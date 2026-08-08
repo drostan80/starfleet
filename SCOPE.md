@@ -1138,8 +1138,19 @@ prompt if items are outstanding (§5.6).
 
 ## 8. API shape
 
-**GraphQL**, single static bearer token auth (stored the same way aniq
-already stores AniList/Trakt credentials — `config.ini` + `keyring`).
+**GraphQL**, single static bearer token auth. **Resolved 2026-08-08
+(A.3)**: the "`config.ini` + `keyring`" phrase describes the pattern
+*clients* (Data, and eventually Holodeck/Captain's Log) use to store
+the token they present — same as aniq's own AniList/Trakt credential
+handling, on a normal desktop with a real keyring daemon available.
+LCARS itself is a different case, not previously addressed: it runs
+headless in Docker (§11.3), where the desktop keyring backends
+aniq/Data rely on generally aren't available at all. LCARS's own copy
+of the token — what it checks incoming requests against — lives in
+`lcars.ini`, plaintext, `chmod 600` — the same precedent aniq already
+sets for its AniList/Trakt `client_id`/`client_secret` (§11.2), not a
+new pattern.
+
 Deliberately designed query/filter shapes (not generic pass-through
 filtering) for: shows by status, episodes airing in the next N days,
 the pending-review list, the backlog, full-text search, the cross-show
