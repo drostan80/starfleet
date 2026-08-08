@@ -847,8 +847,72 @@ order — same reasoning `pagination.py`'s cursors already lean on).
     (`NextUpEntry.episode`/`.show`, `Query.backlog`/`search`/`stats` —
     A.11/A.12/A.13/B.9), confirming no regressions. 166 tests passing,
     `ruff check .` clean.
-- [ ] **A.11 — Implement the cross-show next-up query** (§6.4):
+- [x] **A.11 — Implement the cross-show next-up query** (§6.4):
   soonest-available-first default, manual reorder override.
+  - **A real, previously-invisible bug found and fixed while building
+    this**: `pagination.py`'s `paginate()` (built A.3) has returned its
+    `pageInfo`/`hasNextPage`/`hasPreviousPage`/`startCursor`/
+    `endCursor` keys in camelCase since it was first written — but
+    `convert_names_case=True` (server.py) makes Ariadne's default
+    resolver look up a GraphQL `pageInfo` field as this dict's
+    `page_info` key, same as every other plain scalar field in this
+    codebase. Every connection field built since A.3 has therefore
+    silently returned `null` for `pageInfo` (a schema violation on the
+    non-null `PageInfo!` field) whenever a client actually queried it
+    — invisible until now because `test_pagination.py` only ever calls
+    `paginate()` directly as plain Python (bypassing GraphQL/Ariadne
+    entirely), and no end-to-end test in `test_server.py` had ever
+    queried a `pageInfo` sub-field before this step's own pagination
+    test needed one. Not caught by the systematic unbound-field sweep
+    either — that sweep checks whether a *resolver function* is bound,
+    not whether the default resolver's underlying data actually
+    resolves correctly at runtime, a real blind spot now noted.
+    Fixed by renaming to snake_case (`page_info`/`has_next_page`/
+    `has_previous_page`/`start_cursor`/`end_cursor`) in both
+    `paginate()` and the new `paginate_list()` below; confirmed fixed
+    generally, not just for `nextUp`, by querying an existing
+    connection (`shows(first: 1) { pageInfo { ... } }`) live and
+    getting real values back instead of an error.
+  - **`§6.4`'s own ordering, resolved by re-reading the franchise-
+    ordering precedent it points at**: shows with a `next_up_override`
+    (already built, A.3) sort first by their own `sortOrder`; every
+    other candidate show follows in the stated default,
+    soonest-available-first (`episode.air_date_utc` ascending, nulls
+    sorted last within that group). Not a table-backed query — one row
+    per show, each paired with its own earliest unwatched+available
+    episode, which `pagination.py`'s existing `paginate()` (a single
+    `SELECT ... FROM {table}` scan) can't produce — so the full
+    ordered list is computed in Python first (fine at personal-tracker
+    scale) and handed to a new `pagination.paginate_list()`, same
+    Connection/edges/pageInfo shape as `paginate()` but paging over an
+    already-materialized list via a position-based cursor instead of a
+    `rowid`-based one.
+  - **Built**: `Query.nextUp` resolver — candidates are `watching`-
+    status shows *or* any show with `pacedCadenceDays` set (A.10),
+    regardless of status (the ordinary paced-mode case is a `watching`
+    show anyway, but nothing requires it); a show contributes an entry
+    only if it has an unwatched episode with `available_locally = 1`
+    (§5.2's existing generated column), earliest by `(season, episode)`
+    order. `NextUpEntry.show`/`.episode` field resolvers.
+  - **Tests**: `pagination.paginate_list` gets its own dedicated
+    coverage in `test_pagination.py` (+7, mirroring `paginate()`'s own
+    existing test shapes exactly: no-args, forward paging, walking to
+    the real last page, backward paging, empty list). `test_server.py`
+    (+9): watching show with an available episode is included; a show
+    with only a watched or only an unavailable episode is excluded; a
+    merely-`planned` show is excluded; a paced show is included
+    regardless of status; default ordering is soonest-available-first;
+    a manual override wins over that default; the earliest *unwatched*
+    episode is picked when a show has several; pagination itself
+    works end-to-end through real GraphQL (this is what caught the
+    `pageInfo` bug above). A real test-authoring mistake caught along
+    the way: `addShow` always creates a `PLANNED` show (never
+    `WATCHING`) — several early drafts of these tests assumed
+    otherwise and silently passed for the wrong reason (an empty
+    result set) until traced back to source.
+  - **Verified**: unbound-field sweep re-run, only 3 real gaps left
+    (`Query.backlog`/`search`/`stats` — B.9/A.12/A.13). 180 tests
+    passing, `ruff check .` clean.
 - [ ] **A.12 — Implement full-text search** (§6.5): titles + synopses,
   across all stored title variants.
 - [ ] **A.13 — Implement the stats query surface** (§6.6): totals,

@@ -830,6 +830,171 @@ async def test_paced_next_date_is_latest_watch_event_plus_cadence(client, migrat
     assert data2["show"]["pacedNextDate"] == "2026-01-17T00:00:00Z"
 
 
+# --- cross-show next-up (§6.4, A.11) -----------------------------------------
+
+
+def _insert_next_up_episode(
+    migrated_db,
+    episode_id,
+    show_id,
+    *,
+    season=1,
+    episode=1,
+    state="unwatched",
+    air_date_utc="2026-01-01T00:00:00Z",
+    available=True,
+):
+    conn = db.get_connection()
+    conn.execute(
+        """
+        INSERT INTO episode
+            (id, show_id, season, episode, kind, state, air_date_utc,
+             available_via_sonarr, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'regular', ?, ?, ?, '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')
+        """,
+        (episode_id, show_id, season, episode, state, air_date_utc, int(available)),
+    )
+    conn.commit()
+
+
+NEXT_UP_QUERY = """
+    query {
+      nextUp {
+        edges { node { show { id displayTitle } episode { id season episode } } }
+      }
+    }
+"""
+
+
+async def _add_watching_show(client, **overrides) -> dict:
+    """addShow always creates a PLANNED show (resolve_add_show's own
+    hardcoded initial status) — nextUp's default candidate set is
+    WATCHING-status shows, so most of these tests need one explicitly
+    marked as such."""
+    show = await add_show(client, **overrides)
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    return show
+
+
+async def test_next_up_includes_watching_show_with_available_episode(client, migrated_db):
+    show = await _add_watching_show(client, titleRomaji="Watching Show")
+    _insert_next_up_episode(migrated_db, "e-nu0001", show["id"])
+    data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
+    show_ids = {e["node"]["show"]["id"] for e in data["nextUp"]["edges"]}
+    assert show["id"] in show_ids
+
+
+async def test_next_up_excludes_a_show_with_no_unwatched_available_episode(client, migrated_db):
+    show = await add_show(client, titleRomaji="Nothing To Watch")
+    # watched already — shouldn't count
+    _insert_next_up_episode(migrated_db, "e-nu0002", show["id"], state="watched")
+    # not locally available — shouldn't count either
+    _insert_next_up_episode(
+        migrated_db, "e-nu0003", show["id"], episode=2, available=False
+    )
+    data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
+    show_ids = {e["node"]["show"]["id"] for e in data["nextUp"]["edges"]}
+    assert show["id"] not in show_ids
+
+
+async def test_next_up_excludes_a_planned_show(client, migrated_db):
+    show = await add_show(client, titleRomaji="Just Planned")
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: PLANNED) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    _insert_next_up_episode(migrated_db, "e-nu0004", show["id"])
+    data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
+    show_ids = {e["node"]["show"]["id"] for e in data["nextUp"]["edges"]}
+    assert show["id"] not in show_ids
+
+
+async def test_next_up_includes_a_paced_show_regardless_of_status(client, migrated_db):
+    show = await add_show(client, titleRomaji="Paced Show")
+    _insert_next_up_episode(
+        migrated_db, "e-nu0005", show["id"], air_date_utc="2020-01-01T00:00:00Z"
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { enablePacedMode(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
+    show_ids = {e["node"]["show"]["id"] for e in data["nextUp"]["edges"]}
+    assert show["id"] in show_ids
+
+
+async def test_next_up_defaults_to_soonest_available_first(client, migrated_db):
+    show_a = await _add_watching_show(client, titleRomaji="Airs Later")
+    show_b = await _add_watching_show(client, titleRomaji="Airs Sooner")
+    _insert_next_up_episode(
+        migrated_db, "e-nu0006", show_a["id"], air_date_utc="2026-06-01T00:00:00Z"
+    )
+    _insert_next_up_episode(
+        migrated_db, "e-nu0007", show_b["id"], air_date_utc="2026-01-01T00:00:00Z"
+    )
+    data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
+    order = [e["node"]["show"]["id"] for e in data["nextUp"]["edges"]]
+    assert order.index(show_b["id"]) < order.index(show_a["id"])
+
+
+async def test_next_up_manual_override_wins_over_the_default_order(client, migrated_db):
+    show_a = await _add_watching_show(client, titleRomaji="Airs Sooner")
+    show_b = await _add_watching_show(client, titleRomaji="Airs Later, But Pinned")
+    _insert_next_up_episode(
+        migrated_db, "e-nu0008", show_a["id"], air_date_utc="2026-01-01T00:00:00Z"
+    )
+    _insert_next_up_episode(
+        migrated_db, "e-nu0009", show_b["id"], air_date_utc="2026-06-01T00:00:00Z"
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setNextUpOrder(showId: $id, sortOrder: 1) { sortOrder } }",
+        {"id": show_b["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
+    order = [e["node"]["show"]["id"] for e in data["nextUp"]["edges"]]
+    assert order.index(show_b["id"]) < order.index(show_a["id"])
+
+
+async def test_next_up_picks_the_earliest_unwatched_episode_per_show(client, migrated_db):
+    show = await _add_watching_show(client, titleRomaji="Multi Episode")
+    _insert_next_up_episode(migrated_db, "e-nu0010", show["id"], episode=1, state="watched")
+    _insert_next_up_episode(migrated_db, "e-nu0011", show["id"], episode=2)
+    _insert_next_up_episode(migrated_db, "e-nu0012", show["id"], episode=3)
+    data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
+    entries = data["nextUp"]["edges"]
+    entry = next(e["node"] for e in entries if e["node"]["show"]["id"] == show["id"])
+    assert entry["episode"]["episode"] == 2
+
+
+async def test_next_up_is_paginated(client, migrated_db):
+    show_a = await _add_watching_show(client, titleRomaji="Show A")
+    show_b = await _add_watching_show(client, titleRomaji="Show B")
+    _insert_next_up_episode(
+        migrated_db, "e-nu0013", show_a["id"], air_date_utc="2026-01-01T00:00:00Z"
+    )
+    _insert_next_up_episode(
+        migrated_db, "e-nu0014", show_b["id"], air_date_utc="2026-02-01T00:00:00Z"
+    )
+    data = await gql(
+        client,
+        "query { nextUp(first: 1) { edges { node { show { id } } } pageInfo { hasNextPage } } }",
+        headers=auth_headers(),
+    )
+    assert len(data["nextUp"]["edges"]) == 1
+    assert data["nextUp"]["pageInfo"]["hasNextPage"] is True
+
+
 async def test_set_tracked_records_history(client):
     show = await add_show(client)
     data = await gql(

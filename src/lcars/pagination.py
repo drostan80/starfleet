@@ -47,7 +47,7 @@ def paginate(
 ) -> dict:
     """Runs a paginated `SELECT rowid, * FROM {table} WHERE {where}` (plus
     caller's `params`) and returns a Connection-shaped dict: `{"edges":
-    [...], "pageInfo": {...}}`, each edge `{"node": <dict-row>, "cursor":
+    [...], "page_info": {...}}`, each edge `{"node": <dict-row>, "cursor":
     str}`.
 
     `table`/`where` are always caller-supplied constants from this
@@ -98,11 +98,68 @@ def paginate(
     edges = [{"node": row, "cursor": encode_cursor(row["rowid"])} for row in rows]
     return {
         "edges": edges,
-        "pageInfo": {
-            "hasNextPage": has_next_page,
-            "hasPreviousPage": has_previous_page,
-            "startCursor": edges[0]["cursor"] if edges else None,
-            "endCursor": edges[-1]["cursor"] if edges else None,
+        # snake_case keys, not "pageInfo"/"hasNextPage" — convert_names_case=True
+        # (server.py) makes Ariadne's default resolver look up a GraphQL
+        # `pageInfo` field as this dict's `page_info` key, same as every plain
+        # scalar field elsewhere in this codebase (resolvers.py's own module
+        # docstring). A real bug caught while building A.11 (nextUp): this had
+        # been camelCase since A.3, silently returning null for `pageInfo` on
+        # every connection field ever queried through GraphQL — invisible until
+        # now because test_pagination.py only ever calls this function
+        # directly as plain Python (bypassing GraphQL entirely), and no
+        # end-to-end test had ever queried a `pageInfo` sub-field before.
+        "page_info": {
+            "has_next_page": has_next_page,
+            "has_previous_page": has_previous_page,
+            "start_cursor": edges[0]["cursor"] if edges else None,
+            "end_cursor": edges[-1]["cursor"] if edges else None,
+        },
+    }
+
+
+def paginate_list(
+    items: list[dict],
+    first: int | None = None,
+    after: str | None = None,
+    last: int | None = None,
+    before: str | None = None,
+) -> dict:
+    """Same Connection/edges/pageInfo shape as paginate() above, for a
+    computed/composite list with no single physical table to page
+    against — §6.4's `nextUp` (A.11) is the first: one row per show,
+    each paired with its own best-candidate episode, ordered by a
+    mix of manual overrides and computed availability, not a plain
+    table scan. Cursors encode a position in *this* list rather than
+    a `rowid` — reuses encode_cursor/decode_cursor regardless, since
+    both are just opaque integers to callers either way.
+    """
+    start = 0
+    end = len(items)
+    if after is not None:
+        start = decode_cursor(after) + 1
+    if before is not None:
+        end = decode_cursor(before)
+    window = items[start:end]
+
+    backward = last is not None and first is None
+    if backward:
+        page = window[-last:] if last is not None else window
+        page_start = start + len(window) - len(page)
+    else:
+        page = window[:first] if first is not None else window
+        page_start = start
+
+    edges = [
+        {"node": item, "cursor": encode_cursor(page_start + i)} for i, item in enumerate(page)
+    ]
+    return {
+        "edges": edges,
+        # snake_case — see paginate()'s own comment on this exact key shape.
+        "page_info": {
+            "has_next_page": (page_start + len(page)) < len(items),
+            "has_previous_page": page_start > 0,
+            "start_cursor": edges[0]["cursor"] if edges else None,
+            "end_cursor": edges[-1]["cursor"] if edges else None,
         },
     }
 

@@ -58,6 +58,7 @@ studio_credit_type = ObjectType("StudioCredit")
 franchise_type = ObjectType("Franchise")
 franchise_entry_type = ObjectType("FranchiseEntry")
 next_up_override_type = ObjectType("NextUpOverride")
+next_up_entry_type = ObjectType("NextUpEntry")
 tag_type = ObjectType("Tag")
 
 
@@ -109,6 +110,7 @@ BINDABLES = [
     franchise_type,
     franchise_entry_type,
     next_up_override_type,
+    next_up_entry_type,
     tag_type,
     *ENUMS,
     util.datetime_scalar,
@@ -382,6 +384,73 @@ def resolve_episodes_airing_soon(_, info, days, **page_args):
 def resolve_pending_reviews(_, info, include_resolved=False, **page_args):
     where = "1 = 1" if include_resolved else "resolved_at IS NULL"
     return pagination.paginate(db.get_connection(), "pending_review", where, (), **page_args)
+
+
+@query.field("nextUp")
+def resolve_next_up(_, info, **page_args):
+    """§6.4, A.11 — one entry per `watching`-status or paced/catch-up
+    show, each paired with its earliest unwatched+available episode;
+    shows with no such episode are simply absent, not an error. Not a
+    single-table query (§5's own pagination.py can't page this), so
+    the full ordered list is computed here and handed to
+    pagination.paginate_list instead — fine at personal-tracker scale
+    (a few dozen candidate shows at most).
+
+    Ordering ("same auto-default-plus-override shape as franchise
+    ordering", §6.4): shows with a `next_up_override` come first, by
+    their own `sortOrder` — the same "manual value wins" precedence
+    used everywhere else in this project (§3 principle 6) — then every
+    other show follows in the stated default, soonest-available-first
+    (`episode.air_date_utc` ascending; a null air date, possible for a
+    manually-linked file with no known date, sorts last within this
+    group rather than first, since "soonest" doesn't apply to
+    "unknown")."""
+    conn = db.get_connection()
+    shows = conn.execute(
+        "SELECT id FROM show WHERE status = 'watching' OR paced_cadence_days IS NOT NULL"
+    ).fetchall()
+
+    candidates = []
+    for show in shows:
+        episode = conn.execute(
+            "SELECT * FROM episode"
+            " WHERE show_id = ? AND state = 'unwatched' AND available_locally = 1"
+            " ORDER BY season ASC, episode ASC LIMIT 1",
+            (show["id"],),
+        ).fetchone()
+        if episode is None:
+            continue
+        override = conn.execute(
+            "SELECT sort_order FROM next_up_override WHERE show_id = ?", (show["id"],)
+        ).fetchone()
+        candidates.append(
+            {
+                "show_id": show["id"],
+                "episode": dict(episode),
+                "override_sort_order": override["sort_order"] if override else None,
+            }
+        )
+
+    overridden = sorted(
+        (c for c in candidates if c["override_sort_order"] is not None),
+        key=lambda c: c["override_sort_order"],
+    )
+    default = sorted(
+        (c for c in candidates if c["override_sort_order"] is None),
+        key=lambda c: (c["episode"]["air_date_utc"] is None, c["episode"]["air_date_utc"]),
+    )
+    items = [{"show_id": c["show_id"], "episode": c["episode"]} for c in overridden + default]
+    return pagination.paginate_list(items, **page_args)
+
+
+@next_up_entry_type.field("show")
+def resolve_next_up_entry_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
+
+
+@next_up_entry_type.field("episode")
+def resolve_next_up_entry_episode(obj, info):
+    return obj["episode"]
 
 
 @query.field("person")

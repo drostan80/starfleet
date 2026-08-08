@@ -1148,6 +1148,22 @@ one unified "what's next" view regardless of why an episode is next.
 Defaults to soonest-available-first, with manual reordering supported
 on top (same auto-default-plus-override shape as franchise ordering).
 
+**Implemented 2026-08-08 (A.11)**: a show contributes an entry if
+`status = watching` or `pacedCadenceDays` is set (A.10), and it has an
+unwatched, locally-available episode (§5.2) — the earliest one by
+`(season, episode)`. "Soonest-available-first" reads as
+`episode.air_date_utc` ascending; `next_up_override` (already built,
+A.3/§5.9 addendum) rows sort first, by their own `sortOrder`, ahead of
+every default-ordered entry. Not table-backed (one computed row per
+show), so it's paginated via a new `pagination.paginate_list()` rather
+than the existing table-scan `paginate()`. Also surfaced and fixed a
+real bug in `paginate()` itself, present since A.3 and invisible until
+now: its `pageInfo`/`hasNextPage`/etc. keys were camelCase, but
+`convert_names_case=True` looks them up as snake_case — every
+connection's `pageInfo` had silently been `null` whenever actually
+queried through GraphQL. See `BUILD_PLAN.md`'s A.11 entry for the
+full account.
+
 ### 6.5 Search (Phase A)
 
 Full-text search across titles (and reasonably synopses) is a
