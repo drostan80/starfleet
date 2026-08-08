@@ -1200,6 +1200,29 @@ Full stats view: totals, hours watched (using `duration_minutes`/
 unnormalized genre data doesn't support a meaningful breakdown anyway
 — see §5.1).
 
+**Implemented 2026-08-08 (A.13)**: `totalShows` is a *current-library*
+snapshot (`tracked = 1` only); `totalEpisodesWatched`/`hoursWatched`/
+`scoreDistribution` are deliberately *lifetime* totals, not filtered
+by `tracked` — untracking a show is soft and doesn't erase having
+watched or scored it (§6.11), so those shouldn't shrink just because
+a show was later untracked. Hours: each watched episode's own
+`runtime_minutes` when set, else its show's `duration_minutes`
+(§5.1/§5.2's existing fallback shape); a movie (no episode rows at
+all) counts as watched via any `watch_event` existing for it, using
+`show.duration_minutes` as its only runtime source. Score
+distribution excludes unscored shows (`score IS NULL`) rather than
+representing them as a bucket.
+
+**Known limitation, flagged not fixed here**: `show.duration_minutes`
+has no mutation anywhere in the API to set it — not built in A.1
+(schema only), not populated by A.8's AniList/Radarr fetch either
+(neither call currently requests a duration/runtime field, though
+both APIs have one). This makes movie hours in particular currently
+inert in practice, since a movie has no episode-level runtime to fall
+back on at all. Out of A.13's own scope (a query-surface step, not a
+fetch/mutation one) — worth revisiting as a small addition to A.8's
+fetch or its own tiny mutation, not decided now.
+
 ### 6.7 Sync & reconciliation policy (Phase B)
 
 - **Metadata refresh**: `watching`-status, actively-airing shows get a

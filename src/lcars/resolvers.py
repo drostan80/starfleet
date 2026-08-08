@@ -480,6 +480,67 @@ def resolve_search(_, info, query, **page_args):
     return pagination.paginate(conn, "show", where, (like, like, like, like), **page_args)
 
 
+@query.field("stats")
+def resolve_stats(_, info):
+    """§6.6, A.13 — no ObjectType binding needed for `Stats`/
+    `ScoreBucket`: every one of their fields is a plain scalar (or a
+    list of a type whose own fields are plain scalars), so Ariadne's
+    default dict-key resolution already handles them, same as any
+    other plain field elsewhere — as long as this resolver's own
+    return dict uses the right snake_case keys throughout.
+
+    `totalShows` is a *current-library* snapshot (`tracked = 1`) —
+    reads naturally as "how big is my library right now." Everything
+    else here is a *lifetime* total, deliberately not filtered by
+    `tracked`: untracking a show is soft and doesn't erase having
+    watched it (§6.11) or scored it, so what you've already watched/
+    scored shouldn't shrink just because you later untracked the show
+    it came from. Genre/year/tracking-space breakdowns are explicitly
+    out of scope (§6.6 itself, `genres_raw` is unnormalized).
+    """
+    conn = db.get_connection()
+
+    total_shows = conn.execute("SELECT COUNT(*) AS c FROM show WHERE tracked = 1").fetchone()["c"]
+
+    total_episodes_watched = conn.execute(
+        "SELECT COUNT(*) AS c FROM episode WHERE state = 'watched'"
+    ).fetchone()["c"]
+
+    # Episodic: sum each watched episode's own runtime_minutes, falling
+    # back to its show's duration_minutes when the episode has no override
+    # (§5.1/§5.2, same fallback shape used throughout this project).
+    episode_minutes = conn.execute(
+        "SELECT COALESCE(SUM(COALESCE(e.runtime_minutes, s.duration_minutes)), 0) AS total"
+        " FROM episode e JOIN show s ON e.show_id = s.id"
+        " WHERE e.state = 'watched'"
+    ).fetchone()["total"]
+
+    # Movies have no episode rows at all (§5.1) — "watched" means a
+    # watch_event exists for the show at all; duration comes from the
+    # show's own duration_minutes, the only runtime info a movie has.
+    movie_minutes = conn.execute(
+        "SELECT COALESCE(SUM(s.duration_minutes), 0) AS total"
+        " FROM show s"
+        " WHERE s.media_shape = 'movie'"
+        " AND EXISTS (SELECT 1 FROM watch_event w WHERE w.show_id = s.id)"
+    ).fetchone()["total"]
+
+    hours_watched = (episode_minutes + movie_minutes) / 60.0
+
+    score_rows = conn.execute(
+        "SELECT score, COUNT(*) AS count FROM show"
+        " WHERE score IS NOT NULL GROUP BY score ORDER BY score"
+    ).fetchall()
+    score_distribution = [{"score": row["score"], "count": row["count"]} for row in score_rows]
+
+    return {
+        "total_shows": total_shows,
+        "total_episodes_watched": total_episodes_watched,
+        "hours_watched": hours_watched,
+        "score_distribution": score_distribution,
+    }
+
+
 @query.field("person")
 def resolve_person(_, info, id):  # noqa: A002
     return _get_person(db.get_connection(), id)

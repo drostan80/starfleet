@@ -950,10 +950,50 @@ order — same reasoning `pagination.py`'s cursors already lean on).
   - **Verified**: unbound-field sweep re-run, only 2 real gaps left
     (`Query.backlog`/`stats` — B.9/A.13). 186 tests passing,
     `ruff check .` clean.
-- [ ] **A.13 — Implement the stats query surface** (§6.6): totals,
+- [x] **A.13 — Implement the stats query surface** (§6.6): totals,
   hours watched, personal-score distribution. (Won't be meaningful
   over time until Phase B accumulates real data — building the query
   surface now is still correct, per §6.6's own phase note.)
+  - **Scope split resolved by reasoning from each field's own name,
+    not asked (low-stakes, easily revisable — a read-only query, same
+    risk class as A.11's next-up-override interleaving call)**:
+    `totalShows` reads as "how big is my library right now" ->
+    filtered to `tracked = 1`. Everything else reads as a lifetime
+    achievement metric (episodes watched, hours watched, scores
+    given) -> deliberately *not* filtered by `tracked`, since
+    untracking a show is soft and doesn't erase having already
+    watched/scored it (§6.11). Confirmed with a dedicated test
+    (untrack a show that was already watched+scored: `totalShows`
+    drops, the other three don't).
+  - **A real, pre-existing gap found and flagged, not fixed here**:
+    `show.duration_minutes` has no mutation anywhere in the API to set
+    it — not built in A.1 (schema only), and not populated by A.8's
+    AniList/Radarr fetch either (neither call currently requests a
+    duration/runtime field, though both upstream APIs have one). This
+    makes movie hours in particular inert in practice today, since a
+    movie has no episode-level runtime to fall back on at all. Out of
+    A.13's own scope (a query-surface step, not a fetch/mutation
+    one) — recorded in SCOPE.md §6.6 as a known limitation worth a
+    small follow-up (A.8's fetch, or its own tiny mutation), not
+    decided/built now. Tests exercise the field via direct SQL, same
+    as every other not-yet-mutable column this session.
+  - **Built**: `Query.stats` resolver — no `Stats`/`ScoreBucket`
+    `ObjectType` bindings needed at all, confirmed live: every one of
+    their fields is a plain scalar (or a list of a type whose own
+    fields are plain scalars), so Ariadne's default dict-key
+    resolution already handles them as long as the resolver's own
+    return dict uses the right snake_case keys.
+  - **Tests** (+6, `test_server.py`): `totalShows` counts only
+    tracked shows; `totalEpisodesWatched` counts distinct watched
+    episodes, not watch events; hours watched sums an episode's own
+    override or its show's default correctly across two different
+    shows; movie hours via `duration_minutes` + any watch event;
+    score distribution groups by value and excludes unscored shows;
+    the tracked-vs-lifetime split itself (untrack survives in three
+    of the four fields, not the fourth).
+  - **Verified**: unbound-field sweep re-run — **only `Query.backlog`
+    (B.9, Phase B) remains**; every other Phase A query surface is
+    now built. 192 tests passing, `ruff check .` clean.
 - [ ] **A.14 — Implement deletion policy** (§6.11): soft-delete
   default, hard-delete layered behind a delay + re-type-the-title
   confirmation.

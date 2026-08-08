@@ -1063,6 +1063,150 @@ async def test_search_is_paginated(client):
     assert data["search"]["pageInfo"]["hasNextPage"] is True
 
 
+# --- stats (§6.6, A.13) -------------------------------------------------------
+#
+# show.duration_minutes has no mutation to set it anywhere in the API yet (a
+# real, pre-existing gap — see BUILD_PLAN.md's A.13 entry) — set directly via
+# SQL for these tests, same as any other not-yet-mutable column this session.
+
+STATS_QUERY = """
+    query {
+      stats {
+        totalShows totalEpisodesWatched hoursWatched
+        scoreDistribution { score count }
+      }
+    }
+"""
+
+
+async def test_stats_total_shows_counts_only_tracked(client):
+    await add_show(client, titleRomaji="Tracked Show")
+    untracked = await add_show(client, titleRomaji="Untracked Show")
+    await gql(
+        client,
+        "mutation($id: ID!) { setTracked(showId: $id, tracked: false) { id } }",
+        {"id": untracked["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(client, STATS_QUERY, headers=auth_headers())
+    assert data["stats"]["totalShows"] == 1
+
+
+async def test_stats_total_episodes_watched(client, migrated_db):
+    show = await add_show(client)
+    _insert_next_up_episode(migrated_db, "e-st0001", show["id"], episode=1, state="unwatched")
+    _insert_next_up_episode(migrated_db, "e-st0002", show["id"], episode=2, state="unwatched")
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(client, STATS_QUERY, headers=auth_headers())
+    assert data["stats"]["totalEpisodesWatched"] == 1
+
+
+async def test_stats_hours_watched_uses_episode_override_or_show_default(client, migrated_db):
+    conn = db.get_connection()
+    show_a = await add_show(client, titleRomaji="Has Show Default")
+    conn.execute("UPDATE show SET duration_minutes = 24 WHERE id = ?", (show_a["id"],))
+    conn.commit()
+    _insert_next_up_episode(migrated_db, "e-st0003", show_a["id"], state="unwatched")
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show_a["id"]},
+        headers=auth_headers(),
+    )
+
+    show_b = await add_show(client, titleRomaji="Has Episode Override")
+    _insert_next_up_episode(migrated_db, "e-st0004", show_b["id"], state="unwatched")
+    await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setEpisodeRuntimeOverride(episodeId: $id, runtimeMinutes: 90) { id }
+        }
+        """,
+        {"id": "e-st0004"},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show_b["id"]},
+        headers=auth_headers(),
+    )
+
+    data = await gql(client, STATS_QUERY, headers=auth_headers())
+    # 24 (show_a's fallback) + 90 (show_b's own override) = 114 minutes = 1.9 hours
+    assert data["stats"]["hoursWatched"] == pytest.approx(114 / 60)
+
+
+async def test_stats_hours_watched_includes_movies(client, migrated_db):
+    conn = db.get_connection()
+    movie = await add_show(client, mediaShape="MOVIE", trackingSpace="TV", titleRomaji="A Movie")
+    conn.execute("UPDATE show SET duration_minutes = 120 WHERE id = ?", (movie["id"],))
+    conn.commit()
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id) { id } }",
+        {"id": movie["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(client, STATS_QUERY, headers=auth_headers())
+    assert data["stats"]["hoursWatched"] == pytest.approx(2.0)
+
+
+async def test_stats_score_distribution_excludes_null_and_groups_by_value(client):
+    show_a = await add_show(client, titleRomaji="Score A")
+    show_b = await add_show(client, titleRomaji="Score B")
+    await add_show(client, titleRomaji="Unscored")  # no score set — excluded
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 17) { score } }",
+        {"id": show_a["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 17) { score } }",
+        {"id": show_b["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(client, STATS_QUERY, headers=auth_headers())
+    buckets = {b["score"]: b["count"] for b in data["stats"]["scoreDistribution"]}
+    assert buckets == {17.0: 2}
+
+
+async def test_stats_lifetime_metrics_survive_untracking(client, migrated_db):
+    show = await add_show(client, titleRomaji="Will Be Untracked")
+    _insert_next_up_episode(migrated_db, "e-st0005", show["id"], state="unwatched")
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 15) { score } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setTracked(showId: $id, tracked: false) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(client, STATS_QUERY, headers=auth_headers())
+    assert data["stats"]["totalShows"] == 0  # no longer counted as a current show
+    assert data["stats"]["totalEpisodesWatched"] == 1  # watching it already happened
+    buckets = {b["score"]: b["count"] for b in data["stats"]["scoreDistribution"]}
+    assert buckets == {15.0: 1}  # scoring it already happened too
+
+
 async def test_set_tracked_records_history(client):
     show = await add_show(client)
     data = await gql(
