@@ -101,8 +101,11 @@ no open design questions left blocking it.
   §3 principle 7), and the deliberately-designed query shapes (§8):
   shows by status, episodes airing in the next N days, pending-review
   list, backlog, full-text search, cross-show next-up.
-- [ ] **A.3 — Wire resolvers to SQLite** via SQLAlchemy + Alembic
-  migrations (§11.2), `lcars.db` / `lcars.ini` filenames (§11.2).
+- [ ] **A.3 — Wire resolvers to SQLite** via raw `sqlite3` (stdlib, no
+  ORM) + hand-written Alembic migrations (§11.2, resolved 2026-08-08
+  during 0.2 — this line originally said SQLAlchemy, corrected here to
+  match; see `migrations/README`), `lcars.db` / `lcars.ini` filenames
+  (§11.2).
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
   dataset (one-time/on-demand download, not live polling), manual
