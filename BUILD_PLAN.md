@@ -1142,16 +1142,97 @@ order — same reasoning `pagination.py`'s cursors already lean on).
   - **Verified**: 214 tests passing, `ruff check .` clean. No schema/
     resolver changes at all this step — confirmed the unbound-field
     sweep is unaffected, still only `Query.backlog` (B.9) remains.
-- [ ] **A.17 — Data's side**: replace Data's Trakt client with an
+- [x] **A.17 — Data's side**: replace Data's Trakt client with an
   LCARS client of the same shape (§4 Phase A). Data keeps doing what
   aniq does today (Sonarr polling, AniList calls, its own air-date
   patch) but also writes resulting state to LCARS. aniq's existing
   "queue locally, retry on flush" pattern carries over to the
   Data→LCARS path.
-- [ ] **A.18 — Confirm**: no autonomous scheduler exists yet at the
+  - **Real scope correction, made directly by the user mid-build**: my
+    first draft proposed adding a `showByExternalId` lookup query to
+    LCARS's own schema, reasoning Data would otherwise have no safe way
+    to avoid creating a duplicate show if its local id-cache were ever
+    lost. Corrected sharply: Data doesn't need dedup/lookup
+    infrastructure at all, since it bridges its own add action directly
+    to LCARS's `addShow` — Data is the one *performing* the add, not
+    discovering something that might already exist elsewhere ("data
+    will add shows only by bridging to lcars, [LCARS] is the one
+    actively adding shows... are you overbuilding here?", 2026-08-08).
+    Re-scoped around "bridge on add, remember locally" instead, and
+    confirmed the revised plan with the user before proceeding — see
+    §4's own note in `SCOPE.md`.
+  - **Built** (`~/repos/data`): `lcars_client.py` (async GraphQL,
+    bearer-token auth — a shared secret in `config.ini`'s `[lcars]`
+    section, same class as `sonarr_api_key`, not an OAuth credential,
+    so no login flow/keyring); `lcars_queue.py` (queue-locally-retry-
+    on-flush, mirrors `watch_queue.py`'s shape exactly); `lcars_ids.py`
+    (tvdb_id -> LCARS show id map, persisted at bridge time). Every
+    Trakt-touching function in `app.py` (~40 call sites) replaced with
+    an LCARS counterpart: `_track_new_show_on_lcars` (the actual bridge
+    call, runs unconditionally on every Sonarr add now, not gated by an
+    offer/prompt the way Trakt's was), `_queue_lcars_watched`/
+    `_queue_lcars_status` (§6.8's one narrow permanent exception —
+    episode watch-status dual-writes to AniList *and* LCARS for anime;
+    everything else, including status/score for every show, pushes to
+    LCARS only, additive alongside anime's existing unaffected AniList
+    write), `_lcars_cell`/`_lcars_score_text` (deliberately simpler
+    than the old `_trakt_cell` — push-only, no read-back this phase, so
+    these reflect only locally-known bridged/queued state, never a
+    live-confirmed one), `_undo_lcars_watched` (queued-only; the old
+    "already-synced, call a real unmark" branch has no honest LCARS
+    equivalent without a read-back mechanism). `_search_and_write_
+    trakt_entry` (title search with no Sonarr row) and
+    `_open_trakt_worker` (open the show's Trakt page) dropped with no
+    replacement — LCARS's `addShow` needs an already-known external id,
+    not a title to search, and LCARS is an API server with no per-show
+    webpage; building either would be scope creep the user's own
+    correction above already ruled out. `cli.py`'s `trakt-login`/
+    `trakt-seed-watchlist` removed with no `lcars-login` replacement
+    (no OAuth flow needed at all). `trakt.py`/`trakt_queue.py`/
+    `trakt_cache.py`/`trakt_status.py` deleted, along with
+    `scripts/pogdesign_import.py` (a one-time PoGDesign→Trakt watch-
+    history migration, already run against the real account — its only
+    target no longer exists in the product, so no path could still
+    execute it).
+  - **Tests**: ~1300 lines of Trakt-only test code removed
+    (`test_trakt.py`, `test_trakt_queue.py`, `test_pogdesign_import.py`);
+    `test_app_trakt_wiring.py`/`test_app_trakt_write_wiring.py`
+    replaced with `test_app_lcars_wiring.py` (read-side: bridged/
+    queued/dash cell states) and `test_app_lcars_write_wiring.py`
+    (write-side: mark-watched/force-complete/undo/quit-flush against
+    LCARS); `test_app_list_status.py`/`test_list_screen.py`/
+    `test_app_score.py`/`test_app_detail_pane.py`/`test_config.py`
+    updated in place for the new backend.
+  - **Verified**: 494/495 tests passing, `ruff check .` clean, both in
+    `~/repos/data`. The one remaining failure
+    (`test_check_air_status_survives_a_day_divider_row`) is a
+    pre-existing, already-documented (`backlog.md`), date-dependent
+    flake unrelated to this change — confirmed by reading its own
+    accepted-limitations entry, not re-investigated. Committed and
+    pushed to `~/repos/data` (`37d064a`); no CI configured there
+    (personal-tool scope, per its own backlog.md), so no `gh run watch`
+    step applies the way it does in this repo.
+- [x] **A.18 — Confirm**: no autonomous scheduler exists yet at the
   end of this phase — this alone should already be shippable and
   useful (Trakt gone, real status column, inside Data), before Ops
   exists at all (§4, closing note on Phase A).
+  - **Confirmed, not just assumed**: grepped `~/repos/starfleet/src`
+    for any cron/scheduler/background-loop machinery (`schedule`,
+    `APScheduler`, `asyncio` periodic tasks outside request handling,
+    a `cron`/`ops` module) — none exists; every server-side write in
+    this codebase through A.17 is a direct consequence of a client
+    call (GraphQL mutation) or an on-demand fetch triggered by one
+    (§4's own A.8 clarification), never a self-driven timer. Ops
+    (Phase B, §4/§6.7) has not been started.
+  - **Shippable-and-useful check, against real behavior, not just
+    doc text**: Trakt is fully gone from Data (A.17); every show,
+    anime or not, gets a real server-side `status` column via LCARS's
+    `setStatus`, replacing Trakt's old 5-custom-list hack; LCARS
+    itself pushes status/score on to AniList server-side (A.9),
+    unaffected by any of A.17's Data-side changes. Both halves of
+    Phase A's own closing promise ("Trakt's flakiness is gone, and
+    status gets a real column — inside Data") hold today, with no
+    scheduler required for either.
 
 *(A.9–A.16 don't have hard ordering dependencies on each other — bank
 them in whatever order is convenient once A.1–A.3 exist.)*

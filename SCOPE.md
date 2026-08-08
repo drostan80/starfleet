@@ -266,6 +266,24 @@ again until cutover (§4.4).
   pattern (`trakt_queue.py`/`watch_queue.py`), inherited by Data at the
   fork, carries over to the Data→LCARS path — a home server isn't
   guaranteed reachable from wherever Data happens to be running.
+  **Implemented 2026-08-08 (A.17, `~/repos/data`)**: `lcars_queue.py`
+  mirrors `watch_queue.py`'s own shape exactly for this. Real scope
+  correction made mid-build, directly from the user: Data does **not**
+  get a `showByExternalId`-style lookup/dedup query, and doesn't need
+  one — "data will add shows only by bridging to lcars, [LCARS] is the
+  one actively adding shows" (2026-08-08). Data's own Sonarr-add flow
+  now bridges straight into LCARS's `addShow` at the moment of adding
+  (`_track_new_show_on_lcars`), remembering the returned id locally
+  (`lcars_ids.py`) — this *is* the add, not a second, independent
+  lookup against something that might already exist. LCARS is
+  push-only from Data's side this phase — nothing in §4's own text
+  promised a read-back path yet ("LCARS-backed reads" stay Phase B) —
+  so every LCARS-facing display in Data now reflects only locally-known
+  state (bridged-or-not, currently-queued), a deliberate simplification
+  versus Trakt's own richer live-fetched display. `trakt.py`/
+  `trakt_queue.py`/`trakt_cache.py`/`trakt_status.py` and the now-
+  target-less `scripts/pogdesign_import.py` (one-time PoGDesign→Trakt
+  migration, already run) deleted outright.
 - The real aniq is not part of this phase at all — it keeps running
   standalone against Trakt/AniList as it does today, entirely
   unaffected, for as long as Data/LCARS take to reach parity.
