@@ -28,10 +28,15 @@ mutation = MutationType()
 show_type = ObjectType("Show")
 episode_type = ObjectType("Episode")
 watch_event_type = ObjectType("WatchEvent")
+show_external_id_type = ObjectType("ShowExternalId")
 show_id_mapping_type = ObjectType("ShowIdMapping")
 episode_numbering_mapping_type = ObjectType("EpisodeNumberingMapping")
 episode_movie_link_type = ObjectType("EpisodeMovieLink")
 pending_review_type = ObjectType("PendingReview")
+status_change_type = ObjectType("StatusChange")
+score_change_type = ObjectType("ScoreChange")
+air_date_change_type = ObjectType("AirDateChange")
+tracked_change_type = ObjectType("TrackedChange")
 
 
 def _enum(name: str, *values: str) -> EnumType:
@@ -65,10 +70,15 @@ BINDABLES = [
     show_type,
     episode_type,
     watch_event_type,
+    show_external_id_type,
     show_id_mapping_type,
     episode_numbering_mapping_type,
     episode_movie_link_type,
     pending_review_type,
+    status_change_type,
+    score_change_type,
+    air_date_change_type,
+    tracked_change_type,
     *ENUMS,
     util.datetime_scalar,
 ]
@@ -309,11 +319,31 @@ def resolve_episode_watch_events(obj, info, **page_args):
     )
 
 
+@episode_type.field("airDateHistory")
+def resolve_episode_air_date_history(obj, info, **page_args):
+    return pagination.paginate(
+        db.get_connection(), "air_date_change", "episode_id = ?", (obj["id"],), **page_args
+    )
+
+
 # --- WatchEvent fields -----------------------------------------------------
 
 
 @watch_event_type.field("show")
 def resolve_watch_event_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
+
+
+# --- ShowExternalId fields ---------------------------------------------------
+#
+# Found missing in the 2026-08-08 audit pass: no tests had ever requested
+# ShowExternalId.show, so this fell through both the earlier field-by-field
+# DB-column audit (show_id IS a real column, just not named "show") and every
+# existing test (which only ever asked for service/externalId/url).
+
+
+@show_external_id_type.field("show")
+def resolve_show_external_id_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])
 
 
@@ -348,6 +378,36 @@ def resolve_episode_movie_link_movie_show(obj, info):
 @pending_review_type.field("proposedValueChain")
 def resolve_proposed_value_chain(obj, info):
     return json.loads(obj["proposed_value_chain"])
+
+
+# --- History table fields ---------------------------------------------------
+#
+# Found missing in the 2026-08-08 audit pass, same class of bug as
+# ShowExternalId.show above: none of these four types ever got an
+# ObjectType binding at all, so their show/episode relationship fields
+# were unresolvable — not caught earlier because every existing test only
+# ever asked for the scalar/enum fields (previousStatus, changedBy, etc.),
+# never the nested show/episode itself.
+
+
+@status_change_type.field("show")
+def resolve_status_change_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
+
+
+@score_change_type.field("show")
+def resolve_score_change_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
+
+
+@air_date_change_type.field("episode")
+def resolve_air_date_change_episode(obj, info):
+    return _get_episode(db.get_connection(), obj["episode_id"])
+
+
+@tracked_change_type.field("show")
+def resolve_tracked_change_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
 
 
 # --- Mutation --------------------------------------------------------------
@@ -503,6 +563,106 @@ def resolve_add_watch_event(
     return dict(row)
 
 
+@mutation.field("deleteWatchEvent")
+def resolve_delete_watch_event(_, info, watch_event_id):
+    """Hard-deletable (§5.3) — mirrors aniq's U undo directly. Also
+    reverts episode.state back to unwatched, but only if no other
+    watch_event rows remain for that episode afterwards — a rewatch can
+    have several watch_events for the same episode (§5.3: "the
+    mechanism rewatches work through"), so undoing one of several
+    shouldn't un-mark an episode that's still genuinely watched via
+    another entry. Movie watch events (season/episode both null) have
+    no episode row to update at all."""
+    conn = db.get_connection()
+    row = conn.execute(
+        "SELECT show_id, season, episode FROM watch_event WHERE id = ?", (watch_event_id,)
+    ).fetchone()
+    if row is None:
+        raise GraphQLError(f"no such watch_event: {watch_event_id}")
+    show_id, season, episode = row["show_id"], row["season"], row["episode"]
+    conn.execute("DELETE FROM watch_event WHERE id = ?", (watch_event_id,))
+    if season is not None and episode is not None:
+        remaining = conn.execute(
+            "SELECT 1 FROM watch_event WHERE show_id = ? AND season = ? AND episode = ? LIMIT 1",
+            (show_id, season, episode),
+        ).fetchone()
+        if remaining is None:
+            conn.execute(
+                "UPDATE episode SET state = 'unwatched', updated_at = ?"
+                " WHERE show_id = ? AND season = ? AND episode = ? AND state = 'watched'",
+                (util.now_utc_iso(), show_id, season, episode),
+            )
+    conn.commit()
+    return True
+
+
+@mutation.field("markSeasonWatched")
+def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
+    """Bulk mutation (§5.3) — one watch_event row per episode in the
+    season, single call. Always inserts fresh rows, never skips
+    already-watched episodes — rewatches are normal, not an error
+    (§5.3: "one row per viewing")."""
+    conn = db.get_connection()
+    now = util.now_utc_iso()
+    watched_at = watched_at or now
+    episodes = conn.execute(
+        "SELECT episode FROM episode WHERE show_id = ? AND season = ? ORDER BY episode",
+        (show_id, season),
+    ).fetchall()
+    created_ids = []
+    for row in episodes:
+        watch_id = ids.generate_id(conn, "w")
+        conn.execute(
+            "INSERT INTO watch_event (id, show_id, season, episode, watched_at, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (watch_id, show_id, season, row["episode"], watched_at, now),
+        )
+        created_ids.append(watch_id)
+    conn.execute(
+        "UPDATE episode SET state = 'watched', updated_at = ? WHERE show_id = ? AND season = ?",
+        (now, show_id, season),
+    )
+    conn.commit()
+    return [
+        dict(conn.execute("SELECT rowid, * FROM watch_event WHERE id = ?", (wid,)).fetchone())
+        for wid in created_ids
+    ]
+
+
+@mutation.field("markEpisodeRangeWatched")
+def resolve_mark_episode_range_watched(
+    _, info, show_id, season, from_episode, to_episode, watched_at=None
+):
+    conn = db.get_connection()
+    now = util.now_utc_iso()
+    watched_at = watched_at or now
+    episodes = conn.execute(
+        "SELECT episode FROM episode"
+        " WHERE show_id = ? AND season = ? AND episode BETWEEN ? AND ?"
+        " ORDER BY episode",
+        (show_id, season, from_episode, to_episode),
+    ).fetchall()
+    created_ids = []
+    for row in episodes:
+        watch_id = ids.generate_id(conn, "w")
+        conn.execute(
+            "INSERT INTO watch_event (id, show_id, season, episode, watched_at, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (watch_id, show_id, season, row["episode"], watched_at, now),
+        )
+        created_ids.append(watch_id)
+    conn.execute(
+        "UPDATE episode SET state = 'watched', updated_at = ?"
+        " WHERE show_id = ? AND season = ? AND episode BETWEEN ? AND ?",
+        (now, show_id, season, from_episode, to_episode),
+    )
+    conn.commit()
+    return [
+        dict(conn.execute("SELECT rowid, * FROM watch_event WHERE id = ?", (wid,)).fetchone())
+        for wid in created_ids
+    ]
+
+
 @mutation.field("markEpisodeSkipped")
 def resolve_mark_episode_skipped(_, info, episode_id):
     conn = db.get_connection()
@@ -514,6 +674,102 @@ def resolve_mark_episode_skipped(_, info, episode_id):
         raise GraphQLError(f"no such episode: {episode_id}")
     conn.commit()
     return _get_episode(conn, episode_id)
+
+
+# -- 5.2 episode field overrides -------------------------------------------
+
+
+@mutation.field("setEpisodeAirDate")
+def resolve_set_episode_air_date(_, info, episode_id, air_date_utc):
+    """Sets air_date_source = MANUAL (schema.graphql's own doc comment)
+    — §6.7's priority order means this then wins over every automatic
+    source. Writes air_date_change (§5.7), same as every other manual
+    field-setting mutation writes its own history table."""
+    conn = db.get_connection()
+    client = require_client(info)
+    episode = _require_episode(conn, episode_id)
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE episode SET air_date_utc = ?, air_date_source = 'manual', updated_at = ?"
+        " WHERE id = ?",
+        (air_date_utc, now, episode_id),
+    )
+    conn.execute(
+        "INSERT INTO air_date_change"
+        " (id, episode_id, previous_air_date_utc, new_air_date_utc,"
+        "  previous_source, new_source, changed_at, changed_by)"
+        " VALUES (?, ?, ?, ?, ?, 'manual', ?, ?)",
+        (
+            ids.generate_id(conn, "g"),
+            episode_id,
+            episode["air_date_utc"],
+            air_date_utc,
+            episode["air_date_source"],
+            now,
+            client,
+        ),
+    )
+    conn.commit()
+    return _get_episode(conn, episode_id)
+
+
+@mutation.field("setEpisodeRuntimeOverride")
+def resolve_set_episode_runtime_override(_, info, episode_id, runtime_minutes=None):
+    """No history table for this one — §5.7 lists exactly four dedicated
+    history tables (status/score/air_date/tracked) and runtime isn't
+    among them, so this is a plain field update."""
+    conn = db.get_connection()
+    now = util.now_utc_iso()
+    cur = conn.execute(
+        "UPDATE episode SET runtime_minutes = ?, updated_at = ? WHERE id = ?",
+        (runtime_minutes, now, episode_id),
+    )
+    if cur.rowcount == 0:
+        raise GraphQLError(f"no such episode: {episode_id}")
+    conn.commit()
+    return _get_episode(conn, episode_id)
+
+
+# -- 5.4 external links -----------------------------------------------------
+
+
+@mutation.field("linkShowExternalId")
+def resolve_link_show_external_id(_, info, show_id, service, external_id, url):
+    """Upsert, keyed on show_id, service — matches show_external_id's
+    own PRIMARY KEY (migration 7196ca889757)."""
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    now = util.now_utc_iso()
+    existing = conn.execute(
+        "SELECT 1 FROM show_external_id WHERE show_id = ? AND service = ?", (show_id, service)
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            "UPDATE show_external_id SET external_id = ?, url = ?"
+            " WHERE show_id = ? AND service = ?",
+            (external_id, url, show_id, service),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (show_id, service, external_id, url, now),
+        )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM show_external_id WHERE show_id = ? AND service = ?", (show_id, service)
+    ).fetchone()
+    return dict(row)
+
+
+@mutation.field("unlinkShowExternalId")
+def resolve_unlink_show_external_id(_, info, show_id, service):
+    conn = db.get_connection()
+    cur = conn.execute(
+        "DELETE FROM show_external_id WHERE show_id = ? AND service = ?", (show_id, service)
+    )
+    conn.commit()
+    return cur.rowcount > 0
 
 
 # -- 5.5 id-mapper manual overrides (§3 principle 6: manual wins once set) --

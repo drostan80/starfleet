@@ -285,6 +285,44 @@ said things were done.
 - 54 tests total now (was 51), full suite + `ruff` clean, CI reverified
   green on GitHub's runner after this pass's commit (see that commit
   for the run link/confirmation).
+
+**Third slice, same day**: finished what the *first* slice's own
+description had actually promised but hadn't fully delivered —
+`§5.3` names `deleteWatchEvent`/`markSeasonWatched`/
+`markEpisodeRangeWatched` as `watch_event`'s core mutations alongside
+`addWatchEvent`, none of which existed yet. Added those three, plus
+`setEpisodeAirDate`/`setEpisodeRuntimeOverride` (§5.2 episode field
+overrides) and `linkShowExternalId`/`unlinkShowExternalId` (§5.4) —
+all mechanical, direct extensions of already-established patterns
+(upsert-by-composite-key, history-table writes on manual changes),
+so none needed asking about.
+- `deleteWatchEvent` reverts `episode.state` to `unwatched`, but only
+  if no other `watch_event` rows remain for that episode afterwards —
+  a rewatch can have several (§5.3), so undoing one of several
+  shouldn't un-mark an episode still genuinely watched via another.
+- Ran a proper systematic sweep this time, instead of waiting to
+  stumble on the next gap one test at a time: introspected the built
+  schema for every field whose return type is itself an object type
+  (not a scalar/enum, since those already resolve fine via plain dict
+  lookup), cross-referenced against every `ObjectType`'s real
+  `_resolvers` registry. Found **five more real gaps this way** — all
+  the same class of bug as `Query.episode` from the second slice: a
+  type whose *other* fields had already been built and tested, but
+  one relationship field was simply forgotten and no existing test
+  happened to request it: `ShowExternalId.show`, and `.show`/`.episode`
+  on all four §5.7 history types (`StatusChange`/`ScoreChange`/
+  `AirDateChange`/`TrackedChange` — none of these four had ever gotten
+  an `ObjectType` binding *at all*, despite their scalar fields being
+  tested since the first slice). Fixed all five, added a test for each
+  that specifically requests the previously-unreachable field, not
+  just the scalar fields already covered.
+  - Confirmed the other 48 object-typed fields the same sweep flagged
+    are all genuinely not-yet-started work (Person/Studio/Franchise/
+    tags/`FilterPreset`/deletion/export-import/`stats`/`search`/
+    `nextUp`/`episodesAiringSoon`/`backlog`/`servicePresence`) —
+    already disclosed in `resolvers.py`'s own module docstring as
+    intentionally deferred, not a hidden gap of this same kind.
+- 64 tests total now (was 54), `ruff` clean.
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
   dataset (one-time/on-demand download, not live polling), manual

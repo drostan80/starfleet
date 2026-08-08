@@ -229,7 +229,9 @@ async def test_set_status_updates_and_records_history(client):
         """
         query($id: ID!) {
           show(id: $id) {
-            statusHistory { edges { node { previousStatus newStatus changedBy } } }
+            statusHistory {
+              edges { node { previousStatus newStatus changedBy show { id } } }
+            }
           }
         }
         """,
@@ -241,6 +243,9 @@ async def test_set_status_updates_and_records_history(client):
     assert entries[0]["node"]["previousStatus"] == "PLANNED"
     assert entries[0]["node"]["newStatus"] == "WATCHING"
     assert entries[0]["node"]["changedBy"] == "holodeck"
+    # StatusChange.show found unbound in the 2026-08-08 audit pass — no
+    # earlier test had ever requested it, only the scalar fields above.
+    assert entries[0]["node"]["show"]["id"] == show["id"]
 
 
 @pytest.mark.parametrize(
@@ -272,6 +277,52 @@ async def test_set_tracked_records_history(client):
         headers=auth_headers(),
     )
     assert data["setTracked"]["tracked"] is False
+
+    history = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) {
+            trackedHistory {
+              edges { node { previousTracked newTracked show { id } } }
+            }
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    entries = history["show"]["trackedHistory"]["edges"]
+    assert len(entries) == 1
+    assert entries[0]["node"]["previousTracked"] is True
+    assert entries[0]["node"]["newTracked"] is False
+    # TrackedChange.show found unbound in the same audit pass as StatusChange.show.
+    assert entries[0]["node"]["show"]["id"] == show["id"]
+
+
+async def test_score_history_includes_show(client):
+    show = await add_show(client)
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 15) { score } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    history = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { scoreHistory { edges { node { newScore show { id } } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    entries = history["show"]["scoreHistory"]["edges"]
+    assert len(entries) == 1
+    assert entries[0]["node"]["newScore"] == 15
+    # ScoreChange.show found unbound in the same audit pass as StatusChange.show.
+    assert entries[0]["node"]["show"]["id"] == show["id"]
 
 
 # --- addWatchEvent / markEpisodeSkipped ------------------------------------
@@ -343,6 +394,293 @@ async def test_mark_episode_skipped(client, migrated_db):
         headers=auth_headers(),
     )
     assert data["markEpisodeSkipped"]["state"] == "SKIPPED"
+
+
+async def _insert_episode_range(migrated_db: Path, show_id: str, season: int, episodes: range):
+    conn = db.get_connection()
+    for n in episodes:
+        conn.execute(
+            """
+            INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)
+            VALUES (
+                ?, ?, ?, ?, 'regular', 'unwatched',
+                '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z'
+            )
+            """,
+            (f"e-s{season}e{n:03d}", show_id, season, n),
+        )
+    conn.commit()
+
+
+async def test_delete_watch_event_reverts_episode_state_when_last_one(client, migrated_db):
+    show = await add_show(client)
+    await _insert_episode(migrated_db, show["id"])
+    added = await gql(
+        client,
+        'mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    watch_event_id = added["addWatchEvent"]["id"]
+
+    result = await gql(
+        client,
+        "mutation($id: ID!) { deleteWatchEvent(watchEventId: $id) }",
+        {"id": watch_event_id},
+        headers=auth_headers(),
+    )
+    assert result["deleteWatchEvent"] is True
+
+    episode_state = db.get_connection().execute(
+        "SELECT state FROM episode WHERE id = 'e-tst001'"
+    ).fetchone()
+    assert episode_state["state"] == "unwatched"
+
+
+async def test_delete_watch_event_keeps_state_watched_if_rewatch_remains(client, migrated_db):
+    show = await add_show(client)
+    await _insert_episode(migrated_db, show["id"])
+    first = await gql(
+        client,
+        'mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        'mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    await gql(
+        client,
+        "mutation($id: ID!) { deleteWatchEvent(watchEventId: $id) }",
+        {"id": first["addWatchEvent"]["id"]},
+        headers=auth_headers(),
+    )
+
+    episode_state = db.get_connection().execute(
+        "SELECT state FROM episode WHERE id = 'e-tst001'"
+    ).fetchone()
+    assert episode_state["state"] == "watched"
+
+
+async def test_delete_watch_event_for_movie_has_no_episode_to_revert(client):
+    show = await add_show(
+        client, mediaShape="MOVIE", titleRomaji="A Standalone Film", primaryTitle="ROMAJI"
+    )
+    added = await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    result = await gql(
+        client,
+        "mutation($id: ID!) { deleteWatchEvent(watchEventId: $id) }",
+        {"id": added["addWatchEvent"]["id"]},
+        headers=auth_headers(),
+    )
+    assert result["deleteWatchEvent"] is True
+
+
+async def test_mark_season_watched_creates_one_watch_event_per_episode(client, migrated_db):
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 4))
+
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          markSeasonWatched(showId: $id, season: 1) { season episode }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    watched = sorted(e["episode"] for e in data["markSeasonWatched"])
+    assert watched == [1, 2, 3]
+
+    states = db.get_connection().execute(
+        "SELECT state FROM episode WHERE show_id = ? AND season = 1", (show["id"],)
+    ).fetchall()
+    assert all(s["state"] == "watched" for s in states)
+
+
+async def test_mark_episode_range_watched(client, migrated_db):
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 6))
+
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          markEpisodeRangeWatched(showId: $id, season: 1, fromEpisode: 2, toEpisode: 4) {
+            episode
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    watched = sorted(e["episode"] for e in data["markEpisodeRangeWatched"])
+    assert watched == [2, 3, 4]
+
+    rows = db.get_connection().execute(
+        "SELECT episode, state FROM episode WHERE show_id = ? AND season = 1", (show["id"],)
+    ).fetchall()
+    states = {
+        row["episode"]: row["state"]
+        for row in rows
+    }
+    assert states == {1: "unwatched", 2: "watched", 3: "watched", 4: "watched", 5: "unwatched"}
+
+
+# --- episode field overrides (§5.2) -----------------------------------------
+
+
+async def test_set_episode_air_date_records_history(client, migrated_db):
+    show = await add_show(client)
+    episode_id = await _insert_episode(migrated_db, show["id"])
+
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setEpisodeAirDate(episodeId: $id, airDateUtc: "2026-09-01T12:00:00Z") {
+            airDateUtc airDateSource
+          }
+        }
+        """,
+        {"id": episode_id},
+        headers=auth_headers("captains_log"),
+    )
+    assert data["setEpisodeAirDate"]["airDateUtc"] == "2026-09-01T12:00:00Z"
+    assert data["setEpisodeAirDate"]["airDateSource"] == "MANUAL"
+
+    history = await gql(
+        client,
+        """
+        query($id: ID!) {
+          episode(id: $id) {
+            airDateHistory {
+              edges { node { newAirDateUtc newSource changedBy episode { id } } }
+            }
+          }
+        }
+        """,
+        {"id": episode_id},
+        headers=auth_headers(),
+    )
+    entries = history["episode"]["airDateHistory"]["edges"]
+    assert len(entries) == 1
+    assert entries[0]["node"]["newAirDateUtc"] == "2026-09-01T12:00:00Z"
+    assert entries[0]["node"]["newSource"] == "MANUAL"
+    assert entries[0]["node"]["changedBy"] == "captains_log"
+    # AirDateChange.episode found unbound in the same audit pass as
+    # StatusChange.show (Query.episode was needed to even reach it here).
+    assert entries[0]["node"]["episode"]["id"] == episode_id
+
+
+async def test_set_episode_air_date_requires_client_header(client, migrated_db):
+    show = await add_show(client)
+    episode_id = await _insert_episode(migrated_db, show["id"])
+    resp = await client.post(
+        "/",
+        json={
+            "query": (
+                'mutation($id: ID!) { setEpisodeAirDate(episodeId: $id, '
+                'airDateUtc: "2026-09-01T12:00:00Z") { id } }'
+            ),
+            "variables": {"id": episode_id},
+        },
+        headers=auth_headers(client_name=None),
+    )
+    assert "errors" in resp.json()
+
+
+async def test_set_episode_runtime_override(client, migrated_db):
+    show = await add_show(client)
+    episode_id = await _insert_episode(migrated_db, show["id"])
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setEpisodeRuntimeOverride(episodeId: $id, runtimeMinutes: 45) { runtimeMinutes }
+        }
+        """,
+        {"id": episode_id},
+        headers=auth_headers(),
+    )
+    assert data["setEpisodeRuntimeOverride"]["runtimeMinutes"] == 45
+
+
+# --- external link management (§5.4) ----------------------------------------
+
+
+LINK_SHOW_EXTERNAL_ID = """
+    mutation($id: ID!, $externalId: String!, $url: String!) {
+      linkShowExternalId(showId: $id, service: "tmdb", externalId: $externalId, url: $url) {
+        service externalId url
+      }
+    }
+"""
+
+
+async def test_link_and_unlink_show_external_id(client):
+    show = await add_show(client)
+
+    linked = await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID,
+        {"id": show["id"], "externalId": "999", "url": "https://example/999"},
+        headers=auth_headers(),
+    )
+    assert linked["linkShowExternalId"]["externalId"] == "999"
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { externalIds { edges { node { show { id } } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    # ShowExternalId.show found unbound in the 2026-08-08 audit pass — no
+    # earlier test had ever requested it.
+    assert data["show"]["externalIds"]["edges"][0]["node"]["show"]["id"] == show["id"]
+
+    # calling again with the same service upserts, not duplicates
+    relinked = await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID,
+        {"id": show["id"], "externalId": "1000", "url": "https://example/1000"},
+        headers=auth_headers(),
+    )
+    assert relinked["linkShowExternalId"]["externalId"] == "1000"
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { externalIds { edges { node { service } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert len(data["show"]["externalIds"]["edges"]) == 1
+
+    unlinked = await gql(
+        client,
+        'mutation($id: ID!) { unlinkShowExternalId(showId: $id, service: "tmdb") }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert unlinked["unlinkShowExternalId"] is True
+
+    after = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { externalIds { edges { node { service } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert after["show"]["externalIds"]["edges"] == []
 
 
 # --- pagination wiring (logic itself is tested in test_pagination.py) -----
