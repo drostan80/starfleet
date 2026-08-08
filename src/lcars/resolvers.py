@@ -1,13 +1,15 @@
-"""Resolvers — BUILD_PLAN.md A.3, expanded beyond the original
-Show/Episode/WatchEvent vertical slice to also cover the id-mapper
-tables (ShowIdMapping/EpisodeNumberingMapping/EpisodeMovieLink, §5.5 +
-its addendum) and PendingReview (§5.6) — natural next slice since A.4/
-A.5 build on top of them. The rest of the schema (Person/Studio/
-Franchise/tags/deletion/export-import/...) is still unbound — a client
-querying those fields gets a clear GraphQL error (missing resolver /
-null on a non-null field), not silently wrong data. Expanding
-table-by-table is later A.3 work, tracked in BUILD_PLAN.md, not a
-hidden gap.
+"""Resolvers — BUILD_PLAN.md A.3, built out slice by slice, in §5's own
+document order (same order A.1/A.2 were built in): Show/Episode/
+WatchEvent core -> id-mapper/PendingReview -> the rest of
+watch_event/episode-override/external-link mutations -> now
+ShowServicePresence (§5.4) and Person/Studio/CastCredit/StudioCredit
+(§5.8) — all query-only, no mutations exist for these (externally-
+populated metadata, not client-created, per §5.8's own description).
+The rest of the schema (Franchise/tags/FilterPreset/deletion/
+export-import/stats/search/...) is still unbound — a client querying
+those fields gets a clear GraphQL error (missing resolver / null on a
+non-null field), not silently wrong data. Expanding further is later
+A.3 work, tracked in BUILD_PLAN.md, not a hidden gap.
 
 Field resolution: `convert_names_case=True` (passed to
 make_executable_schema in server.py) handles camelCase-GraphQL-field to
@@ -37,6 +39,11 @@ status_change_type = ObjectType("StatusChange")
 score_change_type = ObjectType("ScoreChange")
 air_date_change_type = ObjectType("AirDateChange")
 tracked_change_type = ObjectType("TrackedChange")
+show_service_presence_type = ObjectType("ShowServicePresence")
+person_type = ObjectType("Person")
+studio_type = ObjectType("Studio")
+cast_credit_type = ObjectType("CastCredit")
+studio_credit_type = ObjectType("StudioCredit")
 
 
 def _enum(name: str, *values: str) -> EnumType:
@@ -79,6 +86,11 @@ BINDABLES = [
     score_change_type,
     air_date_change_type,
     tracked_change_type,
+    show_service_presence_type,
+    person_type,
+    studio_type,
+    cast_credit_type,
+    studio_credit_type,
     *ENUMS,
     util.datetime_scalar,
 ]
@@ -171,6 +183,16 @@ def _get_pending_review(conn, review_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _get_person(conn, person_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM person WHERE id = ?", (person_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _get_studio(conn, studio_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM studio WHERE id = ?", (studio_id,)).fetchone()
+    return dict(row) if row else None
+
+
 # --- Query -------------------------------------------------------------
 
 
@@ -201,6 +223,26 @@ def resolve_shows_by_status(_, info, statuses, **page_args):
 def resolve_pending_reviews(_, info, include_resolved=False, **page_args):
     where = "1 = 1" if include_resolved else "resolved_at IS NULL"
     return pagination.paginate(db.get_connection(), "pending_review", where, (), **page_args)
+
+
+@query.field("person")
+def resolve_person(_, info, id):  # noqa: A002
+    return _get_person(db.get_connection(), id)
+
+
+@query.field("people")
+def resolve_people(_, info, **page_args):
+    return pagination.paginate(db.get_connection(), "person", "1 = 1", (), **page_args)
+
+
+@query.field("studio")
+def resolve_studio(_, info, id):  # noqa: A002
+    return _get_studio(db.get_connection(), id)
+
+
+@query.field("studios")
+def resolve_studios(_, info, **page_args):
+    return pagination.paginate(db.get_connection(), "studio", "1 = 1", (), **page_args)
 
 
 # --- Show fields ---------------------------------------------------------
@@ -286,6 +328,27 @@ def resolve_show_linked_from_episode(obj, info):
     if link is None:
         return None
     return _get_episode(conn, link["episode_id"])
+
+
+@show_type.field("servicePresence")
+def resolve_show_service_presence(obj, info, **page_args):
+    return pagination.paginate(
+        db.get_connection(), "show_service_presence", "show_id = ?", (obj["id"],), **page_args
+    )
+
+
+@show_type.field("cast")
+def resolve_show_cast(obj, info, **page_args):
+    return pagination.paginate(
+        db.get_connection(), "show_person", "show_id = ?", (obj["id"],), **page_args
+    )
+
+
+@show_type.field("studioCredits")
+def resolve_show_studio_credits(obj, info, **page_args):
+    return pagination.paginate(
+        db.get_connection(), "show_studio", "show_id = ?", (obj["id"],), **page_args
+    )
 
 
 # --- Episode fields ------------------------------------------------------
@@ -408,6 +471,51 @@ def resolve_air_date_change_episode(obj, info):
 @tracked_change_type.field("show")
 def resolve_tracked_change_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])
+
+
+# --- ShowServicePresence / Person / Studio / CastCredit / StudioCredit fields (§5.4/§5.8) --
+
+
+@show_service_presence_type.field("show")
+def resolve_show_service_presence_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
+
+
+@person_type.field("credits")
+def resolve_person_credits(obj, info, **page_args):
+    """Queryable from the person side too (§5.8) — every show_person row
+    for this person, across the tracked library."""
+    return pagination.paginate(
+        db.get_connection(), "show_person", "person_id = ?", (obj["id"],), **page_args
+    )
+
+
+@studio_type.field("credits")
+def resolve_studio_credits(obj, info, **page_args):
+    """Same reasoning as Person.credits (§5.8)."""
+    return pagination.paginate(
+        db.get_connection(), "show_studio", "studio_id = ?", (obj["id"],), **page_args
+    )
+
+
+@cast_credit_type.field("show")
+def resolve_cast_credit_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
+
+
+@cast_credit_type.field("person")
+def resolve_cast_credit_person(obj, info):
+    return _get_person(db.get_connection(), obj["person_id"])
+
+
+@studio_credit_type.field("show")
+def resolve_studio_credit_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
+
+
+@studio_credit_type.field("studio")
+def resolve_studio_credit_studio(obj, info):
+    return _get_studio(db.get_connection(), obj["studio_id"])
 
 
 # --- Mutation --------------------------------------------------------------

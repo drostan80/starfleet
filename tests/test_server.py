@@ -906,3 +906,175 @@ async def test_hard_delete_requested_at_field_resolves(client):
         headers=auth_headers(),
     )
     assert data["show"]["hardDeleteRequestedAt"] is None
+
+
+# --- ShowServicePresence / Person / Studio / CastCredit / StudioCredit (§5.4/§5.8) --
+#
+# No mutations exist for any of these — externally-populated metadata
+# (§5.8), not client-created. Rows are inserted directly here, the same way
+# episodes are elsewhere in this file, standing in for the on-demand-fetch/
+# background-poll machinery that doesn't exist yet (A.8/Phase B).
+
+
+def _insert_show_service_presence(show_id: str, service: str, present: bool) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO show_service_presence (id, show_id, service, present, checked_at)"
+        " VALUES (?, ?, ?, ?, '2026-08-08T00:00:00Z')",
+        (f"a-{service[:6]:0<6}", show_id, service, int(present)),
+    )
+    conn.commit()
+
+
+def _insert_person(person_id: str, name: str) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO person (id, name, created_at) VALUES (?, ?, '2026-08-08T00:00:00Z')",
+        (person_id, name),
+    )
+    conn.commit()
+
+
+def _insert_studio(studio_id: str, name: str) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO studio (id, name, created_at) VALUES (?, ?, '2026-08-08T00:00:00Z')",
+        (studio_id, name),
+    )
+    conn.commit()
+
+
+def _insert_cast_credit(show_id: str, person_id: str, role_type: str, character_name=None):
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO show_person (show_id, person_id, role_type, character_name)"
+        " VALUES (?, ?, ?, ?)",
+        (show_id, person_id, role_type, character_name),
+    )
+    conn.commit()
+
+
+def _insert_studio_credit(show_id: str, studio_id: str, role_type: str):
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO show_studio (show_id, studio_id, role_type) VALUES (?, ?, ?)",
+        (show_id, studio_id, role_type),
+    )
+    conn.commit()
+
+
+async def test_show_service_presence(client):
+    show = await add_show(client)
+    _insert_show_service_presence(show["id"], "radarr", True)
+    _insert_show_service_presence(show["id"], "sonarr", False)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) {
+            servicePresence { edges { node { service present show { id } } } }
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    presence = {e["node"]["service"]: e["node"] for e in data["show"]["servicePresence"]["edges"]}
+    assert presence["radarr"]["present"] is True
+    assert presence["sonarr"]["present"] is False
+    assert presence["radarr"]["show"]["id"] == show["id"]
+
+
+async def test_cast_credit_both_directions(client):
+    show = await add_show(client, titleRomaji="Konosuba")
+    _insert_person("p-actor1", "Jane Voice")
+    _insert_cast_credit(show["id"], "p-actor1", "voice_actor", character_name="Megumin")
+
+    from_show = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) {
+            cast { edges { node { roleType characterName person { id name } } } }
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    credit = from_show["show"]["cast"]["edges"][0]["node"]
+    assert credit["roleType"] == "VOICE_ACTOR"
+    assert credit["characterName"] == "Megumin"
+    assert credit["person"]["name"] == "Jane Voice"
+
+    from_person = await gql(
+        client,
+        """
+        query($id: ID!) {
+          person(id: $id) {
+            name
+            credits { edges { node { characterName show { id } } } }
+          }
+        }
+        """,
+        {"id": "p-actor1"},
+        headers=auth_headers(),
+    )
+    reverse_credit = from_person["person"]["credits"]["edges"][0]["node"]
+    assert reverse_credit["characterName"] == "Megumin"
+    assert reverse_credit["show"]["id"] == show["id"]
+
+
+async def test_studio_credit_both_directions(client):
+    show = await add_show(client)
+    _insert_studio("d-studio", "Great Animation Studio")
+    _insert_studio_credit(show["id"], "d-studio", "studio")
+
+    from_show = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) {
+            studioCredits { edges { node { roleType studio { id name } } } }
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    credit = from_show["show"]["studioCredits"]["edges"][0]["node"]
+    assert credit["roleType"] == "STUDIO"
+    assert credit["studio"]["name"] == "Great Animation Studio"
+
+    from_studio = await gql(
+        client,
+        """
+        query($id: ID!) {
+          studio(id: $id) {
+            name
+            credits { edges { node { roleType show { id } } } }
+          }
+        }
+        """,
+        {"id": "d-studio"},
+        headers=auth_headers(),
+    )
+    reverse_credit = from_studio["studio"]["credits"]["edges"][0]["node"]
+    assert reverse_credit["roleType"] == "STUDIO"
+    assert reverse_credit["show"]["id"] == show["id"]
+
+
+async def test_people_and_studios_top_level_queries(client):
+    _insert_person("p-listme", "Someone")
+    _insert_studio("d-listme", "Some Studio")
+
+    people = await gql(
+        client, "{ people { edges { node { id name } } } }", headers=auth_headers()
+    )
+    assert any(e["node"]["id"] == "p-listme" for e in people["people"]["edges"])
+
+    studios = await gql(
+        client, "{ studios { edges { node { id name } } } }", headers=auth_headers()
+    )
+    assert any(e["node"]["id"] == "d-listme" for e in studios["studios"]["edges"])

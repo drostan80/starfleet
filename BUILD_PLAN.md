@@ -323,6 +323,21 @@ so none needed asking about.
     already disclosed in `resolvers.py`'s own module docstring as
     intentionally deferred, not a hidden gap of this same kind.
 - 64 tests total now (was 54), `ruff` clean.
+
+**Fourth slice, same day**: `show_service_presence` (rest of §5.4) and
+`person`/`studio`/`show_person`/`show_studio` (§5.8) — followed §5's
+own document order (same order `schema.graphql`/A.1's migration were
+built in), since `BUILD_PLAN.md` has no sub-checkboxes within A.3 to
+follow more specifically. Query-only, confirmed against `schema.graphql`
+first: no mutations exist for any of these (externally-populated
+metadata per §5.8's own description, not client-created — matches the
+already-confirmed pattern from `show_relation`/`franchise`).
+- Re-ran the systematic object-typed-field sweep from the third slice
+  immediately after, rather than waiting for the next test to
+  stumble on a gap: dropped from 48 to 34 unbound fields — exactly
+  the 14 just implemented, no regressions, no new gaps introduced by
+  this slice.
+- 68 tests total now (was 64), `ruff` clean, schema re-validated.
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
   dataset (one-time/on-demand download, not live polling), manual
