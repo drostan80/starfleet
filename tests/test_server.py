@@ -995,6 +995,74 @@ async def test_next_up_is_paginated(client, migrated_db):
     assert data["nextUp"]["pageInfo"]["hasNextPage"] is True
 
 
+# --- full-text search (§6.5, A.12) -------------------------------------------
+
+SEARCH_QUERY = """
+    query($q: String!) {
+      search(query: $q) { edges { node { id displayTitle } } }
+    }
+"""
+
+
+async def test_search_matches_romaji_title(client):
+    show = await add_show(client, titleRomaji="Golden Kamuy")
+    await add_show(client, titleRomaji="Unrelated Show")
+    data = await gql(client, SEARCH_QUERY, {"q": "Kamuy"}, headers=auth_headers())
+    ids = {e["node"]["id"] for e in data["search"]["edges"]}
+    assert ids == {show["id"]}
+
+
+async def test_search_matches_english_and_native_title_variants(client):
+    show = await add_show(
+        client,
+        titleRomaji="Kimi no Na wa",
+        titleEnglish="Your Name",
+        titleNative="君の名は",
+    )
+    data_en = await gql(client, SEARCH_QUERY, {"q": "Your Name"}, headers=auth_headers())
+    assert {e["node"]["id"] for e in data_en["search"]["edges"]} == {show["id"]}
+
+    data_native = await gql(client, SEARCH_QUERY, {"q": "君の名は"}, headers=auth_headers())
+    assert {e["node"]["id"] for e in data_native["search"]["edges"]} == {show["id"]}
+
+
+async def test_search_matches_synopsis(client, migrated_db):
+    show = await add_show(client, titleRomaji="Mystery Show")
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE show SET synopsis = ? WHERE id = ?",
+        ("A gold rush story in Hokkaido.", show["id"]),
+    )
+    conn.commit()
+    data = await gql(client, SEARCH_QUERY, {"q": "Hokkaido"}, headers=auth_headers())
+    assert {e["node"]["id"] for e in data["search"]["edges"]} == {show["id"]}
+
+
+async def test_search_is_case_insensitive(client):
+    show = await add_show(client, titleRomaji="Golden Kamuy")
+    data = await gql(client, SEARCH_QUERY, {"q": "golden kamuy"}, headers=auth_headers())
+    assert {e["node"]["id"] for e in data["search"]["edges"]} == {show["id"]}
+
+
+async def test_search_no_match_returns_empty(client):
+    await add_show(client, titleRomaji="Golden Kamuy")
+    data = await gql(client, SEARCH_QUERY, {"q": "Nonexistent Title Xyz"}, headers=auth_headers())
+    assert data["search"]["edges"] == []
+
+
+async def test_search_is_paginated(client):
+    await add_show(client, titleRomaji="Search Match One")
+    await add_show(client, titleRomaji="Search Match Two")
+    data = await gql(
+        client,
+        'query { search(query: "Search Match", first: 1) { edges { node { id } } '
+        "pageInfo { hasNextPage } } }",
+        headers=auth_headers(),
+    )
+    assert len(data["search"]["edges"]) == 1
+    assert data["search"]["pageInfo"]["hasNextPage"] is True
+
+
 async def test_set_tracked_records_history(client):
     show = await add_show(client)
     data = await gql(

@@ -913,8 +913,43 @@ order — same reasoning `pagination.py`'s cursors already lean on).
   - **Verified**: unbound-field sweep re-run, only 3 real gaps left
     (`Query.backlog`/`search`/`stats` — B.9/A.12/A.13). 180 tests
     passing, `ruff check .` clean.
-- [ ] **A.12 — Implement full-text search** (§6.5): titles + synopses,
+- [x] **A.12 — Implement full-text search** (§6.5): titles + synopses,
   across all stored title variants.
+  - **Found and corrected a factual error while checking the reference
+    it points at**: §6.5 credits aniq's `list_screen.py` with using
+    `difflib` for its own local filtering — checked the real code,
+    it actually uses `textual.fuzzy.Matcher`, not `difflib` at all.
+    Not a design question (the section's own "full-text search, not
+    per-client fuzzy matching" framing already settles the approach
+    to take here), so corrected the citation in SCOPE.md directly
+    rather than asking about it.
+  - **Approach**: plain SQL `LIKE '%query%'` substring matching
+    (case-insensitive by SQLite's own ASCII default) across all three
+    title variants + synopsis — deliberately not fuzzy/similarity
+    scoring (§6.5 itself frames this as *replacing* per-client fuzzy
+    matching, a different concern from §5.4's fuzzy service-presence
+    matcher, A.7, which exists to tolerate an uncertain title, not
+    search one typed on purpose) and deliberately not SQLite FTS5
+    either — its indexing/ranking machinery is over-engineering at
+    this project's real scale (a single user's shows, dozens to a few
+    hundred rows), a plain scan across an already-small table is
+    simpler and fast enough.
+  - **Built**: `Query.search` resolver — reuses the existing
+    table-backed `pagination.paginate()` directly (a real `WHERE`
+    scan against `show`, no computed-list complexity like `nextUp`
+    needed), matching across `title_romaji`/`title_english`/
+    `title_native`/`synopsis` in one `OR`-joined, parenthesized clause
+    (parenthesized deliberately — `paginate()` ANDs cursor conditions
+    onto whatever `where` it's given, and `AND` binds tighter than
+    `OR` in SQL, so an unparenthesized `OR` clause would have grouped
+    wrong once combined with a real `after`/`before` cursor).
+  - **Tests** (+6, `test_server.py`): matches the romaji title; matches
+    English and native title variants independently; matches synopsis;
+    case-insensitive; no match returns an empty connection, not an
+    error; pagination itself works end-to-end.
+  - **Verified**: unbound-field sweep re-run, only 2 real gaps left
+    (`Query.backlog`/`stats` — B.9/A.13). 186 tests passing,
+    `ruff check .` clean.
 - [ ] **A.13 — Implement the stats query surface** (§6.6): totals,
   hours watched, personal-score distribution. (Won't be meaningful
   over time until Phase B accumulates real data — building the query

@@ -453,6 +453,33 @@ def resolve_next_up_entry_episode(obj, info):
     return obj["episode"]
 
 
+@query.field("search")
+def resolve_search(_, info, query, **page_args):
+    """§6.5, A.12 — across all three stored title variants (not just
+    whichever is primaryTitle) and synopsis. SQL `LIKE` substring
+    matching, case-insensitive by SQLite's own default for ASCII —
+    not fuzzy/similarity scoring: §6.5 explicitly frames this as
+    *replacing* "per-client fuzzy matching" with a real search query,
+    a different concern from §5.4's fuzzy service-presence matcher
+    (fuzzy.py, A.7) or aninote's own vault matcher, both of which
+    exist specifically to tolerate a mismatched/uncertain title
+    string, not to search a query the user typed on purpose. (SCOPE.md
+    itself named `difflib` as aniq's own approach here — checked the
+    real code, `list_screen.py` actually uses `textual.fuzzy.Matcher`,
+    not difflib at all; a factual correction, not a design question —
+    noted in SCOPE.md.) Personal-tracker scale (dozens to a few
+    hundred rows) doesn't call for SQLite FTS5's indexing/ranking
+    machinery — a plain `LIKE` scan across an already-small table is
+    both simpler and fast enough.
+    """
+    conn = db.get_connection()
+    like = f"%{query}%"
+    where = (
+        "(title_romaji LIKE ? OR title_english LIKE ? OR title_native LIKE ? OR synopsis LIKE ?)"
+    )
+    return pagination.paginate(conn, "show", where, (like, like, like, like), **page_args)
+
+
 @query.field("person")
 def resolve_person(_, info, id):  # noqa: A002
     return _get_person(db.get_connection(), id)

@@ -1172,6 +1172,26 @@ centralizes what aniq's `list_screen.py` currently does locally via
 `difflib`, so Holodeck/Captain's Log get equivalent search without
 reimplementing it.
 
+**Factual correction, 2026-08-08 (A.12)**: checked the real code before
+implementing — `list_screen.py`'s own filtering (`_filter_rows()`)
+actually uses `textual.fuzzy.Matcher`, not stdlib `difflib` at all;
+this section's "via difflib" was simply wrong about which library. Not
+a design question (the framing — "full-text search, not per-client
+fuzzy matching" — already settles the *approach*, this was just a
+wrong citation), so corrected here without asking.
+
+**Implemented 2026-08-08 (A.12)**: plain SQL `LIKE '%query%'`
+substring matching (case-insensitive by SQLite's own ASCII default)
+across `title_romaji`/`title_english`/`title_native`/`synopsis` — not
+fuzzy/similarity scoring, deliberately: §6.5's own "not left to
+per-client fuzzy matching" framing distinguishes this from §5.4's
+fuzzy service-presence matcher (`fuzzy.py`, A.7), a different concern
+(tolerating an uncertain/mismatched title, not searching one the user
+typed on purpose). SQLite FTS5's indexing/ranking machinery would be
+over-engineering at this project's actual scale (a single user's
+tracked shows — dozens to a few hundred rows); a plain scan across an
+already-small table is simpler and fast enough.
+
 ### 6.6 Stats/analytics (Phase A query surface, needs Phase B data to be meaningful over time)
 
 Full stats view: totals, hours watched (using `duration_minutes`/
