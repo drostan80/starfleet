@@ -540,9 +540,33 @@ order — same reasoning `pagination.py`'s cursors already lean on).
     literally rather than guessed at: A.4 is complete as its own text
     describes; numbering auto-derivation is left for whichever step
     actually has Sonarr/AniList data to derive it from (A.8 or later).
-- [ ] **A.5 — Implement `pending_review`** (§5.6): the shared
+- [x] **A.5 — Implement `pending_review`** (§5.6): the shared
   audit-only mechanism, value-chain accumulation on repeated automatic
   changes (not overwrite), permanent retention once resolved.
+  - **Already satisfied by earlier steps, verified 2026-08-08** rather
+    than built fresh: re-read §5.6 line by line against what actually
+    exists before doing anything else, per standing instruction. The
+    table itself (A.1), `resolvePendingReview` + the `pendingReviews`
+    query with its `includeResolved` default (both A.3), and the
+    value-chain-accumulation mechanism itself
+    (`_open_or_extend_pending_review`, A.4 — built there as a direct
+    prerequisite for `reconcileSeasonMapping`) were all already in
+    place. "Permanent retention... never purged" checked directly
+    against the schema rather than assumed: no mutation deletes a
+    `pending_review` row, resolved or not — confirmed by
+    `tests/test_pending_reviews_query_defaults_to_unresolved_only`
+    (`includeResolved: true` still returns a resolved entry). The
+    three passive/pull surfaces §5.6 describes (Data's status bar,
+    Holodeck's review queue, Captain's Log's inline prompt) are
+    client-side work, out of this server's own scope.
+  - One real cleanup found while verifying: a test helper's own
+    docstring (`_insert_pending_review`) still said "no mutation
+    creates pending_review rows yet" — stale since A.4 landed
+    `reconcileSeasonMapping`. Fixed the comment; no behavior change.
+  - SCOPE.md §5.6 annotated with this verification. 99 tests still
+    passing, `ruff check .` clean — no new tests were needed since
+    the behavior this step describes was already covered by A.3/A.4's
+    own test suites.
 - [ ] **A.6 — Implement all history tables** (§5.7): `status_change`,
   `score_change`, `air_date_change`, `tracked_change` — dedicated per
   concern, every row records originating client/process.

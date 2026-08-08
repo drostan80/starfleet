@@ -1069,8 +1069,10 @@ async def test_set_episode_movie_link_both_directions_queryable(client, migrated
 
 
 async def _insert_pending_review(migrated_db: Path) -> str:
-    """No mutation creates pending_review rows yet (that's automated
-    derivation, A.4/A.5) — insert directly for this test's purposes."""
+    """reconcileSeasonMapping (A.4) is the one mutation that creates
+    pending_review rows today, and only for season-mapping discrepancies
+    — inserting directly here keeps these resolve/query tests about a
+    generic row, not coupled to season's own specifics."""
     conn = db.get_connection()
     conn.execute(
         """

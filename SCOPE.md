@@ -840,6 +840,18 @@ silently overwriting — so review shows the full original → intermediate
 → current sequence. Entries are retained permanently once resolved,
 never purged.
 
+**Implemented (A.1/A.3/A.4)**: the table (A.1), `resolvePendingReview` +
+the `pendingReviews` query (both A.3, `includeResolved` defaulting to
+unresolved-only), and the automatic-creation/value-chain-accumulation
+mechanism (`_open_or_extend_pending_review`, A.4 — see §5.5's own
+implementation note) all already exist and are tested. "Permanent
+retention once resolved, never purged" holds structurally, not just by
+convention: no mutation in the schema deletes a `pending_review` row at
+all, resolved or not — confirmed via `tests/test_server.py`'s
+`includeResolved: true` check that a resolved entry stays queryable.
+The three passive/pull surfaces below are client-side work (Data/
+Holodeck/Captain's Log), out of this server's own scope.
+
 Surfaces in three passive/pull places, no push/email (accepted gap):
 - Data's status bar.
 - The Holodeck dashboard's foregrounded review queue (not just a
