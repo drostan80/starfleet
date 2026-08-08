@@ -24,8 +24,21 @@ new one) — LCARS runs its own separate authorization (`lcars
 anilist-login`, cli.py) to mint its own independent
 `anilist_access_token`, stored the same plaintext-`lcars.ini`-chmod-600
 way as everything else here (§8's own precedent, not a new pattern).
-`home_timezone` (§6.13) still isn't here — A.16 hasn't been reached
-yet, same discipline A.1/A.2 held to.
+`home_timezone` added here 2026-08-08 (A.16) — §11.2 already lists it
+alongside bearer_token/Sonarr/Radarr/AniList credentials as an
+`lcars.ini` value, not a database row or GraphQL-mutable setting
+(nothing in schema.graphql anticipated a "settings" type at all, so
+this genuinely had no other candidate home — checked before assuming).
+Its actual consumers (§6.13: "today" on the calendar, paced/catch-up
+mode's cadence *reset*, the daily metadata-refresh cadence) are all
+still-unbuilt Phase B/client concerns — A.10's own `pacedNextDate`
+already built the *adaptive computation* §6.2 describes, which is pure
+UTC timestamp arithmetic with no day-boundary bucketing in its own
+text; A.16's job is the setting itself, per its own BUILD_PLAN text,
+not retrofitting a consumer that doesn't exist yet. No validation of
+the value (e.g. against `zoneinfo`) — no other value in this file is
+validated either, consistent with the pattern already established
+here.
 """
 
 import configparser
@@ -72,6 +85,11 @@ class Config:
     anilist_client_id: str | None = None
     anilist_client_secret: str | None = None
     anilist_access_token: str | None = None
+    # A.16, §6.13 — an IANA timezone name. Used to bucket UTC-stored
+    # timestamps into calendar days wherever a "day" boundary matters
+    # (calendar/pacing-reset/daily-refresh, §6.13); storage itself always
+    # stays UTC, this never affects how a timestamp is written.
+    home_timezone: str = "Europe/Dublin"
 
 
 def load_config(config_path: Path = CONFIG_PATH) -> Config:
@@ -94,6 +112,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
                 "anilist_client_secret", fallback=None
             )
             cfg.anilist_access_token = parser["lcars"].get("anilist_access_token", fallback=None)
+            cfg.home_timezone = parser["lcars"].get("home_timezone", fallback=cfg.home_timezone)
     cfg.bearer_token = os.environ.get("LCARS_BEARER_TOKEN", cfg.bearer_token)
     env_db_path = os.environ.get("LCARS_DB_PATH")
     if env_db_path is not None:
@@ -109,6 +128,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     cfg.anilist_access_token = os.environ.get(
         "LCARS_ANILIST_ACCESS_TOKEN", cfg.anilist_access_token
     )
+    cfg.home_timezone = os.environ.get("LCARS_HOME_TIMEZONE", cfg.home_timezone)
     return cfg
 
 

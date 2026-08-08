@@ -1105,9 +1105,43 @@ order — same reasoning `pagination.py`'s cursors already lean on).
   - **Verified**: unbound-field sweep re-run — still only `Query.
     backlog` (B.9, Phase B) remains unbound anywhere in the schema.
     207 tests passing, `ruff check .` clean.
-- [ ] **A.16 — Implement global settings** (§6.13): home timezone
+- [x] **A.16 — Implement global settings** (§6.13): home timezone
   (default `Europe/Dublin`), used for calendar/pacing/refresh
   day-boundary logic; all storage stays UTC internally.
+  - **The real question here was storage location, not the value
+    itself** — checked, not guessed: `schema.graphql` has no
+    "settings" type or `homeTimezone` field anywhere (unlike A.9-A.15,
+    every one of which had its GraphQL shape already stubbed in A.2),
+    so a GraphQL-mutable setting had no existing scaffold to extend.
+    §11.2 already settles it directly: `home_timezone` is listed
+    alongside `bearer_token`/Sonarr/Radarr/AniList credentials as an
+    `lcars.ini` value, the same file/env precedence every other
+    server-side credential in this project already uses — not a
+    database row.
+  - **Built**: `config.Config.home_timezone: str = "Europe/Dublin"` +
+    `lcars.ini`/`LCARS_HOME_TIMEZONE` env var loading, same shape as
+    every other field in this file.
+  - **Deliberately not built here**: anything that actually *reads*
+    `home_timezone` — its three named consumers (calendar, paced/
+    catch-up's cadence *reset*, daily metadata-refresh cadence) are
+    all still-unbuilt Phase B/client concerns. Confirmed A.10's own
+    `pacedNextDate` doesn't need retrofitting for this: §6.2's
+    adaptive-computation text is pure UTC timestamp arithmetic, no
+    day-boundary bucketing anywhere in it.
+  - **Also completed while in this file**: `sonarr_url`/`sonarr_api_
+    key`/`radarr_url`/`radarr_api_key`/`anilist_client_id`/`anilist_
+    client_secret`/`anilist_access_token` (added A.8/A.9) never got
+    their own dedicated file/env-precedence tests at the time — folded
+    into this same pass rather than left as a lingering gap, since
+    this file was already open for `home_timezone`'s own tests.
+  - **Tests** (+8, `test_config.py`, now 12 total in that file):
+    `home_timezone` defaults correctly, loads from file, env overrides
+    file; the same file/env precedence pattern for Sonarr/Radarr load-
+    from-file and env-override, and AniList OAuth fields load-from-
+    file and env-override.
+  - **Verified**: 214 tests passing, `ruff check .` clean. No schema/
+    resolver changes at all this step — confirmed the unbound-field
+    sweep is unaffected, still only `Query.backlog` (B.9) remains.
 - [ ] **A.17 — Data's side**: replace Data's Trakt client with an
   LCARS client of the same shape (§4 Phase A). Data keeps doing what
   aniq does today (Sonarr polling, AniList calls, its own air-date

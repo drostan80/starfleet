@@ -1416,6 +1416,20 @@ rolls back those earlier rows too, not just the row that collided.
   setting only controls how they're bucketed into calendar days for
   display and scheduling logic, not how they're stored.
 
+**Implemented 2026-08-08 (A.16)**: `home_timezone` lives in
+`config.py`/`lcars.ini`, not a database row or a GraphQL-mutable
+setting — §11.2 already lists it alongside `bearer_token`/Sonarr/
+Radarr/AniList credentials as an `lcars.ini` value (checked before
+assuming; nothing in `schema.graphql` anticipated a "settings" type at
+all, so this had no other candidate home). Its three named consumers
+(the calendar, the paced/catch-up cadence *reset*, the daily
+metadata-refresh cadence) are all still-unbuilt Phase B/client
+concerns — A.10's `pacedNextDate` already built §6.2's own adaptive
+computation, which is pure UTC timestamp arithmetic with no
+day-boundary bucketing in its own text, so nothing needed retrofitting
+there. No validation on the value (e.g. against `zoneinfo`) — no other
+`lcars.ini` value is validated either.
+
 ---
 
 ## 7. Clients

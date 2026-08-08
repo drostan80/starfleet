@@ -41,3 +41,76 @@ def test_db_path_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("LCARS_DB_PATH", "/tmp/somewhere/lcars.db")
     cfg = load_config(config_path=tmp_path / "does-not-exist.ini")
     assert cfg.db_path == Path("/tmp/somewhere/lcars.db")
+
+
+# --- Sonarr/Radarr/AniList fields (A.8/A.9) — file<env precedence coverage,
+# never given their own dedicated tests when those fields were first added ---
+
+
+def test_sonarr_radarr_load_from_file(tmp_path):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text(
+        "[lcars]\n"
+        "sonarr_url = http://sonarr:8989\n"
+        "sonarr_api_key = sonarr-key\n"
+        "radarr_url = http://radarr:7878\n"
+        "radarr_api_key = radarr-key\n"
+    )
+    cfg = load_config(config_path=config_path)
+    assert cfg.sonarr_url == "http://sonarr:8989"
+    assert cfg.sonarr_api_key == "sonarr-key"
+    assert cfg.radarr_url == "http://radarr:7878"
+    assert cfg.radarr_api_key == "radarr-key"
+
+
+def test_sonarr_env_vars_override_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text("[lcars]\nsonarr_url = http://from-file:8989\n")
+    monkeypatch.setenv("LCARS_SONARR_URL", "http://from-env:8989")
+    cfg = load_config(config_path=config_path)
+    assert cfg.sonarr_url == "http://from-env:8989"
+
+
+def test_anilist_oauth_fields_load_from_file(tmp_path):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text(
+        "[lcars]\n"
+        "anilist_client_id = cid\n"
+        "anilist_client_secret = csecret\n"
+        "anilist_access_token = tok\n"
+    )
+    cfg = load_config(config_path=config_path)
+    assert cfg.anilist_client_id == "cid"
+    assert cfg.anilist_client_secret == "csecret"
+    assert cfg.anilist_access_token == "tok"
+
+
+def test_anilist_access_token_env_var_overrides_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text("[lcars]\nanilist_access_token = from-file\n")
+    monkeypatch.setenv("LCARS_ANILIST_ACCESS_TOKEN", "from-env")
+    cfg = load_config(config_path=config_path)
+    assert cfg.anilist_access_token == "from-env"
+
+
+# --- home_timezone (A.16, §6.13) ---------------------------------------------
+
+
+def test_home_timezone_defaults_to_europe_dublin(tmp_path):
+    cfg = load_config(config_path=tmp_path / "does-not-exist.ini")
+    assert cfg.home_timezone == "Europe/Dublin"
+
+
+def test_home_timezone_loads_from_file(tmp_path):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text("[lcars]\nhome_timezone = America/New_York\n")
+    cfg = load_config(config_path=config_path)
+    assert cfg.home_timezone == "America/New_York"
+
+
+def test_home_timezone_env_var_overrides_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text("[lcars]\nhome_timezone = America/New_York\n")
+    monkeypatch.setenv("LCARS_HOME_TIMEZONE", "Asia/Tokyo")
+    cfg = load_config(config_path=config_path)
+    assert cfg.home_timezone == "Asia/Tokyo"
