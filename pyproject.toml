@@ -35,6 +35,12 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# schema.graphql (A.2, §11.1) is hand-written SDL loaded at runtime, not a
+# .py file — setuptools doesn't ship non-Python files by default, so a real
+# `pip install .` (as opposed to `-e .`) would silently omit it without this.
+lcars = ["schema.graphql"]
+
 [tool.ruff]
 line-length = 100
 src = ["src"]

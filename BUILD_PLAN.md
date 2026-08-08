@@ -133,13 +133,45 @@ no open design questions left blocking it.
     All in SCOPE.md §5.1/§5.3/§5.9. Verified the same way as A.1
     itself: applied to a scratch DB, exercised every new
     constraint/nullability with real inserts, downgraded cleanly.
-- [ ] **A.2 — Write the GraphQL SDL** (schema-first, §11.1, §8, §10.2
+- [x] **A.2 — Write the GraphQL SDL** (schema-first, §11.1, §8, §10.2
   item 5): types, dedicated field-specific mutations (`setStatus`,
   `setScore`, `addWatchEvent`, `markEpisodeSkipped`,
   `markSeasonWatched`, etc. — never one generic `updateShow(...)`,
   §3 principle 7), and the deliberately-designed query shapes (§8):
   shows by status, episodes airing in the next N days, pending-review
   list, backlog, full-text search, cross-show next-up.
+  - Done 2026-08-08: `src/lcars/schema.graphql`, one hand-written SDL
+    file, 96 types after built-ins. Covers all 24 tables from A.1 +
+    its movie-tracking addendum, every mutation implied by §6.1–§6.13,
+    and all six §8 query shapes. Verified for real: loaded through
+    Ariadne's `make_executable_schema` + `graphql-core`'s
+    `validate_schema`, zero errors; added `tests/test_schema.py` so
+    this stays checked on every future change, not just today.
+  - **Found and fixed a real packaging bug while verifying**: a plain
+    `pip install .` (non-editable — what the Dockerfile actually does)
+    silently dropped `schema.graphql`, since setuptools doesn't ship
+    non-`.py` files by default. Confirmed the failure with a scratch
+    install, fixed via `[tool.setuptools.package-data]`, confirmed the
+    fix with the same scratch-install test.
+  - **Three more real API-shape gaps found, none guessed through**:
+    - Pagination — unaddressed anywhere in SCOPE.md. Asked; you chose
+      Relay-style cursor connections (edges/node/pageInfo), then a
+      follow-up on scope (top-level-only vs. every list field) — you
+      chose every list field, no exceptions, so even small nested
+      lists (a show's own episodes/cast/tags) use full connections.
+    - Mutation response/error shape — also unaddressed. Asked; you
+      confirmed mutations return the mutated entity directly, errors
+      via GraphQL's standard top-level `errors` array, no bespoke
+      per-mutation Payload type.
+    - §6.11's hard-delete delay period had no persisted state to
+      measure it by anywhere in §5. Asked; resolved as a new
+      `show.hardDeleteRequestedAt` timestamp (already added via the
+      A.1-addendum migration, `0c47d1677e7d`).
+  - **Surfaced the movie-tracking gap** that produced the whole A.1
+    addendum above — discovered specifically because writing GraphQL
+    types against the finished A.1 schema forced the "where does a
+    movie's watch-state actually live" question that a table-by-table
+    migration review alone hadn't surfaced.
 - [ ] **A.3 — Wire resolvers to SQLite** via raw `sqlite3` (stdlib, no
   ORM) + hand-written Alembic migrations (§11.2, resolved 2026-08-08
   during 0.2 — this line originally said SQLAlchemy, corrected here to

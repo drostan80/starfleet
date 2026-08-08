@@ -1,0 +1,870 @@
+"""
+LCARS GraphQL schema — SCOPE.md §8 (API shape), built against the data
+model finished in §5 (BUILD_PLAN.md A.1 + its movie-tracking addendum).
+
+Hand-written SDL, schema-first (§11.1) — Ariadne binds resolvers to
+this file, the schema is never generated from Python code. Written in
+BUILD_PLAN.md A.2; resolvers (raw sqlite3, no ORM, §11.2) are A.3's job
+— nothing here has an implementation yet.
+
+Conventions decided while drafting this (not stated in SCOPE.md before
+now — each was asked about explicitly rather than assumed):
+  - Pagination: Relay-style cursor connections (edges/node/pageInfo),
+    applied to *every* list-shaped field with no exceptions, including
+    small nested ones (a show's own episode list, cast, tags, ...).
+  - Mutations return the mutated/created entity directly. Failures
+    surface via GraphQL's standard top-level `errors` array (thrown
+    exceptions in resolvers) — no bespoke per-mutation Payload/error
+    type. Consistent with §6.1's own "clamp/round silently" stance:
+    most invalid input is normalized, not rejected, so there's little
+    for a dedicated error-carrying type to report in the first place.
+  - §8's own "not generic pass-through filtering" principle (mirrors
+    §3 principle 7 for mutations) — every query below is purpose-built
+    for one described use case, never a generic `filter: FilterInput`
+    kitchen sink.
+
+Scalar/type mapping notes:
+  - Every top-level entity's `id` is GraphQL `ID` — already a human-
+    readable, type-prefixed string (§5.0), no separate opaque-id
+    scheme needed on top of it.
+  - `DateTime` (declared below) represents the ISO-8601 UTC TEXT
+    timestamps §5's tables all use (ISO-8601 in, ISO-8601 out).
+  - Fields SCOPE.md explicitly marks open-ended (`service` on
+    show_external_id/show_service_presence, `source`/`changed_by` on
+    the history & pending_review tables) are plain `String`, not
+    GraphQL enums — using an enum would silently reintroduce the
+    "needs a migration to extend" property §5.4 specifically designed
+    around.
+"""
+
+scalar DateTime
+
+# ---------------------------------------------------------------------------
+# Shared Relay plumbing (§ paging convention decided above)
+# ---------------------------------------------------------------------------
+
+"""Common to every connection type below — one shared shape, per Relay convention."""
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+# ---------------------------------------------------------------------------
+# Enums — closed value sets only (SCOPE.md §5). Open-ended fields stay String.
+# ---------------------------------------------------------------------------
+
+"§5.1 — the three independent identity axes, plus the reused status enum."
+enum MediaShape {
+  EPISODIC
+  MOVIE
+}
+
+enum TrackingSpace {
+  TV
+  ANIME
+}
+
+"Reused unchanged for movies (§5.1/§6.10) — no movie-specific simplification."
+enum ShowStatus {
+  WATCHING
+  PLANNED
+  PAUSED
+  COMPLETED
+  DROPPED
+}
+
+"§5.2 — specials/OVAs/bonus-movie episodes all keep season = 0, distinguished by kind."
+enum EpisodeKind {
+  REGULAR
+  SPECIAL
+  OVA
+  BONUS_MOVIE
+}
+
+"§6.7's priority order (Manual > animeschedule.net > AniList > Sonarr raw) governs which wins, not this enum's ordering."
+enum AirDateSource {
+  SONARR
+  ANILIST
+  ANIMESCHEDULE
+  MANUAL
+}
+
+"§5.2 — distinct from watch_event's existence; state=SKIPPED still satisfies show-level completion."
+enum EpisodeState {
+  UNWATCHED
+  WATCHED
+  SKIPPED
+}
+
+"§5.8 show_person.role_type."
+enum PersonRoleType {
+  VOICE_ACTOR
+  ACTOR
+  STAFF
+}
+
+"§5.8 show_studio.role_type."
+enum StudioRoleType {
+  STUDIO
+  PUBLISHER
+  NETWORK
+}
+
+"§5.1 — which title variant is the display default."
+enum PrimaryTitle {
+  ROMAJI
+  ENGLISH
+  NATIVE
+}
+
+"§5.5 show_id_mapping.source — closed because these three are the only ways this table's row gets populated."
+enum ShowIdMappingSource {
+  FRIBB
+  MANUAL
+  UNMATCHED
+}
+
+"§5.5 episode_numbering_mapping.scheme."
+enum NumberingScheme {
+  ABSOLUTE
+  SEASON_EPISODE
+}
+
+"§5.5 episode_numbering_mapping.source."
+enum NumberingSource {
+  SONARR
+  ANILIST
+  MANUAL
+  UNMATCHED
+}
+
+"§5.1/§5.9 addendum (2026-08-08) — episode_movie_link.source."
+enum EpisodeMovieLinkSource {
+  TMDB_MATCH
+  MANUAL
+  UNMATCHED
+}
+
+"§5.6 — the three clients that can actually resolve a pending_review entry (corrected from an inconsistent 4-value list while drafting A.1, see SCOPE.md §5.6)."
+enum ResolvedByClient {
+  DATA
+  HOLODECK
+  CAPTAINS_LOG
+}
+
+# ---------------------------------------------------------------------------
+# 5.1 show
+# ---------------------------------------------------------------------------
+
+type Show {
+  id: ID!
+  mediaShape: MediaShape!
+  trackingSpace: TrackingSpace!
+
+  titleRomaji: String
+  titleEnglish: String
+  titleNative: String
+  primaryTitle: PrimaryTitle!
+  "Resolves to whichever of the three title fields primaryTitle points at."
+  displayTitle: String!
+
+  status: ShowStatus!
+  tracked: Boolean!
+  score: Float
+  totalEpisodes: Int
+  durationMinutes: Int
+  posterUrl: String
+  bannerUrl: String
+  "Source-provided, unnormalized display strings (§5.1) — distinct from the tags field below."
+  genresRaw: [String!]!
+  synopsis: String
+
+  "media_shape = MOVIE only — meaningless/always-false-empty for episodic shows (§5.1 movie-tracking addendum)."
+  availableViaRadarr: Boolean!
+  availableCheckedAt: DateTime
+  availableLocally: Boolean!
+
+  "media_shape = MOVIE only — set once §6.11's delay period has been requested; null otherwise."
+  hardDeleteRequestedAt: DateTime
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  episodes(first: Int, after: String, last: Int, before: String): EpisodeConnection!
+  watchEvents(first: Int, after: String, last: Int, before: String): WatchEventConnection!
+  externalIds(first: Int, after: String, last: Int, before: String): ShowExternalIdConnection!
+  servicePresence(first: Int, after: String, last: Int, before: String): ShowServicePresenceConnection!
+  cast(first: Int, after: String, last: Int, before: String): CastCreditConnection!
+  studioCredits(first: Int, after: String, last: Int, before: String): StudioCreditConnection!
+  tags(first: Int, after: String, last: Int, before: String): TagConnection!
+  "§5.9 show_relation, either direction, as a plain Show list (the link itself carries no extra data — §5.9)."
+  relatedShows(first: Int, after: String, last: Int, before: String): ShowConnection!
+  franchiseMemberships(first: Int, after: String, last: Int, before: String): FranchiseEntryConnection!
+
+  statusHistory(first: Int, after: String, last: Int, before: String): StatusChangeConnection!
+  scoreHistory(first: Int, after: String, last: Int, before: String): ScoreChangeConnection!
+  trackedHistory(first: Int, after: String, last: Int, before: String): TrackedChangeConnection!
+
+  "Nullable until A.4 seeds it (or the show predates seeding) — §5.5."
+  idMapping: ShowIdMapping
+  episodeNumberingMapping: EpisodeNumberingMapping
+  "media_shape = MOVIE only — §5.9 addendum."
+  nextUpOverride: NextUpOverride
+  "media_shape = MOVIE only — the reverse direction of Episode.linkedMovieShow: the bonus_movie-kind episode (elsewhere) reconciled to represent this same film, once matched."
+  linkedFromEpisode: Episode
+}
+
+type ShowEdge {
+  node: Show!
+  cursor: String!
+}
+
+type ShowConnection {
+  edges: [ShowEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# 5.2 episode
+# ---------------------------------------------------------------------------
+
+type Episode {
+  id: ID!
+  show: Show!
+  season: Int!
+  episode: Int!
+  kind: EpisodeKind!
+  "Decimal-capable synthesized numbering (§5.2, e.g. 12.1) — null until sourced or synthesized."
+  absoluteNumber: Float
+
+  airDateUtc: DateTime
+  airDateSource: AirDateSource
+  "Kept for diffing/debugging (§5.2) — the raw, uncorrected value Sonarr itself reported."
+  airDateRawSonarr: DateTime
+
+  availableViaSonarr: Boolean!
+  "Only ever meaningfully true for kind = BONUS_MOVIE (§5.2) — regular/special/ova episodes never populate this."
+  availableViaRadarr: Boolean!
+  availableLocally: Boolean!
+  availableCheckedAt: DateTime
+
+  "Optional override of show.durationMinutes (§5.1/§5.2)."
+  runtimeMinutes: Int
+  state: EpisodeState!
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  watchEvents(first: Int, after: String, last: Int, before: String): WatchEventConnection!
+  airDateHistory(first: Int, after: String, last: Int, before: String): AirDateChangeConnection!
+  "kind = BONUS_MOVIE only — §5.1/§5.9 addendum, the standalone movie show representing the same film, once reconciled."
+  linkedMovieShow: Show
+}
+
+type EpisodeEdge {
+  node: Episode!
+  cursor: String!
+}
+
+type EpisodeConnection {
+  edges: [EpisodeEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# 5.3 watch_event
+# ---------------------------------------------------------------------------
+
+type WatchEvent {
+  id: ID!
+  show: Show!
+  "Null for a movie's watch event (media_shape = MOVIE has no episode row at all — §5.3 addendum)."
+  season: Int
+  episode: Int
+  watchedAt: DateTime!
+  platform: String
+  createdAt: DateTime!
+}
+
+type WatchEventEdge {
+  node: WatchEvent!
+  cursor: String!
+}
+
+type WatchEventConnection {
+  edges: [WatchEventEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# 5.4 show_external_id / show_service_presence
+# ---------------------------------------------------------------------------
+
+"§5.4 — the confirmed/linked crosswalk. `service` is plain String: open-ended by design, not a closed enum."
+type ShowExternalId {
+  show: Show!
+  service: String!
+  externalId: String!
+  url: String!
+  createdAt: DateTime!
+}
+
+type ShowExternalIdEdge {
+  node: ShowExternalId!
+  cursor: String!
+}
+
+type ShowExternalIdConnection {
+  edges: [ShowExternalIdEdge!]!
+  pageInfo: PageInfo!
+}
+
+"§5.4 — passive/informational only, never goes through pending_review (unlike show_external_id links)."
+type ShowServicePresence {
+  id: ID!
+  show: Show!
+  service: String!
+  present: Boolean!
+  checkedAt: DateTime!
+}
+
+type ShowServicePresenceEdge {
+  node: ShowServicePresence!
+  cursor: String!
+}
+
+type ShowServicePresenceConnection {
+  edges: [ShowServicePresenceEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# 5.5 id-mapper / reconciliation tables (+ the 2026-08-08 episode_movie_link addendum)
+# ---------------------------------------------------------------------------
+
+type ShowIdMapping {
+  id: ID!
+  show: Show!
+  tvdbId: Int
+  anilistId: Int
+  source: ShowIdMappingSource!
+  matched: Boolean!
+  manualOverride: Boolean!
+  lastReconciledAt: DateTime
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type EpisodeNumberingMapping {
+  id: ID!
+  show: Show!
+  scheme: NumberingScheme!
+  source: NumberingSource!
+  matched: Boolean!
+  manualOverride: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+"§5.1/§5.9 addendum — reconciles a bonus_movie-kind episode against the standalone movie show for the same film."
+type EpisodeMovieLink {
+  id: ID!
+  episode: Episode!
+  movieShow: Show
+  source: EpisodeMovieLinkSource!
+  matched: Boolean!
+  manualOverride: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# ---------------------------------------------------------------------------
+# 5.6 pending_review
+# ---------------------------------------------------------------------------
+
+"""
+§5.6 — the shared audit-only reconciliation mechanism. `entityType`/
+`source` are plain String (open-ended, §5.6/§5.7). `entityType` +
+`entityId` split from a single "entity" column found underspecified
+while drafting A.1 (see SCOPE.md §5.6) — needed to say *which* row.
+"""
+type PendingReview {
+  id: ID!
+  entityType: String!
+  entityId: ID!
+  field: String!
+  previousValue: String
+  "Full sequence of intermediate values since the entry opened, not just the latest (§5.6)."
+  proposedValueChain: [String!]!
+  source: String!
+  createdAt: DateTime!
+  resolvedAt: DateTime
+  resolvedByClient: ResolvedByClient
+  resolutionNote: String
+}
+
+type PendingReviewEdge {
+  node: PendingReview!
+  cursor: String!
+}
+
+type PendingReviewConnection {
+  edges: [PendingReviewEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# 5.7 history tables
+# ---------------------------------------------------------------------------
+
+"changedBy is plain String — the open client/process list §5.7 itself leaves extensible."
+type StatusChange {
+  id: ID!
+  show: Show!
+  previousStatus: ShowStatus
+  newStatus: ShowStatus!
+  changedAt: DateTime!
+  changedBy: String!
+}
+
+type StatusChangeEdge {
+  node: StatusChange!
+  cursor: String!
+}
+
+type StatusChangeConnection {
+  edges: [StatusChangeEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ScoreChange {
+  id: ID!
+  show: Show!
+  previousScore: Float
+  newScore: Float!
+  changedAt: DateTime!
+  changedBy: String!
+}
+
+type ScoreChangeEdge {
+  node: ScoreChange!
+  cursor: String!
+}
+
+type ScoreChangeConnection {
+  edges: [ScoreChangeEdge!]!
+  pageInfo: PageInfo!
+}
+
+type AirDateChange {
+  id: ID!
+  episode: Episode!
+  previousAirDateUtc: DateTime
+  newAirDateUtc: DateTime!
+  previousSource: AirDateSource
+  newSource: AirDateSource!
+  changedAt: DateTime!
+  changedBy: String!
+}
+
+type AirDateChangeEdge {
+  node: AirDateChange!
+  cursor: String!
+}
+
+type AirDateChangeConnection {
+  edges: [AirDateChangeEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TrackedChange {
+  id: ID!
+  show: Show!
+  previousTracked: Boolean
+  newTracked: Boolean!
+  changedAt: DateTime!
+  changedBy: String!
+}
+
+type TrackedChangeEdge {
+  node: TrackedChange!
+  cursor: String!
+}
+
+type TrackedChangeConnection {
+  edges: [TrackedChangeEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# 5.8 person / show_person / studio / show_studio
+# ---------------------------------------------------------------------------
+
+type Person {
+  id: ID!
+  name: String!
+  portraitUrl: String
+  externalService: String
+  externalId: String
+  externalUrl: String
+  createdAt: DateTime!
+  "Queryable from the person side too (§5.8) — every show_person row for this person, across the tracked library."
+  credits(first: Int, after: String, last: Int, before: String): CastCreditConnection!
+}
+
+type PersonEdge {
+  node: Person!
+  cursor: String!
+}
+
+type PersonConnection {
+  edges: [PersonEdge!]!
+  pageInfo: PageInfo!
+}
+
+"Wraps a show_person join row — carries the role/character alongside the person, from either direction."
+type CastCredit {
+  show: Show!
+  person: Person!
+  roleType: PersonRoleType!
+  characterName: String
+}
+
+type CastCreditEdge {
+  node: CastCredit!
+  cursor: String!
+}
+
+type CastCreditConnection {
+  edges: [CastCreditEdge!]!
+  pageInfo: PageInfo!
+}
+
+type Studio {
+  id: ID!
+  name: String!
+  externalService: String
+  externalId: String
+  externalUrl: String
+  createdAt: DateTime!
+  "Queryable from the studio side too (§5.8), same reasoning as Person.credits."
+  credits(first: Int, after: String, last: Int, before: String): StudioCreditConnection!
+}
+
+type StudioEdge {
+  node: Studio!
+  cursor: String!
+}
+
+type StudioConnection {
+  edges: [StudioEdge!]!
+  pageInfo: PageInfo!
+}
+
+"Wraps a show_studio join row — carries the role (studio/publisher/network) alongside the studio."
+type StudioCredit {
+  show: Show!
+  studio: Studio!
+  roleType: StudioRoleType!
+}
+
+type StudioCreditEdge {
+  node: StudioCredit!
+  cursor: String!
+}
+
+type StudioCreditConnection {
+  edges: [StudioCreditEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# 5.9 show_relation / franchise / franchise_member (+ next_up_override addendum)
+# ---------------------------------------------------------------------------
+
+type Franchise {
+  id: ID!
+  name: String!
+  members(first: Int, after: String, last: Int, before: String): FranchiseEntryConnection!
+}
+
+type FranchiseEdge {
+  node: Franchise!
+  cursor: String!
+}
+
+type FranchiseConnection {
+  edges: [FranchiseEdge!]!
+  pageInfo: PageInfo!
+}
+
+"Wraps a franchise_member join row — carries sortOrder alongside the show, from either direction."
+type FranchiseEntry {
+  franchise: Franchise!
+  show: Show!
+  sortOrder: Int!
+}
+
+type FranchiseEntryEdge {
+  node: FranchiseEntry!
+  cursor: String!
+}
+
+type FranchiseEntryConnection {
+  edges: [FranchiseEntryEdge!]!
+  pageInfo: PageInfo!
+}
+
+"§5.9 addendum (2026-08-08) — the stored manual-reorder override for the §6.4 next-up query."
+type NextUpOverride {
+  id: ID!
+  show: Show!
+  sortOrder: Int!
+}
+
+# ---------------------------------------------------------------------------
+# 5.1 custom tags: tag / show_tag
+# ---------------------------------------------------------------------------
+
+type Tag {
+  id: ID!
+  name: String!
+  createdAt: DateTime!
+  shows(first: Int, after: String, last: Int, before: String): ShowConnection!
+}
+
+type TagEdge {
+  node: Tag!
+  cursor: String!
+}
+
+type TagConnection {
+  edges: [TagEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# 5.10 saved filter presets
+# ---------------------------------------------------------------------------
+
+"filterJson's shape intentionally isn't pinned down beyond \"serialized filter criteria\" (§5.10) — client-interpreted, not server-applied."
+type FilterPreset {
+  id: ID!
+  name: String!
+  filterJson: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type FilterPresetEdge {
+  node: FilterPreset!
+  cursor: String!
+}
+
+type FilterPresetConnection {
+  edges: [FilterPresetEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# §6.4 cross-show "next up" — a computed, composite result (not a stored entity)
+# ---------------------------------------------------------------------------
+
+"One row per show with an available next episode — across watching-status and paced/catch-up shows (§6.4)."
+type NextUpEntry {
+  show: Show!
+  episode: Episode!
+}
+
+type NextUpEntryEdge {
+  node: NextUpEntry!
+  cursor: String!
+}
+
+type NextUpEntryConnection {
+  edges: [NextUpEntryEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# §6.6 stats/analytics — a single computed object, not a list
+# ---------------------------------------------------------------------------
+
+"One bucket of the personal-score distribution (§6.6)."
+type ScoreBucket {
+  score: Float!
+  count: Int!
+}
+
+type Stats {
+  totalShows: Int!
+  totalEpisodesWatched: Int!
+  hoursWatched: Float!
+  scoreDistribution: [ScoreBucket!]!
+}
+
+# ---------------------------------------------------------------------------
+# §6.12 data export/import
+# ---------------------------------------------------------------------------
+
+"""
+Import always rejects on any schema_version mismatch (§6.12) — no
+auto-migration path, so failure here is a thrown GraphQL error, not a
+partial-success payload to model.
+"""
+type ImportResult {
+  schemaVersion: Int!
+  showsImported: Int!
+  episodesImported: Int!
+  watchEventsImported: Int!
+}
+
+# ---------------------------------------------------------------------------
+# Mutation inputs
+# ---------------------------------------------------------------------------
+
+"""
+addShow's input — known external ids are all optional (a show can be
+added with zero, some, or all of them already known; on-demand fetch,
+§4 Phase A/A.8, resolves the rest immediately after creation).
+mediaShape/trackingSpace are required — SCOPE.md §5.1 treats them as
+the two axes that must be known up front, everything else derives.
+"""
+input AddShowInput {
+  mediaShape: MediaShape!
+  trackingSpace: TrackingSpace!
+  titleRomaji: String
+  titleEnglish: String
+  titleNative: String
+  primaryTitle: PrimaryTitle!
+  anilistId: Int
+  tvdbId: Int
+  tmdbId: Int
+  imdbId: String
+  malId: Int
+}
+
+# ---------------------------------------------------------------------------
+# Query
+# ---------------------------------------------------------------------------
+
+type Query {
+  show(id: ID!): Show
+  shows(first: Int, after: String, last: Int, before: String): ShowConnection!
+  "§8 — shows by status. A list of statuses (not singular) so e.g. WATCHING+PAUSED can be queried together without becoming generic pass-through filtering."
+  showsByStatus(statuses: [ShowStatus!]!, first: Int, after: String, last: Int, before: String): ShowConnection!
+
+  episode(id: ID!): Episode
+  "§8 — episodes airing in the next N days."
+  episodesAiringSoon(days: Int!, first: Int, after: String, last: Int, before: String): EpisodeConnection!
+  "§8 — the backlog: unwatched-but-available episodes on watching-status, airing shows (§6.3)."
+  backlog(first: Int, after: String, last: Int, before: String): EpisodeConnection!
+
+  "§8 — the pending-review list. Defaults to unresolved only; includeResolved surfaces the permanent record too (§5.6: never purged)."
+  pendingReviews(includeResolved: Boolean = false, first: Int, after: String, last: Int, before: String): PendingReviewConnection!
+
+  "§8/§6.5 — full-text search across all title variants and synopses (not just the primary title)."
+  search(query: String!, first: Int, after: String, last: Int, before: String): ShowConnection!
+
+  "§8/§6.4 — cross-show next-up, across watching-status and paced/catch-up shows, soonest-available-first by default."
+  nextUp(first: Int, after: String, last: Int, before: String): NextUpEntryConnection!
+
+  franchise(id: ID!): Franchise
+  franchises(first: Int, after: String, last: Int, before: String): FranchiseConnection!
+
+  person(id: ID!): Person
+  people(first: Int, after: String, last: Int, before: String): PersonConnection!
+
+  studio(id: ID!): Studio
+  studios(first: Int, after: String, last: Int, before: String): StudioConnection!
+
+  tag(id: ID!): Tag
+  tags(first: Int, after: String, last: Int, before: String): TagConnection!
+
+  filterPreset(id: ID!): FilterPreset
+  filterPresets(first: Int, after: String, last: Int, before: String): FilterPresetConnection!
+
+  "§6.6 — totals, hours watched, personal-score distribution."
+  stats: Stats!
+
+  "§6.12 — the full JSON export, schema_version included. Read-only: exporting has no side effect, so this is a query, not a mutation."
+  exportData: String!
+}
+
+# ---------------------------------------------------------------------------
+# Mutation
+# ---------------------------------------------------------------------------
+
+type Mutation {
+  # -- Show lifecycle ---------------------------------------------------
+  addShow(input: AddShowInput!): Show!
+  "§6.1 — clamps/rounds silently to the 0-20 quarter-point scale rather than rejecting out-of-range input."
+  setScore(showId: ID!, score: Float!): Show!
+  setStatus(showId: ID!, status: ShowStatus!): Show!
+  setTracked(showId: ID!, tracked: Boolean!): Show!
+
+  # -- §6.11 deletion policy ---------------------------------------------
+  "Soft is always the default/first step (§3 principle 3, §6.11) — a status/tracked-flag change, never a row removal."
+  softDeleteShow(showId: ID!): Show!
+  "Starts the delay period (§6.11) — sets hard_delete_requested_at."
+  requestHardDelete(showId: ID!): Show!
+  "Reverses requestHardDelete before the delay elapses."
+  cancelHardDelete(showId: ID!): Show!
+  "Only succeeds once the delay period has elapsed AND retypedTitle matches the show's current display title (§6.11) — the actual purge, cascading to this show's episodes/watch_events/etc."
+  confirmHardDelete(showId: ID!, retypedTitle: String!): Boolean!
+
+  # -- 5.3 watch tracking -------------------------------------------------
+  "season/episode required for episodic shows, omitted for movies (§5.3 addendum — media_shape = MOVIE has no episode row)."
+  addWatchEvent(showId: ID!, season: Int, episode: Int, watchedAt: DateTime, platform: String): WatchEvent!
+  "Hard-deletable (§5.3) — the one deliberate exception to soft-delete-by-default."
+  deleteWatchEvent(watchEventId: ID!): Boolean!
+  markEpisodeSkipped(episodeId: ID!): Episode!
+  "Bulk mutation (§5.3) — one watch_event row per episode in the season, single call."
+  markSeasonWatched(showId: ID!, season: Int!, watchedAt: DateTime): [WatchEvent!]!
+  markEpisodeRangeWatched(showId: ID!, season: Int!, fromEpisode: Int!, toEpisode: Int!, watchedAt: DateTime): [WatchEvent!]!
+
+  # -- 5.2 episode field overrides -----------------------------------------
+  "Sets air_date_source = MANUAL — §6.7's priority order means this then wins over every automatic source."
+  setEpisodeAirDate(episodeId: ID!, airDateUtc: DateTime!): Episode!
+  setEpisodeRuntimeOverride(episodeId: ID!, runtimeMinutes: Int): Episode!
+
+  # -- 5.5 id-mapper manual overrides (§3 principle 6: manual wins once set) --
+  setShowIdMapping(showId: ID!, tvdbId: Int, anilistId: Int): ShowIdMapping!
+  setEpisodeNumberingScheme(showId: ID!, scheme: NumberingScheme!): EpisodeNumberingMapping!
+  "§5.1/§5.9 addendum — manually confirm/correct which movie show a bonus_movie-kind episode represents."
+  setEpisodeMovieLink(episodeId: ID!, movieShowId: ID!): EpisodeMovieLink!
+
+  # -- 5.4 external links ---------------------------------------------------
+  "Accepts an offered show_service_presence link (§5.4), or adds a crosswalk entry manually."
+  linkShowExternalId(showId: ID!, service: String!, externalId: String!, url: String!): ShowExternalId!
+  unlinkShowExternalId(showId: ID!, service: String!): Boolean!
+
+  # -- 5.6 pending_review ----------------------------------------------------
+  resolvePendingReview(id: ID!, resolvedByClient: ResolvedByClient!, resolutionNote: String): PendingReview!
+
+  # -- 5.9 franchise / next-up manual ordering (§3 principle 6) --------------
+  setFranchiseMemberOrder(franchiseId: ID!, showId: ID!, sortOrder: Int!): FranchiseEntry!
+  setNextUpOrder(showId: ID!, sortOrder: Int!): NextUpOverride!
+
+  # -- 5.1 custom tags ---------------------------------------------------------
+  createTag(name: String!): Tag!
+  deleteTag(tagId: ID!): Boolean!
+  addShowTag(showId: ID!, tagId: ID!): Show!
+  removeShowTag(showId: ID!, tagId: ID!): Show!
+
+  # -- 5.10 saved filter presets ------------------------------------------------
+  createFilterPreset(name: String!, filterJson: String!): FilterPreset!
+  updateFilterPreset(id: ID!, name: String, filterJson: String): FilterPreset!
+  deleteFilterPreset(id: ID!): Boolean!
+
+  # -- 6.12 data import (export is a query — read-only, no side effect) --------
+  "Rejects on any schema_version mismatch (§6.12) — a thrown GraphQL error, no auto-migration."
+  importData(json: String!): ImportResult!
+}
+
+schema {
+  query: Query
+  mutation: Mutation
+}
