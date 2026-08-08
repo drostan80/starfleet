@@ -1226,3 +1226,132 @@ async def test_next_up_order_create_then_update(client):
     )
     # confirms upsert, not a duplicate row
     assert data["show"]["nextUpOverride"]["sortOrder"] == 9
+
+
+# --- custom tags (§5.1) — the only user-created entity in this slice --------
+
+
+async def test_create_tag_rejects_duplicate_name(client):
+    created = await gql(
+        client,
+        'mutation { createTag(name: "favorites") { id name } }',
+        headers=auth_headers(),
+    )
+    assert created["createTag"]["name"] == "favorites"
+
+    resp = await client.post(
+        "/",
+        json={"query": 'mutation { createTag(name: "favorites") { id } }'},
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "already exists" in body["errors"][0]["message"]
+
+
+async def test_add_and_remove_show_tag_both_directions_queryable(client):
+    show = await add_show(client)
+    tag = await gql(
+        client, 'mutation { createTag(name: "must-rewatch") { id } }', headers=auth_headers()
+    )
+    tag_id = tag["createTag"]["id"]
+
+    await gql(
+        client,
+        "mutation($s: ID!, $t: ID!) { addShowTag(showId: $s, tagId: $t) { id } }",
+        {"s": show["id"], "t": tag_id},
+        headers=auth_headers(),
+    )
+
+    from_show = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { tags { edges { node { id name } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert [e["node"]["name"] for e in from_show["show"]["tags"]["edges"]] == ["must-rewatch"]
+
+    from_tag = await gql(
+        client,
+        "query($id: ID!) { tag(id: $id) { shows { edges { node { id } } } } }",
+        {"id": tag_id},
+        headers=auth_headers(),
+    )
+    assert [e["node"]["id"] for e in from_tag["tag"]["shows"]["edges"]] == [show["id"]]
+
+    # adding the same tag twice doesn't duplicate the association
+    await gql(
+        client,
+        "mutation($s: ID!, $t: ID!) { addShowTag(showId: $s, tagId: $t) { id } }",
+        {"s": show["id"], "t": tag_id},
+        headers=auth_headers(),
+    )
+    again = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { tags { edges { node { id } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert len(again["show"]["tags"]["edges"]) == 1
+
+    await gql(
+        client,
+        "mutation($s: ID!, $t: ID!) { removeShowTag(showId: $s, tagId: $t) { id } }",
+        {"s": show["id"], "t": tag_id},
+        headers=auth_headers(),
+    )
+    after_remove = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { tags { edges { node { id } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert after_remove["show"]["tags"]["edges"] == []
+
+
+async def test_delete_tag_cascades_from_shows(client):
+    show = await add_show(client)
+    tag = await gql(
+        client, 'mutation { createTag(name: "temp-tag") { id } }', headers=auth_headers()
+    )
+    tag_id = tag["createTag"]["id"]
+    await gql(
+        client,
+        "mutation($s: ID!, $t: ID!) { addShowTag(showId: $s, tagId: $t) { id } }",
+        {"s": show["id"], "t": tag_id},
+        headers=auth_headers(),
+    )
+
+    result = await gql(
+        client,
+        "mutation($id: ID!) { deleteTag(tagId: $id) }",
+        {"id": tag_id},
+        headers=auth_headers(),
+    )
+    assert result["deleteTag"] is True
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { tags { edges { node { id } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["tags"]["edges"] == []
+
+    resp = await client.post(
+        "/",
+        json={
+            "query": 'mutation($id: ID!) { deleteTag(tagId: $id) }',
+            "variables": {"id": tag_id},
+        },
+        headers=auth_headers(),
+    )
+    assert "errors" in resp.json()
+
+
+async def test_tags_top_level_query(client):
+    await gql(
+        client, 'mutation { createTag(name: "list-me") { id } }', headers=auth_headers()
+    )
+    data = await gql(client, "{ tags { edges { node { name } } } }", headers=auth_headers())
+    assert "list-me" in [e["node"]["name"] for e in data["tags"]["edges"]]

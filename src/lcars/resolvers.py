@@ -47,6 +47,7 @@ studio_credit_type = ObjectType("StudioCredit")
 franchise_type = ObjectType("Franchise")
 franchise_entry_type = ObjectType("FranchiseEntry")
 next_up_override_type = ObjectType("NextUpOverride")
+tag_type = ObjectType("Tag")
 
 
 def _enum(name: str, *values: str) -> EnumType:
@@ -97,6 +98,7 @@ BINDABLES = [
     franchise_type,
     franchise_entry_type,
     next_up_override_type,
+    tag_type,
     *ENUMS,
     util.datetime_scalar,
 ]
@@ -211,6 +213,18 @@ def _require_franchise(conn, franchise_id: str) -> dict:
     return franchise
 
 
+def _get_tag(conn, tag_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM tag WHERE id = ?", (tag_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _require_tag(conn, tag_id: str) -> dict:
+    tag = _get_tag(conn, tag_id)
+    if tag is None:
+        raise GraphQLError(f"no such tag: {tag_id}")
+    return tag
+
+
 # --- Query -------------------------------------------------------------
 
 
@@ -271,6 +285,16 @@ def resolve_franchise(_, info, id):  # noqa: A002
 @query.field("franchises")
 def resolve_franchises(_, info, **page_args):
     return pagination.paginate(db.get_connection(), "franchise", "1 = 1", (), **page_args)
+
+
+@query.field("tag")
+def resolve_tag(_, info, id):  # noqa: A002
+    return _get_tag(db.get_connection(), id)
+
+
+@query.field("tags")
+def resolve_tags(_, info, **page_args):
+    return pagination.paginate(db.get_connection(), "tag", "1 = 1", (), **page_args)
 
 
 # --- Show fields ---------------------------------------------------------
@@ -407,6 +431,17 @@ def resolve_show_next_up_override(obj, info):
         "SELECT * FROM next_up_override WHERE show_id = ?", (obj["id"],)
     ).fetchone()
     return dict(row) if row else None
+
+
+@show_type.field("tags")
+def resolve_show_tags(obj, info, **page_args):
+    return pagination.paginate(
+        db.get_connection(),
+        "tag",
+        "id IN (SELECT tag_id FROM show_tag WHERE show_id = ?)",
+        (obj["id"],),
+        **page_args,
+    )
 
 
 # --- Episode fields ------------------------------------------------------
@@ -599,6 +634,17 @@ def resolve_franchise_entry_show(obj, info):
 @next_up_override_type.field("show")
 def resolve_next_up_override_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])
+
+
+@tag_type.field("shows")
+def resolve_tag_shows(obj, info, **page_args):
+    return pagination.paginate(
+        db.get_connection(),
+        "show",
+        "id IN (SELECT show_id FROM show_tag WHERE tag_id = ?)",
+        (obj["id"],),
+        **page_args,
+    )
 
 
 # --- Mutation --------------------------------------------------------------
@@ -1145,3 +1191,68 @@ def resolve_set_next_up_order(_, info, show_id, sort_order):
     conn.commit()
     row = conn.execute("SELECT * FROM next_up_override WHERE id = ?", (override_id,)).fetchone()
     return dict(row)
+
+
+# -- 5.1 custom tags ----------------------------------------------------------
+
+
+@mutation.field("createTag")
+def resolve_create_tag(_, info, name):
+    """tag.name is UNIQUE (migration 7196ca889757) — checked here first for
+    a clean GraphQLError instead of a raw sqlite3.IntegrityError, same
+    reasoning as addShow's own primaryTitle validation."""
+    conn = db.get_connection()
+    existing = conn.execute("SELECT 1 FROM tag WHERE name = ?", (name,)).fetchone()
+    if existing is not None:
+        raise GraphQLError(f"a tag named {name!r} already exists")
+    tag_id = ids.generate_id(conn, "t")
+    now = util.now_utc_iso()
+    conn.execute(
+        "INSERT INTO tag (id, name, created_at) VALUES (?, ?, ?)", (tag_id, name, now)
+    )
+    conn.commit()
+    return _get_tag(conn, tag_id)
+
+
+@mutation.field("deleteTag")
+def resolve_delete_tag(_, info, tag_id):
+    """Cascades to show_tag — deleting a tag is meant to remove it from
+    every show it's applied to, not be blocked until manually detached
+    from each one first (no ON DELETE CASCADE on the FK, §11.2 raw-SQL
+    migrations don't use one, so this does the same thing explicitly).
+    show_tag (the child) has to go first — db.py runs with
+    `PRAGMA foreign_keys = ON`, so deleting the still-referenced parent
+    tag row first would violate the FK, not silently cascade."""
+    conn = db.get_connection()
+    conn.execute("DELETE FROM show_tag WHERE tag_id = ?", (tag_id,))
+    cur = conn.execute("DELETE FROM tag WHERE id = ?", (tag_id,))
+    if cur.rowcount == 0:
+        conn.rollback()
+        raise GraphQLError(f"no such tag: {tag_id}")
+    conn.commit()
+    return True
+
+
+@mutation.field("addShowTag")
+def resolve_add_show_tag(_, info, show_id, tag_id):
+    conn = db.get_connection()
+    show = _require_show(conn, show_id)
+    _require_tag(conn, tag_id)
+    existing = conn.execute(
+        "SELECT 1 FROM show_tag WHERE show_id = ? AND tag_id = ?", (show_id, tag_id)
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO show_tag (show_id, tag_id) VALUES (?, ?)", (show_id, tag_id)
+        )
+        conn.commit()
+    return show
+
+
+@mutation.field("removeShowTag")
+def resolve_remove_show_tag(_, info, show_id, tag_id):
+    conn = db.get_connection()
+    show = _require_show(conn, show_id)
+    conn.execute("DELETE FROM show_tag WHERE show_id = ? AND tag_id = ?", (show_id, tag_id))
+    conn.commit()
+    return show

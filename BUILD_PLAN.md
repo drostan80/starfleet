@@ -364,6 +364,30 @@ existing thing, not fabricate a new franchise out of thin air.
   query surface (`search`/`stats`/`nextUp`/`episodesAiringSoon`/
   `backlog`) and deletion/export-import mutations, which were never
   part of §5's own document order to begin with.
+
+**Sixth slice, same day**: custom tags — `tag`/`show_tag` (§5.1),
+the last purely-§5 table (saved filter presets, §5.10, is next and
+last). Unlike every entity since the second slice (id-mapper/
+`pending_review` on), tags are §5.1's own explicit call-out as
+**user-created**, not externally-populated metadata — confirmed
+against `schema.graphql` first (its `createTag`/`deleteTag`/
+`addShowTag`/`removeShowTag` mutations were already there from A.2),
+so this slice needed real mutation logic, not just query wiring.
+- `createTag` checks `tag.name`'s `UNIQUE` constraint (migration
+  `7196ca889757`) itself first, for a clean `GraphQLError` instead of
+  a raw `sqlite3.IntegrityError` — same reasoning as `addShow`'s own
+  `primaryTitle` validation.
+- **Caught a real bug before it ever ran**, not through a test
+  failure: `deleteTag`'s first draft deleted the parent `tag` row
+  *before* its `show_tag` children — with `db.py`'s
+  `PRAGMA foreign_keys = ON`, that order would have raised an
+  `IntegrityError` on the very first call, not silently corrupted
+  anything, but still wrong. Caught on review of the diff itself
+  before running it, reordered (children first), *then* verified
+  with a real test exercising the cascade.
+- Re-ran the sweep again: dropped from 23 to 16, exactly the 7 fields
+  just implemented, no new gaps.
+- 76 tests total now (was 72), `ruff` clean, schema re-validated.
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
   dataset (one-time/on-demand download, not live polling), manual
