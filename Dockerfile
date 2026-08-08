@@ -4,10 +4,10 @@
 # eventual Python->Rust rewrite (§11.1) a clean drop-in image swap, with
 # no change to how it's deployed or how it joins the Sonarr stack.
 #
-# Built by BUILD_PLAN.md 0.5, ahead of 0.4's CI workflow (which needs
-# something to build) — no app code exists yet (Phase A), so the image
-# builds and installs cleanly but has no real CMD to run yet; see the
-# placeholder below.
+# Originally scaffolded by BUILD_PLAN.md 0.5, ahead of 0.4's CI workflow
+# (which needed something to build) — at that point no app code existed
+# yet, so the image only needed to build, not run (see git history for
+# the placeholder CMD that stood in until A.3). CMD below is real now.
 
 FROM python:3.12-slim AS base
 
@@ -37,8 +37,11 @@ USER lcars
 
 EXPOSE 8000
 
-# Placeholder — BUILD_PLAN.md 0.5 only requires the image to *build*,
-# not run; there's no ASGI app yet (that's Phase A, §8). Replace with
-# the real serve command once it exists, e.g.:
-#   CMD ["uvicorn", "lcars.server:app", "--host", "0.0.0.0", "--port", "8000"]
-CMD ["python", "-c", "import lcars; print(f'lcars {lcars.__version__} — no ASGI app yet, Phase A (BUILD_PLAN.md)')"]
+# Real serve command, landed in A.3 (was a placeholder through 0.5/0.4).
+# Runs pending migrations first, against the volume-mounted lcars.db —
+# fulfills this file's own comment above about why migrations ship in
+# the image at all. `lcars` is the pyproject.toml console script
+# (src/lcars/cli.py), binding 0.0.0.0 by default (needed for Docker to
+# publish the port on any interface — not a network-topology decision,
+# see the standing side-question answer in this project's history).
+CMD ["sh", "-c", "alembic upgrade head && lcars"]

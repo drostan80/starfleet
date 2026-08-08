@@ -176,7 +176,53 @@ no open design questions left blocking it.
   ORM) + hand-written Alembic migrations (§11.2, resolved 2026-08-08
   during 0.2 — this line originally said SQLAlchemy, corrected here to
   match; see `migrations/README`), `lcars.db` / `lcars.ini` filenames
-  (§11.2).
+  (§11.2). **Deliberately scoped to a vertical slice for this pass**
+  (agreed 2026-08-08 — A.3 covers all 24 tables/96 types, too large to
+  respectably finish-and-verify in one go): foundation + Show/Episode/
+  WatchEvent + their core mutations, fully built, tested end-to-end,
+  and working. Left unchecked until every table has resolvers —
+  remaining tables (Person/Studio/Franchise/tags/id-mapper/
+  pending_review/deletion/export-import/...) are follow-up passes, not
+  a hidden gap.
+  - **Two more real architecture gaps found and asked about before any
+    code was written** (recorded in `SCOPE.md` §11.2/§8):
+    - Sync-vs-async DB execution: raw `sqlite3` (0.2's decision) is
+      blocking, the ASGI stack (Ariadne/uvicorn) is async — never
+      resolved which. Chose: sync resolvers, one shared connection
+      opened at startup, no threading/locking (uvicorn's default
+      single worker means nothing ever touches it concurrently).
+    - LCARS's own bearer-token storage: §8's "config.ini + keyring"
+      phrase turned out to describe *client*-side storage (a normal
+      desktop, real keyring daemon) — LCARS itself runs headless in
+      Docker, where that keyring pattern doesn't apply. Chose:
+      plaintext `lcars.ini`, `chmod 600` — same precedent aniq already
+      sets for its own client_id/secret, not a new pattern.
+  - **A third gap, found mid-implementation**: history/`pending_review`
+    rows must record the originating client (§5.7), but nothing said
+    how the server learns *which* client is calling, given one shared
+    bearer token. Chose an `X-LCARS-Client` HTTP header (transport-
+    level, parallel to the bearer token itself) over threading a
+    `client` argument through every mutation individually.
+  - Built: `config.py` (lcars.ini + env, file<env precedence, mirrors
+    aniq's own pattern), `ids.py` (nanoid generation + collision retry,
+    §5.0), `db.py` (the shared connection), `pagination.py` (generic
+    Relay cursor pagination — a real bug in its first draft, caught by
+    writing `tests/test_pagination.py` before building anything on top
+    of it: `hasNextPage`/`hasPreviousPage` were computed against a
+    WHERE clause that already excluded the rows being checked for,
+    making both always `False`), `util.py` (the `DateTime` scalar,
+    UTC-timestamp helper), `resolvers.py` (Show/Episode/WatchEvent +
+    `addShow`/`setStatus`/`setScore`/`setTracked`/`addWatchEvent`/
+    `markEpisodeSkipped`), `server.py` (the ASGI app, bearer-token
+    middleware, `X-LCARS-Client` context), `cli.py` (the `lcars`
+    console script, argparse per aniq's own convention).
+  - Verified for real throughout, not just written: 45 tests, including
+    real end-to-end HTTP requests (`httpx.ASGITransport`, no bound
+    port) against a real migrated SQLite database — auth rejection,
+    the client-header requirement, score clamping/rounding, history-
+    row writes, movie watch-events with null season/episode, cursor
+    pagination wired end-to-end. Also fixed the Dockerfile's placeholder
+    `CMD` (0.5) with the real serve command now that one exists.
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
   dataset (one-time/on-demand download, not live polling), manual
