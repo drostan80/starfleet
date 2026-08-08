@@ -829,7 +829,18 @@ type Query {
 
 type Mutation {
   # -- Show lifecycle ---------------------------------------------------
+  """
+  addShow also triggers A.8's on-demand metadata fetch (poster/
+  synopsis/cast/episode-list, plus the show's first `season` row) —
+  best-effort: the show is always created regardless of whether the
+  fetch succeeds. A fetch failure never raises here; it opens a
+  pending_review entry (entity_type SHOW, field "metadata_fetch") and
+  leaves the affected fields as they were — retry via
+  refreshShowMetadata once whatever was unreachable is back.
+  """
   addShow(input: AddShowInput!): Show!
+  "A.8 — re-runs the same on-demand metadata fetch addShow triggers at creation; the manual-retry half of its best-effort policy."
+  refreshShowMetadata(showId: ID!): Show!
   "§6.1 — clamps/rounds silently to the 0-20 quarter-point scale rather than rejecting out-of-range input."
   setScore(showId: ID!, score: Float!): Show!
   setStatus(showId: ID!, status: ShowStatus!): Show!

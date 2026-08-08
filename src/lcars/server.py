@@ -74,4 +74,5 @@ def create_app() -> ASGIApp:
     the one shared DB connection (SCOPE.md §11.2 addendum), builds the app."""
     cfg = config.load_config()
     db.connect(cfg.db_path)
+    config.set_current(cfg)  # A.8 — Sonarr/Radarr credentials for metadata.py
     return build_app(cfg.bearer_token)

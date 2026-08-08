@@ -235,7 +235,20 @@ again until cutover (§4.4).
   (any client) triggers an immediate one-shot metadata fetch
   (poster, synopsis, cast, episode list, external ids) from
   AniList/Sonarr/Radarr as appropriate — a direct consequence of a
-  user action, not a background job.
+  user action, not a background job. **Clarified 2026-08-08 (A.8),
+  asked directly rather than assumed**: this text reads two ways —
+  LCARS calling out itself, or a client (Data) fetching and pushing
+  results in, the way A.4/A.7 originally split that work. Confirmed
+  the former: "ultimately all compute and fetch will be handled on
+  the server by lcars, so might as well built it this way now" — a
+  deliberate reversal of A.4/A.7's own original framing once it
+  became clear that framing was only ever a Data-shaped transitional
+  stage, not the end state (Data "has inherited accesses and
+  responsibilities that it will lose when becoming a thin client",
+  per Phase B/C's own drawdown). **The one exception, confirmed
+  explicitly**: pushing watch status *to* AniList/MAL (the
+  OAuth-authenticated write path) stays Data/aniq's own job, entirely
+  unaffected by this — this item is about metadata *fetch* only.
 - **No autonomous scheduler yet** — no daily refresh loop, no weekly
   Fribb reconciliation loop, no Sonarr/Radarr/animeschedule.net
   polling running on its own clock. Those are Phase B.
@@ -244,7 +257,11 @@ again until cutover (§4.4).
   keeps doing what aniq does today (polling Sonarr, calling AniList,
   running its own air-date patch) but also writes the resulting state
   to LCARS. AniList dual-write already exists in the forked code and
-  is unaffected.
+  is unaffected. **Superseded for metadata fetch specifically by the
+  clarification above** — Data's own Sonarr/AniList calls (A.17)
+  remain a second, independent path (e.g. useful while Data still
+  needs them for its own local features), not the one A.8's on-demand
+  fetch itself relies on.
 - Reliability note: aniq's existing "queue locally, retry on flush"
   pattern (`trakt_queue.py`/`watch_queue.py`), inherited by Data at the
   fork, carries over to the Data→LCARS path — a home server isn't

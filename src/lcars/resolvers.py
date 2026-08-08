@@ -23,7 +23,7 @@ import json
 from ariadne import EnumType, MutationType, ObjectType, QueryType
 from graphql import GraphQLError
 
-from lcars import db, fribb, fuzzy, ids, pagination, util
+from lcars import db, fribb, fuzzy, ids, metadata, pagination, pending_review, util
 
 query = QueryType()
 mutation = MutationType()
@@ -189,58 +189,6 @@ def _get_episode_movie_link(conn, link_id: str) -> dict | None:
 def _get_pending_review(conn, review_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM pending_review WHERE id = ?", (review_id,)).fetchone()
     return dict(row) if row else None
-
-
-def _open_or_extend_pending_review(
-    conn, entity_type: str, entity_id: str, field: str, source: str, previous_value, new_value
-) -> None:
-    """§5.6/§3 principle 1: value-chain accumulation on repeated
-    automatic changes to the same field before a human resolves the
-    entry, rather than opening a duplicate entry or silently
-    overwriting. `previousValue` is nullable (schema-legal — "no value
-    before this chain opened"); every entry actually IN the chain must
-    be a real string (`[String!]!`, non-null elements), so a `None`
-    `new_value` (the "no candidate found" case) is represented as the
-    literal string "unmatched" rather than a null list element —
-    caught by a real GraphQL null-in-non-null-list error while writing
-    A.4's own tests, not a hypothetical. First use of this general
-    pattern (A.4) — the same shape any future automatic-reconciliation
-    mutation (air-date, episode numbering, MAL legacy import, ...)
-    will reuse.
-    """
-    previous_str = None if previous_value is None else str(previous_value)
-    new_str = "unmatched" if new_value is None else str(new_value)
-    now = util.now_utc_iso()
-    existing = conn.execute(
-        "SELECT id, proposed_value_chain FROM pending_review"
-        " WHERE entity_type = ? AND entity_id = ? AND field = ? AND resolved_at IS NULL",
-        (entity_type, entity_id, field),
-    ).fetchone()
-    if existing is not None:
-        chain = json.loads(existing["proposed_value_chain"])
-        chain.append(new_str)
-        conn.execute(
-            "UPDATE pending_review SET proposed_value_chain = ? WHERE id = ?",
-            (json.dumps(chain), existing["id"]),
-        )
-        return
-    review_id = ids.generate_id(conn, "r")
-    conn.execute(
-        "INSERT INTO pending_review"
-        " (id, entity_type, entity_id, field, previous_value, proposed_value_chain,"
-        "  source, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            review_id,
-            entity_type,
-            entity_id,
-            field,
-            previous_str,
-            json.dumps([new_str]),
-            source,
-            now,
-        ),
-    )
 
 
 def _get_show_service_presence(conn, presence_id: str) -> dict | None:
@@ -811,6 +759,31 @@ def resolve_add_show(_, info, input):  # noqa: A002 (matches the GraphQL arg nam
         )
 
     conn.commit()
+
+    # A.8 — the on-demand metadata fetch itself, best-effort (see
+    # metadata.py's own docstring: never raises, failures go to
+    # pending_review instead). A separate commit rather than folding
+    # into the block above: the bare show already exists and is
+    # queryable even if every branch of the fetch below fails outright.
+    metadata.fetch_and_populate(conn, show_id)
+    conn.commit()
+    return _get_show(conn, show_id)
+
+
+@mutation.field("refreshShowMetadata")
+def resolve_refresh_show_metadata(_, info, show_id):
+    """A.8 — the manual-retry half of the "best effort and system to
+    try again... manual fix by user is also an option" policy
+    (confirmed 2026-08-08): calls the exact same fetch_and_populate()
+    addShow already calls inline, callable independently any time
+    (e.g. after seeing a metadata_fetch pending_review entry, once
+    whatever was unreachable is back). No require_client() — same
+    reasoning as reconcileSeasonMapping/refreshShowServicePresence:
+    nothing here writes to a changed_by-style column."""
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    metadata.fetch_and_populate(conn, show_id)
+    conn.commit()
     return _get_show(conn, show_id)
 
 
@@ -1256,11 +1229,11 @@ def resolve_reconcile_season_mapping(_, info, show_id, season_number):
     if existing is not None:
         season_id = existing["id"]
         if existing["anilist_id"] != anilist_id:
-            _open_or_extend_pending_review(
+            pending_review.open_or_extend(
                 conn, "season", season_id, "anilist_id", "fribb", existing["anilist_id"], anilist_id
             )
         if existing["mal_id"] != mal_id:
-            _open_or_extend_pending_review(
+            pending_review.open_or_extend(
                 conn, "season", season_id, "mal_id", "fribb", existing["mal_id"], mal_id
             )
         conn.execute(
@@ -1280,7 +1253,7 @@ def resolve_reconcile_season_mapping(_, info, show_id, season_number):
             (season_id, show_id, season_number, anilist_id, mal_id, source, matched, now, now, now),
         )
         if not matched:
-            _open_or_extend_pending_review(
+            pending_review.open_or_extend(
                 conn, "season", season_id, "anilist_id", "fribb", None, None
             )
 

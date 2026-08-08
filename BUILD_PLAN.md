@@ -625,11 +625,99 @@ order — same reasoning `pagination.py`'s cursors already lean on).
     (`NextUpEntry.episode`/`.show`, `Query.backlog`/`search`/`stats` —
     A.11/A.12/A.13/B.9), confirming no regressions. 110 tests passing,
     `ruff check .` clean.
-- [ ] **A.8 — Implement on-demand external fetch triggers**: immediate
+- [x] **A.8 — Implement on-demand external fetch triggers**: immediate
   metadata fetch (poster, synopsis, cast, episode list, external ids)
   on show creation, from any client (§4 Phase A). This is the only
   external-call trigger in Phase A — **no autonomous scheduler yet**,
   that's Phase B.
+  - **Fetch direction resolved by asking, not assumed, 2026-08-08**:
+    §4 Phase A's own text reads two ways — LCARS calling AniList/
+    Sonarr/Radarr directly, or a client (Data) fetching and pushing
+    results in, matching A.4/A.7's original "client fetches, LCARS
+    reconciles" split. Evidence pointed toward the second reading
+    (A.17 explicitly assigns Sonarr/AniList calls to Data's side;
+    config.py deferred those credentials; A.4/A.7's own precedent) —
+    asked anyway given the scale of the decision. Confirmed the
+    first: LCARS makes the calls itself now, since "ultimately all
+    compute and fetch will be handled on the server by lcars, so
+    might as well built it this way now" — Data's A.17-era access is
+    transitional, not the end state. Confirmed exception: pushing
+    watch status *to* AniList/MAL stays Data's own job, unaffected.
+  - **Failure handling resolved by asking**: best-effort (the show is
+    always created regardless of fetch success) + never silent + a
+    manual retry path — all three explicitly requested together
+    ("best effort and system to try again... no silent fail... manual
+    fix by user is also an option... need to reconcile action taken
+    from outside"). Built as: every source branch independently
+    try/except-guarded (`metadata._guarded`, catches bare `Exception`
+    — a malformed response should never crash `addShow`, only skip
+    that branch); a failure opens/extends a `pending_review` entry
+    (reusing §5.6's existing mechanism rather than inventing a second
+    "needs attention" channel — visible via the same `pendingReviews`
+    surface as everything else); a new standalone `refreshShowMetadata
+    (showId)` mutation re-runs the exact same fetch on demand — the
+    "manual fix" / "reconcile from outside" path. Every DB write is
+    upsert-shaped so a retry after a partial failure is always safe.
+  - **Season/franchise scope resolved by asking**: confirmed addShow
+    also auto-creates the show's first `season` row (season_number=1,
+    `manual_override=true` — the caller-supplied anilistId/malId is
+    the same class of "a human already confirmed this" information
+    `setSeasonMapping` already treats as an override) as part of "the
+    full tree… silently, then map accordingly" — but explicitly **not**
+    a franchise row: "no auto franchise if the system can still
+    confirm with my previous answer philosophy (mapping change
+    first)" — franchise stays a deliberately-created grouping (§5.9),
+    unchanged; `franchise_member` already links to existing rows
+    without needing them restructured, so nothing here blocks that
+    happening later.
+  - **Built**: `anilist_client.py` (public, unauthenticated `Media(id)`
+    GraphQL query — title/cover/banner/synopsis/genres/episode-count/
+    idMal/studios/voice cast — porting Data's own real `anilist.py`'s
+    error-handling shape, sync `httpx.Client` per §11.2). `sonarr_
+    client.py` (a close port of Data's own real, working
+    `SonarrClient`, narrowed to the two calls needed: find a series
+    already in Sonarr's own library by tvdb id, and its episodes — a
+    show being tracked in LCARS never implies it's in Sonarr's
+    library, §5.1, so "not found" isn't an error). `radarr_client.py`
+    (no aniq/Data reference exists — aniq is Sonarr/anime-only — built
+    fresh, same *arr-family REST shape `sonarr_client.py` already
+    validated). `metadata.py` — the orchestration: tracking_space=
+    anime → AniList (mandatory per §5.1, writes show fields + the
+    season row + upserted person/studio/show_person/show_studio rows,
+    keyed by AniList's own ids so shows sharing a studio/actor don't
+    duplicate either); media_shape=episodic → Sonarr if linked+
+    configured (episode rows, never overwriting an already-tracked
+    episode); media_shape=movie → Radarr if linked+configured (poster/
+    synopsis/genres). `config.py`: `sonarr_url`/`sonarr_api_key`/
+    `radarr_url`/`radarr_api_key` added (no AniList credential needed
+    — public endpoint); a new `config.get_current()`/`set_current()`
+    module-level singleton (mirrors `db.py`'s own connection-singleton
+    pattern) so sync resolvers can reach it without a DI mechanism.
+    `pending_review.py`: extracted `_open_or_extend_pending_review`
+    out of resolvers.py (first built in A.4) into its own module —
+    metadata.py needed the exact same value-chain-accumulation
+    behavior for fetch-failure logging, and a resolvers.py<->metadata.py
+    circular import wasn't worth introducing just to share one function.
+  - **Tests**: `test_anilist_client.py`/`test_sonarr_client.py`/
+    `test_radarr_client.py` (17 tests total — success, not-found,
+    401, connect/timeout errors, all via an injected fake client, no
+    real network calls, same pattern as `test_fribb.py`).
+    `test_server.py` (+8 end-to-end): AniList fetch populates show
+    fields/season/cast/studio credits; studio/person dedup across two
+    shows; no-media-found leaves the show bare; Sonarr fetch creates
+    episodes; Sonarr not-in-library is a silent no-op; Radarr fetch
+    populates movie fields; not-configured Sonarr/Radarr skips
+    silently (no review noise); a fetch failure opens a pending_review
+    entry and `refreshShowMetadata` successfully retries it. The
+    `client` fixture now stubs `anilist_client.fetch_media` to a
+    no-op and sets empty Sonarr/Radarr config by default — every
+    pre-A.8 test that adds an anime show would otherwise make a real
+    network call; individual A.8 tests re-monkeypatch as needed.
+  - **Verified**: unbound-field sweep re-run, still only 5 real gaps
+    (`NextUpEntry.episode`/`.show`, `Query.backlog`/`search`/`stats` —
+    A.11/A.12/A.13/B.9), confirming no regressions. 135 tests passing,
+    `ruff check .` clean. No new migration needed — every write uses
+    existing §5 columns/tables.
 - [ ] **A.9 — Implement scoring & conversions** (§6.1): 0–20
   quarter-point personal scale, clamp/round silently on invalid input,
   ×5 to AniList, ÷2 to MAL, both push-only.

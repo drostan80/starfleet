@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from lcars import db, fribb
+from lcars import anilist_client, config, db, fribb, radarr_client, sonarr_client
 from lcars.server import build_app
 
 BEARER_TOKEN = "test-token-123"  # noqa: S105 (test fixture, not a real secret)
@@ -33,8 +33,18 @@ def migrated_db(tmp_path) -> Path:
 
 
 @pytest.fixture
-async def client(migrated_db):
+async def client(migrated_db, monkeypatch):
     db.connect(migrated_db)
+    # A.8 — no Sonarr/Radarr credentials by default, so metadata.py's own
+    # "not configured, same as not linked" guard skips those branches
+    # without a test needing to know anything about them; AniList has no
+    # such gate (public endpoint, §5.1's mandatory-for-anime link), so it's
+    # stubbed directly here instead — every existing pre-A.8 test that adds
+    # an anime show would otherwise make a real network call. Tests that
+    # want to exercise the real A.8 fetch behavior re-monkeypatch these
+    # themselves (see the "on-demand metadata fetch" test section below).
+    config.set_current(config.Config())
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: None)
     app = build_app(BEARER_TOKEN)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -188,6 +198,239 @@ async def test_add_show_with_external_ids_creates_crosswalk_rows(client):
     assert links["anilist"]["externalId"] == "12345"
     assert links["anilist"]["url"] == "https://anilist.co/anime/12345"
     assert links["tvdb"]["externalId"] == "67890"
+
+
+# --- on-demand metadata fetch (§4 Phase A, A.8) ------------------------------
+#
+# The `client` fixture stubs anilist_client.fetch_media to a no-op and sets
+# empty Sonarr/Radarr config by default, so every test above this section
+# never touches these paths for real. These tests re-monkeypatch each client
+# to exercise the real addShow-triggers-fetch / refreshShowMetadata behavior.
+
+FAKE_ANILIST_MEDIA = {
+    "title": {"romaji": "Golden Kamuy"},
+    "coverImage": {"large": "https://anilist.co/img/cover.jpg"},
+    "bannerImage": "https://anilist.co/img/banner.jpg",
+    "description": "A gold rush story.",
+    "genres": ["Action", "Adventure"],
+    "episodes": 12,
+    "idMal": 99999,
+    "studios": {"nodes": [{"id": 501, "name": "Geno Studio"}]},
+    "characters": {
+        "edges": [
+            {
+                "role": "MAIN",
+                "node": {"id": 701, "name": {"full": "Saichi Sugimoto"}},
+                "voiceActors": [{"id": 801, "name": {"full": "Kenta Miyake"}}],
+            }
+        ]
+    },
+}
+
+SHOW_METADATA_QUERY = """
+    query($id: ID!) {
+      show(id: $id) {
+        posterUrl bannerUrl synopsis genresRaw totalEpisodes
+        seasons { edges { node { seasonNumber anilistId malId source manualOverride } } }
+        cast { edges { node { roleType characterName person { name } } } }
+        studioCredits { edges { node { roleType studio { name } } } }
+      }
+    }
+"""
+
+
+class _FakeSonarrClient:
+    def __init__(self, series=None, episodes=None):
+        self._series = series
+        self._episodes = episodes or []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        pass
+
+    def series_by_tvdb_id(self, tvdb_id):
+        return self._series
+
+    def episodes(self, series_id):
+        return self._episodes
+
+
+class _FakeRadarrClient:
+    def __init__(self, movie=None):
+        self._movie = movie
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        pass
+
+    def movie_by_tmdb_id(self, tmdb_id):
+        return self._movie
+
+
+async def test_add_show_anilist_fetch_populates_metadata_season_and_cast(client, monkeypatch):
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    show = await add_show(client, anilistId=12345)
+
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    result = data["show"]
+    assert result["posterUrl"] == "https://anilist.co/img/cover.jpg"
+    assert result["bannerUrl"] == "https://anilist.co/img/banner.jpg"
+    assert result["synopsis"] == "A gold rush story."
+    assert result["genresRaw"] == ["Action", "Adventure"]
+    assert result["totalEpisodes"] == 12
+
+    seasons = result["seasons"]["edges"]
+    assert len(seasons) == 1
+    season = seasons[0]["node"]
+    assert season["seasonNumber"] == 1
+    assert season["anilistId"] == 12345
+    assert season["malId"] == 99999
+    assert season["source"] == "MANUAL"
+    assert season["manualOverride"] is True
+
+    cast = result["cast"]["edges"]
+    assert len(cast) == 1
+    assert cast[0]["node"]["roleType"] == "VOICE_ACTOR"
+    assert cast[0]["node"]["characterName"] == "Saichi Sugimoto"
+    assert cast[0]["node"]["person"]["name"] == "Kenta Miyake"
+
+    studios = result["studioCredits"]["edges"]
+    assert len(studios) == 1
+    assert studios[0]["node"]["roleType"] == "STUDIO"
+    assert studios[0]["node"]["studio"]["name"] == "Geno Studio"
+
+
+async def test_add_show_anilist_fetch_reuses_existing_studio_and_person(client, monkeypatch):
+    """Upsert-by-AniList-id (metadata.py's own _link_studio/_link_person) —
+    two shows sharing a studio/voice actor shouldn't duplicate either row."""
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    await add_show(client, anilistId=111, titleRomaji="Show One")
+    await add_show(client, anilistId=222, titleRomaji="Show Two")
+
+    data = await gql(
+        client,
+        "query { people { edges { node { id } } } studios { edges { node { id } } } }",
+        headers=auth_headers(),
+    )
+    assert len(data["people"]["edges"]) == 1
+    assert len(data["studios"]["edges"]) == 1
+
+
+async def test_add_show_anilist_fetch_no_media_found_leaves_show_bare(client, monkeypatch):
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: None)
+    show = await add_show(client, anilistId=12345)
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["posterUrl"] is None
+    assert data["show"]["seasons"]["edges"] == []
+
+
+async def test_add_show_sonarr_fetch_creates_episodes(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    def _ep(number):
+        return {
+            "seasonNumber": 1,
+            "episodeNumber": number,
+            "airDateUtc": "2026-01-01T00:00:00Z",
+            "runtime": 24,
+        }
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1), _ep(2)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) {
+            episodes { edges { node { season episode airDateUtc runtimeMinutes } } }
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    episodes = data["show"]["episodes"]["edges"]
+    assert len(episodes) == 2
+    assert {e["node"]["episode"] for e in episodes} == {1, 2}
+    assert episodes[0]["node"]["runtimeMinutes"] == 24
+
+
+async def test_add_show_sonarr_fetch_no_op_when_not_in_sonarr_library(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    fake = _FakeSonarrClient(series=None)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["episodes"]["edges"] == []
+
+
+async def test_add_show_radarr_fetch_populates_movie_metadata(client, monkeypatch):
+    config.set_current(config.Config(radarr_url="http://radarr:7878", radarr_api_key="key"))
+    movie = {
+        "overview": "A boy and a girl reconnect.",
+        "genres": ["Drama", "Romance"],
+        "images": [
+            {"coverType": "fanart", "remoteUrl": "https://radarr.example/fanart.jpg"},
+            {"coverType": "poster", "remoteUrl": "https://radarr.example/poster.jpg"},
+        ],
+    }
+    fake = _FakeRadarrClient(movie=movie)
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+    show = await add_show(
+        client, mediaShape="MOVIE", trackingSpace="TV", titleRomaji="A Silent Voice", tmdbId=555
+    )
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["posterUrl"] == "https://radarr.example/poster.jpg"
+    assert data["show"]["synopsis"] == "A boy and a girl reconnect."
+    assert data["show"]["genresRaw"] == ["Drama", "Romance"]
+
+
+async def test_add_show_metadata_fetch_skips_silently_when_not_configured(client):
+    """Default fixture: no Sonarr/Radarr config at all — confirms this is
+    treated the same as "not linked", not a failure worth a pending_review."""
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+    reviews = await _pending_reviews_for(client, show["id"])
+    assert reviews == []
+
+
+async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(client, monkeypatch):
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_media",
+        lambda *a, **kw: (_ for _ in ()).throw(anilist_client.AniListError("Could not connect")),
+    )
+    show = await add_show(client, anilistId=12345)
+
+    bare = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert bare["show"]["posterUrl"] is None
+
+    reviews = await _pending_reviews_for(client, show["id"])
+    assert len(reviews) == 1
+    assert reviews[0]["entityType"] == "show"
+    assert reviews[0]["field"] == "metadata_fetch"
+    assert reviews[0]["source"] == "anilist"
+    assert reviews[0]["proposedValueChain"] == ["Could not connect"]
+
+    # whatever was unreachable is back — retry via refreshShowMetadata,
+    # the manual-fix-by-user path (confirmed 2026-08-08)
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    refreshed = await gql(
+        client,
+        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { posterUrl } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert refreshed["refreshShowMetadata"]["posterUrl"] == "https://anilist.co/img/cover.jpg"
 
 
 @pytest.mark.parametrize(
