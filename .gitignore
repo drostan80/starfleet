@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+.coverage
+
+# Runtime state — never commit. lcars.db is the live SQLite database;
+# lcars.ini holds the bearer token + Sonarr/Radarr/AniList/MAL
+# credentials (SCOPE.md §11.2/§8), same config.ini + keyring pattern
+# aniq already uses.
+lcars.db
+lcars.ini
