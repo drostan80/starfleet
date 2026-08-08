@@ -787,6 +787,22 @@ generic audit table. Every row records the originating client/process
 (`aniq | data | holodeck | captains_log | sonarr_sync | anilist_sync |
 ...`).
 
+**How the server actually learns which client is calling — resolved
+2026-08-08 (A.3)**: a real gap, never previously specified. An HTTP
+header, `X-LCARS-Client`, sent on every request — transport-level,
+parallel to the bearer token itself (§8, also a header, not a GraphQL
+argument). Keeps every mutation's GraphQL signature focused on its own
+domain concern rather than repeating a `client` argument across dozens
+of unrelated mutations (would cut against §3 principle 7's "dedicated,
+purpose-built" mutations — a cross-cutting concern doesn't belong
+threaded through each one individually). Any mutation that writes a
+history/`pending_review` row **requires** this header — a direct,
+mechanical consequence of "every row records the originating
+client/process" already being a firm requirement here, not a new
+question: a missing header is rejected with a clear error rather than
+silently defaulting to some placeholder value, which would violate
+that requirement rather than satisfy it.
+
 ### 5.8 `person` / `show_person` / `studio` / `show_studio`
 
 ```
