@@ -255,7 +255,9 @@ async def test_set_tracked_records_history(client):
 # --- addWatchEvent / markEpisodeSkipped ------------------------------------
 
 
-async def _insert_episode(migrated_db: Path, show_id: str) -> str:
+async def _insert_episode(
+    migrated_db: Path, show_id: str, episode_id: str = "e-tst001", kind: str = "regular"
+) -> str:
     """Episodes aren't addable via the API yet (A.8's on-demand fetch,
     not built here) — insert directly for this test's purposes."""
     conn = db.get_connection()
@@ -263,14 +265,14 @@ async def _insert_episode(migrated_db: Path, show_id: str) -> str:
         """
         INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)
         VALUES (
-            'e-tst001', ?, 1, 1, 'regular', 'unwatched',
+            ?, ?, 1, 1, ?, 'unwatched',
             '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z'
         )
         """,
-        (show_id,),
+        (episode_id, show_id, kind),
     )
     conn.commit()
-    return "e-tst001"
+    return episode_id
 
 
 async def test_add_watch_event_marks_episode_watched(client, migrated_db):
@@ -342,3 +344,187 @@ async def test_shows_by_status_filters_and_paginates(client):
     )
     titles = {e["node"]["displayTitle"] for e in data["showsByStatus"]["edges"]}
     assert titles == {"Watching Show 0", "Watching Show 1", "Watching Show 2"}
+
+
+# --- id-mapper manual overrides (§5.5) --------------------------------------
+
+
+async def test_set_show_id_mapping_creates_then_updates(client):
+    show = await add_show(client)
+
+    created = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setShowIdMapping(showId: $id, tvdbId: 111, anilistId: 222) {
+            id tvdbId anilistId source matched manualOverride
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    mapping = created["setShowIdMapping"]
+    assert mapping["tvdbId"] == 111
+    assert mapping["anilistId"] == 222
+    assert mapping["source"] == "MANUAL"
+    assert mapping["matched"] is True
+    assert mapping["manualOverride"] is True
+
+    updated = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setShowIdMapping(showId: $id, tvdbId: 999, anilistId: 222) { id tvdbId }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    # same underlying row (upsert), not a second one
+    assert updated["setShowIdMapping"]["id"] == mapping["id"]
+    assert updated["setShowIdMapping"]["tvdbId"] == 999
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { idMapping { tvdbId } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["idMapping"]["tvdbId"] == 999
+
+
+async def test_set_episode_numbering_scheme(client):
+    show = await add_show(client)
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setEpisodeNumberingScheme(showId: $id, scheme: ABSOLUTE) { scheme source }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["setEpisodeNumberingScheme"]["scheme"] == "ABSOLUTE"
+    assert data["setEpisodeNumberingScheme"]["source"] == "MANUAL"
+
+
+async def test_set_episode_movie_link_both_directions_queryable(client, migrated_db):
+    tv_show = await add_show(client, titleRomaji="Some Series")
+    movie_show = await add_show(
+        client, mediaShape="MOVIE", titleRomaji="Some Series: The Movie"
+    )
+    bonus_episode_id = await _insert_episode(
+        migrated_db, tv_show["id"], episode_id="e-bmovi1", kind="bonus_movie"
+    )
+
+    data = await gql(
+        client,
+        """
+        mutation($e: ID!, $s: ID!) {
+          setEpisodeMovieLink(episodeId: $e, movieShowId: $s) { matched source }
+        }
+        """,
+        {"e": bonus_episode_id, "s": movie_show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["setEpisodeMovieLink"]["matched"] is True
+
+    forward = await gql(
+        client,
+        "query($id: ID!) { episode(id: $id) { linkedMovieShow { id } } }",
+        {"id": bonus_episode_id},
+        headers=auth_headers(),
+    )
+    assert forward["episode"]["linkedMovieShow"]["id"] == movie_show["id"]
+
+    backward = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { linkedFromEpisode { id } } }",
+        {"id": movie_show["id"]},
+        headers=auth_headers(),
+    )
+    assert backward["show"]["linkedFromEpisode"]["id"] == bonus_episode_id
+
+
+# --- pending_review (§5.6) ---------------------------------------------------
+
+
+async def _insert_pending_review(migrated_db: Path) -> str:
+    """No mutation creates pending_review rows yet (that's automated
+    derivation, A.4/A.5) — insert directly for this test's purposes."""
+    conn = db.get_connection()
+    conn.execute(
+        """
+        INSERT INTO pending_review
+            (id, entity_type, entity_id, field, proposed_value_chain, source, created_at)
+        VALUES ('r-test01', 'show', 's-doesnt-matter', 'status', '["watching"]',
+                'sonarr_sync', '2026-08-08T00:00:00Z')
+        """
+    )
+    conn.commit()
+    return "r-test01"
+
+
+async def test_resolve_pending_review(client, migrated_db):
+    review_id = await _insert_pending_review(migrated_db)
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          resolvePendingReview(id: $id, resolutionNote: "looks right") {
+            resolvedByClient resolutionNote resolvedAt
+          }
+        }
+        """,
+        {"id": review_id},
+        headers=auth_headers("captains_log"),
+    )
+    result = data["resolvePendingReview"]
+    assert result["resolvedByClient"] == "CAPTAINS_LOG"
+    assert result["resolutionNote"] == "looks right"
+    assert result["resolvedAt"] is not None
+
+
+async def test_resolve_pending_review_rejects_non_interactive_client(client, migrated_db):
+    review_id = await _insert_pending_review(migrated_db)
+    resp = await client.post(
+        "/",
+        json={
+            "query": 'mutation($id: ID!) { resolvePendingReview(id: $id) { id } }',
+            "variables": {"id": review_id},
+        },
+        headers=auth_headers("sonarr_sync"),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "cannot resolve" in body["errors"][0]["message"]
+
+
+async def test_pending_reviews_query_defaults_to_unresolved_only(client, migrated_db):
+    review_id = await _insert_pending_review(migrated_db)
+
+    before = await gql(
+        client, "{ pendingReviews { edges { node { id } } } }", headers=auth_headers()
+    )
+    assert [e["node"]["id"] for e in before["pendingReviews"]["edges"]] == [review_id]
+
+    await gql(
+        client,
+        'mutation($id: ID!) { resolvePendingReview(id: $id) { id } }',
+        {"id": review_id},
+        headers=auth_headers("data"),
+    )
+
+    after_default = await gql(
+        client, "{ pendingReviews { edges { node { id } } } }", headers=auth_headers()
+    )
+    assert after_default["pendingReviews"]["edges"] == []
+
+    after_all = await gql(
+        client,
+        "{ pendingReviews(includeResolved: true) { edges { node { id } } } }",
+        headers=auth_headers(),
+    )
+    assert [e["node"]["id"] for e in after_all["pendingReviews"]["edges"]] == [review_id]

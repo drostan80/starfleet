@@ -1,10 +1,13 @@
-"""Resolvers — BUILD_PLAN.md A.3, vertical slice: Show/Episode/WatchEvent
-and their core mutations. The rest of the schema (Person/Studio/
-Franchise/tags/id-mapper/pending_review/deletion/export-import/...) is
-unbound for now — a client querying those fields gets a clear GraphQL
-error (missing resolver / null on a non-null field), not silently wrong
-data. Expanding table-by-table is later A.3 work, tracked in
-BUILD_PLAN.md, not a hidden gap.
+"""Resolvers — BUILD_PLAN.md A.3, expanded beyond the original
+Show/Episode/WatchEvent vertical slice to also cover the id-mapper
+tables (ShowIdMapping/EpisodeNumberingMapping/EpisodeMovieLink, §5.5 +
+its addendum) and PendingReview (§5.6) — natural next slice since A.4/
+A.5 build on top of them. The rest of the schema (Person/Studio/
+Franchise/tags/deletion/export-import/...) is still unbound — a client
+querying those fields gets a clear GraphQL error (missing resolver /
+null on a non-null field), not silently wrong data. Expanding
+table-by-table is later A.3 work, tracked in BUILD_PLAN.md, not a
+hidden gap.
 
 Field resolution: `convert_names_case=True` (passed to
 make_executable_schema in server.py) handles camelCase-GraphQL-field to
@@ -25,6 +28,10 @@ mutation = MutationType()
 show_type = ObjectType("Show")
 episode_type = ObjectType("Episode")
 watch_event_type = ObjectType("WatchEvent")
+show_id_mapping_type = ObjectType("ShowIdMapping")
+episode_numbering_mapping_type = ObjectType("EpisodeNumberingMapping")
+episode_movie_link_type = ObjectType("EpisodeMovieLink")
+pending_review_type = ObjectType("PendingReview")
 
 
 def _enum(name: str, *values: str) -> EnumType:
@@ -58,9 +65,21 @@ BINDABLES = [
     show_type,
     episode_type,
     watch_event_type,
+    show_id_mapping_type,
+    episode_numbering_mapping_type,
+    episode_movie_link_type,
+    pending_review_type,
     *ENUMS,
     util.datetime_scalar,
 ]
+
+# §5.6 — resolving a review is one of the three interactive clients' own
+# job (Data/Holodeck/Captain's Log); automated processes (sonarr_sync,
+# anilist_sync, ...) can *create* pending_review entries via other
+# mutations but never resolve one. Mirrors the DB's own CHECK constraint
+# (migrations/versions/7196ca889757_*.py) — checked here first too, for a
+# clean GraphQLError instead of a raw sqlite3.IntegrityError.
+RESOLVING_CLIENTS = {"data", "holodeck", "captains_log"}
 
 # Best-effort deep-link templates for AddShowInput's optional external ids
 # (SCOPE.md §5.4's show_external_id.url) — real-world, well-known URL
@@ -91,8 +110,44 @@ def _get_show(conn, show_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _require_show(conn, show_id: str) -> dict:
+    show = _get_show(conn, show_id)
+    if show is None:
+        raise GraphQLError(f"no such show: {show_id}")
+    return show
+
+
 def _get_episode(conn, episode_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM episode WHERE id = ?", (episode_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _require_episode(conn, episode_id: str) -> dict:
+    episode = _get_episode(conn, episode_id)
+    if episode is None:
+        raise GraphQLError(f"no such episode: {episode_id}")
+    return episode
+
+
+def _get_show_id_mapping(conn, mapping_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM show_id_mapping WHERE id = ?", (mapping_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _get_episode_numbering_mapping(conn, mapping_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM episode_numbering_mapping WHERE id = ?", (mapping_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _get_episode_movie_link(conn, link_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM episode_movie_link WHERE id = ?", (link_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _get_pending_review(conn, review_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM pending_review WHERE id = ?", (review_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -109,12 +164,23 @@ def resolve_shows(_, info, **page_args):
     return pagination.paginate(db.get_connection(), "show", "1 = 1", (), **page_args)
 
 
+@query.field("episode")
+def resolve_episode(_, info, id):  # noqa: A002
+    return _get_episode(db.get_connection(), id)
+
+
 @query.field("showsByStatus")
 def resolve_shows_by_status(_, info, statuses, **page_args):
     placeholders = ", ".join("?" for _ in statuses)
     return pagination.paginate(
         db.get_connection(), "show", f"status IN ({placeholders})", tuple(statuses), **page_args
     )
+
+
+@query.field("pendingReviews")
+def resolve_pending_reviews(_, info, include_resolved=False, **page_args):
+    where = "1 = 1" if include_resolved else "resolved_at IS NULL"
+    return pagination.paginate(db.get_connection(), "pending_review", where, (), **page_args)
 
 
 # --- Show fields ---------------------------------------------------------
@@ -173,12 +239,53 @@ def resolve_show_tracked_history(obj, info, **page_args):
     )
 
 
+@show_type.field("idMapping")
+def resolve_show_id_mapping_field(obj, info):
+    row = db.get_connection().execute(
+        "SELECT * FROM show_id_mapping WHERE show_id = ?", (obj["id"],)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+@show_type.field("episodeNumberingMapping")
+def resolve_show_episode_numbering_mapping_field(obj, info):
+    row = db.get_connection().execute(
+        "SELECT * FROM episode_numbering_mapping WHERE show_id = ?", (obj["id"],)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+@show_type.field("linkedFromEpisode")
+def resolve_show_linked_from_episode(obj, info):
+    """media_shape = MOVIE only — the reverse direction of
+    Episode.linkedMovieShow (§5.1/§5.9 addendum)."""
+    conn = db.get_connection()
+    link = conn.execute(
+        "SELECT episode_id FROM episode_movie_link WHERE movie_show_id = ?", (obj["id"],)
+    ).fetchone()
+    if link is None:
+        return None
+    return _get_episode(conn, link["episode_id"])
+
+
 # --- Episode fields ------------------------------------------------------
 
 
 @episode_type.field("show")
 def resolve_episode_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])
+
+
+@episode_type.field("linkedMovieShow")
+def resolve_episode_linked_movie_show(obj, info):
+    """kind = BONUS_MOVIE only — §5.1/§5.9 addendum."""
+    conn = db.get_connection()
+    link = conn.execute(
+        "SELECT movie_show_id FROM episode_movie_link WHERE episode_id = ?", (obj["id"],)
+    ).fetchone()
+    if link is None or link["movie_show_id"] is None:
+        return None
+    return _get_show(conn, link["movie_show_id"])
 
 
 @episode_type.field("watchEvents")
@@ -198,6 +305,39 @@ def resolve_episode_watch_events(obj, info, **page_args):
 @watch_event_type.field("show")
 def resolve_watch_event_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])
+
+
+# --- ShowIdMapping / EpisodeNumberingMapping / EpisodeMovieLink fields ------
+
+
+@show_id_mapping_type.field("show")
+def resolve_show_id_mapping_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
+
+
+@episode_numbering_mapping_type.field("show")
+def resolve_episode_numbering_mapping_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
+
+
+@episode_movie_link_type.field("episode")
+def resolve_episode_movie_link_episode(obj, info):
+    return _get_episode(db.get_connection(), obj["episode_id"])
+
+
+@episode_movie_link_type.field("movieShow")
+def resolve_episode_movie_link_movie_show(obj, info):
+    if obj.get("movie_show_id") is None:
+        return None
+    return _get_show(db.get_connection(), obj["movie_show_id"])
+
+
+# --- PendingReview fields --------------------------------------------------
+
+
+@pending_review_type.field("proposedValueChain")
+def resolve_proposed_value_chain(obj, info):
+    return json.loads(obj["proposed_value_chain"])
 
 
 # --- Mutation --------------------------------------------------------------
@@ -356,3 +496,127 @@ def resolve_mark_episode_skipped(_, info, episode_id):
         raise GraphQLError(f"no such episode: {episode_id}")
     conn.commit()
     return _get_episode(conn, episode_id)
+
+
+# -- 5.5 id-mapper manual overrides (§3 principle 6: manual wins once set) --
+#
+# None of these three tables carry a changed_by-style column (unlike
+# status_change/score_change/tracked_change, §5.7) — no dedicated history
+# table exists for id-mapping changes either — so these mutations don't
+# call require_client(): there's nowhere in the schema to put the value.
+
+
+@mutation.field("setShowIdMapping")
+def resolve_set_show_id_mapping(_, info, show_id, tvdb_id=None, anilist_id=None):
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    now = util.now_utc_iso()
+    existing = conn.execute(
+        "SELECT id FROM show_id_mapping WHERE show_id = ?", (show_id,)
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            "UPDATE show_id_mapping"
+            " SET tvdb_id = ?, anilist_id = ?, source = 'manual',"
+            "     matched = 1, manual_override = 1, updated_at = ?"
+            " WHERE show_id = ?",
+            (tvdb_id, anilist_id, now, show_id),
+        )
+        mapping_id = existing["id"]
+    else:
+        mapping_id = ids.generate_id(conn, "x")
+        conn.execute(
+            "INSERT INTO show_id_mapping"
+            " (id, show_id, tvdb_id, anilist_id, source, matched, manual_override,"
+            "  created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, 'manual', 1, 1, ?, ?)",
+            (mapping_id, show_id, tvdb_id, anilist_id, now, now),
+        )
+    conn.commit()
+    return _get_show_id_mapping(conn, mapping_id)
+
+
+@mutation.field("setEpisodeNumberingScheme")
+def resolve_set_episode_numbering_scheme(_, info, show_id, scheme):
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    now = util.now_utc_iso()
+    existing = conn.execute(
+        "SELECT id FROM episode_numbering_mapping WHERE show_id = ?", (show_id,)
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            "UPDATE episode_numbering_mapping"
+            " SET scheme = ?, source = 'manual', matched = 1, manual_override = 1,"
+            "     updated_at = ?"
+            " WHERE show_id = ?",
+            (scheme, now, show_id),
+        )
+        mapping_id = existing["id"]
+    else:
+        mapping_id = ids.generate_id(conn, "n")
+        conn.execute(
+            "INSERT INTO episode_numbering_mapping"
+            " (id, show_id, scheme, source, matched, manual_override, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'manual', 1, 1, ?, ?)",
+            (mapping_id, show_id, scheme, now, now),
+        )
+    conn.commit()
+    return _get_episode_numbering_mapping(conn, mapping_id)
+
+
+@mutation.field("setEpisodeMovieLink")
+def resolve_set_episode_movie_link(_, info, episode_id, movie_show_id):
+    conn = db.get_connection()
+    _require_episode(conn, episode_id)
+    _require_show(conn, movie_show_id)
+    now = util.now_utc_iso()
+    existing = conn.execute(
+        "SELECT id FROM episode_movie_link WHERE episode_id = ?", (episode_id,)
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            "UPDATE episode_movie_link"
+            " SET movie_show_id = ?, source = 'manual', matched = 1, manual_override = 1,"
+            "     updated_at = ?"
+            " WHERE episode_id = ?",
+            (movie_show_id, now, episode_id),
+        )
+        link_id = existing["id"]
+    else:
+        link_id = ids.generate_id(conn, "m")
+        conn.execute(
+            "INSERT INTO episode_movie_link"
+            " (id, episode_id, movie_show_id, source, matched, manual_override,"
+            "  created_at, updated_at)"
+            " VALUES (?, ?, ?, 'manual', 1, 1, ?, ?)",
+            (link_id, episode_id, movie_show_id, now, now),
+        )
+    conn.commit()
+    return _get_episode_movie_link(conn, link_id)
+
+
+# -- 5.6 pending_review ------------------------------------------------------
+
+
+@mutation.field("resolvePendingReview")
+def resolve_resolve_pending_review(_, info, id, resolution_note=None):  # noqa: A002
+    conn = db.get_connection()
+    client = require_client(info)
+    if client not in RESOLVING_CLIENTS:
+        raise GraphQLError(
+            f"{client!r} cannot resolve a pending_review — only "
+            f"{sorted(RESOLVING_CLIENTS)} can (§5.6)"
+        )
+    row = conn.execute("SELECT id FROM pending_review WHERE id = ?", (id,)).fetchone()
+    if row is None:
+        raise GraphQLError(f"no such pending_review: {id}")
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE pending_review"
+        " SET resolved_at = ?, resolved_by_client = ?, resolution_note = ?"
+        " WHERE id = ?",
+        (now, client, resolution_note, id),
+    )
+    conn.commit()
+    return _get_pending_review(conn, id)

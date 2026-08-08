@@ -223,6 +223,25 @@ no open design questions left blocking it.
     row writes, movie watch-events with null season/episode, cursor
     pagination wired end-to-end. Also fixed the Dockerfile's placeholder
     `CMD` (0.5) with the real serve command now that one exists.
+  - **Second slice, same day**: `show_id_mapping`/
+    `episode_numbering_mapping`/`episode_movie_link` (§5.5 + addendum,
+    manual-override paths only — automated Fribb-seeded derivation is
+    still A.4's job) and `pending_review` (§5.6, manual resolution
+    only — automated creation is A.4/A.5/Phase B). 51 tests total now.
+    - Caught a real schema inconsistency before writing any resolver
+      code: `resolvePendingReview` had carried its own
+      `resolvedByClient` argument since A.2, which now duplicated/
+      conflicted with A.3's `X-LCARS-Client`-header decision. Asked;
+      dropped the argument in favor of the header, for one consistent
+      source of truth. `schema.graphql` edited accordingly.
+    - Caught a real resolver gap through testing, not review:
+      `Query.episode(id)` had never been bound at all (only
+      `Query.show` was) — a query for it silently returned `null`
+      (legal per the schema, `Episode` is nullable there) instead of
+      erroring, which is exactly the kind of wrong-but-quiet result
+      this project's whole "verify for real" practice exists to catch.
+      Found because `Episode.linkedMovieShow` came back `null` in a
+      test that expected a real value, not because of code review.
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
   dataset (one-time/on-demand download, not live polling), manual

@@ -842,7 +842,13 @@ type Mutation {
   unlinkShowExternalId(showId: ID!, service: String!): Boolean!
 
   # -- 5.6 pending_review ----------------------------------------------------
-  resolvePendingReview(id: ID!, resolvedByClient: ResolvedByClient!, resolutionNote: String): PendingReview!
+  """
+  resolvedByClient dropped as an argument 2026-08-08 (A.3) — derived
+  from the X-LCARS-Client header instead, same as every other
+  mutation's changedBy. Was a redundant/conflicting duplicate of that
+  decision, not a separate design.
+  """
+  resolvePendingReview(id: ID!, resolutionNote: String): PendingReview!
 
   # -- 5.9 franchise / next-up manual ordering (§3 principle 6) --------------
   setFranchiseMemberOrder(franchiseId: ID!, showId: ID!, sortOrder: Int!): FranchiseEntry!
