@@ -21,7 +21,7 @@ moving on.
   is the result. The old `~/repos/Chabrol` discussion repo is left
   untouched as a historical record; nothing further to do with it
   unless told otherwise.
-- [ ] **0.2 — Initialize the LCARS project scaffold.** Python project
+- [x] **0.2 — Initialize the LCARS project scaffold.** Python project
   (`pyproject.toml`), matching aniq's own tooling conventions where
   reasonable (`SCOPE.md` §11.1). Set up Alembic for schema migrations
   (§11.2). No app code yet — just the skeleton a Python project needs.
