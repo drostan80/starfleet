@@ -1346,6 +1346,21 @@ data-model design in §1–§10 — full rationale in the discussion memo.
   (bearer token, Sonarr/Radarr/AniList credentials, home timezone
   default, etc. — same `config.ini` + `keyring` pattern aniq already
   uses, per §8).
+- **DB execution model: sync resolvers, one shared connection** —
+  resolved 2026-08-08 during A.3. The ORM-vs-not decision above didn't
+  itself settle *how* a blocking stdlib driver (`sqlite3`) gets called
+  from resolvers bound into an async ASGI app (Ariadne/uvicorn, §11.1)
+  — a real gap, asked rather than assumed. Resolvers are plain sync
+  Python functions; one `sqlite3` connection opens at app startup and
+  is reused for its lifetime, no threading or locking. Uvicorn's
+  default single worker runs one event loop on one thread, so nothing
+  ever touches the connection concurrently even with multiple clients
+  active at once (§3 principle 8) — their calls simply interleave
+  sequentially. Each DB call briefly blocks the event loop, but local
+  SQLite file operations are sub-millisecond, well within the
+  personal-scale framing used throughout this document. Explicitly
+  **not** `asyncio.to_thread()`-wrapped calls — considered and rejected
+  as unnecessary complexity for this scale.
 
 ### 11.3 Hosting & build pipeline
 
