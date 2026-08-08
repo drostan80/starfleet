@@ -796,10 +796,57 @@ order — same reasoning `pagination.py`'s cursors already lean on).
     "add `season.score`... build it into A.9", not episode — treating
     episode-level scoring as a distinct, not-yet-confirmed follow-up
     rather than assuming it was included.
-- [ ] **A.10 — Implement paced/catch-up mode schema** (§6.2):
+- [x] **A.10 — Implement paced/catch-up mode schema** (§6.2):
   per-show cadence config + the adaptive next-date computation.
   Scheduling itself (actually advancing dates) is Phase B; the schema
   and computation logic belong here.
+  - **"Restricted to completed/non-airing shows" required a real
+    derivation, not a guess**: nothing in the schema tracked a show's
+    real-world release status anywhere (checked — A.8's own AniList
+    fetch doesn't pull `Media.status` either). Resolved by computing
+    it from data already tracked rather than adding a new field: a
+    show is "airing" if it has any episode with a null or future
+    `air_date_utc` — reuses exactly what `episodesAiringSoon` (A.3)
+    already relies on. Deliberately *not* `show.status` (LCARS's own
+    tracking status) — a show can be user-marked `watching` and still
+    be fully released today; that's the ordinary paced-mode case
+    (bingeing a finished show at a self-imposed pace), not a
+    contradiction.
+  - **Built**: migration `98cbfe3ad4cb` — one nullable
+    `show.paced_cadence_days INTEGER` column (its presence *is* the
+    flag, same "nullability IS the flag" shape as
+    `hard_delete_requested_at`; `CHECK (... IS NULL OR ... > 0)`).
+    `enablePacedMode(showId, cadenceDays: Int = 7)` — validates
+    "non-airing" at write time only (no ongoing enforcement; matches
+    "scheduling itself is Phase B"), rejects with a clear
+    `GraphQLError` otherwise. `disablePacedMode(showId)`.
+    `Show.pacedNextDate` — a computed field, never stored: latest
+    `watch_event.watched_at` + `pacedCadenceDays`, recomputed fresh on
+    every query (§6.2's own "adaptive, not pre-baked"); null with no
+    watch event yet or when not in paced mode. New `util.add_days()`
+    (the actual date-arithmetic primitive, reusable wherever else a
+    stored timestamp needs advancing).
+  - **Tests**: new `test_util.py` (4: day advancement, month-boundary
+    crossing, negative days, zero days). `test_server.py` (+9:
+    default cadence is 7, a custom cadence, rejects a show with an
+    unknown-air-date episode, rejects a show with a future episode,
+    allows a fully-aired show, disable clears both fields, next-date
+    is null with no watch event, null when not in paced mode, and the
+    adaptive-recompute case itself — two watches, each producing a
+    freshly-computed date from its own latest `watched_at`). Caught a
+    real GraphQL semantics bug while writing these: a variable
+    resolving to `null` is not the same as omitting the argument
+    entirely — the schema's `cadenceDays: Int = 7` default only
+    applies when the argument is absent from the query document, so
+    the "defaults to 7" tests need their own query that omits the
+    argument outright, not one that passes an explicit `null`.
+  - **Verified**: migration round-trips cleanly (upgrade adds the
+    column + CHECK, downgrade removes it; a live insert confirmed 0
+    and negative values are rejected, `NULL`/positive values aren't).
+    Unbound-field sweep re-run, still only 5 real gaps
+    (`NextUpEntry.episode`/`.show`, `Query.backlog`/`search`/`stats` —
+    A.11/A.12/A.13/B.9), confirming no regressions. 166 tests passing,
+    `ruff check .` clean.
 - [ ] **A.11 — Implement the cross-show next-up query** (§6.4):
   soonest-available-first default, manual reorder override.
 - [ ] **A.12 — Implement full-text search** (§6.5): titles + synopses,

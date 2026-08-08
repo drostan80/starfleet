@@ -678,6 +678,158 @@ async def test_anilist_push_failure_logs_pending_review_against_season(client, m
     assert reviews[0]["source"] == "anilist"
 
 
+# --- paced/catch-up mode (§6.2, A.10) ----------------------------------------
+#
+# Reuses _insert_episode_with_air_date, defined once further down in this
+# file (originally for the episodesAiringSoon tests) — same helper, same
+# (migrated_db, episode_id, show_id, air_date_utc) signature.
+
+# GraphQL argument defaults (cadenceDays: Int = 7, schema.graphql) only
+# apply when the argument is entirely omitted from the query document —
+# NOT when a variable resolves to null (that sends an explicit null, which
+# overrides the default). So ENABLE_PACED_MODE_DEFAULT omits the argument
+# outright, and ENABLE_PACED_MODE_WITH_CADENCE always supplies a real value.
+ENABLE_PACED_MODE_DEFAULT = """
+    mutation($id: ID!) {
+      enablePacedMode(showId: $id) { id pacedCadenceDays pacedNextDate }
+    }
+"""
+
+ENABLE_PACED_MODE_WITH_CADENCE = """
+    mutation($id: ID!, $cadence: Int!) {
+      enablePacedMode(showId: $id, cadenceDays: $cadence) {
+        id pacedCadenceDays pacedNextDate
+      }
+    }
+"""
+
+DISABLE_PACED_MODE = """
+    mutation($id: ID!) {
+      disablePacedMode(showId: $id) { id pacedCadenceDays pacedNextDate }
+    }
+"""
+
+SHOW_PACED_MODE_QUERY = """
+    query($id: ID!) { show(id: $id) { id pacedCadenceDays pacedNextDate } }
+"""
+
+
+async def test_enable_paced_mode_defaults_cadence_to_seven(client):
+    show = await add_show(client)  # no episodes at all — non-airing
+    data = await gql(client, ENABLE_PACED_MODE_DEFAULT, {"id": show["id"]}, headers=auth_headers())
+    assert data["enablePacedMode"]["pacedCadenceDays"] == 7
+
+
+async def test_enable_paced_mode_with_custom_cadence(client):
+    show = await add_show(client)
+    data = await gql(
+        client,
+        ENABLE_PACED_MODE_WITH_CADENCE,
+        {"id": show["id"], "cadence": 3},
+        headers=auth_headers(),
+    )
+    assert data["enablePacedMode"]["pacedCadenceDays"] == 3
+
+
+async def test_enable_paced_mode_rejects_a_show_with_no_air_date_yet(client, migrated_db):
+    show = await add_show(client)
+    _insert_episode_with_air_date(migrated_db, "e-airng1", show["id"], None)
+    resp = await client.post(
+        "/",
+        json={"query": ENABLE_PACED_MODE_DEFAULT, "variables": {"id": show["id"]}},
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "unreleased episodes" in body["errors"][0]["message"]
+
+
+async def test_enable_paced_mode_rejects_a_show_with_a_future_episode(client, migrated_db):
+    show = await add_show(client)
+    _insert_episode_with_air_date(migrated_db, "e-airng2", show["id"], "2099-01-01T00:00:00Z")
+    resp = await client.post(
+        "/",
+        json={"query": ENABLE_PACED_MODE_DEFAULT, "variables": {"id": show["id"]}},
+        headers=auth_headers(),
+    )
+    assert "errors" in resp.json()
+
+
+async def test_enable_paced_mode_allows_a_fully_aired_show(client, migrated_db):
+    show = await add_show(client)
+    _insert_episode_with_air_date(migrated_db, "e-past01", show["id"], "2020-01-01T00:00:00Z")
+    data = await gql(client, ENABLE_PACED_MODE_DEFAULT, {"id": show["id"]}, headers=auth_headers())
+    assert data["enablePacedMode"]["pacedCadenceDays"] == 7
+
+
+async def test_disable_paced_mode_clears_cadence(client):
+    show = await add_show(client)
+    await gql(client, ENABLE_PACED_MODE_DEFAULT, {"id": show["id"]}, headers=auth_headers())
+    data = await gql(client, DISABLE_PACED_MODE, {"id": show["id"]}, headers=auth_headers())
+    assert data["disablePacedMode"]["pacedCadenceDays"] is None
+    assert data["disablePacedMode"]["pacedNextDate"] is None
+
+
+async def test_paced_next_date_is_null_without_a_watch_event(client):
+    show = await add_show(client)
+    data = await gql(client, ENABLE_PACED_MODE_DEFAULT, {"id": show["id"]}, headers=auth_headers())
+    assert data["enablePacedMode"]["pacedNextDate"] is None
+
+
+async def test_paced_next_date_is_null_when_not_in_paced_mode(client, migrated_db):
+    show = await add_show(client)
+    _insert_episode_with_air_date(migrated_db, "e-past02", show["id"], "2020-01-01T00:00:00Z")
+    await gql(
+        client,
+        'mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(client, SHOW_PACED_MODE_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["pacedNextDate"] is None
+
+
+async def test_paced_next_date_is_latest_watch_event_plus_cadence(client, migrated_db):
+    show = await add_show(client)
+    _insert_episode_with_air_date(migrated_db, "e-past03", show["id"], "2020-01-01T00:00:00Z")
+    _insert_episode_with_air_date(
+        migrated_db, "e-past04", show["id"], "2020-01-08T00:00:00Z", episode=2
+    )
+    await gql(
+        client,
+        ENABLE_PACED_MODE_WITH_CADENCE,
+        {"id": show["id"], "cadence": 7},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $watchedAt: DateTime!) {
+          addWatchEvent(showId: $id, season: 1, episode: 1, watchedAt: $watchedAt) { id }
+        }
+        """,
+        {"id": show["id"], "watchedAt": "2026-01-01T00:00:00Z"},
+        headers=auth_headers(),
+    )
+    data = await gql(client, SHOW_PACED_MODE_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["pacedNextDate"] == "2026-01-08T00:00:00Z"
+
+    # a second, later watch recomputes from that new latest watch — adaptive,
+    # not pre-baked (§6.2)
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $watchedAt: DateTime!) {
+          addWatchEvent(showId: $id, season: 1, episode: 2, watchedAt: $watchedAt) { id }
+        }
+        """,
+        {"id": show["id"], "watchedAt": "2026-01-10T00:00:00Z"},
+        headers=auth_headers(),
+    )
+    data2 = await gql(client, SHOW_PACED_MODE_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data2["show"]["pacedNextDate"] == "2026-01-17T00:00:00Z"
+
+
 async def test_set_tracked_records_history(client):
     show = await add_show(client)
     data = await gql(
@@ -741,8 +893,9 @@ async def test_score_history_includes_show(client):
 async def _insert_episode(
     migrated_db: Path, show_id: str, episode_id: str = "e-tst001", kind: str = "regular"
 ) -> str:
-    """Episodes aren't addable via the API yet (A.8's on-demand fetch,
-    not built here) — insert directly for this test's purposes."""
+    """No direct "add one episode" mutation exists (A.8's on-demand
+    fetch populates episodes from Sonarr, not a manual single-episode
+    mutation) — insert directly for this test's purposes."""
     conn = db.get_connection()
     conn.execute(
         """
@@ -2256,7 +2409,7 @@ def _iso(offset_days: float) -> str:
 
 
 def _insert_episode_with_air_date(
-    migrated_db: Path, episode_id: str, show_id: str, air_date_utc: str | None
+    migrated_db: Path, episode_id: str, show_id: str, air_date_utc: str | None, episode: int = 1
 ) -> None:
     conn = db.get_connection()
     conn.execute(
@@ -2264,11 +2417,11 @@ def _insert_episode_with_air_date(
         INSERT INTO episode
             (id, show_id, season, episode, kind, air_date_utc, state, created_at, updated_at)
         VALUES (
-            ?, ?, 1, 1, 'regular', ?, 'unwatched',
+            ?, ?, 1, ?, 'regular', ?, 'unwatched',
             '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z'
         )
         """,
-        (episode_id, show_id, air_date_utc),
+        (episode_id, show_id, episode, air_date_utc),
     )
     conn.commit()
 

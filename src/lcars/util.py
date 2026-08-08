@@ -34,6 +34,14 @@ def _parse(value: str) -> datetime:
         raise GraphQLError(f"not a valid ISO-8601 DateTime: {value!r}") from exc
 
 
+def add_days(iso_timestamp: str, days: int) -> str:
+    """`iso_timestamp` (any stored Z-suffixed value) advanced by `days`
+    — paced/catch-up mode's own adaptive next-date formula (§6.2, A.10):
+    latest watch_event.watched_at + cadence interval."""
+    dt = _parse(iso_timestamp)
+    return (dt + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 datetime_scalar = ScalarType("DateTime")
 
 

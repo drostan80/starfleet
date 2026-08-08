@@ -1115,6 +1115,24 @@ watch. Falling behind resets from the last watch — no backlog
 accumulation for paced shows specifically (that's the separate feature
 below).
 
+**Implemented 2026-08-08 (A.10)**: one nullable `show.paced_cadence_days`
+column — its own presence *is* the paced-mode flag (no separate
+boolean), same shape as `show.hard_delete_requested_at`. "Restricted
+to completed/non-airing shows" resolved as a read of the show's real
+content, not `show.status` (a show can be user-marked `watching` and
+still be fully released — the normal paced-mode case, deliberately
+bingeing at a self-imposed pace): "airing" means *any* episode with no
+known air date yet, or one still in the future; a movie has no
+episode rows at all (§5.1) so it's always eligible. `enablePacedMode
+(showId, cadenceDays: Int = 7)` validates this at write time only — no
+ongoing enforcement if a later fetch adds a new episode, consistent
+with "scheduling itself is Phase B." `disablePacedMode(showId)`
+clears it. The adaptive formula itself is a computed field,
+`Show.pacedNextDate`, never stored — latest `watch_event.watched_at`
++ `pacedCadenceDays`, recomputed fresh on every query; null with no
+watch event yet (no artificial delay before a first episode) or when
+not in paced mode at all.
+
 ### 6.3 Backlog visualization (airing shows, Phase B)
 
 Distinct from pacing. Surfaces in **both** Data's `B` view (inherited

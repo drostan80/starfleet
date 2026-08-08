@@ -965,6 +965,69 @@ def resolve_set_tracked(_, info, show_id, tracked):
     return _get_show(conn, show_id)
 
 
+# -- §6.2 paced/catch-up mode (A.10) -----------------------------------------
+
+
+def _show_is_airing(conn, show_id: str) -> bool:
+    """§6.2 — "restricted to completed/non-airing shows only". Not
+    LCARS's own `show.status` (a show can be user-marked WATCHING and
+    still be fully released — the normal paced-mode case, bingeing at
+    a self-imposed pace) — this checks the show's real content: any
+    episode with no known air date yet, or one still in the future,
+    means new content is still coming, so no synthetic date should
+    ever compete with it. A movie has no episode rows at all (§5.1),
+    so it's always "non-airing" by this definition."""
+    row = conn.execute(
+        "SELECT 1 FROM episode"
+        " WHERE show_id = ? AND (air_date_utc IS NULL OR air_date_utc > ?) LIMIT 1",
+        (show_id, util.now_utc_iso()),
+    ).fetchone()
+    return row is not None
+
+
+@mutation.field("enablePacedMode")
+def resolve_enable_paced_mode(_, info, show_id, cadence_days=7):
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    if _show_is_airing(conn, show_id):
+        raise GraphQLError(
+            f"{show_id} still has unreleased episodes — paced mode is for "
+            "completed/non-airing shows only (§6.2)"
+        )
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE show SET paced_cadence_days = ?, updated_at = ? WHERE id = ?",
+        (cadence_days, now, show_id),
+    )
+    conn.commit()
+    return _get_show(conn, show_id)
+
+
+@mutation.field("disablePacedMode")
+def resolve_disable_paced_mode(_, info, show_id):
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE show SET paced_cadence_days = NULL, updated_at = ? WHERE id = ?", (now, show_id)
+    )
+    conn.commit()
+    return _get_show(conn, show_id)
+
+
+@show_type.field("pacedNextDate")
+def resolve_show_paced_next_date(obj, info):
+    if obj.get("paced_cadence_days") is None:
+        return None
+    conn = db.get_connection()
+    row = conn.execute(
+        "SELECT MAX(watched_at) AS latest FROM watch_event WHERE show_id = ?", (obj["id"],)
+    ).fetchone()
+    if row["latest"] is None:
+        return None
+    return util.add_days(row["latest"], obj["paced_cadence_days"])
+
+
 @mutation.field("addWatchEvent")
 def resolve_add_watch_event(
     _, info, show_id, season=None, episode=None, watched_at=None, platform=None

@@ -195,6 +195,22 @@ type Show {
   "media_shape = MOVIE only — set once §6.11's delay period has been requested; null otherwise."
   hardDeleteRequestedAt: DateTime
 
+  """
+  §6.2, A.10 — non-null means this show is in paced/catch-up mode, this
+  many days between synthetic dates; null means it isn't. Restricted to
+  completed/non-airing shows only (enablePacedMode enforces this at
+  write time) — an airing show never gets fake dates.
+  """
+  pacedCadenceDays: Int
+  """
+  §6.2 — the adaptive next-date formula itself: latest watchEvent +
+  pacedCadenceDays, recomputed fresh on every query (never stored/
+  pre-baked). Null when not in paced mode, or when there's no watch
+  event yet to anchor from (a freshly-enabled show with nothing
+  watched yet has no artificial delay before its first episode).
+  """
+  pacedNextDate: DateTime
+
   createdAt: DateTime!
   updatedAt: DateTime!
 
@@ -858,6 +874,16 @@ type Mutation {
   "§6.8, A.9 — also pushes to AniList (MediaListStatus) on every season the show has a link for; same best-effort policy as setScore."
   setStatus(showId: ID!, status: ShowStatus!): Show!
   setTracked(showId: ID!, tracked: Boolean!): Show!
+
+  # -- §6.2 paced/catch-up mode (A.10) ---------------------------------------
+  """
+  Restricted to completed/non-airing shows (§6.2) — rejects with a
+  GraphQLError if this show currently has any episode with no known
+  air date, or a future one. `cadenceDays` defaults to 7 ("default
+  weekly, editable") when omitted.
+  """
+  enablePacedMode(showId: ID!, cadenceDays: Int = 7): Show!
+  disablePacedMode(showId: ID!): Show!
 
   # -- §6.11 deletion policy ---------------------------------------------
   "Soft is always the default/first step (§3 principle 3, §6.11) — a status/tracked-flag change, never a row removal."
