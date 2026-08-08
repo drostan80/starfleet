@@ -1355,3 +1355,136 @@ async def test_tags_top_level_query(client):
     )
     data = await gql(client, "{ tags { edges { node { name } } } }", headers=auth_headers())
     assert "list-me" in [e["node"]["name"] for e in data["tags"]["edges"]]
+
+
+# --- saved filter presets (§5.10) — the last table in §5's document order ---
+
+
+async def test_create_filter_preset(client):
+    created = await gql(
+        client,
+        """
+        mutation {
+          createFilterPreset(name: "Watching Anime", filterJson: "{\\"status\\":\\"WATCHING\\"}") {
+            id name filterJson
+          }
+        }
+        """,
+        headers=auth_headers(),
+    )
+    preset = created["createFilterPreset"]
+    assert preset["name"] == "Watching Anime"
+    assert preset["filterJson"] == '{"status":"WATCHING"}'
+
+    fetched = await gql(
+        client,
+        "query($id: ID!) { filterPreset(id: $id) { name } }",
+        {"id": preset["id"]},
+        headers=auth_headers(),
+    )
+    assert fetched["filterPreset"]["name"] == "Watching Anime"
+
+
+async def test_create_filter_preset_does_not_require_unique_name(client):
+    """Unlike tag.name, filter_preset.name has no UNIQUE constraint
+    (migration 7196ca889757) — freely editable, not fixed (§5.10)."""
+    first = await gql(
+        client,
+        'mutation { createFilterPreset(name: "Dup", filterJson: "{}") { id } }',
+        headers=auth_headers(),
+    )
+    second = await gql(
+        client,
+        'mutation { createFilterPreset(name: "Dup", filterJson: "{}") { id } }',
+        headers=auth_headers(),
+    )
+    assert first["createFilterPreset"]["id"] != second["createFilterPreset"]["id"]
+
+
+async def test_update_filter_preset_is_a_partial_update(client):
+    created = await gql(
+        client,
+        'mutation { createFilterPreset(name: "Original", filterJson: "{\\"a\\":1}") { id } }',
+        headers=auth_headers(),
+    )
+    preset_id = created["createFilterPreset"]["id"]
+
+    # updating just the name leaves filterJson untouched
+    renamed = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          updateFilterPreset(id: $id, name: "Renamed") { name filterJson }
+        }
+        """,
+        {"id": preset_id},
+        headers=auth_headers(),
+    )
+    assert renamed["updateFilterPreset"]["name"] == "Renamed"
+    assert renamed["updateFilterPreset"]["filterJson"] == '{"a":1}'
+
+    # updating just filterJson leaves the (already-renamed) name untouched
+    rejsoned = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          updateFilterPreset(id: $id, filterJson: "{\\"b\\":2}") { name filterJson }
+        }
+        """,
+        {"id": preset_id},
+        headers=auth_headers(),
+    )
+    assert rejsoned["updateFilterPreset"]["name"] == "Renamed"
+    assert rejsoned["updateFilterPreset"]["filterJson"] == '{"b":2}'
+
+
+async def test_update_filter_preset_requires_existing_id(client):
+    resp = await client.post(
+        "/",
+        json={
+            "query": (
+                'mutation { updateFilterPreset(id: "q-nosuch", name: "X") { id } }'
+            )
+        },
+        headers=auth_headers(),
+    )
+    assert "errors" in resp.json()
+
+
+async def test_delete_filter_preset(client):
+    created = await gql(
+        client,
+        'mutation { createFilterPreset(name: "Temp", filterJson: "{}") { id } }',
+        headers=auth_headers(),
+    )
+    preset_id = created["createFilterPreset"]["id"]
+
+    result = await gql(
+        client,
+        "mutation($id: ID!) { deleteFilterPreset(id: $id) }",
+        {"id": preset_id},
+        headers=auth_headers(),
+    )
+    assert result["deleteFilterPreset"] is True
+
+    resp = await client.post(
+        "/",
+        json={
+            "query": "mutation($id: ID!) { deleteFilterPreset(id: $id) }",
+            "variables": {"id": preset_id},
+        },
+        headers=auth_headers(),
+    )
+    assert "errors" in resp.json()
+
+
+async def test_filter_presets_top_level_query(client):
+    await gql(
+        client,
+        'mutation { createFilterPreset(name: "List Me", filterJson: "{}") { id } }',
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client, "{ filterPresets { edges { node { name } } } }", headers=auth_headers()
+    )
+    assert "List Me" in [e["node"]["name"] for e in data["filterPresets"]["edges"]]

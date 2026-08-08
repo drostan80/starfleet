@@ -225,6 +225,18 @@ def _require_tag(conn, tag_id: str) -> dict:
     return tag
 
 
+def _get_filter_preset(conn, preset_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM filter_preset WHERE id = ?", (preset_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _require_filter_preset(conn, preset_id: str) -> dict:
+    preset = _get_filter_preset(conn, preset_id)
+    if preset is None:
+        raise GraphQLError(f"no such filter_preset: {preset_id}")
+    return preset
+
+
 # --- Query -------------------------------------------------------------
 
 
@@ -295,6 +307,16 @@ def resolve_tag(_, info, id):  # noqa: A002
 @query.field("tags")
 def resolve_tags(_, info, **page_args):
     return pagination.paginate(db.get_connection(), "tag", "1 = 1", (), **page_args)
+
+
+@query.field("filterPreset")
+def resolve_filter_preset(_, info, id):  # noqa: A002
+    return _get_filter_preset(db.get_connection(), id)
+
+
+@query.field("filterPresets")
+def resolve_filter_presets(_, info, **page_args):
+    return pagination.paginate(db.get_connection(), "filter_preset", "1 = 1", (), **page_args)
 
 
 # --- Show fields ---------------------------------------------------------
@@ -1256,3 +1278,52 @@ def resolve_remove_show_tag(_, info, show_id, tag_id):
     conn.execute("DELETE FROM show_tag WHERE show_id = ? AND tag_id = ?", (show_id, tag_id))
     conn.commit()
     return show
+
+
+# -- 5.10 saved filter presets -------------------------------------------------
+#
+# "Server-side entity, freely editable from any client — not read-only, not
+# fixed" (§5.10) — no name-uniqueness constraint (unlike tag.name, migration
+# 7196ca889757 confirms filter_preset.name has none), so unlike createTag
+# there's nothing to validate before inserting.
+
+
+@mutation.field("createFilterPreset")
+def resolve_create_filter_preset(_, info, name, filter_json):
+    conn = db.get_connection()
+    preset_id = ids.generate_id(conn, "q")
+    now = util.now_utc_iso()
+    conn.execute(
+        "INSERT INTO filter_preset (id, name, filter_json, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (preset_id, name, filter_json, now, now),
+    )
+    conn.commit()
+    return _get_filter_preset(conn, preset_id)
+
+
+@mutation.field("updateFilterPreset")
+def resolve_update_filter_preset(_, info, id, name=None, filter_json=None):  # noqa: A002
+    """name/filterJson are both optional — a partial update, only the
+    fields actually provided change."""
+    conn = db.get_connection()
+    existing = _require_filter_preset(conn, id)
+    new_name = name if name is not None else existing["name"]
+    new_filter_json = filter_json if filter_json is not None else existing["filter_json"]
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE filter_preset SET name = ?, filter_json = ?, updated_at = ? WHERE id = ?",
+        (new_name, new_filter_json, now, id),
+    )
+    conn.commit()
+    return _get_filter_preset(conn, id)
+
+
+@mutation.field("deleteFilterPreset")
+def resolve_delete_filter_preset(_, info, id):  # noqa: A002
+    conn = db.get_connection()
+    cur = conn.execute("DELETE FROM filter_preset WHERE id = ?", (id,))
+    if cur.rowcount == 0:
+        raise GraphQLError(f"no such filter_preset: {id}")
+    conn.commit()
+    return True

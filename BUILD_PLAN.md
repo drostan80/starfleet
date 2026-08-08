@@ -388,6 +388,28 @@ so this slice needed real mutation logic, not just query wiring.
 - Re-ran the sweep again: dropped from 23 to 16, exactly the 7 fields
   just implemented, no new gaps.
 - 76 tests total now (was 72), `ruff` clean, schema re-validated.
+
+**Seventh slice, same day**: saved filter presets (§5.10) — the last
+table in §5's own document order. **§5 is now fully exhausted for
+A.3**: every table `SCOPE.md` §5 defines has its resolvers wired.
+Server-side entity, "freely editable from any client — not read-only,
+not fixed" (§5.10's own, deliberately thin, description) — confirmed
+no `UNIQUE` constraint on `filter_preset.name` (unlike `tag.name`),
+so unlike `createTag` there was nothing to validate before inserting;
+`updateFilterPreset` is a genuine partial update (`name`/`filterJson`
+both optional, only the provided ones change).
+- Re-ran the sweep a final time for this table: dropped from 16 to
+  12, exactly the 4 object-typed fields just implemented
+  (`deleteFilterPreset` returns `Boolean`, not counted).
+- 82 tests total now (was 76), `ruff` clean, schema re-validated.
+- **What's left of A.3 is entirely §6-derived query surface and
+  deletion/export-import mutations** — none of it ordered by §5
+  anymore, since §5 itself is done: `search`/`stats`/`nextUp`/
+  `episodesAiringSoon`/`backlog` (Query), `softDeleteShow`/
+  `requestHardDelete`/`cancelHardDelete`/`confirmHardDelete`
+  (deletion, §6.11), `exportData`/`importData` (§6.12). Genuinely
+  unordered by anything in the plan — worth checking in on before
+  picking one, not assuming.
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
   dataset (one-time/on-demand download, not live polling), manual
