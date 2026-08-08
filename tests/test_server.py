@@ -512,6 +512,172 @@ async def test_set_score_clamps_and_rounds_silently(client, input_score, expecte
     assert data["setScore"]["score"] == expected
 
 
+# --- AniList score/status push (§6.1/§6.8, A.9) -----------------------------
+#
+# Default fixture config has no anilist_access_token, so every push is a
+# silent no-op there — these tests explicitly configure one to exercise the
+# real push path, mocking anilist_client.save_media_list_entry throughout
+# (no real network calls).
+
+
+async def _link_season_anilist(client, show_id, season_number, anilist_id):
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!, $season: Int!, $anilistId: Int!) {
+          setSeasonMapping(showId: $id, seasonNumber: $season, anilistId: $anilistId) { id }
+        }
+        """,
+        {"id": show_id, "season": season_number, "anilistId": anilist_id},
+        headers=auth_headers(),
+    )
+    return data["setSeasonMapping"]["id"]
+
+
+def _authenticated_config():
+    return config.Config(anilist_access_token="tok-123")
+
+
+async def test_set_score_pushes_show_score_to_every_linked_season(client, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((token, anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _link_season_anilist(client, show["id"], 1, 111)
+    await _link_season_anilist(client, show["id"], 2, 222)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 17) { score } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert len(calls) == 2
+    pushed_ids = {c[1] for c in calls}
+    assert pushed_ids == {111, 222}
+    for token, _anilist_id, kw in calls:
+        assert token == "tok-123"
+        assert kw == {"score": 85.0}  # ×5, §6.1
+
+
+async def test_set_score_no_push_when_not_authenticated(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        anilist_client, "save_media_list_entry", lambda *a, **kw: called.append(True)
+    )
+    show = await add_show(client)
+    await _link_season_anilist(client, show["id"], 1, 111)
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 17) { score } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert called == []
+
+
+async def test_set_season_score_pushes_only_that_season(client, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    season1 = await _link_season_anilist(client, show["id"], 1, 111)
+    await _link_season_anilist(client, show["id"], 2, 222)
+
+    data = await gql(
+        client,
+        "mutation($id: ID!, $s: Float!) { setSeasonScore(seasonId: $id, score: $s) { score } }",
+        {"id": season1, "s": 18.0},
+        headers=auth_headers(),
+    )
+    assert data["setSeasonScore"]["score"] == 18.0
+    assert calls == [(111, {"score": 90.0})]  # only season 1, not season 2
+
+
+async def test_set_season_score_overrides_show_score_fallback(client, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    season1 = await _link_season_anilist(client, show["id"], 1, 111)
+    await _link_season_anilist(client, show["id"], 2, 222)  # no own score — falls back
+
+    await gql(
+        client,
+        "mutation($id: ID!, $s: Float!) { setSeasonScore(seasonId: $id, score: $s) { score } }",
+        {"id": season1, "s": 12.0},
+        headers=auth_headers(),
+    )
+    calls.clear()
+
+    # show-level score push: season 1 keeps its own 12.0 (-> 60.0), season 2
+    # has no own score so falls back to the new show-level value (-> 100.0)
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 20) { score } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    pushed = dict(calls)
+    assert pushed[111] == {"score": 60.0}
+    assert pushed[222] == {"score": 100.0}
+
+
+async def test_set_status_pushes_to_every_linked_season(client, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _link_season_anilist(client, show["id"], 1, 111)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert calls == [(111, {"status": "COMPLETED"})]
+
+
+async def test_anilist_push_failure_logs_pending_review_against_season(client, monkeypatch):
+    config.set_current(_authenticated_config())
+
+    def _raise(*a, **kw):
+        raise anilist_client.AniListError("Timed out talking to AniList")
+
+    monkeypatch.setattr(anilist_client, "save_media_list_entry", _raise)
+    show = await add_show(client)
+    season_id = await _link_season_anilist(client, show["id"], 1, 111)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 17) { score } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    reviews = await _pending_reviews_for(client, season_id)
+    assert len(reviews) == 1
+    assert reviews[0]["entityType"] == "season"
+    assert reviews[0]["field"] == "anilist_push"
+    assert reviews[0]["source"] == "anilist"
+
+
 async def test_set_tracked_records_history(client):
     show = await add_show(client)
     data = await gql(

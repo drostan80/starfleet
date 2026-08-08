@@ -718,9 +718,84 @@ order — same reasoning `pagination.py`'s cursors already lean on).
     A.11/A.12/A.13/B.9), confirming no regressions. 135 tests passing,
     `ruff check .` clean. No new migration needed — every write uses
     existing §5 columns/tables.
-- [ ] **A.9 — Implement scoring & conversions** (§6.1): 0–20
+- [x] **A.9 — Implement scoring & conversions** (§6.1): 0–20
   quarter-point personal scale, clamp/round silently on invalid input,
   ×5 to AniList, ÷2 to MAL, both push-only.
+  - **Scope confirmed directly, not assumed carried over from A.8**:
+    the user was explicit that score push is *not* the same exception
+    §6.8 carves out for Data's episode-watch-status-only direct write
+    — "it goes through lcars, lcars pushes it, as written in plan."
+  - **Real gap found and folded in, per explicit instruction to check
+    thoroughly before concluding it was one**: §6.8 already says LCARS
+    owns *status* push too ("Everything else (status, score...) is
+    LCARS's job"), but grepping both SCOPE.md and BUILD_PLAN.md fully
+    (not from partial memory) confirmed no step anywhere actually
+    implements pushing the status enum to AniList. Folded status-push
+    into this same step rather than leaving the gap.
+  - **A real, deeper design gap surfaced while building the push
+    itself, resolved directly with the user**: `setScore`/`setStatus`
+    operate on `show`, but AniList tracks each season as its own list
+    entry (A.4) — which entry receives a push once a show has more
+    than one season? Confirmed: score becomes genuinely per-season —
+    new `season.score` column (migration `1168ad1ebaa0`, same 0-20
+    scale as `show.score`), a new `setSeasonScore(seasonId, score)`
+    mutation pushing to just that one season, and `setScore` itself
+    still pushing show.score to *every* linked season (each resolving
+    its own effective value: own `season.score` if set, else the
+    show's). No per-season status exists, so `setStatus` pushes
+    uniformly to every linked season.
+  - **AniList OAuth mechanics confirmed directly**: LCARS reuses
+    Data/aniq's already-registered AniList app (`anilist_client_id`/
+    `_secret`, confirmed — not a new registration) and runs its own
+    separate authorization to mint an independent
+    `anilist_access_token`, via a new `lcars anilist-login` CLI
+    command (the same PIN-redirect flow Data's own login already
+    uses, since LCARS is headless — no browser of its own).
+  - **Built**: `anilist_client.py` extended (A.8 built the read-only
+    half) with `authorize_url`/`exchange_code`/`save_media_list_entry`
+    + a new `AniListAuthError`, close ports of Data's own real
+    `anilist.py`, refactored around one shared `_graphql_request`
+    error-handling helper. `config.py`: `anilist_client_id`/`_secret`/
+    `_access_token` + `save_anilist_token()`. `cli.py`: restructured
+    to subcommands (`serve` — the pre-existing default, still bare
+    `lcars` with no args for the Dockerfile's own sake — and the new
+    `anilist-login`). `resolvers.py`: `_push_season_score`/
+    `_push_show_score`/`_push_show_status` — best-effort throughout,
+    same philosophy as A.8's metadata fetch (not-yet-authenticated
+    treated as "not configured", a real push failure opens/extends a
+    `pending_review` entry against the specific `season`, field
+    `"anilist_push"`, rather than ever failing the local write) —
+    wired into `setScore`/`setSeasonScore`/`setStatus`.
+  - **Tests**: `test_anilist_client.py` (+8: authorize URL shape, code
+    exchange success/rejection/malformed-response, push sends
+    status+score together and each independently omits the other's
+    variable per GraphQL's null-means-unset semantics, 401 raises
+    `AniListAuthError`). New `test_cli.py` (4: bare/`serve` both hit
+    uvicorn with the right args, `anilist-login` requires credentials
+    first and walks the full PIN-paste-exchange-save flow on success).
+    `test_server.py` (+6 end-to-end): show-level score push reaches
+    every linked season at ×5; no push when unauthenticated;
+    season-level push touches only that season; a season with its own
+    score keeps it on a later show-level push while an unscored
+    sibling still falls back to the new show value; status push
+    reaches every linked season; a push failure opens a pending_review
+    entry against the right season.
+  - **Verified**: migration round-trips (upgrade adds `season.score`,
+    downgrade removes it cleanly). Unbound-field sweep re-run, still
+    only 5 real gaps (`NextUpEntry.episode`/`.show`,
+    `Query.backlog`/`search`/`stats` — A.11/A.12/A.13/B.9), confirming
+    no regressions. 153 tests passing, `ruff check .` clean.
+  - **Deliberately still not built here**: MAL's ÷2 push — §6.9/B.10
+    is explicit that MAL integration "can start any time after Phase
+    A's push infrastructure exists" but is its own Phase B step (its
+    own OAuth app registration + the proactive refresh-token renewal
+    job MAL's short-lived tokens need), not folded in here. Also not
+    built: episode-level scoring — the user's own framing mentioned
+    "season level and show level, and episode level" as a longer-term
+    idea, but the concrete confirmation received was specifically
+    "add `season.score`... build it into A.9", not episode — treating
+    episode-level scoring as a distinct, not-yet-confirmed follow-up
+    rather than assuming it was included.
 - [ ] **A.10 — Implement paced/catch-up mode schema** (§6.2):
   per-show cadence config + the adaptive next-date computation.
   Scheduling itself (actually advancing dates) is Phase B; the schema

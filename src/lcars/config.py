@@ -11,13 +11,21 @@ direction: "ultimately all compute and fetch will be handled on the
 server by lcars, so might as well built it this way now" — a deliberate
 reversal of A.4/A.7's original "client fetches, LCARS just reconciles"
 framing once it became clear that framing was only ever a Data-shaped
-transitional stage, not the end state. No AniList credential here:
-A.8's Media-by-id fetch is AniList's public, unauthenticated GraphQL
-endpoint (same as Data's own `search_anime()`/`anilist.py`) — pushing
-watch status *to* AniList/MAL (OAuth-authenticated) stays Data's job,
-explicitly excluded by that same direction. `home_timezone` (§6.13)
-still isn't here — A.16 hasn't been reached yet, same discipline
-A.1/A.2 held to.
+transitional stage, not the end state. A.8's own Media-by-id fetch is
+AniList's public, unauthenticated GraphQL endpoint — no credential
+needed there.
+
+AniList OAuth credentials added here 2026-08-08 (A.9) — confirmed
+directly: score/status push (§6.1/§6.8) is explicitly not the same
+exception as episode watch-status (§6.8's narrow Data-only path); it
+goes through LCARS, LCARS pushes it. `anilist_client_id`/`_secret`
+reuse Data/aniq's existing registered AniList app (confirmed, not a
+new one) — LCARS runs its own separate authorization (`lcars
+anilist-login`, cli.py) to mint its own independent
+`anilist_access_token`, stored the same plaintext-`lcars.ini`-chmod-600
+way as everything else here (§8's own precedent, not a new pattern).
+`home_timezone` (§6.13) still isn't here — A.16 hasn't been reached
+yet, same discipline A.1/A.2 held to.
 """
 
 import configparser
@@ -54,6 +62,16 @@ class Config:
     sonarr_api_key: str | None = None
     radarr_url: str | None = None
     radarr_api_key: str | None = None
+    # A.9 — client_id/secret are Data/aniq's existing registered AniList
+    # app's credentials (reused, confirmed, not a new registration);
+    # access_token is LCARS's own, obtained via `lcars anilist-login`
+    # (cli.py) and saved with save_anilist_token() below. All three
+    # optional: the score/status push is best-effort (metadata.py's own
+    # A.8 precedent) — not yet authenticated just means the push is
+    # skipped, same as Sonarr/Radarr "not configured" above.
+    anilist_client_id: str | None = None
+    anilist_client_secret: str | None = None
+    anilist_access_token: str | None = None
 
 
 def load_config(config_path: Path = CONFIG_PATH) -> Config:
@@ -71,6 +89,11 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.sonarr_api_key = parser["lcars"].get("sonarr_api_key", fallback=None)
             cfg.radarr_url = parser["lcars"].get("radarr_url", fallback=None)
             cfg.radarr_api_key = parser["lcars"].get("radarr_api_key", fallback=None)
+            cfg.anilist_client_id = parser["lcars"].get("anilist_client_id", fallback=None)
+            cfg.anilist_client_secret = parser["lcars"].get(
+                "anilist_client_secret", fallback=None
+            )
+            cfg.anilist_access_token = parser["lcars"].get("anilist_access_token", fallback=None)
     cfg.bearer_token = os.environ.get("LCARS_BEARER_TOKEN", cfg.bearer_token)
     env_db_path = os.environ.get("LCARS_DB_PATH")
     if env_db_path is not None:
@@ -79,6 +102,13 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     cfg.sonarr_api_key = os.environ.get("LCARS_SONARR_API_KEY", cfg.sonarr_api_key)
     cfg.radarr_url = os.environ.get("LCARS_RADARR_URL", cfg.radarr_url)
     cfg.radarr_api_key = os.environ.get("LCARS_RADARR_API_KEY", cfg.radarr_api_key)
+    cfg.anilist_client_id = os.environ.get("LCARS_ANILIST_CLIENT_ID", cfg.anilist_client_id)
+    cfg.anilist_client_secret = os.environ.get(
+        "LCARS_ANILIST_CLIENT_SECRET", cfg.anilist_client_secret
+    )
+    cfg.anilist_access_token = os.environ.get(
+        "LCARS_ANILIST_ACCESS_TOKEN", cfg.anilist_access_token
+    )
     return cfg
 
 
@@ -113,6 +143,22 @@ def save_bearer_token(token: str, config_path: Path = CONFIG_PATH) -> None:
     if not parser.has_section("lcars"):
         parser.add_section("lcars")
     parser["lcars"]["bearer_token"] = token
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with config_path.open("w") as f:
+        parser.write(f)
+    config_path.chmod(0o600)
+
+
+def save_anilist_token(token: str, config_path: Path = CONFIG_PATH) -> None:
+    """A.9 — saved by `lcars anilist-login` (cli.py) once the OAuth
+    exchange succeeds. Same merge-not-overwrite/chmod-600 shape as
+    save_bearer_token() above."""
+    parser = configparser.ConfigParser()
+    if config_path.exists():
+        parser.read(config_path)
+    if not parser.has_section("lcars"):
+        parser.add_section("lcars")
+    parser["lcars"]["anilist_access_token"] = token
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w") as f:
         parser.write(f)

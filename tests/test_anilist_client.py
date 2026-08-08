@@ -1,4 +1,5 @@
-"""AniList metadata fetch — SCOPE.md §5.1/§5.4/§5.5, BUILD_PLAN.md A.8.
+"""AniList metadata fetch + push — SCOPE.md §5.1/§5.4/§5.5/§6.1/§6.8,
+BUILD_PLAN.md A.8/A.9.
 
 Pure client-layer coverage: no real network calls, an injected fake
 httpx.Client stands in throughout — same pattern as
@@ -26,10 +27,15 @@ class _FakeClient:
         self._error = error
         self.calls = 0
         self.last_variables = None
+        self.last_headers = None
+        self.last_json = None
 
-    def post(self, url, json):
+    def post(self, url, json=None, headers=None):
         self.calls += 1
-        self.last_variables = json.get("variables")
+        self.last_json = json
+        self.last_headers = headers
+        if json is not None:
+            self.last_variables = json.get("variables")
         if self._error is not None:
             raise self._error
         return self._response
@@ -38,12 +44,16 @@ class _FakeClient:
         pass
 
 
+# --- fetch_media (A.8) -------------------------------------------------------
+
+
 def test_fetch_media_returns_the_media_object():
     media = {"title": {"romaji": "Golden Kamuy"}, "idMal": 999}
     fake = _FakeClient(response=_FakeResponse(payload={"data": {"Media": media}}))
     result = anilist_client.fetch_media(123, client=fake)
     assert result == media
     assert fake.last_variables == {"mediaId": 123}
+    assert fake.last_headers == {}  # unauthenticated — no token for this call
 
 
 def test_fetch_media_returns_none_for_an_unknown_id():
@@ -75,3 +85,78 @@ def test_fetch_media_raises_on_timeout():
     fake = _FakeClient(error=httpx.TimeoutException("boom"))
     with pytest.raises(anilist_client.AniListError, match="Timed out"):
         anilist_client.fetch_media(123, client=fake)
+
+
+# --- OAuth (A.9) --------------------------------------------------------------
+
+
+def test_authorize_url_includes_client_id_and_pin_redirect():
+    url = anilist_client.authorize_url("42")
+    assert "client_id=42" in url
+    assert "redirect_uri=https://anilist.co/api/v2/oauth/pin" in url
+    assert "response_type=code" in url
+
+
+def test_exchange_code_returns_the_access_token():
+    fake = _FakeClient(response=_FakeResponse(payload={"access_token": "tok-123"}))
+    token = anilist_client.exchange_code("cid", "csecret", "authcode", client=fake)
+    assert token == "tok-123"
+    assert fake.last_json["code"] == "authcode"
+    assert fake.last_json["client_id"] == "cid"
+
+
+def test_exchange_code_raises_with_detail_on_rejection():
+    fake = _FakeClient(response=_FakeResponse(status_code=400, payload={"error": "invalid_grant"}))
+    with pytest.raises(anilist_client.AniListError, match="invalid_grant"):
+        anilist_client.exchange_code("cid", "csecret", "badcode", client=fake)
+
+
+def test_exchange_code_raises_if_no_access_token_in_response():
+    fake = _FakeClient(response=_FakeResponse(payload={"unexpected": "shape"}))
+    with pytest.raises(anilist_client.AniListError, match="access_token"):
+        anilist_client.exchange_code("cid", "csecret", "code", client=fake)
+
+
+# --- save_media_list_entry (A.9 push) -----------------------------------------
+
+
+def test_save_media_list_entry_sends_both_status_and_score():
+    entry = {"status": "CURRENT", "score": 85.0}
+    fake = _FakeClient(response=_FakeResponse(payload={"data": {"SaveMediaListEntry": entry}}))
+    result = anilist_client.save_media_list_entry(
+        "tok", 123, status="CURRENT", score=17.0, client=fake
+    )
+    assert result == {"status": "CURRENT", "score": 85.0}
+    assert fake.last_variables == {"mediaId": 123, "status": "CURRENT", "score": 17.0}
+    assert fake.last_headers == {"Authorization": "Bearer tok"}
+
+
+def test_save_media_list_entry_score_only_omits_status_variable():
+    """§6.1/§6.8 — an explicit null for an optional GraphQL argument
+    means "unset this", not "leave it alone", so a score-only push
+    must never even send a status variable."""
+    fake = _FakeClient(
+        response=_FakeResponse(payload={"data": {"SaveMediaListEntry": {"score": 85.0}}})
+    )
+    anilist_client.save_media_list_entry("tok", 123, score=17.0, client=fake)
+    assert "status" not in fake.last_variables
+    assert fake.last_variables["score"] == 17.0
+
+
+def test_save_media_list_entry_status_only_omits_score_variable():
+    fake = _FakeClient(
+        response=_FakeResponse(payload={"data": {"SaveMediaListEntry": {"status": "DROPPED"}}})
+    )
+    anilist_client.save_media_list_entry("tok", 123, status="DROPPED", client=fake)
+    assert "score" not in fake.last_variables
+    assert fake.last_variables["status"] == "DROPPED"
+
+
+def test_save_media_list_entry_raises_ani_list_auth_error_on_401():
+    fake = _FakeClient(
+        response=_FakeResponse(
+            status_code=401, payload={"errors": [{"message": "Invalid token"}]}
+        )
+    )
+    with pytest.raises(anilist_client.AniListAuthError, match="anilist-login"):
+        anilist_client.save_media_list_entry("bad-tok", 123, score=17.0, client=fake)

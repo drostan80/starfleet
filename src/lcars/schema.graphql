@@ -369,6 +369,8 @@ type Season {
   seasonNumber: Int!
   anilistId: Int
   malId: Int
+  "A.9 — this season's own personal score (0-20 quarter-point scale, same as Show.score); nullable, falls back to Show.score for the AniList push when unset (§6.1)."
+  score: Float
   source: SeasonSource!
   matched: Boolean!
   manualOverride: Boolean!
@@ -841,8 +843,19 @@ type Mutation {
   addShow(input: AddShowInput!): Show!
   "A.8 — re-runs the same on-demand metadata fetch addShow triggers at creation; the manual-retry half of its best-effort policy."
   refreshShowMetadata(showId: ID!): Show!
-  "§6.1 — clamps/rounds silently to the 0-20 quarter-point scale rather than rejecting out-of-range input."
+  """
+  §6.1/§6.8, A.9 — clamps/rounds silently to the 0-20 quarter-point
+  scale rather than rejecting out-of-range input. Also pushes to
+  AniList (×5, exact) on every season the show has an AniList link
+  for, using that season's own `score` when set, else this value —
+  best-effort: not yet authenticated (`lcars anilist-login`) or an
+  unreachable AniList just skips the push/opens a pending_review
+  entry, never blocks the local write.
+  """
   setScore(showId: ID!, score: Float!): Show!
+  "A.9, §6.1/§5.5 addendum — same push as setScore, scoped to one season and its own AniList entry only."
+  setSeasonScore(seasonId: ID!, score: Float!): Season!
+  "§6.8, A.9 — also pushes to AniList (MediaListStatus) on every season the show has a link for; same best-effort policy as setScore."
   setStatus(showId: ID!, status: ShowStatus!): Show!
   setTracked(showId: ID!, tracked: Boolean!): Show!
 

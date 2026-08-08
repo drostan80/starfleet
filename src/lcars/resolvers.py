@@ -23,7 +23,18 @@ import json
 from ariadne import EnumType, MutationType, ObjectType, QueryType
 from graphql import GraphQLError
 
-from lcars import db, fribb, fuzzy, ids, metadata, pagination, pending_review, util
+from lcars import (
+    anilist_client,
+    config,
+    db,
+    fribb,
+    fuzzy,
+    ids,
+    metadata,
+    pagination,
+    pending_review,
+    util,
+)
 
 query = QueryType()
 mutation = MutationType()
@@ -172,6 +183,88 @@ def _require_episode(conn, episode_id: str) -> dict:
 def _get_season(conn, season_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM season WHERE id = ?", (season_id,)).fetchone()
     return dict(row) if row else None
+
+
+# -- AniList push (§6.1/§6.8, A.9) -------------------------------------------
+#
+# LCARS's own AniList OAuth session (config.anilist_access_token, `lcars
+# anilist-login`) — a genuinely separate concern from Data's own narrow
+# episode-watch-status-only direct write (§6.8), confirmed 2026-08-08: score/
+# status push "is not... watch status... it goes through lcars, lcars pushes
+# it". Best-effort throughout, same philosophy as A.8's metadata fetch: not
+# yet authenticated is treated the same as "not configured" (silent no-op,
+# not a failure); an actual push error opens/extends a pending_review entry
+# rather than raising, so a score/status write itself never fails just
+# because AniList happened to be unreachable at that moment.
+
+_STATUS_TO_ANILIST = {
+    "watching": "CURRENT",
+    "planned": "PLANNING",
+    "paused": "PAUSED",
+    "completed": "COMPLETED",
+    "dropped": "DROPPED",
+    # deliberately no REPEATING mapping — §6.8/§6.9: rewatching never
+    # auto-pushes AniList's REPEATING status, and LCARS's own 5-value
+    # status enum has no rewatch-specific value to map from anyway.
+}
+
+
+def _push_season_score(conn, season: dict, fallback_show_score) -> None:
+    """One season's own effective score (its own `season.score` when
+    set, else the show's `score` — resolved directly with the user,
+    2026-08-08, A.9: "push the score as per mapping if anilist score
+    exist for season, score at that season level") to its own AniList
+    `anilist_id`. No-ops on an unlinked season or before `lcars
+    anilist-login` has ever been run."""
+    if season["anilist_id"] is None:
+        return
+    cfg = config.get_current()
+    if not cfg.anilist_access_token:
+        return
+    effective_score = season["score"] if season["score"] is not None else fallback_show_score
+    if effective_score is None:
+        return
+    try:
+        anilist_client.save_media_list_entry(
+            cfg.anilist_access_token, season["anilist_id"], score=effective_score * 5
+        )
+    except anilist_client.AniListError as e:
+        pending_review.open_or_extend(
+            conn, "season", season["id"], "anilist_push", "anilist", None, str(e)
+        )
+
+
+def _push_show_score(conn, show_id: str, show_score) -> None:
+    """Every one of the show's linked seasons — each resolves its own
+    effective score via _push_season_score's own fallback rule."""
+    seasons = conn.execute(
+        "SELECT * FROM season WHERE show_id = ? AND anilist_id IS NOT NULL", (show_id,)
+    ).fetchall()
+    for season in seasons:
+        _push_season_score(conn, dict(season), show_score)
+
+
+def _push_show_status(conn, show_id: str, status: str) -> None:
+    """Every one of the show's linked seasons get the same status —
+    unlike score, there's no per-season status concept (only
+    `show.status` exists)."""
+    cfg = config.get_current()
+    if not cfg.anilist_access_token:
+        return
+    anilist_status = _STATUS_TO_ANILIST[status]
+    seasons = conn.execute(
+        "SELECT id, anilist_id FROM season WHERE show_id = ? AND anilist_id IS NOT NULL",
+        (show_id,),
+    ).fetchall()
+    for season in seasons:
+        try:
+            anilist_client.save_media_list_entry(
+                cfg.anilist_access_token, season["anilist_id"], status=anilist_status
+            )
+        except anilist_client.AniListError as e:
+            pending_review.open_or_extend(
+                conn, "season", season["id"], "anilist_push", "anilist", None, str(e)
+            )
 
 
 def _get_episode_numbering_mapping(conn, mapping_id: str) -> dict | None:
@@ -802,6 +895,7 @@ def resolve_set_status(_, info, show_id, status):
         " VALUES (?, ?, ?, ?, ?, ?)",
         (ids.generate_id(conn, "c"), show_id, row["status"], status, now, client),
     )
+    _push_show_status(conn, show_id, status)  # §6.1/§6.8, A.9 — best-effort
     conn.commit()
     return _get_show(conn, show_id)
 
@@ -824,8 +918,30 @@ def resolve_set_score(_, info, show_id, score):
         " VALUES (?, ?, ?, ?, ?, ?)",
         (ids.generate_id(conn, "o"), show_id, row["score"], rounded, now, client),
     )
+    _push_show_score(conn, show_id, rounded)  # §6.1/§6.8, A.9 — best-effort
     conn.commit()
     return _get_show(conn, show_id)
+
+
+@mutation.field("setSeasonScore")
+def resolve_set_season_score(_, info, season_id, score):
+    """A.9, §6.1/§6.5's season-level score granularity (§5.5 addendum)
+    — same clamp/round as setScore, but scoped to one season and its
+    own AniList entry only, not every season the show has."""
+    conn = db.get_connection()
+    season = _get_season(conn, season_id)
+    if season is None:
+        raise GraphQLError(f"no such season: {season_id}")
+    clamped = max(0.0, min(20.0, score))
+    rounded = round(clamped * 4) / 4
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE season SET score = ?, updated_at = ? WHERE id = ?", (rounded, now, season_id)
+    )
+    season["score"] = rounded
+    _push_season_score(conn, season, fallback_show_score=None)  # A.9 — best-effort
+    conn.commit()
+    return _get_season(conn, season_id)
 
 
 @mutation.field("setTracked")

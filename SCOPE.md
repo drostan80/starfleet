@@ -790,6 +790,10 @@ season
                           season specifically, nullable
   mal_id                  derived/candidate MAL id for this season,
                           nullable (MAL splits by season like AniList)
+  score                   this season's own personal score, nullable,
+                          added 2026-08-08 (A.9) — same 0-20 scale as
+                          show.score (§6.1); falls back to show.score
+                          for the AniList push when unset
   source                 fribb | manual | unmatched
   matched                bool — false = no confident candidate found
                           yet (the "stays usable, unmapped" case above)
@@ -1061,6 +1065,45 @@ not fixed.
   principle 5 (§3) and §10.6 item 12. Until it exists, MAL parity is
   best-effort: it holds whatever Starfleet has pushed to it, with no
   automated check that it still matches.
+
+**Per-season score granularity, resolved 2026-08-08 (A.9)**: building
+the actual AniList push surfaced a question A.4's season split had
+never worked through — `setScore` operates on `show` as a whole, but
+AniList tracks each season as its own separate list entry, so which
+entry receives a push once a show has more than one season? Resolved
+directly with the user, not guessed (real live-AniList-data
+consequences): `season` gets its own `score` column (§5.5), same
+0–20 scale. The push to a given season's AniList entry reads that
+season's own `score` when set, falling back to `show.score`
+otherwise — the common single-season-show case is unaffected either
+way; `setSeasonScore(seasonId, score)` is the new dedicated mutation
+for the per-season value, pushing to just that one season. `setScore`
+itself still pushes to *every* season the show has an AniList link
+for (each resolving its own effective value via the same fallback) —
+there's no per-season `status`, so `setStatus` pushes the same
+show-level status to every linked season uniformly.
+
+**AniList push ownership and mechanics, resolved 2026-08-08 (A.9)**:
+confirmed directly — score/status push is explicitly **not** the same
+exception §6.8 carves out for Data's episode-watch-status-only direct
+write; "it goes through lcars, lcars pushes it." A related real gap
+found while mapping this out: §6.8 already says LCARS owns *status*
+push too ("Everything else (status, score...) is LCARS's job"), but
+no `BUILD_PLAN.md` step anywhere actually implemented it — confirmed
+genuinely unaddressed (checked both documents fully, not from partial
+memory) and folded into this same step, per the user's own call:
+"if it is a real gap then add a step and build the push plan now."
+LCARS's own AniList OAuth session (`anilist_client_id`/`_secret`/
+`anilist_access_token`, `lcars.ini`) reuses Data/aniq's already-
+registered AniList app (confirmed, not a new registration) — LCARS
+runs its own separate authorization via a new `lcars anilist-login`
+CLI command (the PIN-redirect flow, same as Data's own, since LCARS
+is headless) to mint its own independent token. Every push is
+best-effort, same philosophy as A.8's metadata fetch: not yet
+authenticated is treated the same as "not configured" (silent no-op);
+an actual push failure opens/extends a `pending_review` entry
+(`entity_type = season`, `field = "anilist_push"`) rather than ever
+failing the local `setScore`/`setSeasonScore`/`setStatus` write.
 
 ### 6.2 Paced/catch-up mode (Phase A schema, Phase B scheduling)
 
