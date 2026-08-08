@@ -1053,9 +1053,58 @@ order — same reasoning `pagination.py`'s cursors already lean on).
   - **Verified**: unbound-field sweep re-run — only `Query.backlog`
     (B.9, Phase B) remains unbound in the entire schema. 199 tests
     passing, `ruff check .` clean.
-- [ ] **A.15 — Implement data export/import** (§6.12): JSON,
+- [x] **A.15 — Implement data export/import** (§6.12): JSON,
   `schema_version` integer from the first implementation, reject (not
   auto-migrate) on any version mismatch.
+  - **Scope already fully resolved by A.3's own earlier audit pass**
+    (see that entry) — full 24-table restore confirmed, `ImportResult`
+    a confirmation summary not a scope limit, no merge logic for a
+    non-empty target. Nothing left ambiguous going in.
+  - **Table list confirmed live, not counted from memory**: queried
+    `sqlite_master` directly against a real migrated db rather than
+    tallying `CREATE TABLE` statements across four migration files by
+    eye — 24 tables, matching §6.12's own already-stated count exactly
+    (`alembic_version` deliberately excluded — migration bookkeeping,
+    not application data).
+  - **Built**: new `export_import.py` (GraphQL-free, same layering as
+    `metadata.py`/`fribb.py`/`fuzzy.py` — raises plain `ValueError`,
+    resolvers.py wraps it into `GraphQLError`). `EXPORT_IMPORT_TABLES`
+    — the 24 tables in dependency order (parents before children; no
+    `ON DELETE`/`INSERT CASCADE` anywhere in this schema, §11.2, so
+    import's row-by-row `INSERT`s need this to satisfy `foreign_keys =
+    ON` as they go — export reuses the same list, order is just
+    readability there). `export_data()`/`import_data()`. One real,
+    non-obvious detail handled: `episode.available_locally`
+    (`GENERATED ALWAYS ... STORED`, §5.2) is excluded from every
+    `INSERT`'s column list on import (SQLite rejects an explicit value
+    for a generated column outright) via `PRAGMA table_xinfo`'s own
+    `hidden` flag, while still being included in the exported JSON for
+    completeness — the target recomputes it fresh from the columns it
+    actually derives from. `Query.exportData`/`Mutation.importData`
+    resolvers — thin wiring only, all the real logic lives in the pure
+    module.
+  - **Tests**: new `test_export_import.py` (6, against two real
+    separately-migrated databases — the actual restore scenario, not
+    a hand-rolled mini-schema that would drift from the live one and
+    miss exactly the bugs this needs to catch): exports all 24 tables;
+    a full round trip through an interconnected dataset (show,
+    episode, watch_event, tag, show_tag, franchise, franchise_member)
+    restores everything correctly, including the generated-column
+    case; a `schema_version` mismatch is rejected and touches nothing;
+    malformed JSON is rejected; a colliding id raises a plain
+    `sqlite3.IntegrityError`, deliberately not caught into anything
+    friendlier (§6.12's own explicit "not something this handles
+    specially"); and — the one that actually matters most for a
+    destructive-adjacent operation — a collision on a table ordered
+    *after* some already-successfully-inserted rows still rolls back
+    those earlier rows too, confirming the whole import really is one
+    transaction, not a sequence of independently-committed inserts.
+    `test_server.py` (+2, lighter): `exportData` returns valid JSON
+    with the right top-level shape through real GraphQL; `importData`
+    with a bad `schema_version` raises a clear error the same way.
+  - **Verified**: unbound-field sweep re-run — still only `Query.
+    backlog` (B.9, Phase B) remains unbound anywhere in the schema.
+    207 tests passing, `ruff check .` clean.
 - [ ] **A.16 — Implement global settings** (§6.13): home timezone
   (default `Europe/Dublin`), used for calendar/pacing/refresh
   day-boundary logic; all storage stays UTC internally.

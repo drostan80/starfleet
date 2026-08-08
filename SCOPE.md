@@ -1388,6 +1388,23 @@ no merge/conflict-resolution logic for importing into an
 already-populated one; colliding ids surface as an ordinary
 `IntegrityError`, not something this handles specially.
 
+**Implemented 2026-08-08 (A.15)**: `schema_version = 1`, the very
+first value (§6.12's own "from the very first implementation"). The
+24-table list (confirmed against a live `sqlite_master` query, not
+counted from memory) is ordered parents-before-children — no `ON
+DELETE`/`INSERT CASCADE` anywhere in this schema (§11.2), so import's
+row-by-row `INSERT`s need a dependency-safe order to satisfy
+`foreign_keys = ON` as they go; export reuses the same order, though
+only for readability there. `episode.available_locally` (`GENERATED
+ALWAYS ... STORED`) is excluded from every `INSERT`'s column list on
+import — SQLite rejects an explicit value for a generated column
+outright — but is still included in the exported JSON for
+completeness/human-readability; the target database recomputes its
+own value fresh from the columns it actually derives from. The whole
+import is one transaction, confirmed by a real test: a collision on a
+table ordered *after* some already-successfully-inserted rows still
+rolls back those earlier rows too, not just the row that collided.
+
 ### 6.13 Global settings (Phase A)
 
 - **Home timezone**: a single configurable setting (default

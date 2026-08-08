@@ -4,6 +4,7 @@ BUILD_PLAN.md A.3's vertical slice — Show/Episode/WatchEvent + their
 core mutations, plus the bearer-token/X-LCARS-Client plumbing.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from lcars import anilist_client, config, db, fribb, radarr_client, sonarr_client
+from lcars import anilist_client, config, db, export_import, fribb, radarr_client, sonarr_client
 from lcars.server import build_app
 
 BEARER_TOKEN = "test-token-123"  # noqa: S105 (test fixture, not a real secret)
@@ -1583,6 +1584,39 @@ async def test_confirm_hard_delete_cascades_across_every_related_table(client, m
         is not None
     )
     assert conn.execute("SELECT 1 FROM franchise WHERE id = 'f-hdtest'").fetchone() is not None
+
+
+# --- data export/import (§6.12, A.15) ----------------------------------------
+#
+# The actual data-movement logic (24-table round trip, dependency ordering,
+# generated-column exclusion, rollback-on-failure) is covered thoroughly in
+# tests/test_export_import.py against two real separate databases — this
+# file only confirms exportData/importData are wired correctly through
+# GraphQL itself (string in/out, error wrapping).
+
+
+async def test_export_data_returns_valid_json_with_all_tables(client):
+    await add_show(client, titleRomaji="Exportable Show")
+    data = await gql(client, "{ exportData }", headers=auth_headers())
+    payload = json.loads(data["exportData"])
+    assert payload["schema_version"] == export_import.SCHEMA_VERSION
+    assert set(payload["tables"]) == set(export_import.EXPORT_IMPORT_TABLES)
+    assert len(payload["tables"]["show"]) == 1
+
+
+async def test_import_data_rejects_schema_version_mismatch(client):
+    bad_export = json.dumps({"schema_version": 999, "tables": {}})
+    resp = await client.post(
+        "/",
+        json={
+            "query": 'mutation($j: String!) { importData(json: $j) { schemaVersion } }',
+            "variables": {"j": bad_export},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "schema_version mismatch" in body["errors"][0]["message"]
 
 
 async def test_set_tracked_records_history(client):

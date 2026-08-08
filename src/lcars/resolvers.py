@@ -27,6 +27,7 @@ from lcars import (
     anilist_client,
     config,
     db,
+    export_import,
     fribb,
     fuzzy,
     ids,
@@ -2018,3 +2019,26 @@ def resolve_delete_filter_preset(_, info, id):  # noqa: A002
         raise GraphQLError(f"no such filter_preset: {id}")
     conn.commit()
     return True
+
+
+# -- §6.12 data export/import (A.15) -----------------------------------------
+
+
+@query.field("exportData")
+def resolve_export_data(_, info):
+    return export_import.export_data(db.get_connection())
+
+
+@mutation.field("importData")
+def resolve_import_data(_, info, json):  # noqa: A002 (matches the GraphQL arg name)
+    conn = db.get_connection()
+    try:
+        counts = export_import.import_data(conn, json)
+    except ValueError as e:
+        raise GraphQLError(str(e)) from e
+    return {
+        "schema_version": export_import.SCHEMA_VERSION,
+        "shows_imported": counts.get("show", 0),
+        "episodes_imported": counts.get("episode", 0),
+        "watch_events_imported": counts.get("watch_event", 0),
+    }
