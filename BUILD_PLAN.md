@@ -46,15 +46,39 @@ moving on.
     pre-existing date-dependent flake, documented in Data's own
     `.claude/docs/backlog.md`, not fixed here per the "clean copy"
     policy.
-- [ ] **0.4 — Set up CI.** GitHub Actions on the LCARS repo: hybrid
+- [x] **0.4 — Set up CI.** GitHub Actions on the LCARS repo: hybrid
   trigger — every push to `main` builds/tests only (no publish); an
   explicit tag/release builds *and* publishes the image (§11.3).
   Registry: GitHub Container Registry (ghcr.io), proposed default, not
   separately confirmed — adjust if Docker Hub or something else is
   actually wanted.
-- [ ] **0.5 — Scaffold the Docker image**, targeting deployment as an
+  - Done 2026-08-08, built together with 0.5 below (see its note for
+    why the order flipped). `.github/workflows/ci.yml`: push to
+    `main`/PRs → lint (ruff) + `pytest` + `docker build` (no push);
+    a `v*` tag → same, plus publish to
+    `ghcr.io/drostan80/starfleet:{version,latest}`. GHCR proceeded as
+    the default per §11.3, not re-challenged. **Verified for real**:
+    pushed, watched the Actions run (`gh run watch`) — both jobs green,
+    including the docker build actually succeeding on GitHub's runner
+    (no docker/podman available locally to check any other way). The
+    tag-publish path itself is implemented but **not yet exercised** —
+    deliberately not tagging a `v0.1.0` release this early, since
+    there's no real app behind the placeholder `CMD` yet (0.5's own
+    note). Exercise it once there's something worth actually
+    publishing.
+- [x] **0.5 — Scaffold the Docker image**, targeting deployment as an
   additional service inside the existing Sonarr docker-compose stack
   (§11.3). Doesn't need to actually deploy yet — just needs to build.
+  - Done 2026-08-08, **ahead of 0.4** (reordered, not skipped): 0.4's
+    CI needs a Dockerfile to build against, so a broken/no-op docker
+    job wasn't a real option. `Dockerfile`: `python:3.12-slim` (pinned
+    to the `requires-python` floor, not the 3.14 the local dev venv
+    happens to run), non-root user, `lcars.db`/`lcars.ini` deliberately
+    not baked in (runtime state, §11.2). `CMD` is an explicit
+    placeholder (`import lcars; print(...)`) rather than pointing at a
+    real ASGI entrypoint — none exists yet, that's Phase A (§8).
+    Build itself verified via 0.4's CI run, not locally (no docker/
+    podman in this environment).
 
 ---
 
