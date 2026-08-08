@@ -23,7 +23,7 @@ import json
 from ariadne import EnumType, MutationType, ObjectType, QueryType
 from graphql import GraphQLError
 
-from lcars import db, fribb, ids, pagination, util
+from lcars import db, fribb, fuzzy, ids, pagination, util
 
 query = QueryType()
 mutation = MutationType()
@@ -241,6 +241,13 @@ def _open_or_extend_pending_review(
             now,
         ),
     )
+
+
+def _get_show_service_presence(conn, presence_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM show_service_presence WHERE id = ?", (presence_id,)
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def _get_person(conn, person_id: str) -> dict | None:
@@ -1102,6 +1109,49 @@ def resolve_unlink_show_external_id(_, info, show_id, service):
     )
     conn.commit()
     return cur.rowcount > 0
+
+
+@mutation.field("refreshShowServicePresence")
+def resolve_refresh_show_service_presence(_, info, show_id, service, candidate_titles):
+    """A.7, §5.4 — LCARS makes no outbound HTTP calls of its own here
+    (no Sonarr/Radarr/AniList/MAL client code exists yet at all —
+    config.py's own docstring defers those credentials to A.16/Phase B);
+    the caller supplies candidate_titles it already fetched from
+    `service`'s own catalog, and `fuzzy.best_match` (ported from aniq's
+    own real, working matcher) decides whether any of them counts as a
+    match against this show's stored title variants. No require_client()
+    and no history table — §5.4 is explicit this is passive/
+    informational, never goes through pending_review, self-heals
+    quietly like a dead poster URL."""
+    conn = db.get_connection()
+    show = _require_show(conn, show_id)
+    show_titles = [
+        show[f]
+        for f in ("title_romaji", "title_english", "title_native")
+        if show.get(f)
+    ]
+    present = fuzzy.best_match(show_titles, candidate_titles) is not None
+    now = util.now_utc_iso()
+
+    existing = conn.execute(
+        "SELECT id FROM show_service_presence WHERE show_id = ? AND service = ?",
+        (show_id, service),
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            "UPDATE show_service_presence SET present = ?, checked_at = ? WHERE id = ?",
+            (present, now, existing["id"]),
+        )
+        presence_id = existing["id"]
+    else:
+        presence_id = ids.generate_id(conn, "a")
+        conn.execute(
+            "INSERT INTO show_service_presence (id, show_id, service, present, checked_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (presence_id, show_id, service, present, now),
+        )
+    conn.commit()
+    return _get_show_service_presence(conn, presence_id)
 
 
 # -- 5.5 id-mapper manual overrides (§3 principle 6: manual wins once set) --

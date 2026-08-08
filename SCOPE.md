@@ -684,6 +684,30 @@ corruption, unlike the id-mapper's own reconciliation (§5.5), which
 does apply automatically and so leans on the more authoritative
 Fribb-seeded approach instead.
 
+**Implemented 2026-08-08 (A.7)**: `lcars/fuzzy.py` — `best_match()`/
+`normalize_title()`, a close port of aniq's own real, working matcher
+(`~/repos/aniq/src/aniq/notes.py`), generalized from "match a show
+against aninote vault filenames" to "match a show's title variants
+against any caller-supplied candidate list" (its note-vault-specific
+season-suffix disambiguation dropped — not applicable here, that
+specific problem is `season`/§5.5's, solved separately). New
+`refreshShowServicePresence(showId, service, candidateTitles)`
+mutation: the caller supplies `candidateTitles` it already fetched
+from `service`'s own catalog — LCARS itself makes no outbound HTTP
+calls here (no Sonarr/Radarr/AniList/MAL client code exists in this
+codebase at all yet, §11.2's own config.py explicitly defers those
+credentials to A.16/Phase B) — and LCARS owns the actual matching
+decision against the show's stored title variants, threshold-gated.
+Upserts on `(show_id, service)`, no `require_client()`/history table
+(passive/informational, matches this section's own framing). The
+*fetching* of each service's real catalog, and any recurring/
+scheduled call into this mutation, are deliberately out of scope here
+— §5.4's own text already says presence is "refreshed on the same
+background-poll cadence as the rest of Phase B", i.e. Phase B's
+scheduler (Ops) is what will actually drive this on a live clock;
+A.7's own job was the reconciliation *mechanism*, callable on-demand,
+same split as A.4's `reconcileSeasonMapping`.
+
 ### 5.5 id-mapper / reconciliation tables
 
 **`show`/`season`/`episode` are three independently-identified,

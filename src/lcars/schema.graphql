@@ -891,6 +891,18 @@ type Mutation {
   "Accepts an offered show_service_presence link (§5.4), or adds a crosswalk entry manually."
   linkShowExternalId(showId: ID!, service: String!, externalId: String!, url: String!): ShowExternalId!
   unlinkShowExternalId(showId: ID!, service: String!): Boolean!
+  """
+  A.7 — the caller supplies candidateTitles already fetched from
+  `service`'s own catalog (LCARS makes no outbound HTTP calls itself
+  in Phase A, §4 — A.8's on-demand fetch is the only external-call
+  trigger); LCARS owns the actual matching decision, fuzzy title
+  search across every stored title variant against each candidate,
+  threshold-gated (§5.4's own resolved algorithm choice). Upserts on
+  (showId, service). Passive/informational — never touches
+  pending_review, self-heals quietly on the next call (a show present
+  last time but absent now, or vice versa, is just an updated fact).
+  """
+  refreshShowServicePresence(showId: ID!, service: String!, candidateTitles: [String!]!): ShowServicePresence!
 
   # -- 5.6 pending_review ----------------------------------------------------
   """

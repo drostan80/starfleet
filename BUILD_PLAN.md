@@ -589,10 +589,42 @@ order — same reasoning `pagination.py`'s cursors already lean on).
     either, since it writes no history/`pending_review` row. No new
     code or tests needed — 99 tests still passing, `ruff check .`
     clean.
-- [ ] **A.7 — Implement `show_service_presence`** (§5.4): fuzzy title
+- [x] **A.7 — Implement `show_service_presence`** (§5.4): fuzzy title
   search (across all title variants, threshold-gated, `difflib`-style
   scoring) as the matching algorithm — already resolved, not an open
   question. Passive/informational — no `pending_review` on change.
+  - **Read side already existed (A.3), matching logic + write side
+    built now**: checked aniq's real `~/repos/aniq/src/aniq/notes.py`
+    first, same pattern as A.4's `fribb.py` — `best_match()`/
+    `normalize_title()` there is exactly the "difflib-style scoring"
+    §5.4 already points at, so ported it (`lcars/fuzzy.py`) rather
+    than writing a fresh implementation, dropping only its aninote-
+    vault-specific season-suffix disambiguation (not applicable to
+    service-catalog matching). New `refreshShowServicePresence(showId,
+    service, candidateTitles)` mutation, upserting on `(show_id,
+    service)`. One real scope question resolved by re-reading rather
+    than guessing before writing any code: does LCARS itself call out
+    to Sonarr/Radarr/AniList/MAL to fetch each service's catalog?
+    No — confirmed via `config.py`'s own docstring (those credentials
+    are explicitly deferred to A.16/Phase B, so no client code for any
+    of them exists yet) and §4's "A.8's on-demand fetch is the only
+    external-call trigger in Phase A" framing, plus §5.4's own text
+    that presence is "refreshed on the same background-poll cadence as
+    the rest of Phase B" — so the mutation takes an already-fetched
+    candidate title list as an argument; the actual catalog-fetching
+    and any recurring call into this mutation are Phase B's job
+    (Ops), same on-demand-mechanism/later-scheduling split A.4 used
+    for `reconcileSeasonMapping`.
+  - New `tests/test_fuzzy.py` (8 tests: normalization, exact match,
+    fuzzy fallback, below-threshold returns None, empty inputs, title-
+    variant coverage, blank-entry handling, custom threshold) +
+    `test_server.py` (+3 end-to-end: create-then-update via upsert
+    including flipping back to absent on a later call with no match,
+    empty-candidate-list case, independent per-service rows on the
+    same show). Unbound-field sweep re-run: still only 5 real gaps
+    (`NextUpEntry.episode`/`.show`, `Query.backlog`/`search`/`stats` —
+    A.11/A.12/A.13/B.9), confirming no regressions. 110 tests passing,
+    `ruff check .` clean.
 - [ ] **A.8 — Implement on-demand external fetch triggers**: immediate
   metadata fetch (poster, synopsis, cast, episode list, external ids)
   on show creation, from any client (§4 Phase A). This is the only

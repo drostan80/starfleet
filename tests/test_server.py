@@ -684,6 +684,90 @@ async def test_link_and_unlink_show_external_id(client):
     assert after["show"]["externalIds"]["edges"] == []
 
 
+# --- show_service_presence fuzzy matching (§5.4, A.7) -----------------------
+#
+# fuzzy.best_match's own algorithm is covered in tests/test_fuzzy.py; this
+# file covers refreshShowServicePresence's wiring (upsert, which title
+# variants get compared, present flag written correctly).
+
+REFRESH_SERVICE_PRESENCE = """
+    mutation($id: ID!, $service: String!, $titles: [String!]!) {
+      refreshShowServicePresence(showId: $id, service: $service, candidateTitles: $titles) {
+        id show { id } service present checkedAt
+      }
+    }
+"""
+
+
+async def test_refresh_show_service_presence_creates_then_updates(client):
+    show = await add_show(client, titleRomaji="Golden Kamuy")
+
+    found = await gql(
+        client,
+        REFRESH_SERVICE_PRESENCE,
+        {"id": show["id"], "service": "sonarr", "titles": ["Golden Kamuy", "Other Show"]},
+        headers=auth_headers(),
+    )
+    presence = found["refreshShowServicePresence"]
+    assert presence["present"] is True
+    assert presence["service"] == "sonarr"
+    assert presence["show"]["id"] == show["id"]
+
+    # a later call with no matching candidate flips it back to absent —
+    # passive/self-healing, same row (upsert on show_id+service), not a
+    # second one
+    absent = await gql(
+        client,
+        REFRESH_SERVICE_PRESENCE,
+        {"id": show["id"], "service": "sonarr", "titles": ["Completely Different Title"]},
+        headers=auth_headers(),
+    )
+    assert absent["refreshShowServicePresence"]["id"] == presence["id"]
+    assert absent["refreshShowServicePresence"]["present"] is False
+
+
+async def test_refresh_show_service_presence_no_candidates_is_absent(client):
+    show = await add_show(client, titleRomaji="Golden Kamuy")
+    data = await gql(
+        client,
+        REFRESH_SERVICE_PRESENCE,
+        {"id": show["id"], "service": "radarr", "titles": []},
+        headers=auth_headers(),
+    )
+    assert data["refreshShowServicePresence"]["present"] is False
+
+
+async def test_refresh_show_service_presence_independent_per_service(client):
+    show = await add_show(client, titleRomaji="Golden Kamuy")
+    await gql(
+        client,
+        REFRESH_SERVICE_PRESENCE,
+        {"id": show["id"], "service": "sonarr", "titles": ["Golden Kamuy"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        REFRESH_SERVICE_PRESENCE,
+        {"id": show["id"], "service": "radarr", "titles": []},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { servicePresence { edges { node { service present } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    by_service = {
+        e["node"]["service"]: e["node"]["present"]
+        for e in data["show"]["servicePresence"]["edges"]
+    }
+    assert by_service == {"sonarr": True, "radarr": False}
+
+
 # --- pagination wiring (logic itself is tested in test_pagination.py) -----
 
 
