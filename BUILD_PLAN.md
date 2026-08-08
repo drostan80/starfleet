@@ -994,9 +994,65 @@ order — same reasoning `pagination.py`'s cursors already lean on).
   - **Verified**: unbound-field sweep re-run — **only `Query.backlog`
     (B.9, Phase B) remains**; every other Phase A query surface is
     now built. 192 tests passing, `ruff check .` clean.
-- [ ] **A.14 — Implement deletion policy** (§6.11): soft-delete
+- [x] **A.14 — Implement deletion policy** (§6.11): soft-delete
   default, hard-delete layered behind a delay + re-type-the-title
   confirmation.
+  - **Two real ambiguities resolved by close-reading rather than
+    guessing, both low-stakes/easily-revisable (internal-only
+    behavior, no external-service side effect)**: (1) §3 principle
+    3/§6.11 both say "a status/tracked-flag change" for soft-delete,
+    ambiguously — resolved as `tracked` specifically, not `status`,
+    since the two are already independent axes everywhere else in
+    this schema (§5.1) and `tracked` is already the field A.13's own
+    stats surface treats as "current library membership," the natural
+    fit for "soft-deleted." (2) Whether `requestHardDelete` requires
+    the show already be soft-deleted first — resolved yes, reading
+    §6.11's "layered: soft-delete -> a delay period -> ..." sequence
+    as a real precondition to enforce at write time, not just a
+    suggested client UX flow.
+  - **Built**: `softDeleteShow` (sets `tracked = false`, writes
+    `tracked_change`, `status` untouched). `requestHardDelete`
+    (rejects unless already soft-deleted; idempotent — resets the
+    24-hour timer if already pending). `cancelHardDelete` (clears the
+    timer only, doesn't re-track — reversing *that* step
+    specifically, per §6.11's own framing). `confirmHardDelete` — the
+    actual purge: checks the 24-hour delay has elapsed AND
+    `retypedTitle` matches the show's current `displayTitle` exactly,
+    then cascades manually (no `ON DELETE CASCADE` anywhere in this
+    schema, §11.2 — same reasoning `deleteTag`'s own cascade already
+    established) across 16 tables in FK dependency order: `watch_
+    event`, `episode_movie_link` (both as this show's own bonus_movie
+    episodes' links, deleted, *and* as another show's episode linking
+    here as the movie target, unlinked via `movie_show_id = NULL`
+    rather than deleted), `air_date_change`, `episode`, `season`,
+    `show_external_id`, `show_service_presence`, `show_relation`
+    (both `show_id` and `related_show_id` directions), `episode_
+    numbering_mapping`, `status_change`, `score_change`, `tracked_
+    change`, `show_person`, `show_studio`, `franchise_member`,
+    `show_tag`, `next_up_override`, and `pending_review` (no real FK,
+    polymorphic `entity_type`/`entity_id` — cleaned up anyway, for
+    both `entity_type = 'show'` and `entity_type = 'season'` rows
+    whose season belonged to this show, captured before the season
+    rows themselves are deleted).
+  - **Tests** (+8, `test_server.py`): soft-delete sets `tracked`
+    without touching `status`, and records history; `requestHardDelete`
+    rejects a still-tracked show; request-then-cancel round-trips
+    (timer clears, `tracked` stays false); confirming before the delay
+    elapses is rejected; confirming with no pending request is
+    rejected; confirming with the wrong retyped title is rejected; and
+    the big one — a single show wired up with real rows in *every*
+    one of the 16 cascaded tables (via real mutations wherever one
+    exists, direct SQL only where none does — `show_relation`,
+    `franchise` creation, and `pending_review` have no mutations at
+    all) confirms the entire purge succeeds with zero FK violations,
+    every one of those 16 tables is actually empty for this show
+    afterward, the two `episode_movie_link` cross-show cases behave
+    correctly (own link gone, other show's link unlinked not
+    deleted), and every unrelated show/tag/franchise this test also
+    created survives untouched.
+  - **Verified**: unbound-field sweep re-run — only `Query.backlog`
+    (B.9, Phase B) remains unbound in the entire schema. 199 tests
+    passing, `ruff check .` clean.
 - [ ] **A.15 — Implement data export/import** (§6.12): JSON,
   `schema_version` integer from the first implementation, reject (not
   auto-migrate) on any version mismatch.

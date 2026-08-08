@@ -1185,6 +1185,169 @@ def resolve_show_paced_next_date(obj, info):
     return util.add_days(row["latest"], obj["paced_cadence_days"])
 
 
+# -- §6.11 deletion policy (A.14) --------------------------------------------
+
+HARD_DELETE_DELAY_DAYS = 24 / 24  # 24 hours, §6.11 — expressed via util.add_days' own day unit
+
+
+@mutation.field("softDeleteShow")
+def resolve_soft_delete_show(_, info, show_id):
+    """§3 principle 3/§6.11 — "a status/tracked-flag change, never a
+    row removal." Sets `tracked = false` specifically (not `status`):
+    the two are independent axes elsewhere in this schema (§5.1), and
+    `tracked` is already the field this project's own stats surface
+    (A.13) treats as "no longer part of the current library" — the
+    natural fit for "soft-deleted." `status` is left exactly as it
+    was, so e.g. a `completed` show soft-deleted still shows as
+    `completed`, not silently rewritten to some deletion-specific
+    value. Mechanically identical to setTracked(false) — its own
+    dedicated mutation regardless (§3 principle 7), since it's the
+    named entry point the deletion *flow* itself uses."""
+    conn = db.get_connection()
+    client = require_client(info)
+    row = conn.execute("SELECT tracked FROM show WHERE id = ?", (show_id,)).fetchone()
+    if row is None:
+        raise GraphQLError(f"no such show: {show_id}")
+    now = util.now_utc_iso()
+    conn.execute("UPDATE show SET tracked = 0, updated_at = ? WHERE id = ?", (now, show_id))
+    conn.execute(
+        "INSERT INTO tracked_change"
+        " (id, show_id, previous_tracked, new_tracked, changed_at, changed_by)"
+        " VALUES (?, ?, ?, 0, ?, ?)",
+        (ids.generate_id(conn, "k"), show_id, row["tracked"], now, client),
+    )
+    conn.commit()
+    return _get_show(conn, show_id)
+
+
+@mutation.field("requestHardDelete")
+def resolve_request_hard_delete(_, info, show_id):
+    """§6.11's own "layered: soft-delete -> a delay period -> ..."
+    sequence read as a real precondition, not just a suggested client
+    flow — rejects unless the show is already soft-deleted
+    (`tracked = false`). Idempotent otherwise: calling this again
+    while already pending just resets the 24-hour timer, rather than
+    erroring. No require_client() — no dedicated history table exists
+    for this field (only the four §5.7 tables do), same reasoning
+    enablePacedMode/disablePacedMode (A.10) already established."""
+    conn = db.get_connection()
+    show = _require_show(conn, show_id)
+    if show["tracked"]:
+        raise GraphQLError(
+            f"{show_id} must be soft-deleted first (softDeleteShow) before "
+            "requesting a hard delete (§6.11)"
+        )
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE show SET hard_delete_requested_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, show_id),
+    )
+    conn.commit()
+    return _get_show(conn, show_id)
+
+
+@mutation.field("cancelHardDelete")
+def resolve_cancel_hard_delete(_, info, show_id):
+    """Harmless no-op if nothing was pending — same "just clear it"
+    shape as disablePacedMode (A.10). Deliberately does not re-track
+    the show (§6.11 frames this as reversing *requestHardDelete*
+    specifically, not the earlier soft-delete step too) — a separate
+    setTracked(true) call re-tracks it, if that's also wanted."""
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE show SET hard_delete_requested_at = NULL, updated_at = ? WHERE id = ?",
+        (now, show_id),
+    )
+    conn.commit()
+    return _get_show(conn, show_id)
+
+
+@mutation.field("confirmHardDelete")
+def resolve_confirm_hard_delete(_, info, show_id, retyped_title):
+    """The actual purge (§6.11) — succeeds only once the 24-hour delay
+    has elapsed since requestHardDelete AND retypedTitle matches the
+    show's current displayTitle exactly. Cascades manually, in FK
+    dependency order (no ON DELETE CASCADE anywhere in this schema,
+    §11.2 — same reasoning deleteTag's own cascade already
+    documents), across every table that references this show, this
+    show's episodes, or this show's seasons — including two easy-to-
+    miss cross-show cases: show_relation has *both* show_id and
+    related_show_id pointing at `show`, and episode_movie_link's
+    movie_show_id can point at this show from some *other* show's
+    episode row (a bonus_movie episode linking here) — that one gets
+    unlinked (set NULL), not deleted, since the row itself belongs to
+    a different, unrelated show. pending_review has no FK at all
+    (entity_type/entity_id is polymorphic, §5.6) but still gets
+    cleaned up here, in the spirit of "cascading to this show's
+    episodes/watch_events/etc" — an orphaned review pointing at a
+    show/season that no longer exists serves no purpose. No
+    require_client()/history row for the purge itself: §3 principle 3
+    frames a show's hard delete as the one case (alongside
+    watch_event) with deliberately no audit trail afterward — the row
+    and everything about it are gone, by design.
+    """
+    conn = db.get_connection()
+    show = _require_show(conn, show_id)
+    if show["hard_delete_requested_at"] is None:
+        raise GraphQLError(f"{show_id} has no pending hard-delete request (§6.11)")
+    earliest = util.add_days(show["hard_delete_requested_at"], HARD_DELETE_DELAY_DAYS)
+    if util.now_utc_iso() < earliest:
+        raise GraphQLError(f"the 24-hour delay hasn't elapsed yet — try again after {earliest}")
+    display_title = show[f"title_{show['primary_title']}"]
+    if retyped_title != display_title:
+        raise GraphQLError("retypedTitle doesn't match this show's current display title")
+
+    season_ids = [
+        row["id"] for row in conn.execute("SELECT id FROM season WHERE show_id = ?", (show_id,))
+    ]
+
+    conn.execute("DELETE FROM watch_event WHERE show_id = ?", (show_id,))
+    conn.execute(
+        "DELETE FROM episode_movie_link WHERE episode_id IN"
+        " (SELECT id FROM episode WHERE show_id = ?)",
+        (show_id,),
+    )
+    conn.execute(
+        "UPDATE episode_movie_link SET movie_show_id = NULL WHERE movie_show_id = ?", (show_id,)
+    )
+    conn.execute(
+        "DELETE FROM air_date_change WHERE episode_id IN"
+        " (SELECT id FROM episode WHERE show_id = ?)",
+        (show_id,),
+    )
+    conn.execute("DELETE FROM episode WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM season WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM show_external_id WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM show_service_presence WHERE show_id = ?", (show_id,))
+    conn.execute(
+        "DELETE FROM show_relation WHERE show_id = ? OR related_show_id = ?", (show_id, show_id)
+    )
+    conn.execute("DELETE FROM episode_numbering_mapping WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM status_change WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM score_change WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM tracked_change WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM show_person WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM show_studio WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM franchise_member WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM show_tag WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM next_up_override WHERE show_id = ?", (show_id,))
+    conn.execute(
+        "DELETE FROM pending_review WHERE entity_type = 'show' AND entity_id = ?", (show_id,)
+    )
+    if season_ids:
+        placeholders = ", ".join("?" for _ in season_ids)
+        conn.execute(
+            "DELETE FROM pending_review"
+            f" WHERE entity_type = 'season' AND entity_id IN ({placeholders})",  # noqa: S608
+            season_ids,
+        )
+    conn.execute("DELETE FROM show WHERE id = ?", (show_id,))
+    conn.commit()
+    return True
+
+
 @mutation.field("addWatchEvent")
 def resolve_add_watch_event(
     _, info, show_id, season=None, episode=None, watched_at=None, platform=None

@@ -1207,6 +1207,384 @@ async def test_stats_lifetime_metrics_survive_untracking(client, migrated_db):
     assert buckets == {15.0: 1}  # scoring it already happened too
 
 
+# --- deletion policy (§6.11, A.14) -------------------------------------------
+
+
+async def test_soft_delete_sets_tracked_false_and_status_stays(client):
+    show = await add_show(client)
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        "mutation($id: ID!) { softDeleteShow(showId: $id) { tracked status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["softDeleteShow"]["tracked"] is False
+    assert data["softDeleteShow"]["status"] == "COMPLETED"  # untouched
+
+    history = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { trackedHistory { edges { node { newTracked } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert history["show"]["trackedHistory"]["edges"][-1]["node"]["newTracked"] is False
+
+
+async def test_request_hard_delete_requires_soft_delete_first(client):
+    show = await add_show(client)  # still tracked
+    resp = await client.post(
+        "/",
+        json={
+            "query": 'mutation($id: ID!) { requestHardDelete(showId: $id) { id } }',
+            "variables": {"id": show["id"]},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "soft-deleted first" in body["errors"][0]["message"]
+
+
+async def test_request_then_cancel_hard_delete(client):
+    show = await add_show(client)
+    await gql(
+        client,
+        "mutation($id: ID!) { softDeleteShow(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    requested = await gql(
+        client,
+        "mutation($id: ID!) { requestHardDelete(showId: $id) { hardDeleteRequestedAt } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert requested["requestHardDelete"]["hardDeleteRequestedAt"] is not None
+
+    cancelled = await gql(
+        client,
+        "mutation($id: ID!) { cancelHardDelete(showId: $id) { hardDeleteRequestedAt tracked } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert cancelled["cancelHardDelete"]["hardDeleteRequestedAt"] is None
+    assert cancelled["cancelHardDelete"]["tracked"] is False  # only the timer is reversed
+
+
+async def test_confirm_hard_delete_rejects_before_delay_elapses(client):
+    show = await add_show(client)
+    await gql(
+        client,
+        "mutation($id: ID!) { softDeleteShow(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { requestHardDelete(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    resp = await client.post(
+        "/",
+        json={
+            "query": (
+                "mutation($id: ID!, $t: String!) "
+                "{ confirmHardDelete(showId: $id, retypedTitle: $t) }"
+            ),
+            "variables": {"id": show["id"], "t": show["displayTitle"]},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "24-hour delay" in body["errors"][0]["message"]
+
+
+async def test_confirm_hard_delete_rejects_without_a_pending_request(client):
+    show = await add_show(client)
+    await gql(
+        client,
+        "mutation($id: ID!) { softDeleteShow(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    resp = await client.post(
+        "/",
+        json={
+            "query": (
+                "mutation($id: ID!, $t: String!) "
+                "{ confirmHardDelete(showId: $id, retypedTitle: $t) }"
+            ),
+            "variables": {"id": show["id"], "t": show["displayTitle"]},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "no pending hard-delete request" in body["errors"][0]["message"]
+
+
+async def _soft_delete_request_and_backdate(client, migrated_db, show_id):
+    await gql(
+        client,
+        "mutation($id: ID!) { softDeleteShow(showId: $id) { id } }",
+        {"id": show_id},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { requestHardDelete(showId: $id) { id } }",
+        {"id": show_id},
+        headers=auth_headers(),
+    )
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE show SET hard_delete_requested_at = '2020-01-01T00:00:00Z' WHERE id = ?",
+        (show_id,),
+    )
+    conn.commit()
+
+
+async def test_confirm_hard_delete_rejects_wrong_retyped_title(client, migrated_db):
+    show = await add_show(client, titleRomaji="Exact Title")
+    await _soft_delete_request_and_backdate(client, migrated_db, show["id"])
+    resp = await client.post(
+        "/",
+        json={
+            "query": (
+                "mutation($id: ID!, $t: String!) "
+                "{ confirmHardDelete(showId: $id, retypedTitle: $t) }"
+            ),
+            "variables": {"id": show["id"], "t": "Wrong Title"},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "doesn't match" in body["errors"][0]["message"]
+
+
+async def test_confirm_hard_delete_cascades_across_every_related_table(client, migrated_db):
+    conn = db.get_connection()
+    show = await add_show(
+        client, titleRomaji="Doomed Show", anilistId=999, tvdbId=888
+    )
+
+    _insert_next_up_episode(migrated_db, "e-hd0001", show["id"], episode=1, state="unwatched")
+    _insert_next_up_episode(migrated_db, "e-hd0002", show["id"], episode=2, state="unwatched")
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 15) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setEpisodeAirDate(episodeId: $id, airDateUtc: "2026-01-01T00:00:00Z") { id }
+        }
+        """,
+        {"id": "e-hd0002"},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setSeasonMapping(showId: $id, seasonNumber: 1, anilistId: 111) { id }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setEpisodeNumberingScheme(showId: $id, scheme: SEASON_EPISODE) { id }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          refreshShowServicePresence(
+            showId: $id, service: "sonarr", candidateTitles: ["Doomed Show"]
+          ) {
+            id
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    tag = await gql(
+        client, 'mutation { createTag(name: "hd-test-tag") { id } }', headers=auth_headers()
+    )
+    await gql(
+        client,
+        "mutation($s: ID!, $t: ID!) { addShowTag(showId: $s, tagId: $t) { id } }",
+        {"s": show["id"], "t": tag["createTag"]["id"]},
+        headers=auth_headers(),
+    )
+    conn.execute("INSERT INTO franchise (id, name) VALUES ('f-hdtest', 'HD Test Franchise')")
+    conn.commit()
+    await gql(
+        client,
+        """
+        mutation($f: ID!, $s: ID!) {
+          setFranchiseMemberOrder(franchiseId: $f, showId: $s, sortOrder: 1) { show { id } }
+        }
+        """,
+        {"f": "f-hdtest", "s": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setNextUpOrder(showId: $id, sortOrder: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    other_show = await add_show(client, titleRomaji="Related Show")
+    conn.execute(
+        "INSERT INTO show_relation (show_id, related_show_id, created_at)"
+        " VALUES (?, ?, '2026-08-08T00:00:00Z')",
+        (show["id"], other_show["id"]),
+    )
+    conn.execute(
+        "INSERT INTO show_relation (show_id, related_show_id, created_at)"
+        " VALUES (?, ?, '2026-08-08T00:00:00Z')",
+        (other_show["id"], show["id"]),
+    )
+    conn.commit()
+
+    movie_show = await add_show(
+        client, mediaShape="MOVIE", trackingSpace="TV", titleRomaji="Linked Movie"
+    )
+    await gql(
+        client,
+        "mutation($e: ID!, $m: ID!) { setEpisodeMovieLink(episodeId: $e, movieShowId: $m) { id } }",
+        {"e": "e-hd0002", "m": movie_show["id"]},
+        headers=auth_headers(),
+    )
+
+    other_episodic = await add_show(client, titleRomaji="Other Episodic")
+    _insert_next_up_episode(
+        migrated_db, "e-hd0003", other_episodic["id"], episode=1, state="unwatched"
+    )
+    await gql(
+        client,
+        "mutation($e: ID!, $m: ID!) { setEpisodeMovieLink(episodeId: $e, movieShowId: $m) { id } }",
+        {"e": "e-hd0003", "m": show["id"]},
+        headers=auth_headers(),
+    )
+
+    conn.execute(
+        "INSERT INTO pending_review"
+        " (id, entity_type, entity_id, field, proposed_value_chain, source, created_at)"
+        " VALUES ('r-hdtst1', 'show', ?, 'metadata_fetch', '[\"err\"]', 'anilist',"
+        " '2026-08-08T00:00:00Z')",
+        (show["id"],),
+    )
+    season_row = conn.execute(
+        "SELECT id FROM season WHERE show_id = ?", (show["id"],)
+    ).fetchone()
+    conn.execute(
+        "INSERT INTO pending_review"
+        " (id, entity_type, entity_id, field, proposed_value_chain, source, created_at)"
+        " VALUES ('r-hdtst2', 'season', ?, 'anilist_push', '[\"err\"]', 'anilist',"
+        " '2026-08-08T00:00:00Z')",
+        (season_row["id"],),
+    )
+    conn.commit()
+
+    await _soft_delete_request_and_backdate(client, migrated_db, show["id"])
+    result = await gql(
+        client,
+        'mutation($id: ID!, $t: String!) { confirmHardDelete(showId: $id, retypedTitle: $t) }',
+        {"id": show["id"], "t": "Doomed Show"},
+        headers=auth_headers(),
+    )
+    assert result["confirmHardDelete"] is True
+
+    assert conn.execute("SELECT 1 FROM show WHERE id = ?", (show["id"],)).fetchone() is None
+    for table, column in [
+        ("episode", "show_id"),
+        ("watch_event", "show_id"),
+        ("season", "show_id"),
+        ("show_external_id", "show_id"),
+        ("show_service_presence", "show_id"),
+        ("episode_numbering_mapping", "show_id"),
+        ("status_change", "show_id"),
+        ("score_change", "show_id"),
+        ("tracked_change", "show_id"),
+        ("show_tag", "show_id"),
+        ("franchise_member", "show_id"),
+        ("next_up_override", "show_id"),
+    ]:
+        row = conn.execute(f"SELECT 1 FROM {table} WHERE {column} = ?", (show["id"],)).fetchone()  # noqa: S608
+        assert row is None, f"{table} still has a row for the deleted show"
+
+    assert (
+        conn.execute(
+            "SELECT 1 FROM show_relation WHERE show_id = ? OR related_show_id = ?",
+            (show["id"], show["id"]),
+        ).fetchone()
+        is None
+    )
+    assert (
+        conn.execute("SELECT 1 FROM episode_movie_link WHERE episode_id = 'e-hd0002'").fetchone()
+        is None
+    )
+    other_link = conn.execute(
+        "SELECT movie_show_id FROM episode_movie_link WHERE episode_id = 'e-hd0003'"
+    ).fetchone()
+    assert other_link is not None
+    assert other_link["movie_show_id"] is None
+    assert (
+        conn.execute(
+            "SELECT 1 FROM pending_review WHERE id IN ('r-hdtst1', 'r-hdtst2')"
+        ).fetchone()
+        is None
+    )
+    assert conn.execute("SELECT 1 FROM show WHERE id = ?", (other_show["id"],)).fetchone()
+    assert conn.execute("SELECT 1 FROM show WHERE id = ?", (movie_show["id"],)).fetchone()
+    assert conn.execute("SELECT 1 FROM show WHERE id = ?", (other_episodic["id"],)).fetchone()
+    assert (
+        conn.execute("SELECT 1 FROM tag WHERE id = ?", (tag["createTag"]["id"],)).fetchone()
+        is not None
+    )
+    assert conn.execute("SELECT 1 FROM franchise WHERE id = 'f-hdtest'").fetchone() is not None
+
+
 async def test_set_tracked_records_history(client):
     show = await add_show(client)
     data = await gql(

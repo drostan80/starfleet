@@ -1341,6 +1341,25 @@ one was already done; fixed alongside this)**:
   — §6.13's global settings currently has exactly one entry (home
   timezone); this isn't a second one.
 
+**Implemented 2026-08-08 (A.14)**: `softDeleteShow` sets `tracked =
+false` specifically, not `status` — the two stay independent axes
+(§5.1); `status` is left exactly as it was. `requestHardDelete` reads
+"layered: soft-delete → a delay period → ..." as a real precondition,
+not just a suggested client flow — rejects unless the show is already
+soft-deleted. `confirmHardDelete` cascades manually across every table
+that references the show, its episodes, or its seasons (no `ON DELETE
+CASCADE` anywhere in this schema, §11.2) — including two easy-to-miss
+cross-show cases: `show_relation` has both `show_id` and
+`related_show_id` pointing at `show`, and `episode_movie_link`'s
+`movie_show_id` can point at this show from some *other* show's
+episode row — that one gets unlinked (`NULL`), not deleted, since the
+row belongs to a different, unrelated show. `pending_review` has no
+FK at all (polymorphic `entity_type`/`entity_id`, §5.6) but still gets
+cleaned up, in the spirit of "cascading to this show's episodes/
+watch_events/etc." No history row for the purge itself — §3 principle
+3 already frames a show's hard delete as the one case (alongside
+`watch_event`) with deliberately no audit trail afterward.
+
 ### 6.12 Data export / import (Phase A)
 
 JSON, explicitly designed as a **restore path**, not just a one-way
