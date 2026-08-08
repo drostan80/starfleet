@@ -869,6 +869,20 @@ type Mutation {
   §5.2 — A.8's future on-demand fetch populates most of these).
   """
   setSeasonMapping(showId: ID!, seasonNumber: Int!, anilistId: Int, malId: Int): Season!
+  """
+  A.4 — attempts automatic derivation against the Fribb/anime-lists
+  dataset (§5.5, one-time/on-demand download, not live polling) for
+  this (showId, seasonNumber): looks up the show's tvdb external id,
+  resolves a candidate by (tvdbId, seasonNumber), and applies the
+  result immediately (§3 principle 1) unless the row already carries
+  manualOverride = true, in which case the stored value is left
+  untouched and no PendingReview is written (the human already
+  decided — confirmed 2026-08-08). A genuine value change on a
+  non-override row, or a fresh row with no candidate found at all,
+  opens/extends a PendingReview (§5.6); an unchanged re-check does
+  not. Upserts the season row same as setSeasonMapping.
+  """
+  reconcileSeasonMapping(showId: ID!, seasonNumber: Int!): Season!
   setEpisodeNumberingScheme(showId: ID!, scheme: NumberingScheme!): EpisodeNumberingMapping!
   "§5.1/§5.9 addendum — manually confirm/correct which movie show a bonus_movie-kind episode represents."
   setEpisodeMovieLink(episodeId: ID!, movieShowId: ID!): EpisodeMovieLink!

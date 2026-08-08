@@ -780,6 +780,31 @@ dataset — deliberately slower/independent of the daily metadata-
 refresh cadence, since id-mapping data changes far less often than
 episode/schedule metadata.
 
+**Implemented 2026-08-08 (A.4)**: `lcars/fribb.py` — downloads (7-day
+on-disk cache, stale-cache fallback on a network error, matching §4
+Phase A's "one-time/on-demand, not live polling" framing) and matches
+the dataset by `(tvdb_id, season_number)`, verbatim-ported matching
+logic from Data's own real `mapping.py` including its single-candidate
+short-circuit (deliberately does *not* cross-check the lone
+candidate's own season tag — see the module's docstring for the full
+regression history that decision is based on). `reconcileSeasonMapping(
+showId, seasonNumber)` is the on-demand mutation this dataset feeds:
+looks up the show's `tvdb` `show_external_id`, resolves a candidate,
+applies the result immediately unless `manual_override = true` (in
+which case the row is left untouched and — **asked/confirmed
+2026-08-08** — no `pending_review` is opened for the disagreement
+either, since a review entry for something already manually decided
+doesn't serve `pending_review`'s "later human awareness" purpose;
+`last_reconciled_at` still updates). A genuine value change on a
+non-override row, or a brand-new row with no candidate found at all,
+opens/extends a `pending_review` entry (§5.6's value-chain
+accumulation, generalized here into `_open_or_extend_pending_review` —
+the same helper any future automatic-reconciliation mutation reuses);
+an unchanged re-check does not, so repeated on-demand calls don't spam
+the review queue. This mutation is what a **weekly scheduler** (Phase
+B) will call repeatedly once Ops exists — not built yet, out of scope
+here; A.4 only builds the reconciliation mechanism itself, on-demand.
+
 ### 5.6 `pending_review`
 
 ```

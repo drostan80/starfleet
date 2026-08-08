@@ -439,7 +439,7 @@ order — same reasoning `pagination.py`'s cursors already lean on).
   just which counts are worth surfacing to a human, not the real
   scope. Recorded in `SCOPE.md` §6.12, ready for when A.15 actually
   happens — not implemented now, since A.15 hasn't been reached yet.
-- [ ] **A.4 — Implement the id-mapper / reconciliation tables**
+- [x] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `season` (formerly `show_id_mapping`) seeded from the
   Fribb/`anime-lists` dataset (one-time/on-demand download, not live
   polling), manual overrides authoritative, `pending_review` on any
@@ -476,11 +476,70 @@ order — same reasoning `pagination.py`'s cursors already lean on).
     `season_id` FK rejected), full downgrade/upgrade round-trip,
     schema re-validated (98 types, zero errors), unbound-field sweep
     re-run (11 remaining, all correctly attributed to A.11–A.15/B.9,
-    no new gaps), 84 tests passing, `ruff check .` clean. The
-    substantive work this step still requires — the actual Fribb
-    dataset download/cache/matching logic seeding `season` rows — is
-    not yet built; only the manual-override path (`setSeasonMapping`)
-    exists so far.
+    no new gaps), 84 tests passing, `ruff check .` clean.
+  - **Substance built after the correction, same day**: `lcars/fribb.py`
+    — dataset download/cache (7-day TTL, stale-cache fallback on a
+    network error) + `(tvdb_id, season_number)` matching, ported
+    verbatim from Data's real, production-tested `mapping.py`
+    (including its single-candidate short-circuit's hard-won
+    behavior — deliberately does not season-check a lone candidate,
+    per that module's own regression history). `httpx` promoted from
+    a dev-only test dependency to a core one (sync `httpx.Client`,
+    matching §11.2's sync-resolver execution model, not Data's async
+    convention). New `reconcileSeasonMapping(showId, seasonNumber)`
+    mutation: looks up the show's `tvdb` `show_external_id`, resolves
+    a candidate, applies immediately unless `manual_override = true`.
+    One real gap surfaced and asked before writing this: does a
+    Fribb/manual-override disagreement still log a `pending_review`
+    entry, or skip silently? Confirmed: skip entirely (no review noise
+    for something already manually decided; `last_reconciled_at`
+    still updates). Built `_open_or_extend_pending_review` — the
+    first real implementation of §5.6's value-chain-accumulation
+    behavior (extends an existing unresolved entry's
+    `proposedValueChain` rather than duplicating; found and fixed a
+    real schema-shape bug in the process, caught by a test: a `None`
+    "no candidate" value can't go directly into
+    `proposedValueChain: [String!]!`'s non-null list, so it's
+    represented as the literal string `"unmatched"`). New
+    `tests/test_fribb.py` (11 tests: index-building, candidate
+    disambiguation, cache hit/stale/refetch/network-fallback, all via
+    an injected fake client — no real network calls) +
+    `test_server.py` (4 end-to-end tests: no-tvdb-link → unmatched +
+    review; matched via linked tvdb id, including two seasons of one
+    show resolving independently; discrepancy applies immediately and
+    extends one chain across three disagreements rather than opening
+    duplicates; manual_override fully protected, zero review noise).
+    Unbound-field sweep re-run one more time post-implementation:
+    still only 5 real gaps (`NextUpEntry.episode`/`.show`,
+    `Query.backlog`/`search`/`stats` — all A.11/A.12/A.13/B.9, not
+    A.4's concern), confirming no regressions. 99 tests passing total,
+    `ruff check .` clean.
+  - **Deliberately still not built here** — Phase B's actual **weekly
+    scheduler** that calls `reconcileSeasonMapping` on its own clock
+    (§4 Phase B: "Weekly Fribb dataset reconciliation... independent
+    of the daily metadata cadence") and any wiring from A.8's future
+    on-demand-fetch-on-show-creation flow into this mutation. A.4's
+    own scope was the reconciliation *mechanism* itself, callable
+    on-demand — not who calls it or when, which are later steps'
+    concerns per BUILD_PLAN's own ordering.
+  - **Scope note on `episode_numbering_mapping`**: §5.5's own heading
+    ("id-mapper / reconciliation tables") covers two tables — `season`
+    and `episode_numbering_mapping` — sharing one reconciliation
+    *mechanism*, but this step's own enumerated text only names
+    `season`/Fribb work ("`season`... seeded from the Fribb/anime-lists
+    dataset..., manual overrides authoritative, pending_review on any
+    discrepancy or no-candidate-found case"), not numbering-scheme
+    auto-derivation. `episode_numbering_mapping`'s *manual* path
+    (`setEpisodeNumberingScheme`) already exists from an earlier A.3
+    slice — "manual overrides authoritative" already holds for it.
+    Its *automatic* derivation ("Sonarr absolute-order info, AniList
+    episode counts", §5.5) has no real data to derive from yet in
+    Phase A's own build order — that data doesn't exist until A.8's
+    on-demand fetch triggers exist — so treating it as A.4 work now
+    would mean building against nothing real to test against. Read
+    literally rather than guessed at: A.4 is complete as its own text
+    describes; numbering auto-derivation is left for whichever step
+    actually has Sonarr/AniList data to derive it from (A.8 or later).
 - [ ] **A.5 — Implement `pending_review`** (§5.6): the shared
   audit-only mechanism, value-chain accumulation on repeated automatic
   changes (not overwrite), permanent retention once resolved.

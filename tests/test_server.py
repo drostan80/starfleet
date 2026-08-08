@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from lcars import db
+from lcars import db, fribb
 from lcars.server import build_app
 
 BEARER_TOKEN = "test-token-123"  # noqa: S105 (test fixture, not a real secret)
@@ -826,6 +826,189 @@ async def test_episode_season_entity_link(client, migrated_db):
     )
     assert data["episode"]["seasonEntity"]["id"] == season_id
     assert data["episode"]["seasonEntity"]["anilistId"] == 111
+
+
+# --- automatic id-mapper reconciliation (§5.5, A.4) -------------------------
+#
+# fribb.load_dataset is monkeypatched throughout so these tests never make a
+# real network call — the download/cache mechanics themselves are covered by
+# tests/test_fribb.py; this file covers reconcileSeasonMapping's own logic
+# (tvdb lookup, apply-immediately, manual_override protection, pending_review
+# open/skip behavior).
+
+FAKE_FRIBB_DATASET = [
+    {"tvdb_id": 555, "anilist_id": 111, "mal_id": 211, "season": {"tvdb": 1}},
+    {"tvdb_id": 555, "anilist_id": 222, "mal_id": 222, "season": {"tvdb": 2}},
+]
+
+
+def _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET):
+    monkeypatch.setattr(fribb, "load_dataset", lambda: dataset)
+
+
+async def _link_tvdb(client, show_id, tvdb_id):
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $externalId: String!) {
+          linkShowExternalId(showId: $id, service: "tvdb", externalId: $externalId, url: "https://x")
+            { service }
+        }
+        """,
+        {"id": show_id, "externalId": str(tvdb_id)},
+        headers=auth_headers(),
+    )
+
+
+async def _pending_reviews_for(client, entity_id):
+    reviews = await gql(
+        client,
+        """
+        query {
+          pendingReviews {
+            edges { node { entityType entityId field source previousValue proposedValueChain } }
+          }
+        }
+        """,
+        headers=auth_headers(),
+    )
+    return [
+        e["node"] for e in reviews["pendingReviews"]["edges"] if e["node"]["entityId"] == entity_id
+    ]
+
+
+RECONCILE_SEASON_MAPPING = """
+    mutation($id: ID!, $season: Int!) {
+      reconcileSeasonMapping(showId: $id, seasonNumber: $season) {
+        id anilistId malId source matched manualOverride
+      }
+    }
+"""
+
+
+async def _reconcile(client, show_id, season_number):
+    data = await gql(
+        client,
+        RECONCILE_SEASON_MAPPING,
+        {"id": show_id, "season": season_number},
+        headers=auth_headers(),
+    )
+    return data["reconcileSeasonMapping"]
+
+
+async def test_reconcile_season_mapping_no_tvdb_link_logs_no_candidate_review(client, monkeypatch):
+    _patch_fribb_dataset(monkeypatch)
+    show = await add_show(client)
+
+    season = await _reconcile(client, show["id"], 1)
+    assert season["matched"] is False
+    assert season["source"] == "UNMATCHED"
+    assert season["anilistId"] is None
+    assert season["malId"] is None
+
+    reviews = await _pending_reviews_for(client, season["id"])
+    assert len(reviews) == 1
+    assert reviews[0]["entityType"] == "season"
+    assert reviews[0]["field"] == "anilist_id"
+    assert reviews[0]["source"] == "fribb"
+
+
+async def test_reconcile_season_mapping_matches_via_linked_tvdb_id(client, monkeypatch):
+    _patch_fribb_dataset(monkeypatch)
+    show = await add_show(client)
+    await _link_tvdb(client, show["id"], 555)
+
+    season = await _reconcile(client, show["id"], 1)
+    assert season["anilistId"] == 111
+    assert season["malId"] == 211
+    assert season["source"] == "FRIBB"
+    assert season["matched"] is True
+    assert season["manualOverride"] is False
+    assert await _pending_reviews_for(client, season["id"]) == []
+
+    # a second season of the same show resolves independently, via the same
+    # tvdb_id disambiguated by season_number — the exact scenario A.4 exists
+    # for (the retired show_id_mapping table couldn't hold both at once)
+    season2 = await _reconcile(client, show["id"], 2)
+    assert season2["anilistId"] == 222
+
+    # re-running the first season against an unchanged dataset is a clean
+    # match, not a discrepancy — confirms unchanged re-checks stay silent
+    await _reconcile(client, show["id"], 1)
+    assert await _pending_reviews_for(client, season["id"]) == []
+
+
+async def test_reconcile_season_mapping_discrepancy_applies_immediately_and_logs(
+    client, monkeypatch
+):
+    show = await add_show(client)
+    await _link_tvdb(client, show["id"], 555)
+
+    _patch_fribb_dataset(
+        monkeypatch, [{"tvdb_id": 555, "anilist_id": 111, "mal_id": 211, "season": {"tvdb": 1}}]
+    )
+    first = await _reconcile(client, show["id"], 1)
+    season_id = first["id"]
+    assert first["anilistId"] == 111
+
+    # the dataset later disagrees with what's already stored — §3 principle
+    # 1: applied immediately, logged for after-the-fact awareness
+    _patch_fribb_dataset(
+        monkeypatch, [{"tvdb_id": 555, "anilist_id": 999, "mal_id": 211, "season": {"tvdb": 1}}]
+    )
+    second = await _reconcile(client, show["id"], 1)
+    assert second["id"] == season_id
+    assert second["anilistId"] == 999
+
+    all_reviews = await _pending_reviews_for(client, season_id)
+    reviews = [r for r in all_reviews if r["field"] == "anilist_id"]
+    assert len(reviews) == 1
+    assert reviews[0]["previousValue"] == "111"
+    assert reviews[0]["proposedValueChain"] == ["999"]
+
+    # a THIRD disagreement before the first is ever resolved extends the
+    # same entry's value chain rather than opening a duplicate (§5.6)
+    _patch_fribb_dataset(
+        monkeypatch, [{"tvdb_id": 555, "anilist_id": 777, "mal_id": 211, "season": {"tvdb": 1}}]
+    )
+    await _reconcile(client, show["id"], 1)
+    all_reviews = await _pending_reviews_for(client, season_id)
+    reviews = [r for r in all_reviews if r["field"] == "anilist_id"]
+    assert len(reviews) == 1  # still one entry, not two
+    assert reviews[0]["previousValue"] == "111"  # unchanged — value before the FIRST change
+    assert reviews[0]["proposedValueChain"] == ["999", "777"]
+
+
+async def test_reconcile_season_mapping_never_overwrites_manual_override(client, monkeypatch):
+    show = await add_show(client)
+    await _link_tvdb(client, show["id"], 555)
+    manual = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setSeasonMapping(showId: $id, seasonNumber: 1, anilistId: 42, malId: 42) { id }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    season_id = manual["setSeasonMapping"]["id"]
+
+    _patch_fribb_dataset(
+        monkeypatch, [{"tvdb_id": 555, "anilist_id": 999, "mal_id": 999, "season": {"tvdb": 1}}]
+    )
+    data = await gql(
+        client, RECONCILE_SEASON_MAPPING, {"id": show["id"], "season": 1}, headers=auth_headers()
+    )
+    season = data["reconcileSeasonMapping"]
+    assert season["id"] == season_id
+    assert season["anilistId"] == 42  # untouched — manual wins (§3 principle 6)
+    assert season["malId"] == 42
+    assert season["manualOverride"] is True
+
+    # no review noise for a disagreement against something already manually
+    # decided (asked/confirmed 2026-08-08, A.4)
+    assert await _pending_reviews_for(client, season_id) == []
 
 
 async def test_set_episode_numbering_scheme(client):

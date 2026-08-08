@@ -23,7 +23,7 @@ import json
 from ariadne import EnumType, MutationType, ObjectType, QueryType
 from graphql import GraphQLError
 
-from lcars import db, ids, pagination, util
+from lcars import db, fribb, ids, pagination, util
 
 query = QueryType()
 mutation = MutationType()
@@ -189,6 +189,58 @@ def _get_episode_movie_link(conn, link_id: str) -> dict | None:
 def _get_pending_review(conn, review_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM pending_review WHERE id = ?", (review_id,)).fetchone()
     return dict(row) if row else None
+
+
+def _open_or_extend_pending_review(
+    conn, entity_type: str, entity_id: str, field: str, source: str, previous_value, new_value
+) -> None:
+    """§5.6/§3 principle 1: value-chain accumulation on repeated
+    automatic changes to the same field before a human resolves the
+    entry, rather than opening a duplicate entry or silently
+    overwriting. `previousValue` is nullable (schema-legal — "no value
+    before this chain opened"); every entry actually IN the chain must
+    be a real string (`[String!]!`, non-null elements), so a `None`
+    `new_value` (the "no candidate found" case) is represented as the
+    literal string "unmatched" rather than a null list element —
+    caught by a real GraphQL null-in-non-null-list error while writing
+    A.4's own tests, not a hypothetical. First use of this general
+    pattern (A.4) — the same shape any future automatic-reconciliation
+    mutation (air-date, episode numbering, MAL legacy import, ...)
+    will reuse.
+    """
+    previous_str = None if previous_value is None else str(previous_value)
+    new_str = "unmatched" if new_value is None else str(new_value)
+    now = util.now_utc_iso()
+    existing = conn.execute(
+        "SELECT id, proposed_value_chain FROM pending_review"
+        " WHERE entity_type = ? AND entity_id = ? AND field = ? AND resolved_at IS NULL",
+        (entity_type, entity_id, field),
+    ).fetchone()
+    if existing is not None:
+        chain = json.loads(existing["proposed_value_chain"])
+        chain.append(new_str)
+        conn.execute(
+            "UPDATE pending_review SET proposed_value_chain = ? WHERE id = ?",
+            (json.dumps(chain), existing["id"]),
+        )
+        return
+    review_id = ids.generate_id(conn, "r")
+    conn.execute(
+        "INSERT INTO pending_review"
+        " (id, entity_type, entity_id, field, previous_value, proposed_value_chain,"
+        "  source, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            review_id,
+            entity_type,
+            entity_id,
+            field,
+            previous_str,
+            json.dumps([new_str]),
+            source,
+            now,
+        ),
+    )
 
 
 def _get_person(conn, person_id: str) -> dict | None:
@@ -1092,6 +1144,96 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
             " VALUES (?, ?, ?, ?, ?, 'manual', 1, 1, ?, ?)",
             (season_id, show_id, season_number, anilist_id, mal_id, now, now),
         )
+    conn.commit()
+    return _get_season(conn, season_id)
+
+
+# -- 5.5 id-mapper automatic reconciliation (A.4, §3 principle 1) -----------
+
+
+@mutation.field("reconcileSeasonMapping")
+def resolve_reconcile_season_mapping(_, info, show_id, season_number):
+    """Attempts automatic derivation against the Fribb/anime-lists
+    dataset (§5.5, `fribb.py`) for this season and applies the result
+    immediately (§3 principle 1) — except when the row is already
+    manual_override, which stays fully protected (§3 principle 6) and
+    doesn't even get a PendingReview logged for the disagreement
+    (asked/confirmed 2026-08-08, A.4: a review entry for something
+    already manually decided doesn't serve pending_review's "later
+    human awareness" purpose — last_reconciled_at still updates so the
+    row shows as checked). A genuine value change on a non-override
+    row — including a first-time "no candidate found", per §5.5's own
+    "stays usable locally in an unmapped state" framing — opens/
+    extends a PendingReview; an unchanged re-check (same value, or
+    still no candidate) does not, so repeated on-demand calls don't
+    spam the review queue. No require_client() — same reasoning as
+    setSeasonMapping just above: no changed_by-style column exists on
+    `season` to record it, and `source` already says the data came
+    from 'fribb', not who triggered the call.
+    """
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    now = util.now_utc_iso()
+
+    existing_row = conn.execute(
+        "SELECT * FROM season WHERE show_id = ? AND season_number = ?",
+        (show_id, season_number),
+    ).fetchone()
+    existing = dict(existing_row) if existing_row else None
+
+    if existing is not None and existing["manual_override"]:
+        conn.execute(
+            "UPDATE season SET last_reconciled_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, existing["id"]),
+        )
+        conn.commit()
+        return _get_season(conn, existing["id"])
+
+    tvdb_row = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'tvdb'",
+        (show_id,),
+    ).fetchone()
+    candidate = None
+    if tvdb_row is not None:
+        dataset = fribb.load_dataset()
+        index = fribb.build_tvdb_index(dataset)
+        tvdb_id = int(tvdb_row["external_id"])
+        candidate = fribb.resolve_season_candidate(index, tvdb_id, season_number)
+    anilist_id, mal_id = fribb.extract_ids(candidate)
+    matched = candidate is not None
+    source = "fribb" if matched else "unmatched"
+
+    if existing is not None:
+        season_id = existing["id"]
+        if existing["anilist_id"] != anilist_id:
+            _open_or_extend_pending_review(
+                conn, "season", season_id, "anilist_id", "fribb", existing["anilist_id"], anilist_id
+            )
+        if existing["mal_id"] != mal_id:
+            _open_or_extend_pending_review(
+                conn, "season", season_id, "mal_id", "fribb", existing["mal_id"], mal_id
+            )
+        conn.execute(
+            "UPDATE season"
+            " SET anilist_id = ?, mal_id = ?, source = ?, matched = ?,"
+            "     last_reconciled_at = ?, updated_at = ?"
+            " WHERE id = ?",
+            (anilist_id, mal_id, source, matched, now, now, season_id),
+        )
+    else:
+        season_id = ids.generate_id(conn, "z")
+        conn.execute(
+            "INSERT INTO season"
+            " (id, show_id, season_number, anilist_id, mal_id, source, matched,"
+            "  manual_override, last_reconciled_at, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+            (season_id, show_id, season_number, anilist_id, mal_id, source, matched, now, now, now),
+        )
+        if not matched:
+            _open_or_extend_pending_review(
+                conn, "season", season_id, "anilist_id", "fribb", None, None
+            )
+
     conn.commit()
     return _get_season(conn, season_id)
 

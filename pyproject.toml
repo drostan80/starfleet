@@ -25,6 +25,11 @@ dependencies = [
     # transitive dependency, declared explicitly here too since our own code
     # imports it directly, not just relies on it coming along by accident.
     "starlette>=0.37",
+    # fribb.py (A.4, §5.5) downloads the Fribb/anime-lists dataset with a
+    # sync httpx.Client (matches §11.2's sync-resolver execution model) —
+    # promoted here from a dev-only test dependency, 2026-08-08, now that
+    # runtime code (not just tests/test_server.py's ASGI transport) needs it.
+    "httpx>=0.27",
 ]
 
 [project.scripts]
@@ -35,9 +40,8 @@ dev = [
     "ruff>=0.6",
     "pytest>=8",
     "pytest-asyncio>=0.24",
-    # ASGI test client for server.py (A.3) — the de facto standard way to
-    # exercise an ASGI app without binding a real port (httpx.ASGITransport).
-    "httpx>=0.27",
+    # httpx itself moved to core dependencies above (A.4) — still used here
+    # too, for server.py (A.3)'s ASGI test client (httpx.ASGITransport).
 ]
 
 [tool.setuptools.packages.find]
