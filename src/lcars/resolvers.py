@@ -85,12 +85,22 @@ RESOLVING_CLIENTS = {"data", "holodeck", "captains_log"}
 # (SCOPE.md §5.4's show_external_id.url) — real-world, well-known URL
 # formats, not a design question. A.8's on-demand metadata fetch may
 # later refine/replace these once it exists.
+#
+# tmdb's own path segment depends on media_shape (movie vs. tv) — caught
+# during a full audit pass: the original single "/movie/{id}" template
+# would have produced a wrong link for a tmdbId supplied on an episodic
+# (tracking_space=tv) show. Not a hypothetical: §5.4 itself already notes
+# "Movies key primarily on TMDB... but [episodic shows] carry ... TMDB ids
+# too where they exist."
 EXTERNAL_ID_URL_TEMPLATES = {
     "anilist": "https://anilist.co/anime/{id}",
     "tvdb": "https://thetvdb.com/dereferrer/series/{id}",
-    "tmdb": "https://www.themoviedb.org/movie/{id}",
     "imdb": "https://www.imdb.com/title/{id}/",
     "mal": "https://myanimelist.net/anime/{id}",
+}
+TMDB_URL_TEMPLATES = {
+    "movie": "https://www.themoviedb.org/movie/{id}",
+    "episodic": "https://www.themoviedb.org/tv/{id}",
 }
 
 
@@ -380,7 +390,6 @@ def resolve_add_show(_, info, input):  # noqa: A002 (matches the GraphQL arg nam
     for service, key in (
         ("anilist", "anilist_id"),
         ("tvdb", "tvdb_id"),
-        ("tmdb", "tmdb_id"),
         ("imdb", "imdb_id"),
         ("mal", "mal_id"),
     ):
@@ -392,6 +401,15 @@ def resolve_add_show(_, info, input):  # noqa: A002 (matches the GraphQL arg nam
                 " VALUES (?, ?, ?, ?, ?)",
                 (show_id, service, str(value), url, now),
             )
+
+    tmdb_id = input.get("tmdb_id")
+    if tmdb_id is not None:
+        url = TMDB_URL_TEMPLATES[input["media_shape"]].format(id=tmdb_id)
+        conn.execute(
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES (?, 'tmdb', ?, ?, ?)",
+            (show_id, str(tmdb_id), url, now),
+        )
 
     conn.commit()
     return _get_show(conn, show_id)

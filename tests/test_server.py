@@ -189,6 +189,28 @@ async def test_add_show_with_external_ids_creates_crosswalk_rows(client):
     assert links["tvdb"]["externalId"] == "67890"
 
 
+@pytest.mark.parametrize(
+    ("media_shape", "expected_url"),
+    [
+        ("MOVIE", "https://www.themoviedb.org/movie/555"),
+        ("EPISODIC", "https://www.themoviedb.org/tv/555"),
+    ],
+)
+async def test_tmdb_url_depends_on_media_shape(client, media_shape, expected_url):
+    """Audit-pass fix: a single tmdb URL template would have produced a
+    wrong link for whichever media_shape it wasn't written for — §5.4
+    itself notes both movies and episodic shows can carry a TMDB id."""
+    show = await add_show(client, mediaShape=media_shape, tmdbId=555)
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { externalIds { edges { node { url } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    urls = [e["node"]["url"] for e in data["show"]["externalIds"]["edges"]]
+    assert urls == [expected_url]
+
+
 # --- setStatus / setScore / setTracked + history --------------------------
 
 
@@ -528,3 +550,21 @@ async def test_pending_reviews_query_defaults_to_unresolved_only(client, migrate
         headers=auth_headers(),
     )
     assert [e["node"]["id"] for e in after_all["pendingReviews"]["edges"]] == [review_id]
+
+
+# --- audit-pass fix: show.hardDeleteRequestedAt (§6.11) --------------------
+#
+# Confirms the column this field depends on actually exists — caught missing
+# during a full audit pass despite BUILD_PLAN.md having claimed it was
+# already added; see migration 4509892cd91b.
+
+
+async def test_hard_delete_requested_at_field_resolves(client):
+    show = await add_show(client)
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { hardDeleteRequestedAt } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["hardDeleteRequestedAt"] is None

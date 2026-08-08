@@ -165,8 +165,13 @@ no open design questions left blocking it.
       per-mutation Payload type.
     - §6.11's hard-delete delay period had no persisted state to
       measure it by anywhere in §5. Asked; resolved as a new
-      `show.hardDeleteRequestedAt` timestamp (already added via the
-      A.1-addendum migration, `0c47d1677e7d`).
+      `show.hardDeleteRequestedAt` timestamp. **Correction (found in
+      the 2026-08-08 audit pass below): this was never actually
+      migrated** — the decision was made and written into
+      `schema.graphql`, but no column for it exists in
+      `0c47d1677e7d` despite this bullet's original claim otherwise.
+      Fixed via a dedicated migration, `4509892cd91b`, in the audit
+      pass.
   - **Surfaced the movie-tracking gap** that produced the whole A.1
     addendum above — discovered specifically because writing GraphQL
     types against the finished A.1 schema forced the "where does a
@@ -242,6 +247,44 @@ no open design questions left blocking it.
       this project's whole "verify for real" practice exists to catch.
       Found because `Episode.linkedMovieShow` came back `null` in a
       test that expected a real value, not because of code review.
+
+**Audit pass, 2026-08-08** (requested before continuing past A.3):
+full cross-check of `BUILD_PLAN.md`/`SCOPE.md` claims against actual
+repo state, not another read-through of the prose. Method: dumped the
+*real* migrated-DB schema (`PRAGMA table_xinfo`, every table) and
+diffed it field-by-field against every type in `schema.graphql`, by
+hand, type by type — rather than re-trusting the commit messages that
+said things were done.
+- **Found the one real gap this surfaced**: `Show.hardDeleteRequestedAt`
+  (and the three hard-delete mutations depending on it, §6.11) had no
+  backing column anywhere — A.2's own entry above had incorrectly
+  claimed it was "already added." Also surfaced a second, related gap
+  while fixing it: §6.11 never specified an actual delay *duration*,
+  only that a delay period exists conceptually. Asked; 24 hours, fixed
+  (not configurable — §6.13 has exactly one setting today, home
+  timezone, and this isn't a second one). Both fixed: migration
+  `4509892cd91b`, `SCOPE.md` §6.11 updated with the full resolution,
+  this entry corrected.
+- Also fixed a smaller, lower-stakes correctness bug spotted in the
+  same pass: `addShow`'s TMDB URL template was hardcoded to
+  `/movie/{id}`, which would have produced a wrong link for a
+  `tmdbId` supplied on an episodic (TV) show — §5.4 itself already
+  notes both movie and episodic shows can carry a TMDB id. Split into
+  a movie/episodic-aware template, tested both cases.
+- Everything else checked out: the full §5.0 id-prefix table (18
+  prefixes) verified identical across `SCOPE.md`, `ids.py`'s
+  `PREFIX_TABLES`, and every migration's own `CHECK` constraint; every
+  other `schema.graphql` field cross-referenced against its real DB
+  column, table by table, with no further mismatches; every SQL table
+  reference in `resolvers.py` checked against the real table list;
+  `~/repos/aniq` and `~/repos/data` reconfirmed exactly as they were
+  left (no drift on the hard constraint). Also scanned every test file
+  for the same hardcoded-id-length mistake that had already been
+  caught twice in earlier passes — none found beyond the two already
+  fixed.
+- 54 tests total now (was 51), full suite + `ruff` clean, CI reverified
+  green on GitHub's runner after this pass's commit (see that commit
+  for the run link/confirmation).
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
   dataset (one-time/on-demand download, not live polling), manual

@@ -1084,6 +1084,20 @@ confirmation before the actual purge executes. Reachable from both
 Captain's Log and Holodeck — the re-type step is the friction, not a
 client restriction.
 
+**Resolved 2026-08-08, two gaps caught in a later audit pass (A.2 had
+already written `requestHardDelete`/`cancelHardDelete`/
+`confirmHardDelete` into the SDL, but neither of these was ever
+actually settled here — `BUILD_PLAN.md` incorrectly claimed the first
+one was already done; fixed alongside this)**:
+- **Storage**: a new `show.hard_delete_requested_at` timestamp
+  (nullable), set by `requestHardDelete`, cleared by
+  `cancelHardDelete`. `confirmHardDelete` checks both that it's set
+  *and* that the delay below has elapsed since.
+- **Delay duration**: a fixed **24 hours**, not configurable. Matches
+  this project's general preference for simple defaults over settings
+  — §6.13's global settings currently has exactly one entry (home
+  timezone); this isn't a second one.
+
 ### 6.12 Data export / import (Phase A)
 
 JSON, explicitly designed as a **restore path**, not just a one-way
