@@ -396,8 +396,10 @@ for a show, `e-x82j1q` for an episode.
 | `o-` | `score_change` |
 | `g-` | `air_date_change` |
 | `k-` | `tracked_change` |
+| `m-` | `episode_movie_link` |
+| `v-` | `next_up_override` |
 
-16 of 26 letters used, leaving headroom for future entities.
+18 of 26 letters used, leaving headroom for future entities.
 
 ### 5.1 `show`
 
@@ -408,7 +410,7 @@ enum:
 |---|---|---|
 | `media_shape` | `episodic` \| `movie` | |
 | `tracking_space` | `tv` \| `anime` | `anime` **mandates** an AniList link, no exceptions — applies orthogonally to `media_shape`, an anime movie still requires one. `tv`'s Sonarr link is optional. |
-| `file_source` | independent Sonarr/Radarr availability flags, not one exclusive value | Lives on the **episode** row, not the show row (per-episode, not per-show) — **validated against real library data (§10)**: confirmed correct at per-episode granularity, and refined from a single enum to two independent booleans — see §5.2, `available_via_sonarr`/`available_via_radarr`. |
+| `file_source` | independent Sonarr/Radarr availability flags, not one exclusive value | For `media_shape = episodic`: lives on the **episode** row, not the show row (per-episode, not per-show) — **validated against real library data (§10)**: confirmed correct at per-episode granularity, and refined from a single enum to two independent booleans — see §5.2, `available_via_sonarr`/`available_via_radarr`. For `media_shape = movie`: lives on **`show` itself** instead — see the movie-tracking fields below, added 2026-08-08 while drafting A.2. |
 
 Other fields:
 - **Title, stored as all available variants, not one string**:
@@ -447,6 +449,48 @@ Other fields:
 - Custom tags: flat (no hierarchy), user-defined, many-to-many
   (`show_tag`). Also covers "favorite" — no separate pinned/favorite
   boolean field; a tag does that job.
+- **Movie tracking fields** (`media_shape = 'movie'` only), added
+  2026-08-08 while drafting A.2, resolving a real gap A.1 missed: a
+  standalone movie show gets **no `episode` row at all** — clarified
+  directly by the user: a film can occupy a slot in a *franchise's*
+  watch order (`franchise_member.sort_order`, §5.9 — "an episode of
+  the franchise," not of its own show), but is never modeled as an
+  `episode` of its own show, and is never conflated with Sonarr's own
+  season-0 tracking. So the availability mechanism `episode` normally
+  carries moves onto `show` itself for this case:
+  `available_via_radarr`, `available_checked_at`, and a generated
+  `available_locally` (mirrors `episode`'s own shape, §5.2, just
+  Radarr-only — no Sonarr side to OR against, since a movie show's own
+  Sonarr availability doesn't apply — see `episode_movie_link` below
+  for the *separate* case of the same film also being tracked as a
+  `bonus_movie`-kind episode elsewhere). No movie-specific `skipped`
+  equivalent — confirmed sufficient to reuse `status` alone
+  (`dropped`/`completed` already cover "decided not to watch"/
+  "watched"); `episode.state = skipped` exists specifically to clear
+  per-episode backlog counters (§6.3) on an accumulating list, which a
+  single movie doesn't have.
+
+**Movie ↔ Sonarr-tracked-episode reconciliation** (added 2026-08-08,
+A.2): the *same* film can exist both as a standalone Radarr-tracked
+movie show and as a `bonus_movie`-kind episode inside a different,
+related episodic show (Sonarr sometimes carries a tie-in movie as a
+season-0 special). Reconciled the same way every other cross-source
+identity question in this document is (§3.1, §5.5) — internal ids are
+the source of truth, external ids (TMDB) map onto them, a best guess
+applies immediately with a `pending_review` entry on ambiguity, manual
+override wins once set. New table, same shape as `show_id_mapping`:
+
+```
+episode_movie_link
+  id                m- (see updated prefix table, §5.0)
+  episode_id        FK episode, UNIQUE — the bonus_movie-kind row
+  movie_show_id     FK show, nullable until matched — the standalone
+                     movie show representing the same film
+  source            tmdb_match | manual | unmatched
+  matched           bool
+  manual_override   bool
+  created_at / updated_at
+```
 
 **Show-row promotion paths** (three, all distinct):
 - A bare `tracked = false` relation/franchise stub becomes a real
@@ -535,13 +579,21 @@ episode
 ```
 watch_event
   show_id
-  season
-  episode
+  season               nullable — see movie note below
+  episode              nullable — see movie note below
   watched_at
   platform            optional — streaming platform/device, for
                        watches with no local file
 ```
 
+- **`season`/`episode` are nullable, added 2026-08-08 (A.2)**: a
+  movie show (`media_shape = 'movie'`) has no `episode` row to
+  reference at all (§5.1's movie-tracking-fields note), so its
+  `watch_event` rows carry `show_id` alone with `season`/`episode`
+  both null. Episodic shows are unaffected — always non-null there.
+  Standard SQL foreign-key matching already does the right thing here
+  (a FK with any null column isn't enforced for that row) — no special
+  schema trick needed beyond making the two columns nullable.
 - One row per viewing — the mechanism rewatches work through. No
   separate `watched_at` column on `episode`; first/last-watched/watch-
   count are derived queries over this table. Show-level started/
@@ -825,6 +877,22 @@ side-story vs. adaptation, etc.); confirmed generic on purpose, kept
 consistent with how the relation graph was already framed everywhere
 else in this document. Franchise auto-derivation treats every link the
 same way.
+
+**`next_up_override`** — added 2026-08-08 while drafting A.2, filling
+a gap: §6.4's cross-show next-up query was always described as having
+"manual reordering supported on top (same auto-default-plus-override
+shape as franchise ordering)," but unlike franchise ordering
+(`franchise_member.sort_order` right above), nothing in §5 actually
+stored that override — the next-up list itself is a computed query
+result, not a stored entity, so it needed its own small table rather
+than a column on anything else:
+
+```
+next_up_override
+  id         v- (§5.0)
+  show_id     FK show, UNIQUE
+  sort_order
+```
 
 ### 5.10 Saved filter presets
 

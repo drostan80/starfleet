@@ -117,6 +117,22 @@ no open design questions left blocking it.
     missing from §5.1's own field list despite being required by
     §5.7/§6.1; A.3's stale "SQLAlchemy" reference (see the standalone
     fix commit before this one).
+  - **A.1 addendum, found while starting A.2** (migration
+    `0c47d1677e7d`): a real, non-mechanical gap — every A.1 tracking
+    mechanism (`available_via_*`, `state`, `watch_event`'s FK) assumed
+    an `episode` row, but §5.2 says a standalone movie show is "not an
+    episode at all." Asked rather than guessed, across several rounds
+    (this had real branches — episodic-row-reuse vs. show-level
+    fields; then a further clarification once answered surfaced a
+    second gap, movie↔`bonus_movie`-episode reconciliation, also
+    asked). Resolved: `show` gets its own `available_via_radarr`/
+    `available_locally` (movie-only), `watch_event.season`/`episode`
+    became nullable, `episode_movie_link` added as a third
+    id-mapper-shaped reconciliation table, and `next_up_override`
+    added for §6.4's manual reorder (no table existed for it either).
+    All in SCOPE.md §5.1/§5.3/§5.9. Verified the same way as A.1
+    itself: applied to a scratch DB, exercised every new
+    constraint/nullability with real inserts, downgraded cleanly.
 - [ ] **A.2 — Write the GraphQL SDL** (schema-first, §11.1, §8, §10.2
   item 5): types, dedicated field-specific mutations (`setStatus`,
   `setScore`, `addWatchEvent`, `markEpisodeSkipped`,
