@@ -567,9 +567,28 @@ order — same reasoning `pagination.py`'s cursors already lean on).
     passing, `ruff check .` clean — no new tests were needed since
     the behavior this step describes was already covered by A.3/A.4's
     own test suites.
-- [ ] **A.6 — Implement all history tables** (§5.7): `status_change`,
+- [x] **A.6 — Implement all history tables** (§5.7): `status_change`,
   `score_change`, `air_date_change`, `tracked_change` — dedicated per
   concern, every row records originating client/process.
+  - **Already satisfied by earlier A.3 work, verified 2026-08-08**
+    rather than built fresh — re-read §5.7 against what actually
+    exists first, per standing instruction. All four tables (A.1),
+    all four dedicated write paths (`setStatus`/`setScore`/
+    `setTracked`/`setEpisodeAirDate`, A.3), and every relationship
+    field (`StatusChange.show`/`ScoreChange.show`/
+    `AirDateChange.episode`/`TrackedChange.show`, found unbound and
+    fixed during A.3's own systematic sweep) already exist. Every
+    write path calls `require_client()` and stores the result as
+    `changed_by` — confirmed against real tests
+    (`tests/test_server.py` already asserts `changedBy` on both
+    `statusHistory` and `airDateHistory`), not just read off the
+    code. Confirmed `addShow` deliberately does *not* write a
+    `status_change` row at creation (no "previous" state exists yet
+    to record a change from — history tables track changes, not the
+    initial value) and correctly doesn't call `require_client()`
+    either, since it writes no history/`pending_review` row. No new
+    code or tests needed — 99 tests still passing, `ruff check .`
+    clean.
 - [ ] **A.7 — Implement `show_service_presence`** (§5.4): fuzzy title
   search (across all title variants, threshold-gated, `difflib`-style
   scoring) as the matching algorithm — already resolved, not an open
