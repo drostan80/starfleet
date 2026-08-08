@@ -7,7 +7,7 @@ format, so the DateTime scalar below is close to a passthrough: it just
 validates rather than reformats.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from ariadne import ScalarType
 from graphql import GraphQLError
@@ -15,6 +15,14 @@ from graphql import GraphQLError
 
 def now_utc_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def utc_iso_offset(days: int) -> str:
+    """now_utc_iso(), `days` days ahead (or behind, if negative) — same
+    "Z"-suffixed format, so it's directly comparable to any stored
+    timestamp via plain string comparison (all of them share this exact
+    format, so lexicographic order is chronological order)."""
+    return (datetime.now(UTC) + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _parse(value: str) -> datetime:

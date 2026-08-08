@@ -7,6 +7,7 @@ core mutations, plus the bearer-token/X-LCARS-Client plumbing.
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -1488,3 +1489,54 @@ async def test_filter_presets_top_level_query(client):
         client, "{ filterPresets { edges { node { name } } } }", headers=auth_headers()
     )
     assert "List Me" in [e["node"]["name"] for e in data["filterPresets"]["edges"]]
+
+
+# --- episodesAiringSoon (§8) — the last piece genuinely scoped to A.3 -------
+#
+# search/stats/nextUp/deletion/export-import each have their own dedicated,
+# separately-numbered BUILD_PLAN.md steps (A.11-A.15); backlog is Phase B's
+# own step (B.9, matching §6.3's "(Phase B)" label). episodesAiringSoon has
+# neither a later dedicated step nor a phase-B data dependency, so it's the
+# one remaining piece that was actually A.3's job.
+
+
+def _iso(offset_days: float) -> str:
+    return (datetime.now(UTC) + timedelta(days=offset_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _insert_episode_with_air_date(
+    migrated_db: Path, episode_id: str, show_id: str, air_date_utc: str | None
+) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        """
+        INSERT INTO episode
+            (id, show_id, season, episode, kind, air_date_utc, state, created_at, updated_at)
+        VALUES (
+            ?, ?, 1, 1, 'regular', ?, 'unwatched',
+            '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z'
+        )
+        """,
+        (episode_id, show_id, air_date_utc),
+    )
+    conn.commit()
+
+
+async def test_episodes_airing_soon_filters_by_date_window(client, migrated_db):
+    show_a = await add_show(client, titleRomaji="Show A")
+    show_b = await add_show(client, titleRomaji="Show B")
+    show_c = await add_show(client, titleRomaji="Show C")
+    show_d = await add_show(client, titleRomaji="Show D")
+
+    _insert_episode_with_air_date(migrated_db, "e-past01", show_a["id"], _iso(-1))  # already aired
+    _insert_episode_with_air_date(migrated_db, "e-soon01", show_b["id"], _iso(2))  # within window
+    _insert_episode_with_air_date(migrated_db, "e-later1", show_c["id"], _iso(10))  # outside window
+    _insert_episode_with_air_date(migrated_db, "e-nodate", show_d["id"], None)  # unknown air date
+
+    data = await gql(
+        client,
+        "{ episodesAiringSoon(days: 3) { edges { node { id } } } }",
+        headers=auth_headers(),
+    )
+    ids = {e["node"]["id"] for e in data["episodesAiringSoon"]["edges"]}
+    assert ids == {"e-soon01"}

@@ -177,7 +177,7 @@ no open design questions left blocking it.
     types against the finished A.1 schema forced the "where does a
     movie's watch-state actually live" question that a table-by-table
     migration review alone hadn't surfaced.
-- [ ] **A.3 — Wire resolvers to SQLite** via raw `sqlite3` (stdlib, no
+- [x] **A.3 — Wire resolvers to SQLite** via raw `sqlite3` (stdlib, no
   ORM) + hand-written Alembic migrations (§11.2, resolved 2026-08-08
   during 0.2 — this line originally said SQLAlchemy, corrected here to
   match; see `migrations/README`), `lcars.db` / `lcars.ini` filenames
@@ -402,14 +402,43 @@ both optional, only the provided ones change).
   12, exactly the 4 object-typed fields just implemented
   (`deleteFilterPreset` returns `Boolean`, not counted).
 - 82 tests total now (was 76), `ruff` clean, schema re-validated.
-- **What's left of A.3 is entirely §6-derived query surface and
-  deletion/export-import mutations** — none of it ordered by §5
-  anymore, since §5 itself is done: `search`/`stats`/`nextUp`/
-  `episodesAiringSoon`/`backlog` (Query), `softDeleteShow`/
-  `requestHardDelete`/`cancelHardDelete`/`confirmHardDelete`
-  (deletion, §6.11), `exportData`/`importData` (§6.12). Genuinely
-  unordered by anything in the plan — worth checking in on before
-  picking one, not assuming.
+
+**Correction, same day**: the note directly above (marking `search`/
+`stats`/`nextUp`/`episodesAiringSoon`/`backlog`/deletion/export-import
+as "what's left of A.3") was wrong, caught while actually starting on
+them — re-reading this file's own A.11-A.15 straight through shows
+`nextUp` is **A.11**, `search` is **A.12**, `stats` is **A.13**,
+deletion is **A.14**, export/import is **A.15** — each its own
+separately-numbered step, not A.3 sub-items. `backlog` isn't A.3
+either — it's Phase B's own **B.9**, matching `§6.3`'s "(Phase B)"
+label (flagged as ambiguous at the time; it wasn't, the cross-check
+just hadn't gone far enough). The one item in that list with neither
+a dedicated later step nor a Phase-B data dependency —
+`episodesAiringSoon` — turned out to be the *only* piece actually
+still owed to A.3.
+
+**Eighth slice, same day**: `episodesAiringSoon` (§8) — the correction
+above's one real remainder. Added `util.utc_iso_offset(days)`
+alongside the existing `now_utc_iso()`; the date-window filter is
+plain ISO-8601 string comparison (valid since every stored timestamp
+shares the exact same format, so lexicographic order is chronological
+order — same reasoning `pagination.py`'s cursors already lean on).
+- 83 tests total now (was 82), `ruff` clean.
+- **`§5` was already fully exhausted (seventh slice); A.3 is now
+  genuinely complete** — reconfirmed via the same systematic sweep:
+  every remaining unbound object-typed field maps cleanly to A.11
+  (`nextUp`), A.12 (`search`), A.13 (`stats`), A.14 (deletion), A.15
+  (`importData`), or B.9 (`backlog`) — 11 fields, none of them A.3's.
+  Checked off above.
+- Also resolved a real gap found re-reading §6.12 before touching
+  A.15-adjacent work early: `ImportResult` (written in A.2) only
+  reports `showsImported`/`episodesImported`/`watchEventsImported`,
+  which reads like a 3-table scope limit, contradicting §6.12's own
+  "rebuilding a fresh LCARS instance" full-restore framing. Asked;
+  confirmed full restore, all 24 tables — `ImportResult`'s shape is
+  just which counts are worth surfacing to a human, not the real
+  scope. Recorded in `SCOPE.md` §6.12, ready for when A.15 actually
+  happens — not implemented now, since A.15 hasn't been reached yet.
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
   dataset (one-time/on-demand download, not live polling), manual

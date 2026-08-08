@@ -1109,6 +1109,23 @@ version mismatch** with a clear error — no auto-migration logic to
 build or maintain; upgrading an old export before re-importing is a
 manual, out-of-band step.
 
+**Resolved 2026-08-08 (A.3)**: a real gap — `ImportResult` (already in
+`schema.graphql` from A.2) only reports `showsImported`/
+`episodesImported`/`watchEventsImported`, which reads like it could
+mean the scope is limited to those three tables, contradicting this
+section's own "rebuilding a fresh LCARS instance" framing (which
+implies everything: tags, franchises, `pending_review`, history,
+id-mappings — losing those on a restore wouldn't be a real restore).
+Confirmed: **full restore, all 24 tables**. `ImportResult`'s three
+fields are just which counts are worth surfacing to a human as a
+confirmation summary, not a scope limit on what actually gets
+imported — `schema.graphql` unchanged, the other 21 tables' counts
+just aren't individually reported back. Import targets a fresh/empty
+database (the section's own "rebuilding a fresh instance" scenario) —
+no merge/conflict-resolution logic for importing into an
+already-populated one; colliding ids surface as an ordinary
+`IntegrityError`, not something this handles specially.
+
 ### 6.13 Global settings (Phase A)
 
 - **Home timezone**: a single configurable setting (default

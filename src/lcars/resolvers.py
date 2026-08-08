@@ -263,6 +263,21 @@ def resolve_shows_by_status(_, info, statuses, **page_args):
     )
 
 
+@query.field("episodesAiringSoon")
+def resolve_episodes_airing_soon(_, info, days, **page_args):
+    """§8 — episodes airing in the next N days, inclusive of right now
+    and the end of the Nth day; already-aired episodes aren't "soon"."""
+    now = util.now_utc_iso()
+    until = util.utc_iso_offset(days)
+    return pagination.paginate(
+        db.get_connection(),
+        "episode",
+        "air_date_utc IS NOT NULL AND air_date_utc >= ? AND air_date_utc <= ?",
+        (now, until),
+        **page_args,
+    )
+
+
 @query.field("pendingReviews")
 def resolve_pending_reviews(_, info, include_resolved=False, **page_args):
     where = "1 = 1" if include_resolved else "resolved_at IS NULL"
