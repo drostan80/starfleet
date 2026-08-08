@@ -1231,15 +1231,28 @@ all) counts as watched via any `watch_event` existing for it, using
 distribution excludes unscored shows (`score IS NULL`) rather than
 representing them as a bucket.
 
-**Known limitation, flagged not fixed here**: `show.duration_minutes`
-has no mutation anywhere in the API to set it — not built in A.1
-(schema only), not populated by A.8's AniList/Radarr fetch either
-(neither call currently requests a duration/runtime field, though
-both APIs have one). This makes movie hours in particular currently
-inert in practice, since a movie has no episode-level runtime to fall
-back on at all. Out of A.13's own scope (a query-surface step, not a
-fetch/mutation one) — worth revisiting as a small addition to A.8's
-fetch or its own tiny mutation, not decided now.
+**Known limitation, flagged during A.13, fixed 2026-08-08 (A.19)**:
+`show.duration_minutes` had no mutation anywhere in the API to set it
+— not built in A.1 (schema only), not populated by A.8's AniList/
+Radarr fetch either (neither call requested a duration/runtime field,
+though both APIs have one). This made movie hours in particular inert
+in practice, since a movie has no episode-level runtime to fall back
+on at all. Fixed per the user's own direction: "tmdb should have it
+for every media for a one time check, anilist does have it for
+animes." AniList's `duration` field now fills it for `tracking_space
+= anime` (movie or episodic alike — an anime movie still goes through
+AniList, §5.1); a new `tmdb_client.py` (plain v3 API-key auth, no
+OAuth — read-only public metadata) fills it for everything else. A
+movie's tmdb id usually already exists (§5.4 — movies key primarily on
+TMDB); a non-anime TV show usually only carries a tvdb id, so the
+fetch resolves TMDB's own id via a TVDB->TMDB bridge
+(`/find?external_source=tvdb_id`) the first time and persists it as a
+real `show_external_id` row, same upsert shape `linkShowExternalId`
+itself already uses — a later refresh reads it straight back, no
+re-resolution needed. Same "not configured = same as not linked, no
+pending_review noise" treatment every other A.8 branch already gets;
+a genuine failure (TMDB unreachable, wrong key) still opens one, same
+as AniList/Sonarr/Radarr.
 
 ### 6.7 Sync & reconciliation policy (Phase B)
 

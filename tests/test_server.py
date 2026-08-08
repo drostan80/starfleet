@@ -14,7 +14,16 @@ from pathlib import Path
 import httpx
 import pytest
 
-from lcars import anilist_client, config, db, export_import, fribb, radarr_client, sonarr_client
+from lcars import (
+    anilist_client,
+    config,
+    db,
+    export_import,
+    fribb,
+    radarr_client,
+    sonarr_client,
+    tmdb_client,
+)
 from lcars.server import build_app
 
 BEARER_TOKEN = "test-token-123"  # noqa: S105 (test fixture, not a real secret)
@@ -215,6 +224,7 @@ FAKE_ANILIST_MEDIA = {
     "description": "A gold rush story.",
     "genres": ["Action", "Adventure"],
     "episodes": 12,
+    "duration": 24,
     "idMal": 99999,
     "studios": {"nodes": [{"id": 501, "name": "Geno Studio"}]},
     "characters": {
@@ -231,7 +241,7 @@ FAKE_ANILIST_MEDIA = {
 SHOW_METADATA_QUERY = """
     query($id: ID!) {
       show(id: $id) {
-        posterUrl bannerUrl synopsis genresRaw totalEpisodes
+        posterUrl bannerUrl synopsis genresRaw totalEpisodes durationMinutes
         seasons { edges { node { seasonNumber anilistId malId source manualOverride } } }
         cast { edges { node { roleType characterName person { name } } } }
         studioCredits { edges { node { roleType studio { name } } } }
@@ -256,6 +266,39 @@ class _FakeSonarrClient:
 
     def episodes(self, series_id):
         return self._episodes
+
+
+class _FakeTmdbClient:
+    def __init__(self, tvdb_to_tmdb=None, movie_runtime=None, tv_runtime=None, error=None):
+        self._tvdb_to_tmdb = tvdb_to_tmdb or {}
+        self._movie_runtime = movie_runtime
+        self._tv_runtime = tv_runtime
+        self._error = error
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        pass
+
+    def find_by_tvdb_id(self, tvdb_id):
+        self.calls.append(("find_by_tvdb_id", tvdb_id))
+        if self._error is not None:
+            raise self._error
+        return self._tvdb_to_tmdb.get(tvdb_id)
+
+    def movie_runtime(self, tmdb_id):
+        self.calls.append(("movie_runtime", tmdb_id))
+        if self._error is not None:
+            raise self._error
+        return self._movie_runtime
+
+    def tv_episode_runtime(self, tmdb_id):
+        self.calls.append(("tv_episode_runtime", tmdb_id))
+        if self._error is not None:
+            raise self._error
+        return self._tv_runtime
 
 
 class _FakeRadarrClient:
@@ -283,6 +326,7 @@ async def test_add_show_anilist_fetch_populates_metadata_season_and_cast(client,
     assert result["synopsis"] == "A gold rush story."
     assert result["genresRaw"] == ["Action", "Adventure"]
     assert result["totalEpisodes"] == 12
+    assert result["durationMinutes"] == 24
 
     seasons = result["seasons"]["edges"]
     assert len(seasons) == 1
@@ -432,6 +476,95 @@ async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(cl
         headers=auth_headers(),
     )
     assert refreshed["refreshShowMetadata"]["posterUrl"] == "https://anilist.co/img/cover.jpg"
+
+
+# --- TMDB duration fetch (A.19, §5.1 duration_minutes gap) -------------------
+#
+# Default fixture config has no tmdb_api_key, so every test above this
+# section never touches this path — same "not configured = no-op" gate
+# Sonarr/Radarr already use. These explicitly set tmdb_api_key to exercise it.
+
+
+async def test_add_show_tmdb_fetch_populates_movie_duration(client, monkeypatch):
+    config.set_current(config.Config(tmdb_api_key="key"))
+    fake = _FakeTmdbClient(movie_runtime=112)
+    monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
+    show = await add_show(client, mediaShape="MOVIE", trackingSpace="TV", tmdbId=555)
+
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["durationMinutes"] == 112
+    assert fake.calls == [("movie_runtime", 555)]  # already had a tmdb id — no bridge needed
+
+
+async def test_add_show_tmdb_fetch_resolves_tvdb_bridge_for_episodic_show(client, monkeypatch):
+    config.set_current(config.Config(tmdb_api_key="key"))
+    fake = _FakeTmdbClient(tvdb_to_tmdb={67890: 42}, tv_runtime=22)
+    monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) {
+            durationMinutes
+            externalIds { edges { node { service externalId url } } }
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["durationMinutes"] == 22
+    assert fake.calls == [("find_by_tvdb_id", 67890), ("tv_episode_runtime", 42)]
+
+    external_ids = {e["node"]["service"]: e["node"] for e in data["show"]["externalIds"]["edges"]}
+    assert external_ids["tmdb"]["externalId"] == "42"
+    assert external_ids["tmdb"]["url"] == "https://www.themoviedb.org/tv/42"
+
+
+async def test_add_show_tmdb_fetch_no_op_when_tvdb_has_no_tmdb_match(client, monkeypatch):
+    config.set_current(config.Config(tmdb_api_key="key"))
+    fake = _FakeTmdbClient(tvdb_to_tmdb={})  # no match
+    monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["durationMinutes"] is None
+    assert fake.calls == [("find_by_tvdb_id", 67890)]  # never got to tv_episode_runtime
+
+
+async def test_add_show_tmdb_fetch_skipped_for_anime(client, monkeypatch):
+    """AniList already covers duration for anime — TMDB should never be
+    called at all for a tracking_space=anime show, regardless of
+    media_shape (an anime movie still goes through AniList, §5.1)."""
+    config.set_current(config.Config(tmdb_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    fake = _FakeTmdbClient(movie_runtime=112)
+    monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
+    await add_show(client, anilistId=12345)
+    assert fake.calls == []
+
+
+async def test_add_show_tmdb_fetch_skips_silently_when_not_configured(client):
+    """Default fixture: no tmdb_api_key at all — confirms this is
+    treated the same as "not linked", not a failure worth a
+    pending_review, same as Sonarr/Radarr's own equivalent test."""
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+    reviews = await _pending_reviews_for(client, show["id"])
+    assert reviews == []
+
+
+async def test_add_show_tmdb_fetch_failure_logs_pending_review(client, monkeypatch):
+    config.set_current(config.Config(tmdb_api_key="key"))
+    fake = _FakeTmdbClient(error=tmdb_client.TmdbError("Could not connect to TMDB"))
+    monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+
+    reviews = await _pending_reviews_for(client, show["id"])
+    assert len(reviews) == 1
+    assert reviews[0]["source"] == "tmdb"
+    assert reviews[0]["proposedValueChain"] == ["Could not connect to TMDB"]
 
 
 @pytest.mark.parametrize(

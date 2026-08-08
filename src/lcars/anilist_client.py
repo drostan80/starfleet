@@ -35,6 +35,7 @@ query ($mediaId: Int) {
     description(asHtml: false)
     genres
     episodes
+    duration
     idMal
     studios(isMain: true) { nodes { id name } }
     characters(sort: [ROLE, RELEVANCE], perPage: 25) {
@@ -118,8 +119,10 @@ def _graphql_request(
 def fetch_media(anilist_id: int, client: httpx.Client | None = None) -> dict | None:
     """The raw `Media` object (or None if AniList has no such id) for
     `anilist_id` — title variants, cover/banner, synopsis, genres,
-    episode count, the companion MAL id, main studio(s), and voice
-    cast. Raises AniListError on a network/HTTP/GraphQL-level failure
+    episode count, average episode `duration` (minutes — A.19, fills
+    `show.duration_minutes` for anime; TMDB covers everything else,
+    see tmdb_client.py), the companion MAL id, main studio(s), and
+    voice cast. Raises AniListError on a network/HTTP/GraphQL-level failure
     rather than returning None — callers (metadata.py) need to tell
     "no such id" apart from "AniList was unreachable" (§3's best-effort
     policy treats them differently: the latter is worth a retry, the

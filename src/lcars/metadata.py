@@ -49,8 +49,22 @@ recorded.
 import json
 from collections.abc import Callable
 
-from lcars import anilist_client, ids, pending_review, radarr_client, sonarr_client, util
+from lcars import (
+    anilist_client,
+    ids,
+    pending_review,
+    radarr_client,
+    sonarr_client,
+    tmdb_client,
+    util,
+)
 from lcars.config import get_current
+
+# A.19 — mirrors resolvers.py's own EXTERNAL_ID_URL_TEMPLATES/
+# TMDB_URL_TEMPLATES exactly (migration 7196ca889757's show_external_id
+# shape), duplicated here rather than imported: resolvers.py imports
+# this module, so the reverse import would be circular.
+_TMDB_TV_URL_TEMPLATE = "https://www.themoviedb.org/tv/{id}"
 
 
 def fetch_and_populate(conn, show_id: str) -> None:
@@ -63,6 +77,10 @@ def fetch_and_populate(conn, show_id: str) -> None:
 
     if show["tracking_space"] == "anime":
         _guarded(conn, show, "anilist", _fetch_anilist)
+    else:
+        # A.19 — AniList already covers duration for anime (its own
+        # `duration` field, above); everything else gets it from TMDB.
+        _guarded(conn, show, "tmdb", _fetch_tmdb_duration)
     if show["media_shape"] == "episodic":
         _guarded(conn, show, "sonarr", _fetch_sonarr)
     elif show["media_shape"] == "movie":
@@ -114,6 +132,7 @@ def _fetch_anilist(conn, show: dict) -> None:
         "  synopsis = COALESCE(?, synopsis),"
         "  genres_raw = COALESCE(?, genres_raw),"
         "  total_episodes = COALESCE(?, total_episodes),"
+        "  duration_minutes = COALESCE(?, duration_minutes),"
         "  updated_at = ?"
         " WHERE id = ?",
         (
@@ -122,6 +141,7 @@ def _fetch_anilist(conn, show: dict) -> None:
             media.get("description"),
             json.dumps(genres) if genres else None,
             media.get("episodes"),
+            media.get("duration"),
             now,
             show["id"],
         ),
@@ -233,6 +253,70 @@ def _link_person(conn, show_id: str, voice_actor: dict, role_type: str, characte
             " VALUES (?, ?, ?, ?)",
             (show_id, person_id, role_type, character_name),
         )
+
+
+# --- TMDB (everything except tracking_space = anime) — A.19 -----------------
+
+
+def _fetch_tmdb_duration(conn, show: dict) -> None:
+    """Fills `show.duration_minutes` for every non-anime show, movie or
+    TV — AniList already covers anime via its own `duration` field
+    (see `_fetch_anilist` above). A movie's tmdb id usually already
+    exists (§5.4: movies key primarily on TMDB, native to Radarr); a
+    non-anime TV show usually only carries a tvdb id (native to
+    Sonarr), so this resolves TMDB's id via `find_by_tvdb_id` first and
+    persists the result as a real `show_external_id` row (same
+    upsert-by-show_id+service shape `linkShowExternalId` itself uses,
+    resolvers.py) — a retry/refresh afterward reads it straight back,
+    no need to re-resolve."""
+    cfg = get_current()
+    if not cfg.tmdb_api_key:
+        return  # not configured — same as "not linked", not a failure to report
+
+    tmdb_id_str = _external_id(conn, show["id"], "tmdb")
+    with tmdb_client.TmdbClient(cfg.tmdb_api_key) as client:
+        if tmdb_id_str is None:
+            tmdb_id_str = _resolve_and_store_tmdb_id(conn, show, client)
+            if tmdb_id_str is None:
+                return
+        tmdb_id = int(tmdb_id_str)
+        if show["media_shape"] == "movie":
+            runtime = client.movie_runtime(tmdb_id)
+        else:
+            runtime = client.tv_episode_runtime(tmdb_id)
+
+    if runtime:
+        conn.execute(
+            "UPDATE show SET duration_minutes = COALESCE(?, duration_minutes), updated_at = ?"
+            " WHERE id = ?",
+            (runtime, util.now_utc_iso(), show["id"]),
+        )
+
+
+def _resolve_and_store_tmdb_id(
+    conn, show: dict, client: "tmdb_client.TmdbClient"
+) -> str | None:
+    """Only the episodic (TV) side has a bridge to resolve through — a
+    movie with no tmdb id at all has nothing this function can do
+    about it (no title-search feature exists, out of A.19's own
+    scope); `_fetch_tmdb_duration` above already no-ops for that case
+    the same way every other "nothing to look up" branch in this file
+    does."""
+    if show["media_shape"] != "episodic":
+        return None
+    tvdb_id_str = _external_id(conn, show["id"], "tvdb")
+    if tvdb_id_str is None:
+        return None
+    tmdb_id = client.find_by_tvdb_id(int(tvdb_id_str))
+    if tmdb_id is None:
+        return None
+    now = util.now_utc_iso()
+    conn.execute(
+        "INSERT OR IGNORE INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'tmdb', ?, ?, ?)",
+        (show["id"], str(tmdb_id), _TMDB_TV_URL_TEMPLATE.format(id=tmdb_id), now),
+    )
+    return str(tmdb_id)
 
 
 # --- Sonarr (media_shape = episodic) ----------------------------------------

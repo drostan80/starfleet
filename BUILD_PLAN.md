@@ -1233,6 +1233,54 @@ order — same reasoning `pagination.py`'s cursors already lean on).
     Phase A's own closing promise ("Trakt's flakiness is gone, and
     status gets a real column — inside Data") hold today, with no
     scheduler required for either.
+- [x] **A.19 — Fix**: `show.duration_minutes` has no way to ever get
+  populated (flagged during A.13, §6.6, not fixed there — out of that
+  step's own query-surface scope). User-directed fix, 2026-08-08:
+  "fix this gap by asking databases for the information, tmdb should
+  have it for every media for a one time check, anilist does have it
+  for animes."
+  - **Built**: AniList's `Media.duration` field added to
+    `anilist_client.py`'s existing `_MEDIA_QUERY` (already fetched for
+    every `tracking_space = anime` show, A.8/A.9 — no new call,
+    just a wider one) and written into `show.duration_minutes` in
+    `_fetch_anilist`. New `tmdb_client.py` (plain v3 API-key auth,
+    matching the project's existing Sonarr/Radarr REST-client
+    convention — no OAuth needed for read-only public metadata) covers
+    every non-anime show: `movie_runtime`/`tv_episode_runtime` against
+    an already-known tmdb id, plus `find_by_tvdb_id` to bridge
+    TVDB->TMDB the first time for a non-anime TV show that only
+    carries a tvdb id (§5.4 — TV shows aren't guaranteed a tmdb id the
+    way movies are). A resolved bridge id is persisted as a real
+    `show_external_id` row (`INSERT OR IGNORE`, same upsert-by-
+    show_id+service shape `linkShowExternalId` itself already uses),
+    so a later refresh reads it straight back instead of re-resolving.
+    New `Config.tmdb_api_key` (`lcars.ini`'s `[lcars]` section /
+    `LCARS_TMDB_API_KEY`), same "optional, not-configured = same as
+    not-linked, no pending_review noise" treatment every other A.8
+    branch already gets — a genuine failure still opens one.
+    `metadata.fetch_and_populate()`'s own branching: `tracking_space =
+    anime` goes through AniList only (already covers duration);
+    everything else goes through the new TMDB branch instead — the two
+    are mutually exclusive per show, confirmed by a dedicated test
+    (`test_add_show_tmdb_fetch_skipped_for_anime`: TMDB never called
+    for an anime show even with a key configured).
+  - **Tests**: `test_tmdb_client.py` (+11, pure client-layer, no real
+    network — find_by_tvdb_id/movie_runtime/tv_episode_runtime,
+    404-is-a-legitimate-miss vs. 401/500/connect/timeout errors);
+    `test_config.py` (+3, tmdb_api_key file/env/default precedence,
+    same pattern as every other credential in that file);
+    `test_server.py` (+6: movie duration via an already-known tmdb id,
+    episodic duration via the TVDB->TMDB bridge + the persisted
+    `show_external_id` row, no-op when TMDB has no match for a bridged
+    tvdb id, skipped entirely for anime, skipped silently when
+    unconfigured, a genuine failure opens a `pending_review` entry
+    with `source = 'tmdb'`) — plus `duration` added to the existing
+    AniList fetch fixture/test.
+  - **Verified**: 234 tests passing (was 214), `ruff check .` clean.
+    No schema/migration change at all — `Show.durationMinutes` already
+    existed in `schema.graphql` since A.1, this only ever populates it;
+    unbound-field sweep therefore unaffected, still only `Query.
+    backlog` (B.9, Phase B) remains.
 
 *(A.9–A.16 don't have hard ordering dependencies on each other — bank
 them in whatever order is convenient once A.1–A.3 exist.)*

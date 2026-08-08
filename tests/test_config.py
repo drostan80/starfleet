@@ -114,3 +114,27 @@ def test_home_timezone_env_var_overrides_file(tmp_path, monkeypatch):
     monkeypatch.setenv("LCARS_HOME_TIMEZONE", "Asia/Tokyo")
     cfg = load_config(config_path=config_path)
     assert cfg.home_timezone == "Asia/Tokyo"
+
+
+# --- tmdb_api_key (A.19, §5.1) ------------------------------------------------
+
+
+def test_tmdb_api_key_defaults_to_none(tmp_path, monkeypatch):
+    monkeypatch.delenv("LCARS_TMDB_API_KEY", raising=False)
+    cfg = load_config(config_path=tmp_path / "does-not-exist.ini")
+    assert cfg.tmdb_api_key is None
+
+
+def test_tmdb_api_key_loads_from_file(tmp_path):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text("[lcars]\ntmdb_api_key = abc123\n")
+    cfg = load_config(config_path=config_path)
+    assert cfg.tmdb_api_key == "abc123"
+
+
+def test_tmdb_api_key_env_var_overrides_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text("[lcars]\ntmdb_api_key = abc123\n")
+    monkeypatch.setenv("LCARS_TMDB_API_KEY", "env-key")
+    cfg = load_config(config_path=config_path)
+    assert cfg.tmdb_api_key == "env-key"

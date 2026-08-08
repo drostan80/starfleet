@@ -90,6 +90,13 @@ class Config:
     # (calendar/pacing-reset/daily-refresh, §6.13); storage itself always
     # stays UTC, this never affects how a timestamp is written.
     home_timezone: str = "Europe/Dublin"
+    # A.19 — fixes the show.duration_minutes gap flagged during A.13
+    # (§6.6): a plain v3 TMDB API key (read-only public metadata, no
+    # OAuth), covering every non-anime show (movie or TV) — AniList
+    # already covers tracking_space=anime via its own `duration` field.
+    # Optional, same "not configured = same as not linked, no failure to
+    # report" treatment metadata.py already gives Sonarr/Radarr.
+    tmdb_api_key: str | None = None
 
 
 def load_config(config_path: Path = CONFIG_PATH) -> Config:
@@ -113,6 +120,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             )
             cfg.anilist_access_token = parser["lcars"].get("anilist_access_token", fallback=None)
             cfg.home_timezone = parser["lcars"].get("home_timezone", fallback=cfg.home_timezone)
+            cfg.tmdb_api_key = parser["lcars"].get("tmdb_api_key", fallback=None)
     cfg.bearer_token = os.environ.get("LCARS_BEARER_TOKEN", cfg.bearer_token)
     env_db_path = os.environ.get("LCARS_DB_PATH")
     if env_db_path is not None:
@@ -129,6 +137,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
         "LCARS_ANILIST_ACCESS_TOKEN", cfg.anilist_access_token
     )
     cfg.home_timezone = os.environ.get("LCARS_HOME_TIMEZONE", cfg.home_timezone)
+    cfg.tmdb_api_key = os.environ.get("LCARS_TMDB_API_KEY", cfg.tmdb_api_key)
     return cfg
 
 
