@@ -44,6 +44,9 @@ person_type = ObjectType("Person")
 studio_type = ObjectType("Studio")
 cast_credit_type = ObjectType("CastCredit")
 studio_credit_type = ObjectType("StudioCredit")
+franchise_type = ObjectType("Franchise")
+franchise_entry_type = ObjectType("FranchiseEntry")
+next_up_override_type = ObjectType("NextUpOverride")
 
 
 def _enum(name: str, *values: str) -> EnumType:
@@ -91,6 +94,9 @@ BINDABLES = [
     studio_type,
     cast_credit_type,
     studio_credit_type,
+    franchise_type,
+    franchise_entry_type,
+    next_up_override_type,
     *ENUMS,
     util.datetime_scalar,
 ]
@@ -193,6 +199,18 @@ def _get_studio(conn, studio_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _get_franchise(conn, franchise_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM franchise WHERE id = ?", (franchise_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _require_franchise(conn, franchise_id: str) -> dict:
+    franchise = _get_franchise(conn, franchise_id)
+    if franchise is None:
+        raise GraphQLError(f"no such franchise: {franchise_id}")
+    return franchise
+
+
 # --- Query -------------------------------------------------------------
 
 
@@ -243,6 +261,16 @@ def resolve_studio(_, info, id):  # noqa: A002
 @query.field("studios")
 def resolve_studios(_, info, **page_args):
     return pagination.paginate(db.get_connection(), "studio", "1 = 1", (), **page_args)
+
+
+@query.field("franchise")
+def resolve_franchise(_, info, id):  # noqa: A002
+    return _get_franchise(db.get_connection(), id)
+
+
+@query.field("franchises")
+def resolve_franchises(_, info, **page_args):
+    return pagination.paginate(db.get_connection(), "franchise", "1 = 1", (), **page_args)
 
 
 # --- Show fields ---------------------------------------------------------
@@ -349,6 +377,36 @@ def resolve_show_studio_credits(obj, info, **page_args):
     return pagination.paginate(
         db.get_connection(), "show_studio", "show_id = ?", (obj["id"],), **page_args
     )
+
+
+@show_type.field("relatedShows")
+def resolve_show_related_shows(obj, info, **page_args):
+    """show_relation is directed, stored as-ingested (§5.9), but read as
+    undirected here — either direction counts as a link, same treatment
+    franchise auto-derivation itself gives the graph."""
+    return pagination.paginate(
+        db.get_connection(),
+        "show",
+        "id IN (SELECT related_show_id FROM show_relation WHERE show_id = ?)"
+        " OR id IN (SELECT show_id FROM show_relation WHERE related_show_id = ?)",
+        (obj["id"], obj["id"]),
+        **page_args,
+    )
+
+
+@show_type.field("franchiseMemberships")
+def resolve_show_franchise_memberships(obj, info, **page_args):
+    return pagination.paginate(
+        db.get_connection(), "franchise_member", "show_id = ?", (obj["id"],), **page_args
+    )
+
+
+@show_type.field("nextUpOverride")
+def resolve_show_next_up_override(obj, info):
+    row = db.get_connection().execute(
+        "SELECT * FROM next_up_override WHERE show_id = ?", (obj["id"],)
+    ).fetchone()
+    return dict(row) if row else None
 
 
 # --- Episode fields ------------------------------------------------------
@@ -516,6 +574,31 @@ def resolve_studio_credit_show(obj, info):
 @studio_credit_type.field("studio")
 def resolve_studio_credit_studio(obj, info):
     return _get_studio(db.get_connection(), obj["studio_id"])
+
+
+# --- Franchise / FranchiseEntry fields (§5.9) -------------------------------
+
+
+@franchise_type.field("members")
+def resolve_franchise_members(obj, info, **page_args):
+    return pagination.paginate(
+        db.get_connection(), "franchise_member", "franchise_id = ?", (obj["id"],), **page_args
+    )
+
+
+@franchise_entry_type.field("franchise")
+def resolve_franchise_entry_franchise(obj, info):
+    return _get_franchise(db.get_connection(), obj["franchise_id"])
+
+
+@franchise_entry_type.field("show")
+def resolve_franchise_entry_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
+
+
+@next_up_override_type.field("show")
+def resolve_next_up_override_show(obj, info):
+    return _get_show(db.get_connection(), obj["show_id"])
 
 
 # --- Mutation --------------------------------------------------------------
@@ -1002,3 +1085,63 @@ def resolve_resolve_pending_review(_, info, id, resolution_note=None):  # noqa: 
     )
     conn.commit()
     return _get_pending_review(conn, id)
+
+
+# -- 5.9 franchise / next-up manual ordering (§3 principle 6) ----------------
+
+
+@mutation.field("setFranchiseMemberOrder")
+def resolve_set_franchise_member_order(_, info, franchise_id, show_id, sort_order):
+    """Overrides an existing membership's sort_order, or creates one —
+    same upsert-by-composite-key pattern as the §5.5 id-mapper mutations.
+    Both franchise_id and show_id must already exist (no createFranchise
+    mutation exists at all — franchises are auto-derived, §5.9 — this
+    mutation manages membership/ordering within one, not fabricates a
+    new franchise out of thin air)."""
+    conn = db.get_connection()
+    _require_franchise(conn, franchise_id)
+    _require_show(conn, show_id)
+    existing = conn.execute(
+        "SELECT 1 FROM franchise_member WHERE franchise_id = ? AND show_id = ?",
+        (franchise_id, show_id),
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            "UPDATE franchise_member SET sort_order = ? WHERE franchise_id = ? AND show_id = ?",
+            (sort_order, franchise_id, show_id),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO franchise_member (franchise_id, show_id, sort_order) VALUES (?, ?, ?)",
+            (franchise_id, show_id, sort_order),
+        )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM franchise_member WHERE franchise_id = ? AND show_id = ?",
+        (franchise_id, show_id),
+    ).fetchone()
+    return dict(row)
+
+
+@mutation.field("setNextUpOrder")
+def resolve_set_next_up_order(_, info, show_id, sort_order):
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    existing = conn.execute(
+        "SELECT id FROM next_up_override WHERE show_id = ?", (show_id,)
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            "UPDATE next_up_override SET sort_order = ? WHERE show_id = ?",
+            (sort_order, show_id),
+        )
+        override_id = existing["id"]
+    else:
+        override_id = ids.generate_id(conn, "v")
+        conn.execute(
+            "INSERT INTO next_up_override (id, show_id, sort_order) VALUES (?, ?, ?)",
+            (override_id, show_id, sort_order),
+        )
+    conn.commit()
+    row = conn.execute("SELECT * FROM next_up_override WHERE id = ?", (override_id,)).fetchone()
+    return dict(row)

@@ -338,6 +338,32 @@ already-confirmed pattern from `show_relation`/`franchise`).
   the 14 just implemented, no regressions, no new gaps introduced by
   this slice.
 - 68 tests total now (was 64), `ruff` clean, schema re-validated.
+
+**Fifth slice, same day**: `show_relation`/`franchise`/`franchise_member`
++ `next_up_override` (§5.9), completing §5's own document order for
+A.3's schema-defined tables. `show_relation`/`franchise` have no
+mutations (auto-derived, not client-created — same pattern as person/
+studio); `franchise_member` (`setFranchiseMemberOrder`) and
+`next_up_override` (`setNextUpOrder`) both got their manual-override
+mutations, upsert-by-key, same pattern as the §5.5 id-mapper
+mutations — both require the referenced franchise/show to already
+exist (no `createFranchise` mutation exists at all), consistent with
+"manual override authoritative" (§3 principle 6) meaning override an
+existing thing, not fabricate a new franchise out of thin air.
+- `Show.relatedShows` reads `show_relation` as undirected (either
+  direction counts, §5.9's own framing for franchise auto-derivation,
+  applied here too) via a `show_id IN (...) OR id IN (...)` filter —
+  fits the existing `pagination.paginate()` helper unchanged, no new
+  pagination mechanism needed despite the two-direction query.
+- Re-ran the sweep again: dropped from 34 to 23, exactly the 11 fields
+  just implemented, no new gaps.
+- 72 tests total now (was 68), `ruff` clean, schema re-validated.
+- §5's own tables are now exhausted for A.3 — what's left is custom
+  tags (§5.1) and saved filter presets (§5.10), both still schema-
+  defined but not yet reached in document order, plus the §6-derived
+  query surface (`search`/`stats`/`nextUp`/`episodesAiringSoon`/
+  `backlog`) and deletion/export-import mutations, which were never
+  part of §5's own document order to begin with.
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
   (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
   dataset (one-time/on-demand download, not live polling), manual

@@ -1078,3 +1078,151 @@ async def test_people_and_studios_top_level_queries(client):
         client, "{ studios { edges { node { id name } } } }", headers=auth_headers()
     )
     assert any(e["node"]["id"] == "d-listme" for e in studios["studios"]["edges"])
+
+
+# --- show_relation / franchise / franchise_member / next_up_override (§5.9) --
+#
+# show_relation and franchise itself have no mutations (auto-derived, not
+# client-created, same as person/studio) — inserted directly here.
+# franchise_member and next_up_override DO have manual-override mutations.
+
+
+def _insert_show_relation(show_id: str, related_show_id: str) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO show_relation (show_id, related_show_id, created_at)"
+        " VALUES (?, ?, '2026-08-08T00:00:00Z')",
+        (show_id, related_show_id),
+    )
+    conn.commit()
+
+
+def _insert_franchise(franchise_id: str, name: str) -> None:
+    conn = db.get_connection()
+    conn.execute("INSERT INTO franchise (id, name) VALUES (?, ?)", (franchise_id, name))
+    conn.commit()
+
+
+async def test_related_shows_reads_both_directions(client):
+    show_a = await add_show(client, titleRomaji="Show A")
+    show_b = await add_show(client, titleRomaji="Show B")
+    show_c = await add_show(client, titleRomaji="Show C")
+    # A -> B (A is the source), C -> A (A is the target) — both should
+    # surface in A's relatedShows despite being opposite directions.
+    _insert_show_relation(show_a["id"], show_b["id"])
+    _insert_show_relation(show_c["id"], show_a["id"])
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { relatedShows { edges { node { id } } } } }",
+        {"id": show_a["id"]},
+        headers=auth_headers(),
+    )
+    related_ids = {e["node"]["id"] for e in data["show"]["relatedShows"]["edges"]}
+    assert related_ids == {show_b["id"], show_c["id"]}
+
+
+async def test_franchise_member_order_create_then_update(client):
+    show = await add_show(client)
+    _insert_franchise("f-testfr", "Test Franchise")
+
+    created = await gql(
+        client,
+        """
+        mutation($f: ID!, $s: ID!) {
+          setFranchiseMemberOrder(franchiseId: $f, showId: $s, sortOrder: 1) {
+            sortOrder franchise { id name } show { id }
+          }
+        }
+        """,
+        {"f": "f-testfr", "s": show["id"]},
+        headers=auth_headers(),
+    )
+    entry = created["setFranchiseMemberOrder"]
+    assert entry["sortOrder"] == 1
+    assert entry["franchise"]["name"] == "Test Franchise"
+    assert entry["show"]["id"] == show["id"]
+
+    updated = await gql(
+        client,
+        """
+        mutation($f: ID!, $s: ID!) {
+          setFranchiseMemberOrder(franchiseId: $f, showId: $s, sortOrder: 2) { sortOrder }
+        }
+        """,
+        {"f": "f-testfr", "s": show["id"]},
+        headers=auth_headers(),
+    )
+    assert updated["setFranchiseMemberOrder"]["sortOrder"] == 2
+
+    # confirms upsert, not a duplicate row
+    members = await gql(
+        client,
+        "query($id: ID!) { franchise(id: $id) { members { edges { node { sortOrder } } } } }",
+        {"id": "f-testfr"},
+        headers=auth_headers(),
+    )
+    assert len(members["franchise"]["members"]["edges"]) == 1
+    assert members["franchise"]["members"]["edges"][0]["node"]["sortOrder"] == 2
+
+    from_show = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { franchiseMemberships { edges { node { sortOrder } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert from_show["show"]["franchiseMemberships"]["edges"][0]["node"]["sortOrder"] == 2
+
+
+async def test_franchise_member_order_requires_existing_franchise_and_show(client):
+    show = await add_show(client)
+    resp = await client.post(
+        "/",
+        json={
+            "query": (
+                'mutation($s: ID!) { setFranchiseMemberOrder(franchiseId: "f-nosuch", '
+                "showId: $s, sortOrder: 1) { sortOrder } }"
+            ),
+            "variables": {"s": show["id"]},
+        },
+        headers=auth_headers(),
+    )
+    assert "errors" in resp.json()
+
+
+async def test_next_up_order_create_then_update(client):
+    show = await add_show(client)
+
+    created = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setNextUpOrder(showId: $id, sortOrder: 5) { sortOrder show { id } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert created["setNextUpOrder"]["sortOrder"] == 5
+    assert created["setNextUpOrder"]["show"]["id"] == show["id"]
+
+    updated = await gql(
+        client,
+        'mutation($id: ID!) { setNextUpOrder(showId: $id, sortOrder: 9) { sortOrder } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert updated["setNextUpOrder"]["sortOrder"] == 9
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { nextUpOverride { sortOrder } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    # confirms upsert, not a duplicate row
+    assert data["show"]["nextUpOverride"]["sortOrder"] == 9
