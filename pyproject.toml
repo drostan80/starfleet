@@ -42,6 +42,12 @@ src = ["src"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# Hand-written SQL DDL (§11.2) — column-aligned CHECK/enum lists read far
+# better unwrapped than reflowed to 100 cols. Same reasoning aniq itself
+# used for a verbatim-fixture test file, just applied to migrations here.
+"migrations/versions/*.py" = ["E501"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

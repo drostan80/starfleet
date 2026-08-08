@@ -421,6 +421,11 @@ Other fields:
   unchanged 5-value enum, reused as-is for movies (no movie-specific
   simplification — `watching`/`paused` remain meaningful, e.g. paused
   mid-sitting).
+- `score`: the personal 0–20 quarter-point value itself (§6.1). Not
+  listed as its own bullet in an earlier pass of this section, but
+  confirmed to live on `show` by both §5.7's `score_change` history
+  table and §6.1's conversion rules — noted explicitly here while
+  drafting A.1 so the field list is actually complete.
 - `tracked`: boolean, independent of `status`. Lets LCARS know about
   a show without any intent to watch it (distinct from `planned`,
   which implies eventual intent). Relation/franchise targets can exist
@@ -631,8 +636,47 @@ per-level foreign-key typing:
   (absolute vs. season+episode) within an already-identified show.
   Populated the same way: automatic derivation attempt (Sonarr
   absolute-order info, AniList episode counts), manual override/
-  fallback when derivation isn't confident. Exact column list not yet
-  drafted (§10).
+  fallback when derivation isn't confident.
+
+**Columns drafted 2026-08-08 (A.1)** — both tables are one row *per
+show* (not per episode — "episode-level" describes what the mapping is
+*about*, not its grain), which is why each still earns its own `x-`/
+`n-` id despite the 1:1 relationship to `show`. "Identical shape" above
+means the reconciliation-bookkeeping columns (`source`/`matched`/
+`manual_override`/timestamps), not literally identical columns — the
+two tables' actual subject-matter values differ (an identity mapping
+needs two foreign ids; a numbering mapping needs one scheme value):
+
+```
+show_id_mapping
+  id                    x-
+  show_id               FK show, UNIQUE (one row per show)
+  tvdb_id                derived/candidate TVDB series id, nullable
+  anilist_id              derived/candidate AniList media id, nullable
+  source                 fribb | manual | unmatched
+  matched                bool — false = no confident candidate found
+                          yet (the "stays usable, unmapped" case above)
+  manual_override        bool — once true, auto-derivation no longer
+                          overwrites tvdb_id/anilist_id (§3 principle 6)
+  last_reconciled_at     last time the weekly Fribb pass (§5.5 below)
+                          checked this row
+  created_at / updated_at
+
+episode_numbering_mapping
+  id                    n-
+  show_id               FK show, UNIQUE (one row per show)
+  scheme                  absolute | season_episode — which numbering
+                          convention this show's episodes are keyed by
+  source                 sonarr | anilist | manual | unmatched
+  matched                bool, same meaning as above
+  manual_override        bool, same meaning as above
+  created_at / updated_at
+```
+
+No `last_reconciled_at` on `episode_numbering_mapping` — deliberately
+asymmetric with `show_id_mapping`, since only the identity mapping has
+a stated recurring (weekly) reconciliation cadence below; numbering is
+derived once at show-add time with no periodic re-check specified.
 
 `show_id_mapping` also gets a **weekly** reconciliation pass against
 the Fribb dataset — deliberately slower/independent of the daily
@@ -643,7 +687,12 @@ than episode/schedule metadata.
 
 ```
 pending_review
-  entity
+  entity_type            which table/concept the reviewed field
+                          belongs to — split from a single "entity"
+                          column (added while drafting A.1: the
+                          original sketch had no way to say *which*
+                          row, just its type)
+  entity_id               the specific row's id within entity_type
   field
   previous_value        value before the *first* change in a chain
   proposed_value_chain   full sequence of intermediate values since
@@ -651,7 +700,12 @@ pending_review
   source
   created_at
   resolved_at
-  resolved_by_client     aniq | data | holodeck | captains_log
+  resolved_by_client     data | holodeck | captains_log — corrected
+                          while drafting A.1: the original list
+                          included `aniq`, inconsistent with "three
+                          passive/pull places" directly below (aniq
+                          has no LCARS integration at all, §7.2, so it
+                          can't resolve a review)
   resolution_note        optional free-text commentary
 ```
 
@@ -725,7 +779,28 @@ a broadcast network, the same three concepts the old raw
 "studio/publisher/network" info-card field used to collapse into one
 string.
 
-### 5.9 `franchise` / `franchise_member`
+### 5.9 `show_relation` / `franchise` / `franchise_member`
+
+```
+show_relation
+  show_id            the show whose AniList data reported this link
+  related_show_id    FK to show — may point at a tracked = false stub
+```
+
+**Added 2026-08-08, filling a gap found while drafting A.1**: every
+other passage discussing franchise auto-derivation ("the relation
+graph," §5.1/§5.9/§6.10) assumed this table already existed; it had
+never actually been defined. **Directed edges, stored as-ingested** —
+one row per direction, written whenever a show's AniList data is
+fetched and reports a relation (each show's own AniList page lists its
+relations independently, so the two directions can arrive at different
+times or only one direction may ever be populated). No dedup/
+normalization at write time — franchise auto-derivation below treats
+the graph as undirected (either direction counts as a link), consistent
+with `show_service_presence`'s (§5.4) "just reflects reality" treatment
+of other auto-populated, non-`pending_review` data. Composite primary
+key `(show_id, related_show_id)`; no join-table id prefix spent on it,
+same reasoning as the other pure link tables (§5.0).
 
 ```
 franchise
@@ -741,8 +816,8 @@ franchise_member
                    watched mid-series)
 ```
 
-Auto-derived from the relation graph (pairwise prequel/sequel/related
-links, which can point at untracked stubs), manual override
+Auto-derived from `show_relation` above (pairwise prequel/sequel/
+related links, which can point at untracked stubs), manual override
 authoritative. No description or franchise-level art in scope. Movies
 fully participate alongside TV/anime. **Relation links stay
 undifferentiated** — no per-link relation-type field (prequel vs.
@@ -1097,11 +1172,12 @@ actually needs:
 
 ### 10.2 Schema-drafting work (mechanical — see `BUILD_PLAN.md`)
 
-4. `episode_numbering_mapping`'s exact column list (§5.5) — the
-   population *strategy* is settled, the columns aren't drafted yet.
+~~4. `episode_numbering_mapping`'s exact column list (§5.5)~~ —
+   **resolved** 2026-08-08 during `BUILD_PLAN.md` A.1, see §5.5.
 5. The actual GraphQL schema (SDL) — types, full query/mutation
    signatures — the *shapes* are settled (§8), the text isn't written.
-6. `show_id_mapping`'s exact column list, mirrored from the above.
+~~6. `show_id_mapping`'s exact column list~~ — **resolved** alongside
+   item 4, see §5.5.
 
 ~~7. `show_service_presence`'s matching algorithm~~ — **resolved**:
 fuzzy title search across all stored title variants, threshold-gated,

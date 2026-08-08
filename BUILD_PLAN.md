@@ -88,12 +88,35 @@ moving on.
 drafting/implementation against an already-fully-specified design —
 no open design questions left blocking it.
 
-- [ ] **A.1 — Draft the full data model** (§5.0–§5.10): every table,
+- [x] **A.1 — Draft the full data model** (§5.0–§5.10): every table,
   using the id scheme (§5.0, prefix table) for every top-level entity.
   Two column lists still need drafting from scratch (population
   *strategy* is settled, exact columns aren't):
-  - [ ] `episode_numbering_mapping`'s exact columns (§5.5, §10.2 item 4)
-  - [ ] `show_id_mapping`'s exact columns (§5.5, §10.2 item 6)
+  - [x] `episode_numbering_mapping`'s exact columns (§5.5, §10.2 item 4)
+  - [x] `show_id_mapping`'s exact columns (§5.5, §10.2 item 6)
+  - Done 2026-08-08: `migrations/versions/7196ca889757_*.py`, one
+    migration, all 22 tables from §5.0–§5.10 (deliberately *not*
+    including §6-derived schema — pacing/§6.2, global settings/§6.13,
+    FTS/§6.5 — those belong to their own later A-steps). Verified for
+    real: applied to a scratch DB, exercised the id-shape/
+    `primary_title`/generated-`available_locally`/composite-FK
+    constraints with actual inserts (valid rows accepted, invalid ones
+    correctly rejected), then downgraded cleanly back to empty.
+    Applied to the dev `lcars.db` too.
+  - **Two SCOPE.md gaps found and fixed**, not silently patched over:
+    - `show_relation` didn't exist as a table at all despite being
+      referenced everywhere as the graph franchise auto-derivation
+      reads from — asked before proceeding (directed-edges-as-ingested
+      vs. undirected canonical pairs); you picked directed. Now in
+      §5.9.
+    - `pending_review` had no `entity_id` (only a type), and its
+      `resolved_by_client` enum included `aniq`, which can't actually
+      resolve anything (no LCARS integration, §7.2) — both fixed
+      directly, didn't need asking (unambiguous from surrounding text).
+  - Also fixed while re-reading before starting: `show.score` was
+    missing from §5.1's own field list despite being required by
+    §5.7/§6.1; A.3's stale "SQLAlchemy" reference (see the standalone
+    fix commit before this one).
 - [ ] **A.2 — Write the GraphQL SDL** (schema-first, §11.1, §8, §10.2
   item 5): types, dedicated field-specific mutations (`setStatus`,
   `setScore`, `addWatchEvent`, `markEpisodeSkipped`,
