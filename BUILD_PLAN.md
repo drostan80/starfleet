@@ -25,7 +25,7 @@ moving on.
   (`pyproject.toml`), matching aniq's own tooling conventions where
   reasonable (`SCOPE.md` §11.1). Set up Alembic for schema migrations
   (§11.2). No app code yet — just the skeleton a Python project needs.
-- [ ] **0.3 — Fork aniq into a new sibling repo, `~/repos/data`,
+- [x] **0.3 — Fork aniq into a new sibling repo, `~/repos/data`,
   becoming Data.** `SCOPE.md` §4.0 / §10.3 — the confirmed first real
   build action. A clean, one-time copy of aniq's current codebase, not
   a git remote/submodule relationship. From this point on:
@@ -34,6 +34,18 @@ moving on.
     roadmap (§4.0, a hard constraint, not a guideline).
   - `~/repos/data` is freely modifiable — this is where all
     LCARS-client integration work happens.
+  - Done 2026-08-08: 64 tracked files copied (current disk content,
+    including two then-uncommitted edits) into a fresh `git init`
+    (no shared history with aniq), pushed to `drostan80/data`
+    (private). Package/CLI mechanically renamed `aniq`→`data`
+    (resolved during this step — see `SCOPE.md` §4.0 addendum for the
+    runtime-state-isolation reasoning: nested config/cache paths under
+    `starfleet/`, distinct keyring service name, so Data's credentials
+    can never collide with aniq's live ones). Verified with a fresh
+    venv: ruff clean, 557/558 tests pass — the one failure is a
+    pre-existing date-dependent flake, documented in Data's own
+    `.claude/docs/backlog.md`, not fixed here per the "clean copy"
+    policy.
 - [ ] **0.4 — Set up CI.** GitHub Actions on the LCARS repo: hybrid
   trigger — every push to `main` builds/tests only (no publish); an
   explicit tag/release builds *and* publishes the image (§11.3).

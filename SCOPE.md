@@ -199,6 +199,28 @@ again until cutover (§4.4).
 - Data is **the blueprint of the final front-end client**, not a
   disposable prototype — see Cutover (§4.4) for what "finished" means
   for it.
+- **Fork executed 2026-08-08** (`BUILD_PLAN.md` 0.3). Two decisions
+  made mechanically during the fork, not previously specified here:
+  - **Package/CLI renamed `aniq`→`data`** at fork time (not deferred)
+    — avoids two same-named `aniq` things (module, console command)
+    coexisting on the same machine once both are installed.
+  - **Runtime-state isolation, beyond just the repo split**: aniq's
+    own config/cache-file paths and keyring service name were the
+    literal string `"aniq"` (`~/.config/aniq/config.ini`,
+    `~/.local/share/aniq/*.json`, `KEYRING_SERVICE = "aniq"`). A naive
+    `aniq`→`data` rename alone would have fixed the collision with the
+    *real* aniq, but left Data using the bare, highly generic
+    `~/.config/data`/`~/.local/share/data`/keyring-service-`"data"` —
+    a real risk of colliding with some unrelated future tool using the
+    same generic name. Nested Data's runtime state one level under a
+    shared `starfleet` namespace instead
+    (`~/.config/starfleet/data/config.ini`,
+    `~/.local/share/starfleet/data/*.json`), and gave the keyring
+    service its own distinct name (`"starfleet-data"`) rather than
+    reusing the module name. Net effect: Data's OAuth tokens/config can
+    never be read from, written to, or silently overwrite aniq's live
+    credentials — the "never modify aniq" constraint (point 5 above)
+    is honored operationally, not just at the git-repo level.
 
 ### Phase A — schema + CRUD API + reconciliation, no autonomous scheduler
 
