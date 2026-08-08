@@ -119,8 +119,14 @@ enum PrimaryTitle {
   NATIVE
 }
 
-"§5.5 show_id_mapping.source — closed because these three are the only ways this table's row gets populated."
-enum ShowIdMappingSource {
+"""
+§5.5 season.source — closed because these three are the only ways
+this table's row gets populated. Renamed from ShowIdMappingSource
+2026-08-08 (A.4) — show_id_mapping itself was retired (one show can
+span multiple AniList entries, one per season; see §5.5), replaced by
+this per-season table.
+"""
+enum SeasonSource {
   FRIBB
   MANUAL
   UNMATCHED
@@ -207,8 +213,9 @@ type Show {
   scoreHistory(first: Int, after: String, last: Int, before: String): ScoreChangeConnection!
   trackedHistory(first: Int, after: String, last: Int, before: String): TrackedChangeConnection!
 
-  "Nullable until A.4 seeds it (or the show predates seeding) — §5.5."
-  idMapping: ShowIdMapping
+  "Replaces one show can have multiple AniList entries, one per season (§5.5) — see Season.anilistId/malId, not a show-level field anymore."
+  seasons(first: Int, after: String, last: Int, before: String): SeasonConnection!
+  "Nullable until A.8's on-demand fetch or A.4's reconciliation seeds it (or the show predates seeding) — §5.5."
   episodeNumberingMapping: EpisodeNumberingMapping
   "media_shape = MOVIE only — §5.9 addendum."
   nextUpOverride: NextUpOverride
@@ -233,7 +240,10 @@ type ShowConnection {
 type Episode {
   id: ID!
   show: Show!
+  "The raw Sonarr-numbered season (§5.2) — unchanged since A.1. For that season's own cross-service identity (AniList/MAL ids), see seasonEntity below, added 2026-08-08 (A.4)."
   season: Int!
+  "Nullable — not every episode has been linked to a season row yet (A.8/A.4's reconciliation populates it)."
+  seasonEntity: Season
   episode: Int!
   kind: EpisodeKind!
   "Decimal-capable synthesized numbering (§5.2, e.g. 12.1) — null until sourced or synthesized."
@@ -344,17 +354,37 @@ type ShowServicePresenceConnection {
 # 5.5 id-mapper / reconciliation tables (+ the 2026-08-08 episode_movie_link addendum)
 # ---------------------------------------------------------------------------
 
-type ShowIdMapping {
+"""
+§5.5 — season-level identity (which AniList/MAL entry this particular
+season of a show corresponds to). Replaces ShowIdMapping 2026-08-08
+(A.4): one show can span multiple AniList entries, one per season
+(TVDB groups a franchise's seasons under one series id; AniList splits
+each season into its own entry) — a single anilist_id column on a
+show-scoped table couldn't represent that. tvdbId stays on Show via
+ShowExternalId, unchanged — TVDB doesn't split by season.
+"""
+type Season {
   id: ID!
   show: Show!
-  tvdbId: Int
+  seasonNumber: Int!
   anilistId: Int
-  source: ShowIdMappingSource!
+  malId: Int
+  source: SeasonSource!
   matched: Boolean!
   manualOverride: Boolean!
   lastReconciledAt: DateTime
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+type SeasonEdge {
+  node: Season!
+  cursor: String!
+}
+
+type SeasonConnection {
+  edges: [SeasonEdge!]!
+  pageInfo: PageInfo!
 }
 
 type EpisodeNumberingMapping {
@@ -831,7 +861,14 @@ type Mutation {
   setEpisodeRuntimeOverride(episodeId: ID!, runtimeMinutes: Int): Episode!
 
   # -- 5.5 id-mapper manual overrides (§3 principle 6: manual wins once set) --
-  setShowIdMapping(showId: ID!, tvdbId: Int, anilistId: Int): ShowIdMapping!
+  """
+  Replaces setShowIdMapping 2026-08-08 (A.4). Upserts by (showId,
+  seasonNumber) — same upsert-not-require-existing behavior the
+  retired mutation had, since no other mutation creates a season row
+  first (mirrors episode's own no-addEpisode-mutation situation,
+  §5.2 — A.8's future on-demand fetch populates most of these).
+  """
+  setSeasonMapping(showId: ID!, seasonNumber: Int!, anilistId: Int, malId: Int): Season!
   setEpisodeNumberingScheme(showId: ID!, scheme: NumberingScheme!): EpisodeNumberingMapping!
   "§5.1/§5.9 addendum — manually confirm/correct which movie show a bonus_movie-kind episode represents."
   setEpisodeMovieLink(episodeId: ID!, movieShowId: ID!): EpisodeMovieLink!

@@ -31,7 +31,8 @@ PREFIX_TABLES = {
     "f": "franchise",
     "t": "tag",
     "r": "pending_review",
-    "x": "show_id_mapping",
+    # "x" (show_id_mapping) retired 2026-08-08 (A.4) — replaced by "z" (season)
+    # below; not reassigned, see SCOPE.md §5.0.
     "n": "episode_numbering_mapping",
     "a": "show_service_presence",
     "q": "filter_preset",
@@ -41,6 +42,7 @@ PREFIX_TABLES = {
     "k": "tracked_change",
     "m": "episode_movie_link",  # §5.1/§5.9 addendum, 2026-08-08
     "v": "next_up_override",  # §5.9 addendum, 2026-08-08
+    "z": "season",  # §5.5, A.4, 2026-08-08 — replaces show_id_mapping ("x")
 }
 
 MAX_ATTEMPTS = 10

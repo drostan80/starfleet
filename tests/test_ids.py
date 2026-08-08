@@ -51,4 +51,4 @@ def test_regenerates_on_collision(conn, monkeypatch):
 
 def test_unknown_prefix_raises(conn):
     with pytest.raises(ValueError, match="unknown id prefix"):
-        generate_id(conn, "z")
+        generate_id(conn, "y")

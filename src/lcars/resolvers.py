@@ -31,7 +31,7 @@ show_type = ObjectType("Show")
 episode_type = ObjectType("Episode")
 watch_event_type = ObjectType("WatchEvent")
 show_external_id_type = ObjectType("ShowExternalId")
-show_id_mapping_type = ObjectType("ShowIdMapping")
+season_type = ObjectType("Season")
 episode_numbering_mapping_type = ObjectType("EpisodeNumberingMapping")
 episode_movie_link_type = ObjectType("EpisodeMovieLink")
 pending_review_type = ObjectType("PendingReview")
@@ -68,7 +68,7 @@ ENUMS = [
     _enum("PersonRoleType", "voice_actor", "actor", "staff"),
     _enum("StudioRoleType", "studio", "publisher", "network"),
     _enum("PrimaryTitle", "romaji", "english", "native"),
-    _enum("ShowIdMappingSource", "fribb", "manual", "unmatched"),
+    _enum("SeasonSource", "fribb", "manual", "unmatched"),
     _enum("NumberingScheme", "absolute", "season_episode"),
     _enum("NumberingSource", "sonarr", "anilist", "manual", "unmatched"),
     _enum("EpisodeMovieLinkSource", "tmdb_match", "manual", "unmatched"),
@@ -82,7 +82,7 @@ BINDABLES = [
     episode_type,
     watch_event_type,
     show_external_id_type,
-    show_id_mapping_type,
+    season_type,
     episode_numbering_mapping_type,
     episode_movie_link_type,
     pending_review_type,
@@ -169,8 +169,8 @@ def _require_episode(conn, episode_id: str) -> dict:
     return episode
 
 
-def _get_show_id_mapping(conn, mapping_id: str) -> dict | None:
-    row = conn.execute("SELECT * FROM show_id_mapping WHERE id = ?", (mapping_id,)).fetchone()
+def _get_season(conn, season_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM season WHERE id = ?", (season_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -390,12 +390,11 @@ def resolve_show_tracked_history(obj, info, **page_args):
     )
 
 
-@show_type.field("idMapping")
-def resolve_show_id_mapping_field(obj, info):
-    row = db.get_connection().execute(
-        "SELECT * FROM show_id_mapping WHERE show_id = ?", (obj["id"],)
-    ).fetchone()
-    return dict(row) if row else None
+@show_type.field("seasons")
+def resolve_show_seasons(obj, info, **page_args):
+    return pagination.paginate(
+        db.get_connection(), "season", "show_id = ?", (obj["id"],), **page_args
+    )
 
 
 @show_type.field("episodeNumberingMapping")
@@ -489,6 +488,13 @@ def resolve_episode_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])
 
 
+@episode_type.field("seasonEntity")
+def resolve_episode_season_entity(obj, info):
+    if obj.get("season_id") is None:
+        return None
+    return _get_season(db.get_connection(), obj["season_id"])
+
+
 @episode_type.field("linkedMovieShow")
 def resolve_episode_linked_movie_show(obj, info):
     """kind = BONUS_MOVIE only — §5.1/§5.9 addendum."""
@@ -540,11 +546,11 @@ def resolve_show_external_id_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])
 
 
-# --- ShowIdMapping / EpisodeNumberingMapping / EpisodeMovieLink fields ------
+# --- Season / EpisodeNumberingMapping / EpisodeMovieLink fields ------------
 
 
-@show_id_mapping_type.field("show")
-def resolve_show_id_mapping_show(obj, info):
+@season_type.field("show")
+def resolve_season_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])
 
 
@@ -1054,34 +1060,40 @@ def resolve_unlink_show_external_id(_, info, show_id, service):
 # call require_client(): there's nowhere in the schema to put the value.
 
 
-@mutation.field("setShowIdMapping")
-def resolve_set_show_id_mapping(_, info, show_id, tvdb_id=None, anilist_id=None):
+@mutation.field("setSeasonMapping")
+def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None, mal_id=None):
+    """Replaces setShowIdMapping (§5.5, A.4) — one show can span
+    multiple AniList/MAL entries, one per season, so this is keyed on
+    (show_id, season_number) rather than show_id alone. Upserts, same
+    as the mutation it replaces: no other mutation creates a season
+    row first (A.8's future on-demand fetch is what will, normally)."""
     conn = db.get_connection()
     _require_show(conn, show_id)
     now = util.now_utc_iso()
     existing = conn.execute(
-        "SELECT id FROM show_id_mapping WHERE show_id = ?", (show_id,)
+        "SELECT id FROM season WHERE show_id = ? AND season_number = ?",
+        (show_id, season_number),
     ).fetchone()
     if existing is not None:
         conn.execute(
-            "UPDATE show_id_mapping"
-            " SET tvdb_id = ?, anilist_id = ?, source = 'manual',"
+            "UPDATE season"
+            " SET anilist_id = ?, mal_id = ?, source = 'manual',"
             "     matched = 1, manual_override = 1, updated_at = ?"
-            " WHERE show_id = ?",
-            (tvdb_id, anilist_id, now, show_id),
+            " WHERE show_id = ? AND season_number = ?",
+            (anilist_id, mal_id, now, show_id, season_number),
         )
-        mapping_id = existing["id"]
+        season_id = existing["id"]
     else:
-        mapping_id = ids.generate_id(conn, "x")
+        season_id = ids.generate_id(conn, "z")
         conn.execute(
-            "INSERT INTO show_id_mapping"
-            " (id, show_id, tvdb_id, anilist_id, source, matched, manual_override,"
-            "  created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 'manual', 1, 1, ?, ?)",
-            (mapping_id, show_id, tvdb_id, anilist_id, now, now),
+            "INSERT INTO season"
+            " (id, show_id, season_number, anilist_id, mal_id, source, matched,"
+            "  manual_override, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, 'manual', 1, 1, ?, ?)",
+            (season_id, show_id, season_number, anilist_id, mal_id, now, now),
         )
     conn.commit()
-    return _get_show_id_mapping(conn, mapping_id)
+    return _get_season(conn, season_id)
 
 
 @mutation.field("setEpisodeNumberingScheme")

@@ -388,7 +388,7 @@ for a show, `e-x82j1q` for an episode.
 | `f-` | `franchise` |
 | `t-` | `tag` |
 | `r-` | `pending_review` |
-| `x-` | `show_id_mapping` |
+| ~~`x-`~~ | ~~`show_id_mapping`~~ — **retired 2026-08-08 (A.4)**, see §5.5: replaced by `season`. Not reassigned — nothing was ever deployed with it, but retiring rather than reusing the letter keeps any stray historical reference (docs, old branches) unambiguous. |
 | `n-` | `episode_numbering_mapping` |
 | `a-` | `show_service_presence` |
 | `q-` | saved filter preset |
@@ -398,8 +398,10 @@ for a show, `e-x82j1q` for an episode.
 | `k-` | `tracked_change` |
 | `m-` | `episode_movie_link` |
 | `v-` | `next_up_override` |
+| `z-` | `season` — added 2026-08-08 (A.4), see §5.5 |
 
-18 of 26 letters used, leaving headroom for future entities.
+18 of 26 letters used (`x-` retired, not counted), leaving headroom
+for future entities.
 
 ### 5.1 `show`
 
@@ -478,7 +480,11 @@ season-0 special). Reconciled the same way every other cross-source
 identity question in this document is (§3.1, §5.5) — internal ids are
 the source of truth, external ids (TMDB) map onto them, a best guess
 applies immediately with a `pending_review` entry on ambiguity, manual
-override wins once set. New table, same shape as `show_id_mapping`:
+override wins once set. New table, same reconciliation shape as the
+other id-mapper tables (originally written as "same shape as
+`show_id_mapping`" — that table was retired 2026-08-08/A.4, replaced
+by `season`; the shape reference still holds, just pointed at its
+successor now):
 
 ```
 episode_movie_link
@@ -507,6 +513,12 @@ episode_movie_link
 episode
   show_id
   season
+  season_id             FK season (§5.5), added 2026-08-08 (A.4) —
+                         alongside the plain integer `season` above,
+                         not replacing it; `season` stays for raw
+                         Sonarr-numbering compatibility, `season_id`
+                         is the link to that season's own cross-
+                         service identity (§5.5's `season` table)
   episode
   kind                 regular | special | ova | bonus_movie
   absolute_number       decimal-capable — see numbering below
@@ -674,45 +686,78 @@ Fribb-seeded approach instead.
 
 ### 5.5 id-mapper / reconciliation tables
 
-Two tables, identical shape, sharing one reconciliation mechanism
-(§3.1) — kept separate rather than one polymorphic table, for cleaner
+**`show`/`season`/`episode` are three independently-identified,
+independently-mappable levels — resolved 2026-08-08 (A.4), a real
+modeling gap found starting that step, not caught by the earlier audit
+pass.** The original `show_id_mapping` (below) assumed one `show` maps
+to exactly one AniList entry — wrong: the real, working aniq/Data
+`mapping.py` this project formalizes resolves AniList ids by
+**`(tvdb_id, season_number)` together**, because TVDB groups a
+franchise's seasons under one series id while AniList splits each
+season into its own entry (a single `anilist_id` column can't hold
+"season 1 → AniList X, season 2 → AniList Y" at once). `season` is the
+fix: a new table, one row per season of a show, holding the per-season
+cross-service identity that `show_id_mapping` incorrectly tried to
+hold on `show` directly. `show_id_mapping` is retired entirely (§5.0's
+prefix table) — nothing was ever deployed with it, so a clean
+drop-and-replace beat carrying deprecated cruft forward.
+`tvdb_id` stays exactly where it already was, on `show` via
+`show_external_id` — TVDB doesn't split by season, it's one series id
+with `season_number` as a sub-key, so no separate `tvdb_id` lives on
+`season` itself. `episode` gets a `season_id` FK to this new table,
+*alongside* keeping its existing integer `season` column (§5.2) for
+raw Sonarr-numbering compatibility, unchanged. `franchise`/
+`franchise_member` (§5.9) are a distinct, coexisting concept, not
+superseded by this — confirmed directly: a movie needs to map to
+*both* its franchise position *and* its season, not one or the other.
+
+Two id-mapper tables, sharing one reconciliation mechanism (§3.1) —
+kept separate rather than one polymorphic table, for cleaner
 per-level foreign-key typing:
 
-- **`show_id_mapping`** — show-level identity (which AniList entry =
-  which TVDB series). Seeded from the Fribb/`anime-lists` dataset,
-  manual overrides authoritative. A row with **no** confident
-  auto-derived candidate at all (not just a discrepancy) still goes
-  through the same `pending_review` mechanism — the show stays fully
-  usable locally in an unmapped state, not blocked.
+- **`season`** — season-level identity (which AniList/MAL entry this
+  particular season of a show corresponds to). Seeded from the
+  Fribb/`anime-lists` dataset, manual overrides authoritative. A row
+  with **no** confident auto-derived candidate at all (not just a
+  discrepancy) still goes through the same `pending_review`
+  mechanism — the season stays fully usable locally in an unmapped
+  state, not blocked.
 - **`episode_numbering_mapping`** — episode-level numbering
   (absolute vs. season+episode) within an already-identified show.
   Populated the same way: automatic derivation attempt (Sonarr
   absolute-order info, AniList episode counts), manual override/
   fallback when derivation isn't confident.
 
-**Columns drafted 2026-08-08 (A.1)** — both tables are one row *per
-show* (not per episode — "episode-level" describes what the mapping is
-*about*, not its grain), which is why each still earns its own `x-`/
-`n-` id despite the 1:1 relationship to `show`. "Identical shape" above
-means the reconciliation-bookkeeping columns (`source`/`matched`/
+**`episode_numbering_mapping`'s columns drafted 2026-08-08 (A.1)**,
+**`season`'s drafted 2026-08-08 (A.4)** — `episode_numbering_mapping`
+is one row *per show* (not per episode — "episode-level" describes
+what the mapping is *about*, not its grain); `season` is one row *per
+season of a show* (§5.0's `z-` prefix). "Identical shape" above means
+the reconciliation-bookkeeping columns (`source`/`matched`/
 `manual_override`/timestamps), not literally identical columns — the
-two tables' actual subject-matter values differ (an identity mapping
-needs two foreign ids; a numbering mapping needs one scheme value):
+two tables' actual subject-matter values differ:
 
 ```
-show_id_mapping
-  id                    x-
-  show_id               FK show, UNIQUE (one row per show)
-  tvdb_id                derived/candidate TVDB series id, nullable
-  anilist_id              derived/candidate AniList media id, nullable
+season
+  id                    z-
+  show_id               FK show
+  season_number          the Sonarr/TVDB season number this season
+                          corresponds to (the authoritative value —
+                          episode.season, §5.2, keeps holding it too,
+                          per-row, for simplicity)
+  anilist_id              derived/candidate AniList media id for THIS
+                          season specifically, nullable
+  mal_id                  derived/candidate MAL id for this season,
+                          nullable (MAL splits by season like AniList)
   source                 fribb | manual | unmatched
   matched                bool — false = no confident candidate found
                           yet (the "stays usable, unmapped" case above)
   manual_override        bool — once true, auto-derivation no longer
-                          overwrites tvdb_id/anilist_id (§3 principle 6)
+                          overwrites anilist_id/mal_id (§3 principle 6)
   last_reconciled_at     last time the weekly Fribb pass (§5.5 below)
                           checked this row
   created_at / updated_at
+  UNIQUE (show_id, season_number)
 
 episode_numbering_mapping
   id                    n-
@@ -726,14 +771,14 @@ episode_numbering_mapping
 ```
 
 No `last_reconciled_at` on `episode_numbering_mapping` — deliberately
-asymmetric with `show_id_mapping`, since only the identity mapping has
-a stated recurring (weekly) reconciliation cadence below; numbering is
-derived once at show-add time with no periodic re-check specified.
+asymmetric with `season`, since only the identity mapping has a stated
+recurring (weekly) reconciliation cadence below; numbering is derived
+once at show-add time with no periodic re-check specified.
 
-`show_id_mapping` also gets a **weekly** reconciliation pass against
-the Fribb dataset — deliberately slower/independent of the daily
-metadata-refresh cadence, since id-mapping data changes far less often
-than episode/schedule metadata.
+`season` also gets a **weekly** reconciliation pass against the Fribb
+dataset — deliberately slower/independent of the daily metadata-
+refresh cadence, since id-mapping data changes far less often than
+episode/schedule metadata.
 
 ### 5.6 `pending_review`
 

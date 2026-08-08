@@ -710,49 +710,122 @@ async def test_shows_by_status_filters_and_paginates(client):
 # --- id-mapper manual overrides (§5.5) --------------------------------------
 
 
-async def test_set_show_id_mapping_creates_then_updates(client):
+async def test_set_season_mapping_creates_then_updates(client):
+    """§5.5/A.4: replaces the old show_id_mapping test. Also exercises
+    the exact scenario the season entity exists for — two seasons of
+    the same show resolving to two different AniList ids, which the
+    old show-scoped mapping couldn't represent at all."""
     show = await add_show(client)
 
-    created = await gql(
+    season1 = await gql(
         client,
         """
         mutation($id: ID!) {
-          setShowIdMapping(showId: $id, tvdbId: 111, anilistId: 222) {
-            id tvdbId anilistId source matched manualOverride
+          setSeasonMapping(showId: $id, seasonNumber: 1, anilistId: 111, malId: 211) {
+            id seasonNumber anilistId malId source matched manualOverride show { id }
           }
         }
         """,
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    mapping = created["setShowIdMapping"]
-    assert mapping["tvdbId"] == 111
-    assert mapping["anilistId"] == 222
+    mapping = season1["setSeasonMapping"]
+    assert mapping["seasonNumber"] == 1
+    assert mapping["anilistId"] == 111
+    assert mapping["malId"] == 211
     assert mapping["source"] == "MANUAL"
     assert mapping["matched"] is True
     assert mapping["manualOverride"] is True
+    assert mapping["show"]["id"] == show["id"]
+
+    # a second season of the SAME show, a DIFFERENT AniList id — the
+    # exact case a single show-level anilist_id column couldn't hold
+    season2 = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setSeasonMapping(showId: $id, seasonNumber: 2, anilistId: 222, malId: 222) {
+            seasonNumber anilistId
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert season2["setSeasonMapping"]["seasonNumber"] == 2
+    assert season2["setSeasonMapping"]["anilistId"] == 222
 
     updated = await gql(
         client,
         """
         mutation($id: ID!) {
-          setShowIdMapping(showId: $id, tvdbId: 999, anilistId: 222) { id tvdbId }
+          setSeasonMapping(showId: $id, seasonNumber: 1, anilistId: 999, malId: 211) {
+            id anilistId
+          }
         }
         """,
         {"id": show["id"]},
         headers=auth_headers(),
     )
     # same underlying row (upsert), not a second one
-    assert updated["setShowIdMapping"]["id"] == mapping["id"]
-    assert updated["setShowIdMapping"]["tvdbId"] == 999
+    assert updated["setSeasonMapping"]["id"] == mapping["id"]
+    assert updated["setSeasonMapping"]["anilistId"] == 999
 
     data = await gql(
         client,
-        "query($id: ID!) { show(id: $id) { idMapping { tvdbId } } }",
+        """
+        query($id: ID!) {
+          show(id: $id) { seasons { edges { node { seasonNumber anilistId } } } }
+        }
+        """,
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    assert data["show"]["idMapping"]["tvdbId"] == 999
+    seasons = {
+        e["node"]["seasonNumber"]: e["node"]["anilistId"]
+        for e in data["show"]["seasons"]["edges"]
+    }
+    assert seasons == {1: 999, 2: 222}
+
+
+async def test_episode_season_entity_link(client, migrated_db):
+    show = await add_show(client)
+    season = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setSeasonMapping(showId: $id, seasonNumber: 1, anilistId: 111, malId: 211) { id }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    season_id = season["setSeasonMapping"]["id"]
+
+    # episodes aren't addable via the API yet (A.8) — link one directly,
+    # same convention as every other episode fixture in this file
+    conn = db.get_connection()
+    conn.execute(
+        """
+        INSERT INTO episode
+            (id, show_id, season, season_id, episode, kind, state, created_at, updated_at)
+        VALUES (
+            'e-season', ?, 1, ?, 1, 'regular', 'unwatched',
+            '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z'
+        )
+        """,
+        (show["id"], season_id),
+    )
+    conn.commit()
+
+    data = await gql(
+        client,
+        "query($id: ID!) { episode(id: $id) { seasonEntity { id anilistId } } }",
+        {"id": "e-season"},
+        headers=auth_headers(),
+    )
+    assert data["episode"]["seasonEntity"]["id"] == season_id
+    assert data["episode"]["seasonEntity"]["anilistId"] == 111
 
 
 async def test_set_episode_numbering_scheme(client):

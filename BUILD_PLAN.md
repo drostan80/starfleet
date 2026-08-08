@@ -440,10 +440,47 @@ order — same reasoning `pagination.py`'s cursors already lean on).
   scope. Recorded in `SCOPE.md` §6.12, ready for when A.15 actually
   happens — not implemented now, since A.15 hasn't been reached yet.
 - [ ] **A.4 — Implement the id-mapper / reconciliation tables**
-  (§5.5): `show_id_mapping` seeded from the Fribb/`anime-lists`
-  dataset (one-time/on-demand download, not live polling), manual
-  overrides authoritative, `pending_review` on any discrepancy or
-  no-candidate-found case.
+  (§5.5): `season` (formerly `show_id_mapping`) seeded from the
+  Fribb/`anime-lists` dataset (one-time/on-demand download, not live
+  polling), manual overrides authoritative, `pending_review` on any
+  discrepancy or no-candidate-found case.
+  - **Correction found while starting this step, 2026-08-08**:
+    checked Data's real (forked-from-aniq) `mapping.py` as reference
+    before building the equivalent logic here, and found it resolves
+    AniList ids by `(tvdb_id, season_number)` together — TVDB groups
+    a franchise's seasons under one series id, AniList splits each
+    season into its own entry. `show_id_mapping` (built in A.1) held
+    a single `anilist_id` on a show-scoped table, which cannot
+    represent "season 1 → AniList X, season 2 → AniList Y"
+    simultaneously. Not caught by the earlier full audit pass (A.1
+    addendum) since it's a modeling gap, not a missing-field gap.
+    Stopped and asked rather than guessing at a fix, given the
+    magnitude. Confirmed shape: a first-class `season` entity
+    (distinct from both `show` and `episode`, and distinct from the
+    pre-existing `franchise`/`franchise_member` multi-show sequencing
+    concept), one row per season of a show, holding its own
+    `anilist_id`/`mal_id`/`source`/`matched`/`manual_override`.
+    `episode` gained a nullable `season_id` FK to it (its existing
+    integer `season`/`episode` numbering fields are unchanged —
+    different concern). Confirmed via two rounds of AskUserQuestion
+    (concept, then exact column list). Implemented: migration
+    `2b9d7beb777c` (`DROP TABLE show_id_mapping`, `CREATE TABLE
+    season` with `UNIQUE(show_id, season_number)`, `episode.season_id`
+    added), `SCOPE.md` §5.0/§5.2/§5.5 rewritten, `schema.graphql`
+    (`Season`/`SeasonSource`/`SeasonEdge`/`SeasonConnection` types,
+    `Show.seasons` connection, `Episode.seasonEntity`,
+    `setSeasonMapping` mutation replacing `setShowIdMapping`),
+    `resolvers.py`, `ids.py` (`x` retired, `z` → `season`). Verified:
+    real inserts (two seasons of one show holding two different
+    AniList ids; duplicate `season_number` rejected; bogus
+    `season_id` FK rejected), full downgrade/upgrade round-trip,
+    schema re-validated (98 types, zero errors), unbound-field sweep
+    re-run (11 remaining, all correctly attributed to A.11–A.15/B.9,
+    no new gaps), 84 tests passing, `ruff check .` clean. The
+    substantive work this step still requires — the actual Fribb
+    dataset download/cache/matching logic seeding `season` rows — is
+    not yet built; only the manual-override path (`setSeasonMapping`)
+    exists so far.
 - [ ] **A.5 — Implement `pending_review`** (§5.6): the shared
   audit-only mechanism, value-chain accumulation on repeated automatic
   changes (not overwrite), permanent retention once resolved.
