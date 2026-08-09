@@ -1795,12 +1795,155 @@ background scheduler.
     per-entity fan-out rather than one query. B.3 (Sonarr/Radarr polling
     per episode) will face the same shape — worth a real query-design
     pass there rather than assuming this pattern always scales.
-- [ ] **B.3 — Sonarr/Radarr polling for file availability**
+- [x] **B.3 — Sonarr/Radarr polling for file availability**
   (queue/episode-file/movie-file endpoints, never a filesystem scan).
   This is where `available_via_sonarr`/`available_via_radarr` (§5.2)
   get checked and updated independently — remember `bonus_movie`-kind
   episodes are commonly available via **both** sources, added
   asynchronously; poll both, don't assume one implies the other.
+  `BUILD_PLAN.md`'s own text here named the general area but not the
+  mechanism/cadence/scope — asked directly, then **verified against the
+  user's own real, live Sonarr (4.0.19.2979) and Radarr (6.3.0.10514)
+  instances** (read-only GET requests, no writes), rather than built
+  from documentation memory — the same "resolve by testing, not more
+  reading" practice §10.1 already used for animeschedule.net. Full
+  rationale in `SCOPE.md` §5.2's own "Resolved 2026-08-09 (B.3)" note;
+  short version:
+  - Availability is **3-state** (`unavailable | downloading |
+    available`), not boolean — the user's own reasoning: a file grabbed
+    but not yet imported is a real, useful, distinct state ("allowed me
+    to spot downloaded shows that sonarr could not automatically
+    import"). Confirmed by real data that the mechanism must also
+    handle the *reverse* transition (available → unavailable):
+    `episodeFileDeleted` occurred 48 times in the last 250 history
+    records on the user's own instance.
+  - Mechanism: poll Sonarr/Radarr's own `/history` (grab **and** import
+    events — "checking availability... by looking at grab and import
+    history is what makes the most sense... easier and quicker" than
+    re-scanning every tracked episode), not a re-check against "what
+    should come." Verified live: `includeEpisode=true&includeSeries=true`
+    (Sonarr) / `includeMovie=true` (Radarr) embed everything needed to
+    match a history event straight to the existing `tvdb`/`tmdb`
+    `show_external_id` crosswalk (§5.4) — no new correlation-id column
+    needed, an earlier draft of this plan's own assumption, corrected
+    by testing before it was built.
+  - Cadence: hourly baseline; 5 min while a `WATCHING` show has an
+    episode that just aired and isn't yet available, for up to 2h since
+    air; 15 min after that window. Radarr has no "just aired" moment,
+    so it stays on the baseline cadence.
+  - LCARS itself polls (not Ops directly) — same established
+    architecture as B.1/B.2. A single global sweep, not per-show/
+    per-season like B.1/B.2's own mutations — one shared history feed
+    covers every tracked show at once, so no per-item due-query is
+    needed on Ops's side; a new small `availability_poll_checkpoint`
+    table (one row per service, no GraphQL exposure — pure internal
+    bookkeeping) keeps repeat polls cheap by only processing new events.
+  - **Built**: migration `f7a2c4e91b6d` — `available_via_sonarr`/
+    `available_via_radarr` (episode) and `available_via_radarr` (show,
+    movie-only) converted INTEGER bool → TEXT 3-state; new
+    `file_path_sonarr`/`file_path_radarr` (episode) and
+    `file_path_radarr` (show); `available_locally`'s generated formula
+    updated to check for `'available'` specifically; new
+    `availability_poll_checkpoint` table. No real data existed for any
+    converted column (confirmed by grep before drafting — nothing had
+    ever written to them), so a plain DROP+ADD was safe, not a
+    data-preserving rebuild. `util.utc_iso_offset_hours()` — a proper
+    hours-granularity primitive alongside the existing days-based
+    `utc_iso_offset()`, needed for B.3's 2-hour urgency window.
+    `sonarr_client.py`/`radarr_client.py` gained `history_page()`.
+    New `availability.py`: `poll_file_availability()` (both services,
+    best-effort per service — a Sonarr failure doesn't block Radarr's
+    own poll), `recommended_poll_interval_seconds()`. `schema.graphql`:
+    new `AvailabilityStatus` enum (registered in resolvers.py's `ENUMS`
+    — the schema-validation pass doesn't catch a missing enum
+    registration, only a real query does, caught before it shipped),
+    `Episode.filePathSonarr`/`filePathRadarr`, `Show.filePathRadarr`,
+    `Mutation.pollFileAvailability`,
+    `Query.recommendedAvailabilityPollIntervalSeconds`.
+    `export_import.py`: `availability_poll_checkpoint` added to
+    `EXPORT_IMPORT_TABLES` (25 tables now, was 24) — §6.12's own "full
+    restore, all tables" framing extends to this too, not just
+    domain-visible ones. `ops/lcars_client.py`:
+    `poll_file_availability()`/
+    `recommended_availability_poll_interval_seconds()`.
+    `ops/scheduler.py`: `run_availability_once()` +
+    `_availability_loop()` — a third, genuinely dynamic-interval loop
+    (not a flat `_loop()` instance like the other two): asks LCARS for
+    the next interval after every sweep rather than sleeping a fixed
+    amount, run concurrently alongside the other two via `run_forever`'s
+    own `asyncio.gather`.
+  - **Tests**: `test_availability.py` (new, 20 tests against a real
+    migrated SQLite DB with fake Sonarr/Radarr clients shaped after the
+    real captured responses — grabbed/imported/deleted/ignored event
+    handling, untracked-show and not-yet-fetched-episode skips,
+    not-configured no-op, a client error caught not raised, checkpoint
+    advancement + second-poll-only-sees-new-events, chronological
+    event ordering within one poll — a delete-then-reimport upgrade
+    resolves to the correct final state regardless of the real API's
+    own newest-first pagination order; `recommended_poll_interval_seconds`'s
+    three tiers, plus ignoring already-available/non-watching/future
+    episodes). `test_server.py` (+6: `pollFileAvailability`/
+    `recommendedAvailabilityPollIntervalSeconds` end-to-end through
+    real GraphQL; `Episode`/`Show` availability fields resolve with the
+    right enum casing through real GraphQL — locks in the `ENUMS`
+    registration, a real gap class this project has hit before).
+    `test_ops_lcars_client.py` (+2), `test_ops_scheduler.py` (+7:
+    `run_availability_once`, `_availability_loop`'s three behaviors —
+    sleeps the recommended interval, survives a sweep failure, falls
+    back to 3600s if the interval check itself fails — `run_forever`'s
+    wiring test extended to confirm all three loops, not just two).
+  - **Verified**: 343 tests passing (was 312 at B.2's close), `ruff
+    check .` clean, migration chain round-trips, unbound-field sweep
+    confirms `pollFileAvailability`/
+    `recommendedAvailabilityPollIntervalSeconds` are the only new
+    bindings needed (only `Query.backlog`/B.9 remains unbound).
+    **Beyond the mocked tests — real, live, read-only verification
+    against the user's own actual Sonarr and Radarr instances**, not
+    just the API-shape research above: seeded a scratch LCARS DB with a
+    real show/episode from the user's own library (tvdb 457078, "You
+    and I Are Polar Opposites" S02E06) and a checkpoint bounding the
+    poll to a small recent window, ran `_poll_sonarr` against the real
+    server with the real API key — it correctly found the real
+    `downloadFolderImported` event and wrote the exact real file path
+    from the user's own media library. Same check against the real
+    Radarr instance (tmdb 687163, "Project Hail Mary") with the same
+    result. Nothing was written to either Sonarr or Radarr at any point
+    (GET-only) — only LCARS's own scratch test database was modified.
+  - **Addendum, caught before commit**: `pollFileAvailability` runs as a
+    sync resolver on LCARS's single shared event loop (§11.2's own DB-
+    execution-model note) — a never-polled service's first call would
+    have walked its entire history inline (Sonarr: ~23,000 records,
+    ~92 pages) and blocked every other client's request for that whole
+    duration. Raised, then resolved directly by the user: split into
+    two entry points (`SCOPE.md` §5.2's own addendum has the full
+    rationale) — `pollFileAvailability` (Ops's automatic call) now
+    seeds a never-polled service's checkpoint to "now" and does no
+    history walk at all; a new `backfillFileAvailability` mutation +
+    `ops backfill-availability` CLI subcommand is the deliberate,
+    manual, run-once-at-a-quiet-moment counterpart, explicitly **not**
+    part of `run_forever`'s own loop. Also fixed real credential
+    hygiene: the Sonarr/Radarr API keys used for this step's live
+    verification were pasted directly into chat by the user and are
+    now flagged for rotation (never written to any file in this repo —
+    confirmed by grep before this commit).
+    - **Built**: `availability.py` — `_poll_sonarr`/`_poll_radarr` gained
+      a `backfill: bool` parameter; `backfill_file_availability()`
+      alongside the existing `poll_file_availability()`.
+      `schema.graphql`/`resolvers.py`: `Mutation.backfillFileAvailability`.
+      `ops/lcars_client.py`: `backfill_file_availability()`.
+      `ops/cli.py`: `ops backfill-availability` subcommand — prints an
+      explicit blocking-duration warning, calls the mutation once,
+      prints the result, exits (never runs from `ops run`'s loop).
+    - **Tests**: `test_availability.py` (+7: first-ever-call seeds
+      without processing, for both services; backfill ignores an
+      existing checkpoint and walks full history regardless, for both
+      services; `backfill_file_availability()`'s own public-function
+      wiring). `test_server.py` (+1: `backfillFileAvailability`
+      GraphQL wiring). `test_ops_lcars_client.py` (+1). New
+      `test_ops_cli.py` (4 tests — the pre-existing gap of `ops run`
+      itself having no CLI-level test coverage closed alongside the
+      new subcommand, not deferred).
+    - **Verified**: 354 tests passing (was 343), `ruff check .` clean.
 - [ ] **B.4 — AniList `airingSchedule` polling.**
 - [ ] **B.5 — animeschedule.net polling.** Prefer the **REST API v3**
   (`/timetables/{airType}`, filtered by `anilist-ids` — avoids fuzzy

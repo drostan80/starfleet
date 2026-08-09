@@ -26,6 +26,13 @@ def utc_iso_offset(days: int) -> str:
     return (datetime.now(UTC) + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def utc_iso_offset_hours(hours: float) -> str:
+    """Same as utc_iso_offset() above, but at hour granularity — B.3's
+    2-hour "just aired" window (§6.7) doesn't fit cleanly as a fraction
+    of a day the way every other consumer of utc_iso_offset() does."""
+    return (datetime.now(UTC) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _parse(value: str) -> datetime:
     try:
         # datetime.fromisoformat handles the "Z" suffix natively (3.12+,

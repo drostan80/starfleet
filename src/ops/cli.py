@@ -10,18 +10,49 @@ from ops.lcars_client import LcarsClient
 from ops.scheduler import run_forever
 
 
-def _cmd_run(args: argparse.Namespace) -> None:
-    logging.basicConfig(level=logging.INFO)
-    cfg = config.load_config()
+def _require_bearer_token(cfg: config.Config) -> None:
     if not cfg.lcars_bearer_token:
         raise SystemExit(
             "lcars_bearer_token must be set first — in ops.ini's [ops] section, or "
             "OPS_LCARS_BEARER_TOKEN/OPS_LCARS_BEARER_TOKEN_FILE (SCOPE.md §11.2/§8)."
         )
 
+
+def _cmd_run(args: argparse.Namespace) -> None:
+    logging.basicConfig(level=logging.INFO)
+    cfg = config.load_config()
+    _require_bearer_token(cfg)
+
     async def _main() -> None:
         async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token) as client:
             await run_forever(client, cfg.poll_interval_seconds, cfg.monthly_poll_interval_seconds)
+
+    asyncio.run(_main())
+
+
+def _cmd_backfill_availability(args: argparse.Namespace) -> None:
+    """§5.2/§6.7, B.3 — the manual, one-time trigger for
+    backfillFileAvailability: never called by `ops run`'s own loop,
+    only by hand, at a moment of the operator's own choosing, because
+    it blocks LCARS's single request-handling thread for real
+    seconds-to-minutes while it walks each configured service's entire
+    history (SCOPE.md §5.2's "Resolved 2026-08-09 (B.3)" note)."""
+    logging.basicConfig(level=logging.INFO)
+    cfg = config.load_config()
+    _require_bearer_token(cfg)
+    print(
+        "Backfilling file availability from Sonarr's/Radarr's full history — this "
+        "will block LCARS's other requests for the duration (real seconds to minutes "
+        "on a large library). Run this at a quiet moment, not while anyone else is using it."
+    )
+
+    async def _main() -> None:
+        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token) as client:
+            result = await client.backfill_file_availability()
+            print(
+                f"Done: {result['episodesUpdated']} episode(s), "
+                f"{result['showsUpdated']} show(s) updated."
+            )
 
     asyncio.run(_main())
 
@@ -32,6 +63,12 @@ def main() -> None:
 
     run = subparsers.add_parser("run", help="run the polling loop (the default)")
     run.set_defaults(func=_cmd_run)
+
+    backfill = subparsers.add_parser(
+        "backfill-availability",
+        help="one-time full Sonarr/Radarr history walk — run manually, blocks while it runs",
+    )
+    backfill.set_defaults(func=_cmd_backfill_availability)
 
     # No subcommand at all ("ops" alone) still means "run" — same
     # by-hand default lcars/cli.py's own main() already established,

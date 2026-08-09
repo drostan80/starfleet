@@ -1,5 +1,6 @@
 """The polling loops themselves — B.1 (daily metadata refresh), B.2
-(Fribb reconciliation, two tiers: weekly + monthly).
+(Fribb reconciliation, two tiers: weekly + monthly), B.3 (file
+availability, one adaptive-cadence loop).
 
 Each `run_*_once()` is the real, testable unit — one full sweep,
 exercised directly by a test with no infinite loop or real sleep
@@ -78,6 +79,16 @@ async def run_monthly_once(client: LcarsClient) -> int:
     return reconciled
 
 
+async def run_availability_once(client: LcarsClient) -> int:
+    """§5.2/§6.7, B.3 — one global availability sweep
+    (pollFileAvailability): no per-item loop here at all, unlike the
+    other tiers — the mutation itself covers every tracked show in one
+    call (LCARS's own checkpoint state, not Ops, is what keeps repeat
+    calls cheap). Returns the combined episodes+shows-updated count."""
+    result = await client.poll_file_availability()
+    return result["episodesUpdated"] + result["showsUpdated"]
+
+
 async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     """B.1's daily tier and B.2's weekly tier share one loop/interval
     (run_forever's own docstring explains why: the weekly tier is
@@ -108,18 +119,43 @@ async def _loop(coro_fn, client: LcarsClient, interval_seconds: int, label: str)
         await asyncio.sleep(interval_seconds)
 
 
+async def _availability_loop(client: LcarsClient) -> None:
+    """§5.2/§6.7, B.3 — the one loop with a genuinely dynamic interval,
+    unlike every other tier's flat one: after each sweep, asks LCARS for
+    the next interval (300s/900s/900s baseline 3600s, computed
+    server-side from watching shows' own episode air dates — see
+    recommendedAvailabilityPollIntervalSeconds's own docstring) rather
+    than sleeping a fixed amount. Same broad-except/log-and-continue
+    shape as _loop() above, for the same reason."""
+    while True:
+        try:
+            count = await run_availability_once(client)
+            logger.info("availability: processed %d item(s)", count)
+        except Exception:
+            logger.exception("availability: sweep failed, will retry")
+        try:
+            interval = await client.recommended_availability_poll_interval_seconds()
+        except Exception:
+            logger.exception("availability: interval check failed, falling back to 3600s")
+            interval = 3600
+        await asyncio.sleep(interval)
+
+
 async def run_forever(
     client: LcarsClient, interval_seconds: int, monthly_interval_seconds: int
 ) -> None:
-    """Two concurrent loops, not three independent timers — B.2's own
+    """Three concurrent loops, not one shared cadence — B.2's own
     weekly tier is self-gating (dueForSeasonReconciliation only ever
     returns a season once it's genuinely 7+ days stale, regardless of
     how often it's checked), so it rides the same cadence as B.1's daily
-    tier rather than needing its own interval. Only the monthly tier is
-    unconditional/not self-limiting, so it alone gets its own,
+    tier rather than needing its own interval. The monthly tier is
+    unconditional/not self-limiting, so it gets its own,
     much-longer-period loop (SCOPE.md §5.5's B.2 note, BUILD_PLAN.md's
-    B.2 entry)."""
+    B.2 entry). B.3's availability loop is its own third, dynamic-
+    interval loop — it can't share either of the other two: faster than
+    the hourly one when urgent, but not on a fixed cadence at all."""
     await asyncio.gather(
         _loop(run_daily_and_weekly_once, client, interval_seconds, "daily+weekly"),
         _loop(run_monthly_once, client, monthly_interval_seconds, "monthly"),
+        _availability_loop(client),
     )

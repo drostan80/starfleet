@@ -25,6 +25,7 @@ from graphql import GraphQLError
 
 from lcars import (
     anilist_client,
+    availability,
     config,
     db,
     export_import,
@@ -86,6 +87,7 @@ ENUMS = [
     _enum("NumberingSource", "sonarr", "anilist", "manual", "unmatched"),
     _enum("EpisodeMovieLinkSource", "tmdb_match", "manual", "unmatched"),
     _enum("ResolvedByClient", "data", "holodeck", "captains_log"),
+    _enum("AvailabilityStatus", "unavailable", "downloading", "available"),
 ]
 
 BINDABLES = [
@@ -1104,6 +1106,42 @@ def resolve_refresh_show_metadata(_, info, show_id):
     metadata.fetch_and_populate(conn, show_id)
     conn.commit()
     return _get_show(conn, show_id)
+
+
+@mutation.field("pollFileAvailability")
+def resolve_poll_file_availability(_, info):
+    """§5.2/§6.7, B.3 — the global availability sweep (availability.py):
+    polls Sonarr's/Radarr's own /history since each service's own
+    checkpoint, no per-item argument (one shared history feed covers
+    every tracked show at once). No require_client() — same reasoning
+    as refreshShowMetadata/reconcileSeasonMapping: nothing here writes
+    to a changed_by-style column, this is passive/informational the same
+    way show_service_presence's own refresh is (§5.4). A never-polled
+    service seeds its checkpoint to "now" and does no work here — see
+    availability.py's own module docstring and backfillFileAvailability
+    below for the deliberate full-history counterpart."""
+    conn = db.get_connection()
+    return availability.poll_file_availability(conn)
+
+
+@mutation.field("backfillFileAvailability")
+def resolve_backfill_file_availability(_, info):
+    """§5.2/§6.7, B.3 — the manual, one-time counterpart to
+    pollFileAvailability above: walks each configured service's entire
+    history, ignoring any existing checkpoint. Not called by Ops's own
+    automatic loop, only by the explicit `ops backfill-availability`
+    CLI command — genuinely blocks LCARS's single request-handling
+    thread for real seconds-to-minutes while it runs, by design (see
+    its own schema.graphql docstring). Same passive/no require_client()
+    reasoning as pollFileAvailability."""
+    conn = db.get_connection()
+    return availability.backfill_file_availability(conn)
+
+
+@query.field("recommendedAvailabilityPollIntervalSeconds")
+def resolve_recommended_availability_poll_interval_seconds(_, info):
+    conn = db.get_connection()
+    return availability.recommended_poll_interval_seconds(conn)
 
 
 @mutation.field("setStatus")

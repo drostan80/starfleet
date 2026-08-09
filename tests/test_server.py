@@ -1643,7 +1643,16 @@ def _insert_next_up_episode(
              available_via_sonarr, created_at, updated_at)
         VALUES (?, ?, ?, ?, 'regular', ?, ?, ?, '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z')
         """,
-        (episode_id, show_id, season, episode, state, air_date_utc, int(available)),
+        (
+            episode_id,
+            show_id,
+            season,
+            episode,
+            state,
+            air_date_utc,
+            # B.3 — available_via_sonarr is now 3-state, not boolean.
+            "available" if available else "unavailable",
+        ),
     )
     conn.commit()
 
@@ -4396,3 +4405,99 @@ async def test_absolute_number_synthesis_recomputes_when_a_special_is_inserted(
     assert got[(1, 1)] == 1
     assert got[(0, 8)] == 1.1   # earlier-airing special takes the first slot
     assert got[(0, 9)] == 1.2   # the pre-existing one renumbered behind it
+
+
+# --- file availability polling (§5.2/§6.7, B.3) — GraphQL wiring only; the ---
+# --- actual poll/reconcile logic has its own dedicated test_availability.py --
+
+POLL_FILE_AVAILABILITY = """
+    mutation { pollFileAvailability { episodesUpdated showsUpdated } }
+"""
+
+BACKFILL_FILE_AVAILABILITY = """
+    mutation { backfillFileAvailability { episodesUpdated showsUpdated } }
+"""
+
+RECOMMENDED_INTERVAL_QUERY = """
+    query { recommendedAvailabilityPollIntervalSeconds }
+"""
+
+
+async def test_poll_file_availability_returns_zero_with_nothing_configured(client):
+    # No Sonarr/Radarr credentials in the client fixture's default config (§4.9's
+    # own "not configured, same as not linked" guard) — a clean no-op, not an error.
+    data = await gql(client, POLL_FILE_AVAILABILITY, headers=auth_headers())
+    assert data["pollFileAvailability"] == {"episodesUpdated": 0, "showsUpdated": 0}
+
+
+async def test_backfill_file_availability_wiring_returns_zero_with_nothing_configured(client):
+    # Same not-configured no-op guard applies to the manual backfill mutation —
+    # its own event-processing/checkpoint-ignoring logic is test_availability.py's
+    # job (test_backfill_sonarr_ignores_an_existing_checkpoint_and_walks_full_history
+    # et al.); this only locks in that the mutation is wired to availability.py's
+    # backfill_file_availability(), not poll_file_availability().
+    data = await gql(client, BACKFILL_FILE_AVAILABILITY, headers=auth_headers())
+    assert data["backfillFileAvailability"] == {"episodesUpdated": 0, "showsUpdated": 0}
+
+
+async def test_recommended_availability_poll_interval_defaults_to_baseline(client):
+    data = await gql(client, RECOMMENDED_INTERVAL_QUERY, headers=auth_headers())
+    assert data["recommendedAvailabilityPollIntervalSeconds"] == 3600
+
+
+async def test_episode_availability_fields_resolve_through_real_graphql(client, migrated_db):
+    # Locks in the AvailabilityStatus enum's own DB<->GraphQL value mapping
+    # (resolvers.py's ENUMS list) — a real gap class this project has hit before
+    # (a missing _enum() registration is invisible to schema validation, only
+    # surfaces at actual query time).
+    show = await add_show(client, titleRomaji="Availability Fields")
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, state,"
+        " available_via_sonarr, file_path_sonarr, created_at, updated_at)"
+        " VALUES ('e-avf001', ?, 1, 1, 'regular', 'unwatched', 'available', '/data/x.mkv',"
+        " '2026-08-09T00:00:00Z', '2026-08-09T00:00:00Z')",
+        (show["id"],),
+    )
+    conn.commit()
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          episode(id: $id) {
+            availableViaSonarr availableViaRadarr filePathSonarr filePathRadarr availableLocally
+          }
+        }
+        """,
+        {"id": "e-avf001"},
+        headers=auth_headers(),
+    )
+    assert data["episode"]["availableViaSonarr"] == "AVAILABLE"
+    assert data["episode"]["availableViaRadarr"] == "UNAVAILABLE"
+    assert data["episode"]["filePathSonarr"] == "/data/x.mkv"
+    assert data["episode"]["filePathRadarr"] is None
+    assert data["episode"]["availableLocally"] is True
+
+
+async def test_show_availability_fields_resolve_through_real_graphql(client, migrated_db):
+    show = await add_show(
+        client, mediaShape="MOVIE", trackingSpace="TV", titleRomaji="Availability Movie"
+    )
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE show SET available_via_radarr = 'downloading' WHERE id = ?", (show["id"],)
+    )
+    conn.commit()
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { availableViaRadarr filePathRadarr availableLocally }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["availableViaRadarr"] == "DOWNLOADING"
+    assert data["show"]["filePathRadarr"] is None
+    assert data["show"]["availableLocally"] is False

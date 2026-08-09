@@ -63,3 +63,25 @@ class RadarrClient:
         if this tmdb_id isn't tracked there at all — not an error."""
         results = self._get("movie", params={"tmdbId": tmdb_id})
         return results[0] if results else None
+
+    def history_page(self, page: int, page_size: int = 250) -> dict:
+        """§5.2/§6.10, B.3 — Radarr's own grab/import event log, mirrors
+        SonarrClient.history_page() exactly — verified live against a
+        real Radarr instance (6.3.0.10514) before this was written.
+        `includeMovie` embeds the full movie object (tmdbId) directly.
+        Real event types seen: `grabbed`, `downloadFolderImported`
+        (data.importedPath), `movieFileDeleted`. One real API quirk
+        found by testing: the embedded movie's own `hasFile` field can
+        come back null even when `movieFileId` is populated — the
+        `eventType` itself is the authoritative signal here, not the
+        embedded object's own hasFile."""
+        return self._get(
+            "history",
+            params={
+                "page": page,
+                "pageSize": page_size,
+                "sortKey": "date",
+                "sortDirection": "descending",
+                "includeMovie": "true",
+            },
+        )

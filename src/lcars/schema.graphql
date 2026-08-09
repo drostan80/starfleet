@@ -153,6 +153,13 @@ enum EpisodeMovieLinkSource {
   UNMATCHED
 }
 
+"§5.2/§5.1, B.3 — episode.available_via_sonarr/available_via_radarr and show.available_via_radarr (movies). Refined from a plain boolean: a file grabbed but not yet imported is a real, distinct state, and a file can go back to UNAVAILABLE (deleted/replaced), not just forward."
+enum AvailabilityStatus {
+  UNAVAILABLE
+  DOWNLOADING
+  AVAILABLE
+}
+
 "§5.6 — the three clients that can actually resolve a pending_review entry (corrected from an inconsistent 4-value list while drafting A.1, see SCOPE.md §5.6)."
 enum ResolvedByClient {
   DATA
@@ -187,8 +194,10 @@ type Show {
   genresRaw: [String!]!
   synopsis: String
 
-  "media_shape = MOVIE only — meaningless/always-false-empty for episodic shows (§5.1 movie-tracking addendum)."
-  availableViaRadarr: Boolean!
+  "media_shape = MOVIE only — meaningless/always-UNAVAILABLE for episodic shows (§5.1 movie-tracking addendum). Refined bool -> 3-state, B.3."
+  availableViaRadarr: AvailabilityStatus!
+  "media_shape = MOVIE only — the imported file path once AVAILABLE, added B.3."
+  filePathRadarr: String
   availableCheckedAt: DateTime
   availableLocally: Boolean!
 
@@ -273,9 +282,14 @@ type Episode {
   "Kept for diffing/debugging (§5.2) — the raw, uncorrected value Sonarr itself reported."
   airDateRawSonarr: DateTime
 
-  availableViaSonarr: Boolean!
-  "Only ever meaningfully true for kind = BONUS_MOVIE (§5.2) — regular/special/ova episodes never populate this."
-  availableViaRadarr: Boolean!
+  "Refined bool -> 3-state, B.3 — a file grabbed but not yet imported (DOWNLOADING) is real and distinct from either end state."
+  availableViaSonarr: AvailabilityStatus!
+  "Only ever meaningfully non-UNAVAILABLE for kind = BONUS_MOVIE (§5.2) — regular/special/ova episodes never populate this."
+  availableViaRadarr: AvailabilityStatus!
+  "The imported file path once AVAILABLE, Sonarr side — added B.3, cleared when the status moves off AVAILABLE."
+  filePathSonarr: String
+  "Same, Radarr side — only ever meaningfully set for kind = BONUS_MOVIE, same as availableViaRadarr above."
+  filePathRadarr: String
   availableLocally: Boolean!
   availableCheckedAt: DateTime
 
@@ -757,6 +771,16 @@ type Stats {
 }
 
 # ---------------------------------------------------------------------------
+# §5.2/§6.7 file availability polling (B.3)
+# ---------------------------------------------------------------------------
+
+"pollFileAvailability's own confirmation summary, same spirit as ImportResult below — a human/Ops-facing count, not the source of truth for what actually changed (that's each episode's/show's own availableViaSonarr/availableViaRadarr)."
+type AvailabilityPollResult {
+  episodesUpdated: Int!
+  showsUpdated: Int!
+}
+
+# ---------------------------------------------------------------------------
 # §6.12 data export/import
 # ---------------------------------------------------------------------------
 
@@ -828,6 +852,9 @@ type Query {
   "§5.5/B.2 — every season of a watching+actively-airing show (all of that show's seasons, not just the one currently airing) not reconciled against the Fribb dataset in the last 7 days. Ops's own weekly-tier query — self-gating (a season only appears once genuinely stale), so it can be checked as often as convenient without over-reconciling."
   dueForSeasonReconciliation(first: Int, after: String, last: Int, before: String): SeasonConnection!
 
+  "§5.2/§6.7, B.3 — Ops's own adaptive availability-poll cadence, computed server-side: 300 (5 min) while a WATCHING show has an episode that aired in the last 2 hours and isn't yet locally available; 900 (15 min) while one aired further in the past and still isn't available; 3600 (1 hour) baseline otherwise. Radarr has no equivalent urgency — a movie release has no 'just aired' moment."
+  recommendedAvailabilityPollIntervalSeconds: Int!
+
   franchise(id: ID!): Franchise
   franchises(first: Int, after: String, last: Int, before: String): FranchiseConnection!
 
@@ -868,6 +895,45 @@ type Mutation {
   addShow(input: AddShowInput!): Show!
   "A.8 — re-runs the same on-demand metadata fetch addShow triggers at creation; the manual-retry half of its best-effort policy."
   refreshShowMetadata(showId: ID!): Show!
+  """
+  §5.2/§6.7, B.3 — the global availability sweep: polls Sonarr's and
+  Radarr's own /history (grab and import events, not a re-check of
+  each tracked episode) since the last processed event
+  (availability_poll_checkpoint), updating available_via_sonarr/
+  available_via_radarr and the matching file_path_* column on whatever
+  episodes/shows those events reference. Ops's own daily/weekly/monthly
+  mutations (refreshShowMetadata/reconcileSeasonMapping) act on one
+  show/season at a time; this one is a single global sweep instead —
+  one shared history feed covers every tracked show at once, so there's
+  no per-item argument to take.
+
+  A service's very first call (no checkpoint yet) never walks that
+  service's full history here — it seeds the checkpoint to "now" and
+  returns zero, so Ops's own automatic cadence (§6.7) never blocks
+  LCARS's single request-handling thread on an unbounded backfill.
+  Real history before that seed moment is only ever processed by an
+  explicit backfillFileAvailability call, run deliberately, not by
+  Ops's own timer.
+  """
+  pollFileAvailability: AvailabilityPollResult!
+  """
+  §5.2/§6.7, B.3 — the one-time, manually-triggered counterpart to
+  pollFileAvailability above: walks each configured service's *entire*
+  /history from the beginning, ignoring any existing checkpoint,
+  rather than only what's new since it. Not part of Ops's own
+  automatic loop — deliberately absent from `run_forever`'s own
+  scheduling, since a full walk (tens of thousands of records on a
+  long-running Sonarr instance) blocks LCARS's single request-handling
+  thread for the duration, real seconds-to-minutes, not sub-millisecond
+  like everything else this database does. Meant to be run once,
+  deliberately, at a moment of the caller's own choosing (`ops
+  backfill-availability`) — e.g. right after B.3's own schema lands, or
+  any time real availability state is suspected to have drifted.
+  Safe to re-run: the underlying event-matching logic is the same
+  idempotent apply pollFileAvailability itself uses, just over a wider
+  window; existing correct state is simply reapplied, not corrupted.
+  """
+  backfillFileAvailability: AvailabilityPollResult!
   """
   §6.1/§6.8, A.9 — clamps/rounds silently to the 0-20 quarter-point
   scale rather than rejecting out-of-range input. Also pushes to

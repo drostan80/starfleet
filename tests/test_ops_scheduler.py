@@ -1,16 +1,19 @@
 """ops.scheduler — B.1 (daily metadata refresh), B.2 (Fribb
-reconciliation, weekly + monthly tiers). Each run_*_once() is the real
-unit under test; a fake LcarsClient stand-in (not the real
-httpx-backed one) keeps these tests focused on the scheduler's own
-looping/error-isolation logic, already separately covered by
-test_ops_lcars_client.py for the transport layer.
+reconciliation, weekly + monthly tiers), B.3 (file availability, one
+dynamic-interval loop). Each run_*_once() is the real unit under test;
+a fake LcarsClient stand-in (not the real httpx-backed one) keeps
+these tests focused on the scheduler's own looping/error-isolation
+logic, already separately covered by test_ops_lcars_client.py for the
+transport layer.
 """
 
 import pytest
 
 from ops.lcars_client import LcarsError
 from ops.scheduler import (
+    _availability_loop,
     _loop,
+    run_availability_once,
     run_daily_and_weekly_once,
     run_forever,
     run_monthly_once,
@@ -31,12 +34,19 @@ class _FakeClient:
         all_seasons_: list[dict] | None = None,
         fail_show_ids: set[str] | None = None,
         fail_season_ids: set[str] | None = None,
+        availability_result: dict | None = None,
+        recommended_interval: int = 3600,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
         self._all_seasons = all_seasons_ or []
         self._fail_show_ids = fail_show_ids or set()
         self._fail_season_ids = fail_season_ids or set()
+        self._availability_result = availability_result or {
+            "episodesUpdated": 0,
+            "showsUpdated": 0,
+        }
+        self._recommended_interval = recommended_interval
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -65,6 +75,12 @@ class _FakeClient:
             raise LcarsError(f"boom: {season_id}")
         self.reconciled.append((show_id, season_number))
         return {"id": season_id}
+
+    async def poll_file_availability(self) -> dict:
+        return self._availability_result
+
+    async def recommended_availability_poll_interval_seconds(self) -> int:
+        return self._recommended_interval
 
 
 # --- run_once (B.1) ---------------------------------------------------------
@@ -149,6 +165,75 @@ async def test_run_monthly_once_a_single_seasons_failure_does_not_stop_the_rest(
     assert client.reconciled == [("s-b", 1)]
 
 
+# --- run_availability_once (B.3) --------------------------------------------
+
+
+async def test_run_availability_once_sums_episodes_and_shows_updated():
+    client = _FakeClient(availability_result={"episodesUpdated": 3, "showsUpdated": 2})
+    assert await run_availability_once(client) == 5
+
+
+async def test_run_availability_once_is_zero_with_nothing_updated():
+    client = _FakeClient()
+    assert await run_availability_once(client) == 0
+
+
+# --- _availability_loop (B.3's own dynamic-interval loop) -------------------
+
+
+async def test_availability_loop_sleeps_the_recommended_interval(monkeypatch):
+    client = _FakeClient(recommended_interval=300)
+    sleep_calls = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        raise SystemExit  # stop after one tick
+
+    monkeypatch.setattr("ops.scheduler.asyncio.sleep", fake_sleep)
+    with pytest.raises(SystemExit):
+        await _availability_loop(client)
+    assert sleep_calls == [300]
+
+
+async def test_availability_loop_survives_a_sweep_failure_and_still_checks_interval(monkeypatch):
+    class _BrokenClient(_FakeClient):
+        async def poll_file_availability(self):
+            raise RuntimeError("totally unexpected")
+
+    client = _BrokenClient(recommended_interval=900)
+    sleep_calls = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        raise SystemExit
+
+    monkeypatch.setattr("ops.scheduler.asyncio.sleep", fake_sleep)
+    with pytest.raises(SystemExit):
+        await _availability_loop(client)
+    # The sweep failure didn't stop the loop from reaching the interval check.
+    assert sleep_calls == [900]
+
+
+async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_itself_fails(
+    monkeypatch,
+):
+    class _BrokenIntervalClient(_FakeClient):
+        async def recommended_availability_poll_interval_seconds(self):
+            raise RuntimeError("totally unexpected")
+
+    client = _BrokenIntervalClient()
+    sleep_calls = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        raise SystemExit
+
+    monkeypatch.setattr("ops.scheduler.asyncio.sleep", fake_sleep)
+    with pytest.raises(SystemExit):
+        await _availability_loop(client)
+    assert sleep_calls == [3600]
+
+
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
 
 
@@ -190,16 +275,23 @@ async def test_loop_survives_a_non_lcars_error_and_keeps_ticking(monkeypatch):
 # --- run_forever (wiring only — each loop's own behavior is covered above) --
 
 
-async def test_run_forever_wires_up_both_the_hourly_and_monthly_loops(monkeypatch):
+async def test_run_forever_wires_up_all_three_loops(monkeypatch):
     calls = []
 
     async def fake_loop(coro_fn, client, interval_seconds, label):
         calls.append((coro_fn.__name__, interval_seconds, label))
 
+    availability_calls = []
+
+    async def fake_availability_loop(client):
+        availability_calls.append(client)
+
     monkeypatch.setattr("ops.scheduler._loop", fake_loop)
+    monkeypatch.setattr("ops.scheduler._availability_loop", fake_availability_loop)
     client = _FakeClient()
     await run_forever(client, interval_seconds=3600, monthly_interval_seconds=2592000)
     assert set(calls) == {
         ("run_daily_and_weekly_once", 3600, "daily+weekly"),
         ("run_monthly_once", 2592000, "monthly"),
     }
+    assert availability_calls == [client]

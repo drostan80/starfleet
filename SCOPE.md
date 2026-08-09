@@ -495,12 +495,16 @@ Other fields:
   `episode` of its own show, and is never conflated with Sonarr's own
   season-0 tracking. So the availability mechanism `episode` normally
   carries moves onto `show` itself for this case:
-  `available_via_radarr`, `available_checked_at`, and a generated
-  `available_locally` (mirrors `episode`'s own shape, §5.2, just
-  Radarr-only — no Sonarr side to OR against, since a movie show's own
-  Sonarr availability doesn't apply — see `episode_movie_link` below
-  for the *separate* case of the same film also being tracked as a
-  `bonus_movie`-kind episode elsewhere). No movie-specific `skipped`
+  `available_via_radarr` (3-state `unavailable | downloading |
+  available`, same B.3 refinement as `episode`'s own field, §5.2),
+  `file_path_radarr` (added B.3, no Sonarr-side counterpart — a
+  standalone movie show has no Sonarr availability at all),
+  `available_checked_at`, and a generated `available_locally` (mirrors
+  `episode`'s own shape, §5.2, just Radarr-only — no Sonarr side to OR
+  against, since a movie show's own Sonarr availability doesn't apply —
+  see `episode_movie_link` below for the *separate* case of the same
+  film also being tracked as a `bonus_movie`-kind episode elsewhere).
+  No movie-specific `skipped`
   equivalent — confirmed sufficient to reuse `status` alone
   (`dropped`/`completed` already cover "decided not to watch"/
   "watched"); `episode.state = skipped` exists specifically to clear
@@ -590,14 +594,19 @@ episode
                          and "airs in Xh" countdowns
   air_date_source        sonarr | anilist | animeschedule | manual
   air_date_raw_sonarr    kept for diffing/debugging
-  available_via_sonarr   bool — file available through Sonarr's own
-                         copy (the episode/season-0-special file, for
-                         any kind)
-  available_via_radarr   bool — file available through Radarr's own
-                         copy (only ever populated for `bonus_movie`
-                         kind — see below)
-  available_locally      derived: available_via_sonarr OR
-                         available_via_radarr
+  available_via_sonarr   unavailable | downloading | available —
+                         **refined from bool to 3-state, B.3, see below**
+  available_via_radarr   unavailable | downloading | available — same
+                         refinement, only ever populated for
+                         `bonus_movie` kind (see below)
+  file_path_sonarr       the actual imported file path, Sonarr side —
+                         **added B.3**, nullable, cleared when the
+                         source flips back to unavailable/downloading
+  file_path_radarr       same, Radarr side — **added B.3**
+  available_locally      derived: available_via_sonarr = 'available'
+                         OR available_via_radarr = 'available' —
+                         `downloading` does not count as locally
+                         available (refined, B.3)
   available_checked_at
   runtime_minutes        optional override of show.duration_minutes
   state                  unwatched | watched | skipped
@@ -630,6 +639,117 @@ episode
   (`media_shape = movie`, not an episode at all) only Radarr applies,
   per §6.10 — the dual-source case is specific to `bonus_movie`-kind
   episodes living inside an already-tracked episodic show.
+
+**Resolved 2026-08-09 (B.3)**: `BUILD_PLAN.md`'s own B.3 line
+("Sonarr/Radarr polling for file availability... queue/episode-file/
+movie-file endpoints") named the general area but not the exact
+mechanism, cadence, or scope — asked directly, then verified against
+the user's own real, live Sonarr (4.0.19.2979) and Radarr (6.3.0.10514)
+instances rather than built from documentation memory, the same
+"resolve by testing, not more reading" practice §10.1 already used for
+animeschedule.net.
+
+- **Availability is 3-state, not boolean**: `unavailable | downloading
+  | available`. A user's own framing settled this directly: a file
+  isn't just present-or-absent — "grabbed not imported" is a real,
+  useful, distinct `downloading` state, valuable specifically because
+  it surfaces a show Sonarr grabbed but failed to auto-import (an
+  operational problem worth seeing, not something a plain boolean can
+  represent). Confirmed by real data: `episodeFileDeleted` (a file
+  becoming unavailable again, not just newly available) occurred 48
+  times in the last 250 history records on the user's own instance —
+  genuinely common, not a hypothetical edge case, so the mechanism
+  needs to handle transitions in both directions, not just
+  unavailable→available.
+- **Mechanism: poll Sonarr/Radarr's own `/history` (grab **and** import
+  events), not re-check each tracked episode's current state.** The
+  user's own reasoning: "checking availability... by looking at grab
+  and import history is what makes the most sense... if something is
+  grabbed out of expected timeframe it is still picked up and the
+  polling of only the grabbed/imported history is bound to be easier
+  and quicker" than re-scanning every tracked episode against "what
+  should come." Verified directly against both real instances:
+  - Sonarr's `/api/v3/history?includeEpisode=true&includeSeries=true`
+    embeds the full episode (`seasonNumber`/`episodeNumber`) **and**
+    series (`tvdbId`) objects on every record — real event types seen:
+    `grabbed`, `downloadFolderImported` (carries `data.importedPath`),
+    `episodeFileDeleted`, `downloadIgnored` (a rejected grab — no
+    availability effect, skipped).
+  - Radarr's `/api/v3/history?includeMovie=true` mirrors this exactly:
+    `movieId`/`tmdbId` embedded, same four event types
+    (`movieFileDeleted` instead of `episodeFileDeleted`).
+  - **No new correlation-id column needed** — an earlier draft of this
+    plan proposed storing Sonarr's/Radarr's own native episode/movie
+    ids for exactly this matching purpose; verifying the real API
+    first showed `includeSeries=true`/`includeMovie=true` already embed
+    `tvdbId`/`tmdbId` directly, so a history event matches straight to
+    the existing `show_external_id` crosswalk (§5.4) with nothing new
+    to store. One real API quirk found and worth flagging: the embedded
+    `movie.hasFile` field came back `null` even when `movieFileId` was
+    populated — `eventType` itself (not the embedded object's own
+    `hasFile`) is the authoritative signal, and that's what's used.
+  - **State transitions**: `grabbed` → `downloading`;
+    `downloadFolderImported` → `available` + `data.importedPath` stored
+    in `file_path_sonarr`/`file_path_radarr`; `episodeFileDeleted`/
+    `movieFileDeleted` → `unavailable`, path cleared;
+    `downloadIgnored` → no-op. Events are processed oldest-first within
+    each poll (Sonarr/Radarr return newest-first; reversed before
+    applying) so a rapid delete-then-reimport (a quality upgrade —
+    confirmed a real, common case in the live data, `data.reason:
+    "Upgrade"` on a real `episodeFileDeleted` record) resolves to the
+    correct final state, not whichever event happened to apply last by
+    accident of pagination order.
+  - **A new, small global checkpoint table** (not per-show — the
+    history feed is one shared stream per service, not scoped to a
+    show): `availability_poll_checkpoint(service PRIMARY KEY, 
+    last_event_at, updated_at)`, one row each for `sonarr`/`radarr`. No
+    id prefix (§5.0) — same reasoning `show_service_presence` already
+    uses for its own natural/composite key, generalized here to a
+    global singleton-per-service key. Not exposed via GraphQL — pure
+    internal polling-mechanism bookkeeping, the same non-domain-data
+    treatment `alembic_version` already gets.
+  - **LCARS itself does the polling**, not Ops directly — same
+    established architecture as B.1/B.2 (§11.2's B.1 note): Ops
+    triggers a mutation on its own schedule; LCARS is what actually
+    calls out to Sonarr/Radarr. Unlike B.1/B.2's per-show/per-season
+    mutations, this one is a single global sweep (one shared history
+    feed covers every tracked show at once) — no per-item "due" query
+    needed on Ops's side at all; the checkpoint table's own incremental
+    processing is what keeps repeat calls cheap.
+- **Cadence, confirmed directly**: hourly baseline; **5 minutes** while
+  a `WATCHING`-status show has an episode that just aired and isn't yet
+  `available`, for up to **2 hours** since air; **15 minutes** after
+  that window (until it resolves). Movies have no "just aired" moment
+  the same way an episode does, so Radarr stays on the baseline hourly
+  cadence — the adaptive urgency is Sonarr/episode-specific.
+- **Unverified, flagged the same way §10.1 flags animeschedule.net's
+  own remaining unknown**: nothing — both instances were reachable and
+  tested directly this round, not left as an open research item.
+- **First-ever poll of a never-polled service, revisited after B.3's
+  own build, before commit**: a genuine gap this note originally left
+  unaddressed — `pollFileAvailability` runs as a **sync** resolver on
+  LCARS's **single** shared event loop/connection (§11.2's own DB-
+  execution-model note), so a never-polled service's first call would
+  walk its entire history inline (Sonarr's ~23,000 records, ~92 pages)
+  and block every other client's request for the duration. Resolved by
+  the user directly: **two entry points, not one**.
+  - `pollFileAvailability` (Ops's own automatic call, unchanged
+    signature/schema shape) never walks a never-polled service's full
+    history — it seeds `availability_poll_checkpoint` to "now" and
+    returns zero for that service. Every automatic call, from the very
+    first one onward, stays cheap.
+  - A new `backfillFileAvailability` mutation is the deliberate,
+    manual counterpart: walks a configured service's *entire* history,
+    ignoring any existing checkpoint. **Not** part of Ops's own
+    `run_forever` loop — triggered only by a new `ops
+    backfill-availability` CLI subcommand, run by the user once, at a
+    moment of their own choosing, with an explicit printed warning
+    that it will block LCARS while it runs. Same event-matching logic
+    as the automatic path, just over a wider window — safe to re-run.
+  - This is the same "rare, explicit, user-triggered utility" shape §9
+    already established for filesystem-touching work below, applied
+    here to a different cost (blocking-duration, not a settled-rule
+    reversal) — consistent with, not a departure from, that precedent.
 - **Absolute numbering**: sourced as-is when a source reports an
   official value (even non-integer). When no source numbering exists,
   LCARS synthesizes one as `<preceding regular absolute number>.

@@ -61,7 +61,7 @@ def _seed(conn: sqlite3.Connection) -> None:
         "INSERT INTO episode"
         " (id, show_id, season, episode, kind, state, available_via_sonarr,"
         "  created_at, updated_at)"
-        " VALUES ('e-exp001', 's-exp001', 1, 1, 'regular', 'watched', 1,"
+        " VALUES ('e-exp001', 's-exp001', 1, 1, 'regular', 'watched', 'available',"
         "  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
     )
     conn.execute(
@@ -81,12 +81,12 @@ def _seed(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def test_export_includes_all_24_tables(source_db):
+def test_export_includes_every_table(source_db):
     blob = export_import.export_data(source_db)
     data = json.loads(blob)
     assert data["schema_version"] == export_import.SCHEMA_VERSION
     assert set(data["tables"]) == set(export_import.EXPORT_IMPORT_TABLES)
-    assert len(data["tables"]) == 24
+    assert len(data["tables"]) == 25  # 24 through A.15/B.2 + availability_poll_checkpoint (B.3)
 
 
 def test_export_import_round_trip_restores_everything(source_db, target_db):

@@ -207,6 +207,48 @@ async def test_all_seasons_empty_library_is_a_clean_no_op():
     await client.aclose()
 
 
+async def test_poll_file_availability_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        return httpx.Response(
+            200,
+            json={"data": {"pollFileAvailability": {"episodesUpdated": 4, "showsUpdated": 1}}},
+        )
+
+    client = _client(handler)
+    result = await client.poll_file_availability()
+    assert result == {"episodesUpdated": 4, "showsUpdated": 1}
+    await client.aclose()
+
+
+async def test_backfill_file_availability_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        assert "backfillFileAvailability" in payload["query"]
+        return httpx.Response(
+            200,
+            json={"data": {"backfillFileAvailability": {"episodesUpdated": 9, "showsUpdated": 2}}},
+        )
+
+    client = _client(handler)
+    result = await client.backfill_file_availability()
+    assert result == {"episodesUpdated": 9, "showsUpdated": 2}
+    await client.aclose()
+
+
+async def test_recommended_availability_poll_interval_seconds_returns_the_int():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"data": {"recommendedAvailabilityPollIntervalSeconds": 300}}
+        )
+
+    client = _client(handler)
+    assert await client.recommended_availability_poll_interval_seconds() == 300
+    await client.aclose()
+
+
 async def test_raises_lcars_auth_error_on_401():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={})

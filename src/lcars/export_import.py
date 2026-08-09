@@ -2,10 +2,10 @@
 
 A restore path, not just a one-way backup (§6.12's own framing: the
 motivating scenario is rebuilding a fresh LCARS instance). Full
-24-table restore — confirmed directly with the user during A.3
+table restore — confirmed directly with the user during A.3
 (SCOPE.md §6.12's own resolved note): `ImportResult`'s three reported
 counts are a human-facing confirmation summary, not a scope limit: all
-24 tables are exported/imported regardless.
+real tables are exported/imported regardless.
 
 GraphQL-free by design (raises plain `ValueError`, not `GraphQLError`)
 — same layering as `metadata.py`/`fribb.py`/`fuzzy.py`: resolvers.py
@@ -18,14 +18,15 @@ import json
 SCHEMA_VERSION = 1
 
 # Every real table in the schema (confirmed against a live sqlite_master
-# query, 2026-08-08 — 24 tables, matching §6.12's own "all 24 tables"
-# count exactly; alembic_version is migration bookkeeping, not
-# application data, deliberately excluded), ordered parents-before-
-# children so import's row-by-row INSERTs never hit a foreign_keys=ON
-# violation (no ON DELETE/INSERT CASCADE anywhere in this schema,
-# §11.2 — same reasoning every other manual cascade this project builds
-# already documents). One list, reused for both export (order is just
-# readability there) and import (order is load-bearing there).
+# query — 25 tables as of B.3's own availability_poll_checkpoint
+# addition (was 24 through A.15/B.2); alembic_version is migration
+# bookkeeping, not application data, deliberately excluded), ordered
+# parents-before-children so import's row-by-row INSERTs never hit a
+# foreign_keys=ON violation (no ON DELETE/INSERT CASCADE anywhere in
+# this schema, §11.2 — same reasoning every other manual cascade this
+# project builds already documents). One list, reused for both export
+# (order is just readability there) and import (order is load-bearing
+# there).
 EXPORT_IMPORT_TABLES = [
     # no dependencies
     "show",
@@ -34,6 +35,8 @@ EXPORT_IMPORT_TABLES = [
     "person",
     "studio",
     "filter_preset",
+    # global, not per-show — added B.3 (§5.2's own B.3 note)
+    "availability_poll_checkpoint",
     # depend on show
     "season",
     "episode",

@@ -200,3 +200,42 @@ class LcarsClient:
         """
         data = await self._query(query, {"id": show_id, "season": season_number})
         return data["reconcileSeasonMapping"]
+
+    async def poll_file_availability(self) -> dict:
+        """§5.2/§6.7, B.3 — the global availability sweep
+        (pollFileAvailability): no per-item argument, since one call
+        covers every tracked show at once (LCARS's own checkpoint state
+        keeps repeat calls cheap, not Ops filtering anything itself)."""
+        query = """
+        mutation { pollFileAvailability { episodesUpdated showsUpdated } }
+        """
+        data = await self._query(query)
+        return data["pollFileAvailability"]
+
+    async def backfill_file_availability(self) -> dict:
+        """§5.2/§6.7, B.3 — the manual, one-time counterpart to
+        poll_file_availability() above: walks each configured service's
+        entire history, ignoring any existing checkpoint. Never called
+        by scheduler.py's own automatic loop — only by the explicit
+        `ops backfill-availability` CLI command (cli.py), run
+        deliberately by a human, since it blocks LCARS's single
+        request-handling thread for real seconds-to-minutes while it
+        runs (schema.graphql's own backfillFileAvailability docstring
+        has the full rationale)."""
+        query = """
+        mutation { backfillFileAvailability { episodesUpdated showsUpdated } }
+        """
+        data = await self._query(query)
+        return data["backfillFileAvailability"]
+
+    async def recommended_availability_poll_interval_seconds(self) -> int:
+        """§5.2/§6.7, B.3 — LCARS computes Ops's own adaptive cadence
+        (300s/900s/3600s) server-side, from data only it holds (watching
+        shows' episode air dates) — Ops just asks and acts on the
+        answer, same "server decides, client acts" split B.1/B.2's own
+        dueForX queries already established."""
+        query = """
+        query { recommendedAvailabilityPollIntervalSeconds }
+        """
+        data = await self._query(query)
+        return data["recommendedAvailabilityPollIntervalSeconds"]
