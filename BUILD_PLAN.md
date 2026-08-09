@@ -2108,16 +2108,88 @@ background scheduler.
     written. Clean-install sanity check (fresh venv, real `pip
     install`) confirmed `lcars.metadata`/`lcars.anilist_client` import
     cleanly.
-- [ ] **B.5 — animeschedule.net polling.** Prefer the **REST API v3**
-  (`/timetables/{airType}`, filtered by `anilist-ids` — avoids fuzzy
-  matching entirely since Chabrol already has the AniList id via
-  `show_external_id`) over the RSS feeds. First sub-step: confirm
-  whether the read endpoints need an OAuth2 bearer token at all, and
-  register an app if so (§10.1 item 2 — the one remaining unverified
-  detail, resolve by testing, not more reading). RSS
-  (`/jpnrss.xml`/`/subrss.xml`/`/dubrss.xml`) stays a documented
-  fallback if API access proves restricted. Respect the confirmed
-  **120 req/min** global rate limit.
+- [x] **B.5 — animeschedule.net polling.**
+  - **Built**: route resolved by live testing, not the plan's own
+    original assumption — `/api/v3/timetables/{airType}` (the endpoint
+    this line originally preferred, filtered by `anilist-ids`) returns
+    a real, live **401 "Unauthorized. Use private endpoint."**; no
+    self-serve registration page exists either (`/api`, `/api/v3`,
+    `/about/api`, `/api-docs` all confirmed 404 live). `/api/v3/anime`
+    (including its own `anilist-ids` filter) *does* work with no token
+    at all, but only returns a show-level delay flag
+    (`delayedTimetable`/`delayedFrom`/`delayedUntil`), no per-episode
+    date — confirmed insufficient to fill §6.7's air-date-source slot.
+    Asked the user directly rather than guess at an undocumented
+    registration process; confirmed: fall back to RSS outright (this
+    line's own documented fallback), accepting the fuzzy-matching
+    tradeoff. Only the **raw** feed (`/jpnrss.xml`, native/Japan
+    release) is polled — `/subrss.xml`/`/dubrss.xml` describe a
+    fansub/dub group's own later release, a different event this
+    project doesn't model. Confirmed live: the raw feed is a fixed
+    ~25-item rolling window that covered barely 16 real hours in one
+    snapshot — rotates faster than a day, so `animeschedule.py` rides
+    Ops's existing **hourly** tick (`run_daily_and_weekly_once`), not
+    B.1/B.4's daily due-gated cadence; no new interval added.
+    `animeschedule_client.py` (pure fetch/parse, stdlib
+    `xml.etree`/`re`, no new dependency) + `animeschedule.py`
+    (orchestration: candidate shows = `status = 'watching'` and
+    actively airing and `tracking_space = 'anime'`; matching reuses
+    `fuzzy.best_match()` — §5.4/A.7 — verbatim, same threshold, same
+    "return None rather than guess" philosophy, restricted to the
+    candidate pool per the user's own explicit call ("keeping the
+    search to tracked shows should elucidate the vast majority of
+    cases"); episode resolution restricted to that show's own
+    currently-airing season(s) — exactly one candidate episode row
+    applies the date, zero or more than one **flags, doesn't guess**
+    (`pending_review`, field `animeschedule_episode_match`, per "simply
+    flagging those which aren't clear will suffice")). New
+    `pollAnimeSchedule: AnimeSchedulePollResult!` mutation, global
+    sweep shape (no per-item argument), same as B.3's
+    `pollFileAvailability`. No migration needed — `air_date_source`'s
+    CHECK constraint already included `'animeschedule'` since the
+    initial schema.
+  - **Manual-override exemption resolved** — the question §6.7
+    explicitly left open when B.4 built AniList/Sonarr's hard
+    manual-date gate: asked directly, confirmed animeschedule.net
+    **does** override `air_date_source = 'manual'`, restating the
+    user's own B.4 reasoning ("the overwrite and log is intended for
+    when a new information about an air date is logged... those data
+    are likely to come from animeschedule"). Every such overwrite still
+    opens/extends a `pending_review` — visible, never silent.
+  - **Post-write review caught a real bug before commit**: the flagged
+    (ambiguous-match) write path called `pending_review.open_or_extend`
+    unconditionally on every sweep, with no equivalent to the applied
+    path's own "unchanged if the value already matches" early return.
+    Given the raw feed's own ~16-hour rolling window (above) and Ops's
+    hourly tick, the *same* still-in-window item would re-append an
+    identical finding to the same review's `proposed_value_chain` on
+    roughly a dozen consecutive sweeps — turning §5.6's "the automatic
+    source changed its mind again" chain into a dozen copies of "the
+    same feed item was re-read." Fixed with a local guard
+    (`_flag()`/`_last_chain_entry()` in animeschedule.py) that skips the
+    write when the finding's message is identical to the review's own
+    last chain entry — kept local to this module rather than changed in
+    shared `pending_review.py`, to avoid altering B.4's already-shipped/
+    verified AniList chain-accumulation semantics as a side effect. A
+    second, smaller finding in the same pass: the "show matched but has
+    no currently-airing season" branch returned `"unchanged"` (silently
+    swallowing a real match) rather than flagging — corrected to flag,
+    with a dedicated regression test calling `_apply_or_flag` directly
+    (the branch is unreachable via `poll_anime_schedule`'s own normal
+    flow today, since `_candidate_shows`/`_airing_seasons` share one
+    predicate, but the mislabeled fallback could have silently
+    swallowed a real finding if that ever changed).
+  - **Verified**: 410 tests passing (was 384 at B.4's close), `ruff
+    check .`/`ruff format --check` clean. Live testing throughout, not
+    just doc-reading: the 401/404 endpoint findings above, the real raw
+    feed's actual item shape and ~25-item/~16-hour window. Clean-install
+    sanity check (fresh venv, real `pip install`) confirmed
+    `lcars.animeschedule`/`lcars.animeschedule_client`/
+    `ops.scheduler.run_animeschedule_once`/
+    `ops.lcars_client.LcarsClient.poll_anime_schedule` all import
+    cleanly; `lcars.server.build_schema()` confirmed
+    `AnimeSchedulePollResult`/`pollAnimeSchedule` both real, bound
+    schema members (104 types total).
 - [ ] **B.6 — Per-integration service-health tracking**: reachable?
   rate-limited? — its own concept, separate from any individual show's
   state.

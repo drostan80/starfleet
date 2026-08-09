@@ -809,6 +809,16 @@ type LocalFileAuditResult {
 }
 
 # ---------------------------------------------------------------------------
+# §6.7 animeschedule.net air-date reconciliation (B.5)
+# ---------------------------------------------------------------------------
+
+"pollAnimeSchedule's own confirmation summary — same human/Ops-facing-count spirit as AvailabilityPollResult above. episodesUpdated is a genuine air_date_utc correction/confirmation; flagged is an RSS item that matched one of LCARS's own watching+airing shows by title but couldn't be resolved to exactly one episode row (pending_review, field \"animeschedule_episode_match\") — a human needs to look, not a source of truth about what changed on its own."
+type AnimeSchedulePollResult {
+  episodesUpdated: Int!
+  flagged: Int!
+}
+
+# ---------------------------------------------------------------------------
 # §6.12 data export/import
 # ---------------------------------------------------------------------------
 
@@ -982,6 +992,26 @@ type Mutation {
   via `ops audit-local-files` at a moment of the caller's own choosing.
   """
   auditLocalFiles: LocalFileAuditResult!
+  """
+  §6.7, B.5 — a global sweep of animeschedule.net's raw (native/Japan
+  release) RSS feed, matched by fuzzy title against LCARS's own
+  watching+actively-airing anime shows, restricted to those shows'
+  currently-airing season(s). A confident single-episode match writes
+  air_date_utc/air_date_source = ANIMESCHEDULE — this source **does**
+  override an existing air_date_source = MANUAL value (§6.7's own
+  priority order), on the reasoning a real animeschedule.net release
+  report is a genuine reschedule signal, not just another opinion to
+  rank; every such overwrite still opens/extends a pending_review, per
+  §5.6, never silent. An RSS item that title-matches a tracked show but
+  resolves to zero or more than one candidate episode row is flagged
+  (pending_review, field "animeschedule_episode_match") rather than
+  guessed. No per-item argument — one call sweeps the whole feed, same
+  "global sweep, not per-show" shape pollFileAvailability already
+  established. Rides Ops's own existing hourly tick (no new interval):
+  the feed's own rolling window (§10.1, confirmed live) rotates faster
+  than a day, so this can't share B.1/B.4's daily due-gated cadence.
+  """
+  pollAnimeSchedule: AnimeSchedulePollResult!
   """
   §6.1/§6.8, A.9 — clamps/rounds silently to the 0-20 quarter-point
   scale rather than rejecting out-of-range input. Also pushes to

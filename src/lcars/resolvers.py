@@ -25,6 +25,7 @@ from graphql import GraphQLError
 
 from lcars import (
     anilist_client,
+    animeschedule,
     availability,
     config,
     db,
@@ -1150,6 +1151,15 @@ def resolve_audit_local_files(_, info):
     docstring for the full rationale."""
     conn = db.get_connection()
     return local_audit.audit_local_files(conn)
+
+
+@mutation.field("pollAnimeSchedule")
+def resolve_poll_anime_schedule(_, info):
+    """§6.7, B.5 — animeschedule.py's own global RSS sweep. No
+    require_client() — same passive/not-a-changed_by-column reasoning
+    as pollFileAvailability/auditLocalFiles above."""
+    conn = db.get_connection()
+    return animeschedule.poll_anime_schedule(conn)
 
 
 @query.field("recommendedAvailabilityPollIntervalSeconds")

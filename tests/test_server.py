@@ -4702,6 +4702,10 @@ RECOMMENDED_INTERVAL_QUERY = """
     query { recommendedAvailabilityPollIntervalSeconds }
 """
 
+POLL_ANIME_SCHEDULE = """
+    mutation { pollAnimeSchedule { episodesUpdated flagged } }
+"""
+
 
 async def test_poll_file_availability_returns_zero_with_nothing_configured(client):
     # No Sonarr/Radarr credentials in the client fixture's default config (§4.9's
@@ -4733,6 +4737,17 @@ async def test_audit_local_files_wiring_returns_empty_with_nothing_configured(cl
         "orphanFiles": [],
         "untrackedShows": [],
     }
+
+
+async def test_poll_anime_schedule_returns_zero_with_no_candidate_shows(client):
+    # No watching+actively-airing anime shows in this fresh DB — candidates
+    # is empty, so poll_anime_schedule() returns early without ever calling
+    # animeschedule_client.fetch_raw_feed() (no real network call here). The
+    # actual matching/reconciliation logic is test_animeschedule.py's job;
+    # this only locks in that the mutation is wired to
+    # animeschedule.poll_anime_schedule() with correct camelCase field names.
+    data = await gql(client, POLL_ANIME_SCHEDULE, headers=auth_headers())
+    assert data["pollAnimeSchedule"] == {"episodesUpdated": 0, "flagged": 0}
 
 
 async def test_recommended_availability_poll_interval_defaults_to_baseline(client):

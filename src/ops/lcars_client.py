@@ -249,6 +249,20 @@ class LcarsClient:
         data = await self._query(query)
         return data["auditLocalFiles"]
 
+    async def poll_anime_schedule(self) -> dict:
+        """§6.7, B.5 — the global animeschedule.net RSS sweep
+        (pollAnimeSchedule): no per-item argument, one call matches the
+        whole feed against every watching+airing anime show at once.
+        Called by scheduler.py's own automatic loop, riding the same
+        hourly tick as run_daily_and_weekly_once — the feed's own
+        rolling window rotates faster than a day (animeschedule.py's
+        own docstring), so it can't wait for B.1/B.4's daily cadence."""
+        query = """
+        mutation { pollAnimeSchedule { episodesUpdated flagged } }
+        """
+        data = await self._query(query)
+        return data["pollAnimeSchedule"]
+
     async def recommended_availability_poll_interval_seconds(self) -> int:
         """§5.2/§6.7, B.3 — LCARS computes Ops's own adaptive cadence
         (300s/900s/3600s) server-side, from data only it holds (watching

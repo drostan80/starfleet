@@ -222,6 +222,20 @@ async def test_poll_file_availability_sends_no_variables_and_returns_the_result(
     await client.aclose()
 
 
+async def test_poll_anime_schedule_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        return httpx.Response(
+            200, json={"data": {"pollAnimeSchedule": {"episodesUpdated": 2, "flagged": 1}}}
+        )
+
+    client = _client(handler)
+    result = await client.poll_anime_schedule()
+    assert result == {"episodesUpdated": 2, "flagged": 1}
+    await client.aclose()
+
+
 async def test_backfill_file_availability_sends_no_variables_and_returns_the_result():
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read())

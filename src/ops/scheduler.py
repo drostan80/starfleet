@@ -1,6 +1,7 @@
 """The polling loops themselves — B.1 (daily metadata refresh), B.2
 (Fribb reconciliation, two tiers: weekly + monthly), B.3 (file
-availability, one adaptive-cadence loop).
+availability, one adaptive-cadence loop), B.5 (animeschedule.net RSS
+sweep, riding B.1's own hourly tick).
 
 Each `run_*_once()` is the real, testable unit — one full sweep,
 exercised directly by a test with no infinite loop or real sleep
@@ -89,15 +90,27 @@ async def run_availability_once(client: LcarsClient) -> int:
     return result["episodesUpdated"] + result["showsUpdated"]
 
 
+async def run_animeschedule_once(client: LcarsClient) -> int:
+    """§6.7, B.5 — one global animeschedule.net RSS sweep
+    (pollAnimeSchedule): same "no per-item loop, the mutation itself
+    covers everything" shape as run_availability_once above. Returns
+    the combined episodes-updated+flagged count."""
+    result = await client.poll_anime_schedule()
+    return result["episodesUpdated"] + result["flagged"]
+
+
 async def run_daily_and_weekly_once(client: LcarsClient) -> int:
-    """B.1's daily tier and B.2's weekly tier share one loop/interval
-    (run_forever's own docstring explains why: the weekly tier is
-    self-gating, so it doesn't need its own timer) — this is the single
-    unit that loop actually calls each tick. Returns the combined count,
-    for the caller to log."""
+    """B.1's daily tier, B.2's weekly tier, and B.5's animeschedule
+    sweep share one loop/interval (run_forever's own docstring explains
+    why the weekly tier doesn't need its own timer; B.5's own module
+    docstring explains why animeschedule can't wait for a daily one —
+    its feed's rolling window rotates faster than that) — this is the
+    single unit that loop actually calls each tick. Returns the
+    combined count, for the caller to log."""
     daily = await run_once(client)
     weekly = await run_weekly_once(client)
-    return daily + weekly
+    animeschedule = await run_animeschedule_once(client)
+    return daily + weekly + animeschedule
 
 
 async def _loop(coro_fn, client: LcarsClient, interval_seconds: int, label: str) -> None:
@@ -148,14 +161,18 @@ async def run_forever(
     weekly tier is self-gating (dueForSeasonReconciliation only ever
     returns a season once it's genuinely 7+ days stale, regardless of
     how often it's checked), so it rides the same cadence as B.1's daily
-    tier rather than needing its own interval. The monthly tier is
-    unconditional/not self-limiting, so it gets its own,
+    tier rather than needing its own interval. B.5's animeschedule sweep
+    rides that identical tick too — no per-item due-gating to be
+    self-limiting about, it just needs "more often than daily" (its own
+    module docstring has the rolling-window reasoning), and hourly
+    already satisfies that with no fourth loop needed. The monthly tier
+    is unconditional/not self-limiting, so it gets its own,
     much-longer-period loop (SCOPE.md §5.5's B.2 note, BUILD_PLAN.md's
     B.2 entry). B.3's availability loop is its own third, dynamic-
     interval loop — it can't share either of the other two: faster than
     the hourly one when urgent, but not on a fixed cadence at all."""
     await asyncio.gather(
-        _loop(run_daily_and_weekly_once, client, interval_seconds, "daily+weekly"),
+        _loop(run_daily_and_weekly_once, client, interval_seconds, "daily+weekly+animeschedule"),
         _loop(run_monthly_once, client, monthly_interval_seconds, "monthly"),
         _availability_loop(client),
     )

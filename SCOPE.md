@@ -1633,8 +1633,9 @@ as AniList/Sonarr/Radarr.
   get no background refresh (a monthly rolling option is named, not
   implemented). A fourth, uncapped trigger — immediate fetch on show
   creation (§4, Phase A) — is independent of this cadence.
-- **Air-date source priority**: Manual > animeschedule.net (REST API
-  v3, `/timetables`, preferred over its RSS feeds — §10.1) > AniList
+- **Air-date source priority**: Manual > animeschedule.net (**revised
+  2026-08-09 (B.5) — RSS `/jpnrss.xml`, not the REST API's
+  `/timetables`; see the B.5 note below for why**) > AniList
   `airingSchedule` > Sonarr raw. **Revised 2026-08-09 (B.4) — this now
   genuinely gates for AniList/Sonarr**: the original framing here ("does
   not gate the apply... including one overwriting a manual value") was
@@ -1642,11 +1643,8 @@ as AniList/Sonarr/Radarr.
   reasoning before commit — see the B.4 note immediately below for why.
   Manual is hard-protected from AniList and Sonarr specifically, the
   same shape `season.manual_override` already gives season mapping (§3
-  principle 6). Whether animeschedule.net (B.5, not built yet) gets an
-  exemption from that gate — since it's specifically the source for
-  genuine real-world reschedule events, not just another opinion to
-  rank — is an open question for B.5's own design pass, not resolved
-  here.
+  principle 6). **Resolved 2026-08-09 (B.5)**: animeschedule.net *does*
+  get an exemption from that gate — see the B.5 note below.
 
   **Resolved 2026-08-09 (B.4), AniList `airingSchedule` — the first of
   these automatic sources actually built** (Sonarr raw is a one-time
@@ -1717,6 +1715,77 @@ as AniList/Sonarr/Radarr.
     "anilist", ...)` is the actual write-path for a genuine correction,
     keyed by the **episode's** own id, same shared mechanism A.4/A.8
     already use.
+
+  **Resolved 2026-08-09 (B.5), animeschedule.net — route settled by
+  live testing, not `BUILD_PLAN.md`'s own original assumption**:
+  `BUILD_PLAN.md`'s B.5 line preferred the REST API v3's
+  `/timetables/{airType}`, filtered by `anilist-ids`. Real, live calls
+  found this endpoint returns **401 "Unauthorized. Use private
+  endpoint."** with no self-serve registration path discoverable
+  (`/api`, `/api/v3`, `/about/api`, `/api-docs` all confirmed 404
+  live). A different endpoint, `/api/v3/anime` (including its own
+  `anilist-ids` filter), *does* work with no token — but only returns a
+  show-level delay flag (`delayedTimetable`/`delayedFrom`/
+  `delayedUntil`), no per-episode date, confirmed insufficient to fill
+  this section's air-date-source slot on its own. Asked the user
+  directly rather than guess at an undocumented app-registration
+  process: confirmed to fall back to RSS outright — `BUILD_PLAN.md`'s
+  own already-documented fallback, accepting the fuzzy-matching
+  tradeoff `§10.1` originally flagged RSS for.
+  - **Raw feed only** (`/jpnrss.xml`) — its own item text ("released
+    *natively*") is the Japan broadcast release, matching
+    `episode.air_date_utc`'s existing semantics, the same real-world
+    event AniList's `airingSchedule`/Sonarr's raw date both describe.
+    `/subrss.xml`/`/dubrss.xml` describe a fansub/dub group's own,
+    later release — a different event this project doesn't model, not
+    fetched.
+  - **Hourly, not daily — a real cadence finding, not a preference**:
+    confirmed live, the raw feed is a fixed ~25-item rolling window
+    that covered barely 16 hours of real releases in one snapshot —
+    global release volume rotates it faster than a day, so a daily
+    check (B.1/B.4's own cadence) would let the window roll over
+    completely and silently miss tracked shows. `pollAnimeSchedule`
+    rides Ops's existing hourly tick (`run_daily_and_weekly_once`)
+    instead — no new interval, same "no new interval" precedent B.1/
+    B.2/B.4 already established, just a different existing tick to
+    reuse.
+  - **Matching restricted to watching+actively-airing anime shows
+    only** — the user's own explicit design call: "keeping the search
+    to tracked shows should elucidate the vast majority of cases...
+    simply flagging those which aren't clear will suffice." Reuses
+    `fuzzy.best_match()` (§5.4, A.7) verbatim against this restricted
+    candidate pool — same threshold, same "return None rather than
+    guess" philosophy; most of the global feed's volume (shows LCARS
+    doesn't track) is expected to silently match nothing, not flagged.
+    A title match alone can't disambiguate *which* season/episode row
+    within a multi-season show an item refers to, so episode resolution
+    is further restricted to that show's own currently-airing
+    season(s): exactly one candidate episode row applies the date; zero
+    or more than one **flags rather than guesses**
+    (`pending_review`, `entity_type = "show"`, `field =
+    "animeschedule_episode_match"` — same shape `metadata._guarded`,
+    A.8, already uses for its own "couldn't cleanly resolve this" case).
+    **Caught in review, before commit**: the flagged path's own write
+    isn't naturally idempotent the way the applied path is — the raw
+    feed's rolling window means the same item re-sweeps roughly a dozen
+    times on Ops's hourly tick, so an unguarded `open_or_extend` would
+    duplicate an identical finding into the same review's own value
+    chain that many times. Guarded locally (`animeschedule.py`'s own
+    `_flag()`, not a change to shared `pending_review.py`, to avoid
+    touching B.4's already-verified chain-accumulation semantics as a
+    side effect): a repeat of the exact same finding is treated as a
+    no-op, only a genuinely different finding extends the chain.
+  - **Manual-override exemption resolved** — the question this section
+    explicitly left open when B.4 built AniList/Sonarr's hard
+    manual-date gate: asked directly, confirmed animeschedule.net
+    *does* override `air_date_source = 'manual'`, restating the user's
+    own B.4 reasoning for exactly this case ("the overwrite and log is
+    intended for when a new information about an air date is
+    logged... those data are likely to come from animeschedule").
+    Every such overwrite still opens/extends a `pending_review` — the
+    same shared mechanism, never a silent write.
+  - No migration needed — `air_date_source`'s CHECK constraint already
+    included `'animeschedule'` since the initial schema (§5.2).
 - **Service-level health**: per-integration reachability/rate-limit
   status (Sonarr/Radarr/AniList/animeschedule.net), distinct from any
   individual show's tracking state. Tracked by Ops (Phase B's
@@ -2057,25 +2126,29 @@ actually needs:
    every possible edge case (the user recalled other issues existing
    historically without specifics) — treat as strong, not
    absolutely final, if a genuinely new pattern surfaces later.
-~~2. animeschedule.net feed technical details~~ — **substantially
-   resolved**. Real finding: a full **REST API v3** exists
-   (`/api/v3`), not just RSS as originally assumed — `/anime/{slug}`,
-   `/anime` (searchable/filterable directly by `mal-ids`/
-   `anilist-ids`/`anidb-ids` — no fuzzy matching needed), and
-   `/timetables/{airType}` (`raw`\|`sub`\|`dub`\|`all`) returning
-   structured `TimetableAnime` objects with explicit `episodeDate`/
-   `episodeNumber` fields — a materially better fit than RSS for this
-   schema. Three public RSS feeds also confirmed live (`/jpnrss.xml`,
-   `/subrss.xml`, `/dubrss.xml` — RFC 2822 `pubDate`, UTC) but with
-   thin, free-text items (no structured episode number or external id)
-   — kept as a documented fallback, not the primary path. Rate limit:
-   **120 req/min, global** (their own docs flag it as subject to
-   change). Format: JSON, lowerCamelCase, ISO 8601 UTC. **Still
-   unverified, needs an actual test call rather than more doc-reading**:
-   whether the read-only `/anime`/`/timetables` endpoints require an
-   OAuth2 bearer token at all, and the app-registration process itself
-   (free? approval needed?) — low-stakes unknowns, easy to resolve once
-   building starts.
+~~2. animeschedule.net feed technical details~~ — **fully resolved
+   2026-08-09 (B.5)**, the one remaining unverified detail closed by an
+   actual test call, not more doc-reading. A full **REST API v3**
+   exists (`/api/v3`) — `/anime/{slug}`, `/anime` (searchable/
+   filterable directly by `mal-ids`/`anilist-ids`/`anidb-ids`), and
+   `/timetables/{airType}` returning structured `TimetableAnime`
+   objects with explicit `episodeDate`/`episodeNumber` fields. Live
+   calls found: `/anime` (including its `anilist-ids` filter) needs
+   **no token at all** — but `/timetables/{airType}` returns a real
+   **401 "Unauthorized. Use private endpoint,"** and no self-serve
+   registration page exists (`/api`, `/api/v3`, `/about/api`,
+   `/api-docs` all confirmed 404 live) — not a simple "get a free key"
+   situation. `/anime`'s own data turned out insufficient for this
+   project's need anyway: it's a show-level delay flag
+   (`delayedTimetable`/`delayedFrom`/`delayedUntil`), no per-episode
+   date. Decision, made with the user directly rather than guessed: use
+   the three public RSS feeds after all (`/jpnrss.xml`/`/subrss.xml`/
+   `/dubrss.xml` — RFC 2822 `pubDate`, UTC, confirmed live), only the
+   **raw** one (native/Japan release, matching `episode.air_date_utc`'s
+   existing semantics) actually polled. Rate limit: **120 req/min,
+   global** (their own docs flag it as subject to change) — moot for
+   B.5's own hourly single-fetch cadence. See §6.7's own B.5 note for
+   the full reconciliation design this finding drove.
 ~~3. MAL API verification~~ — **fully resolved**, all four original
    assumptions confirmed accurate (OAuth2+refresh token, 5-value
    status enum, 0–10 score, unpublished-but-now-practically-known rate

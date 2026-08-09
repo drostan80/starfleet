@@ -13,6 +13,7 @@ from ops.lcars_client import LcarsError
 from ops.scheduler import (
     _availability_loop,
     _loop,
+    run_animeschedule_once,
     run_availability_once,
     run_daily_and_weekly_once,
     run_forever,
@@ -36,6 +37,7 @@ class _FakeClient:
         fail_season_ids: set[str] | None = None,
         availability_result: dict | None = None,
         recommended_interval: int = 3600,
+        animeschedule_result: dict | None = None,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
@@ -47,6 +49,10 @@ class _FakeClient:
             "showsUpdated": 0,
         }
         self._recommended_interval = recommended_interval
+        self._animeschedule_result = animeschedule_result or {
+            "episodesUpdated": 0,
+            "flagged": 0,
+        }
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -81,6 +87,9 @@ class _FakeClient:
 
     async def recommended_availability_poll_interval_seconds(self) -> int:
         return self._recommended_interval
+
+    async def poll_anime_schedule(self) -> dict:
+        return self._animeschedule_result
 
 
 # --- run_once (B.1) ---------------------------------------------------------
@@ -178,6 +187,19 @@ async def test_run_availability_once_is_zero_with_nothing_updated():
     assert await run_availability_once(client) == 0
 
 
+# --- run_animeschedule_once (B.5) --------------------------------------------
+
+
+async def test_run_animeschedule_once_sums_updated_and_flagged():
+    client = _FakeClient(animeschedule_result={"episodesUpdated": 3, "flagged": 2})
+    assert await run_animeschedule_once(client) == 5
+
+
+async def test_run_animeschedule_once_is_zero_with_nothing_updated():
+    client = _FakeClient()
+    assert await run_animeschedule_once(client) == 0
+
+
 # --- _availability_loop (B.3's own dynamic-interval loop) -------------------
 
 
@@ -237,10 +259,14 @@ async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_it
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
 
 
-async def test_run_daily_and_weekly_once_sums_both_tiers():
-    client = _FakeClient(due_shows=[{"id": "s-a"}], due_seasons=[_season("z-a", "s-b")])
+async def test_run_daily_and_weekly_once_sums_all_three_tiers():
+    client = _FakeClient(
+        due_shows=[{"id": "s-a"}],
+        due_seasons=[_season("z-a", "s-b")],
+        animeschedule_result={"episodesUpdated": 1, "flagged": 1},
+    )
     count = await run_daily_and_weekly_once(client)
-    assert count == 2
+    assert count == 4
     assert client.refreshed == ["s-a"]
     assert client.reconciled == [("s-b", 1)]
 
@@ -291,7 +317,7 @@ async def test_run_forever_wires_up_all_three_loops(monkeypatch):
     client = _FakeClient()
     await run_forever(client, interval_seconds=3600, monthly_interval_seconds=2592000)
     assert set(calls) == {
-        ("run_daily_and_weekly_once", 3600, "daily+weekly"),
+        ("run_daily_and_weekly_once", 3600, "daily+weekly+animeschedule"),
         ("run_monthly_once", 2592000, "monthly"),
     }
     assert availability_calls == [client]
