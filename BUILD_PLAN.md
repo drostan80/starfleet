@@ -1537,10 +1537,10 @@ own suite and CI. Findings and their resolutions:
 `SCOPE.md` §4 "Phase B" / §6.7. Build **Ops**, the autonomous
 background scheduler.
 
-- [ ] **B.1 — Daily metadata refresh** for `watching`-status,
+- [x] **B.1 — Daily metadata refresh** for `watching`-status,
   actively-airing shows; on-open trigger capped to the same
   once-per-day ceiling (not stacking). **Design question carried over
-  from the 2026-08-09 consolidation audit, resolve here, not before**:
+  from the 2026-08-09 consolidation audit, resolved here, not before**:
   §11.2's sync-resolvers/single-shared-connection execution model is
   justified entirely by "nothing ever touches the connection
   concurrently" — true only because Phase A has no autonomous
@@ -1548,10 +1548,138 @@ background scheduler.
   premise (a background job needing DB + outbound HTTP access,
   independent of any client request) — a long poll could block the
   event loop for every concurrent GraphQL request while it runs.
-  Decide the concurrency model (a second connection? a worker
-  thread/process? `asyncio.to_thread()` after all, reconsidered against
-  real Phase B shape rather than Phase A's?) before writing B.1's own
-  scheduler, not as an afterthought once it's already running.
+  Presented four options, asked rather than guessed given the scale of
+  the decision (it sets the pattern for every later B-step, not just
+  this one): a second in-process connection (WAL mode); a dedicated
+  worker thread/process in the same container; `asyncio.to_thread()`
+  reconsidered against Phase B's real shape; or Ops as a separate
+  process with **no** database access at all, driving LCARS purely
+  through its own GraphQL API like any other client. **Confirmed: the
+  last one.** Full rationale in `SCOPE.md` §11.2's new "Resolved
+  2026-08-09 (B.1)" note — short version: Ops is already a distinct
+  named component (§1), §3 principle 8 already frames every LCARS-
+  facing actor as a peer client, and this keeps §11.2's original
+  "nothing touches the connection concurrently" premise *literally*
+  true going forward instead of needing re-justification at every later
+  B-step. Cost stated plainly there too: every Ops responsibility from
+  here on needs a real mutation/query to act through, not direct DB
+  access — B.2–B.10 inherit this, not just B.1.
+  - **Two more real gaps closed by reuse, not a second ask** (both
+    flagged as blocking, both resolved from precedent already in
+    `SCOPE.md` — see its own B.1 note for the reasoning in each case):
+    a new `show.metadata_last_refreshed_at` column, same per-entity
+    "last checked" shape `season.last_reconciled_at` (§5.5) already
+    established; and the on-open trigger turned out to need **no new
+    mutation at all** — it's the same new `dueForMetadataRefresh` query
+    below, called by whichever caller happens first (Ops's own clock or
+    a client on open), followed by the existing `refreshShowMetadata`
+    (A.8) — "not stacking" falls out of the shared timestamp rather
+    than needing its own guard.
+  - **Built**: migration for `show.metadata_last_refreshed_at`
+    (nullable `TEXT`, same shape as every other optional timestamp
+    column in this schema). `util.start_of_today_utc(home_timezone)` —
+    `home_timezone`'s (§6.13, A.16) first real consumer, six steps
+    after it was built with none. `schema.graphql`:
+    `Show.metadataLastRefreshedAt: DateTime`, new
+    `Query.dueForMetadataRefresh(...): ShowConnection!` (§8's
+    deliberately-designed-query-shapes precedent, not generic
+    pass-through filtering). `resolvers.py`: the eligibility query
+    reuses `_show_is_airing` (A.10) verbatim rather than re-deriving
+    the same "any episode with a null/future air_date_utc" predicate a
+    second time — computed in Python first, same `paginate_list()`
+    pattern `nextUp` (A.11) already established, not a single raw-SQL
+    `WHERE`, since the airing check isn't expressible as one column
+    comparison. `metadata.fetch_and_populate()` (§4/A.8) now stamps
+    `metadata_last_refreshed_at` at the end of every run, regardless of
+    which individual source branches succeeded — an `addShow`-triggered
+    fetch therefore already counts as "refreshed today," so Ops's very
+    next poll correctly skips a show created hours earlier.
+  - **New `src/ops` package** — Ops itself, a separate console script/
+    process (`ops = "ops.cli:main"`, `pyproject.toml`), no DB dependency
+    at all: `ops/lcars_client.py` (async `httpx` GraphQL client, close
+    port of Data's own real `lcars_client.py` — same bearer-token +
+    `X-LCARS-Client` header shape, `ops` instead of `data`),
+    `ops/config.py` (`OPS_LCARS_URL`/`OPS_LCARS_BEARER_TOKEN` incl. the
+    A.23 `_FILE` convention, `OPS_POLL_INTERVAL_SECONDS`, default 3600),
+    `ops/scheduler.py` (`run_once()` — the testable unit, walks every
+    page of `dueForMetadataRefresh`, calls `refreshShowMetadata` per
+    show, one show's failure doesn't stop the rest; `run_forever()` — a
+    thin `while True: run_once(); sleep(interval)` wrapper), `ops/
+    cli.py` (`ops run`). `SCOPE.md` §11.3 documents the compose-service
+    shape (same image, `command: ops run` override, no migrations, its
+    own env — see that section).
+  - **Tests**: migration round-trip (upgrade adds the column, downgrade
+    removes it). `test_util.py` (+`start_of_today_utc` cases: a fixed
+    instant near a day boundary in a non-UTC zone, confirming the
+    bucket flips at local midnight not UTC midnight). `test_server.py`
+    (`dueForMetadataRefresh`: excludes a non-watching show, excludes a
+    fully-aired watching show, excludes a watching+airing show already
+    refreshed today, includes one that's never been refreshed and one
+    refreshed yesterday; `refreshShowMetadata`/`addShow`'s inline fetch
+    both stamp the timestamp). New `test_ops_lcars_client.py` (mirrors
+    Data's own `lcars_client` test shape — success, 401, GraphQL error,
+    connect/timeout, all via an injected fake transport, no real
+    network) and `test_ops_scheduler.py` (`run_once` calls
+    `refresh_show_metadata` once per due show; a per-show exception is
+    caught and logged, not fatal to the rest of the batch; zero due
+    shows is a clean no-op).
+  - **Verified**: 290 tests passing (was 266), `ruff check .` clean,
+    full migration chain round-trips (`upgrade head` → `downgrade base`
+    → `upgrade head`). Unbound-field sweep re-run, matched to this
+    project's own established convention (domain object-typed fields
+    and Query/Mutation resolvers, not the generic `*Edge`/`*Connection`
+    fields Ariadne already resolves by default dict lookup, never
+    explicitly bound anywhere in this codebase's history) —
+    `dueForMetadataRefresh` now bound, only `Query.backlog` (B.9)
+    remains. **Beyond the mocked unit tests**: a real in-process
+    end-to-end run — a real migrated SQLite DB, the real ASGI app, and
+    Ops's own real `LcarsClient` (not a fake) all wired together over
+    `httpx.ASGITransport` — added a watching+airing show,
+    confirmed `dueForMetadataRefresh` actually finds it, called
+    `refreshShowMetadata` through Ops's client, then confirmed the show
+    no longer comes back as due — proving the daily ceiling actually
+    suppresses a re-fetch, not just that the query shape is plausible
+    (the class of gap both consolidation audits kept catching: a
+    mechanism firing into something that silently doesn't work).
+  - **Three real gaps caught by a review pass before checking this off**,
+    none from a failing test — the same "verify for real, don't trust
+    that it's probably fine" practice this file's own past audits used:
+    - Reusing `_show_is_airing` (A.10) verbatim carries a real, silent
+      consequence its own docstring states plainly: "a movie has no
+      episode rows at all, so it's always non-airing." A `media_shape
+      = movie` show can therefore never appear in `dueForMetadataRefresh`,
+      regardless of status — exactly the shape both consolidation audits
+      kept catching (A.24 was "silently bare forever," this is "silently
+      never refreshed"). Judged deliberate on reflection (a `watching`
+      movie is already released, with little reason for its metadata to
+      keep changing the way an actively-airing show's does) rather than
+      reversed — but it was undocumented and untested until now. Fixed:
+      recorded explicitly in `SCOPE.md` §11.2's B.1 note, same
+      "low-stakes, easily revisable" self-flagged class of call as
+      A.13/A.14, plus a dedicated test (a watching movie, never
+      refreshed, still excluded).
+    - `ops/lcars_client.py`'s `_query` (ported from Data's real client
+      unchanged) fell through to a raw `payload["data"]` on a malformed
+      200 response (non-JSON body, or JSON with neither `data` nor
+      `errors`) — raising `TypeError`/`KeyError` instead of `LcarsError`.
+      Confirmed by direct reproduction, not assumed: a mocked non-JSON
+      200 response raised `TypeError`. That would have escaped both
+      `run_once`'s and `run_forever`'s own `except LcarsError` — fatal
+      for Data's TUI is visible to a human; fatal for Ops's unattended
+      daemon is a silent, permanent stop to all background sync. Fixed:
+      `_query` now raises `LcarsError` explicitly for this case (Data's
+      own real `lcars_client.py` has the same gap, deliberately not
+      touched here — a different repo, out of this step's scope). New
+      test confirms it.
+    - `run_forever`'s own `except LcarsError` was narrower than its
+      stated job — belt-and-suspenders broadened to bare `Exception`,
+      same reasoning `metadata._guarded` (A.8) already applies to the
+      identical "never let one bad response crash the long-running
+      process" concern. New test: a genuinely unanticipated exception
+      (not `LcarsError`) is caught and the loop reaches a second tick.
+  - 293 tests passing after these three fixes (was 290 before them, 266
+    at Phase A's own close), `ruff check .` clean, unbound-field sweep
+    unaffected.
 - [ ] **B.2 — Weekly Fribb dataset reconciliation** — deliberately
   slower/independent of the daily cadence.
 - [ ] **B.3 — Sonarr/Radarr polling for file availability**

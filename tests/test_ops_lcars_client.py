@@ -1,0 +1,140 @@
+"""Ops's own GraphQL client — B.1. Same pattern Data's own real
+`test_lcars_client.py` (`~/repos/data`) already established for its
+sibling client: an injected `httpx.MockTransport`, no real network call.
+"""
+
+import json
+
+import httpx
+import pytest
+
+from ops.lcars_client import LcarsAuthError, LcarsClient, LcarsError
+
+
+def _client(handler) -> LcarsClient:
+    return LcarsClient("http://lcars:8000", "test-token", transport=httpx.MockTransport(handler))
+
+
+async def test_refresh_show_metadata_sends_the_right_headers_and_variables():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {"id": "s-abc123"}
+        assert request.headers["x-lcars-client"] == "ops"
+        assert request.headers["authorization"] == "Bearer test-token"
+        return httpx.Response(200, json={"data": {"refreshShowMetadata": {"id": "s-abc123"}}})
+
+    client = _client(handler)
+    result = await client.refresh_show_metadata("s-abc123")
+    assert result == {"id": "s-abc123"}
+    await client.aclose()
+
+
+async def test_due_for_metadata_refresh_walks_every_page():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        calls.append(payload["variables"]["after"])
+        if payload["variables"]["after"] is None:
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "dueForMetadataRefresh": {
+                            "edges": [{"node": {"id": "s-page001", "displayTitle": "A"}}],
+                            "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+                        }
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "dueForMetadataRefresh": {
+                        "edges": [{"node": {"id": "s-page002", "displayTitle": "B"}}],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    shows = await client.due_for_metadata_refresh()
+    assert [s["id"] for s in shows] == ["s-page001", "s-page002"]
+    assert calls == [None, "cursor-1"]
+    await client.aclose()
+
+
+async def test_due_for_metadata_refresh_empty_result_is_a_clean_no_op():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "dueForMetadataRefresh": {
+                        "edges": [],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    assert await client.due_for_metadata_refresh() == []
+    await client.aclose()
+
+
+async def test_raises_lcars_auth_error_on_401():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={})
+
+    client = _client(handler)
+    with pytest.raises(LcarsAuthError):
+        await client.refresh_show_metadata("s-abc123")
+    await client.aclose()
+
+
+async def test_raises_lcars_error_on_graphql_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"errors": [{"message": "no such show: s-bad"}]})
+
+    client = _client(handler)
+    with pytest.raises(LcarsError, match="no such show"):
+        await client.refresh_show_metadata("s-bad")
+    await client.aclose()
+
+
+async def test_raises_on_connect_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    client = _client(handler)
+    with pytest.raises(LcarsError, match="Could not connect"):
+        await client.refresh_show_metadata("s-abc123")
+    await client.aclose()
+
+
+async def test_raises_lcars_error_on_malformed_200_response():
+    # A real gap caught by review, not a test failure: a 200 with no
+    # valid JSON body (or JSON with neither "data" nor "errors") used to
+    # fall straight into `payload["data"]`, raising a raw TypeError/
+    # KeyError that would escape run_once/run_forever's own
+    # `except LcarsError` handling and kill the unattended daemon.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not json")
+
+    client = _client(handler)
+    with pytest.raises(LcarsError, match="unexpected response"):
+        await client.refresh_show_metadata("s-abc123")
+    await client.aclose()
+
+
+async def test_raises_on_timeout():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.TimeoutException("boom")
+
+    client = _client(handler)
+    with pytest.raises(LcarsError, match="Timed out"):
+        await client.refresh_show_metadata("s-abc123")
+    await client.aclose()

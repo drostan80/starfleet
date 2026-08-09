@@ -457,6 +457,31 @@ def resolve_next_up(_, info, **page_args):
     return pagination.paginate_list(items, **page_args)
 
 
+@query.field("dueForMetadataRefresh")
+def resolve_due_for_metadata_refresh(_, info, **page_args):
+    """§6.7/B.1 — Ops's own daily-pass query; a client's on-open trigger
+    calls this exact same query (SCOPE.md §11.2's B.1 note) rather than
+    a separate mutation. Eligibility is `status = WATCHING` **and**
+    actively airing — reuses `_show_is_airing` (A.10) verbatim rather
+    than re-deriving the same "any episode with a null/future
+    air_date_utc" predicate a second time in raw SQL; §6.7's own text
+    ("watching-status, actively-airing shows... not-airing/not-watching
+    shows get no background refresh") reads as one combined filter, not
+    two independent jobs. Not a single-table WHERE (same reason nextUp,
+    A.11, isn't) — the airing check isn't one column comparison — so
+    candidates are computed in Python first and handed to
+    pagination.paginate_list, same pattern as nextUp."""
+    conn = db.get_connection()
+    cutoff = util.start_of_today_utc(config.get_current().home_timezone)
+    candidates = conn.execute(
+        "SELECT * FROM show WHERE status = 'watching'"
+        " AND (metadata_last_refreshed_at IS NULL OR metadata_last_refreshed_at < ?)",
+        (cutoff,),
+    ).fetchall()
+    due = [dict(show) for show in candidates if _show_is_airing(conn, show["id"])]
+    return pagination.paginate_list(due, **page_args)
+
+
 @next_up_entry_type.field("show")
 def resolve_next_up_entry_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])

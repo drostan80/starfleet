@@ -34,6 +34,11 @@ dependencies = [
 
 [project.scripts]
 lcars = "lcars.cli:main"
+# Ops (§1 naming table, §4 Phase B, B.1) — a separate deployable, sharing
+# this package/image but with no dependency on lcars's own code (SCOPE.md
+# §11.2's B.1 note: it holds no database connection, drives LCARS purely
+# over GraphQL like any other client).
+ops = "ops.cli:main"
 
 [project.optional-dependencies]
 dev = [

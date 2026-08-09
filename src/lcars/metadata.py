@@ -103,6 +103,20 @@ def fetch_and_populate(conn, show_id: str) -> None:
     elif show["media_shape"] == "movie":
         _guarded(conn, show, "radarr", _fetch_radarr)
 
+    # B.1, §6.7/§11.2 — stamped unconditionally, regardless of which (if
+    # any) branch above actually succeeded: this is an "attempt" marker,
+    # not a "succeeded" one, matching every _guarded branch's own
+    # best-effort/never-blocks philosophy. A genuine failure is already
+    # visible via pending_review and retriable any time via
+    # refreshShowMetadata — this stamp only prevents Ops's own daily pass
+    # (Query.dueForMetadataRefresh) from re-attempting a show that was
+    # just fetched, addShow's own inline call included, so a show created
+    # today isn't immediately re-fetched by Ops's next poll the same day.
+    conn.execute(
+        "UPDATE show SET metadata_last_refreshed_at = ? WHERE id = ?",
+        (util.now_utc_iso(), show_id),
+    )
+
 
 def _guarded(conn, show: dict, service: str, fn: Callable[[object, dict], None]) -> None:
     """Runs `fn(conn, show)`, catching anything at all — a malformed

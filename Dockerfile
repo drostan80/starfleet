@@ -61,3 +61,11 @@ EXPOSE 8000
 # publish the port on any interface — not a network-topology decision,
 # see the standing side-question answer in this project's history).
 CMD ["sh", "-c", "alembic upgrade head && lcars"]
+
+# Ops (B.1, SCOPE.md §11.2/§11.3) shares this exact image — `ops` is a
+# second console script from the same `pip install .` (src/ops/), needs
+# none of the migrations/schema.graphql above (it holds no DB connection
+# at all, drives LCARS purely over GraphQL). The compose entry for the
+# `ops` service overrides `command` to `ops run` instead of using this
+# CMD, and gets its own env (OPS_LCARS_URL/OPS_LCARS_BEARER_TOKEN[_FILE]) —
+# see SCOPE.md §11.3's own B.1 addendum for the full compose shape.

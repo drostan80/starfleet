@@ -1948,6 +1948,97 @@ data-model design in §1–§10 — full rationale in the discussion memo.
   Confirmed with the user: address as part of B.1's own design work
   (see `BUILD_PLAN.md`'s B.1 entry), not pulled forward into Phase A.
 
+**Resolved 2026-08-09 (B.1)**: Ops is a **separate process, with no
+database connection of its own at all** — it drives LCARS purely
+through the GraphQL API, holding its own bearer token and sending
+`X-LCARS-Client: ops`, the same shape Data/Holodeck/Captain's Log
+already use. This dissolves the concurrency question rather than
+solving it: only LCARS's own single event loop ever touches the shared
+`sqlite3` connection, exactly as §11.2's original justification assumed
+— Ops adds a second caller of the API, not a second caller of the
+database. Three alternatives (a second in-process connection with WAL;
+a dedicated worker thread/process inside the same container; wrapping
+every Ops-triggered call in `asyncio.to_thread()`) were presented
+alongside this one and explicitly not chosen. Reasons, not just the
+outcome: **§1's own naming table already lists Ops as a distinct named
+component** ("Chabrol's background scheduler"), not a mode of LCARS
+itself; **§3 principle 8** already frames every LCARS-facing actor as a
+peer client talking over the same API, no privileged one; and this
+keeps the "nothing touches the connection concurrently" premise
+literally true going forward, rather than requiring it to be re-proven
+every time a new Ops responsibility is added in B.2–B.10. Cost, stated
+plainly: every Ops responsibility needs a *real mutation/query* to act
+through — some already exist from Phase A (`refreshShowMetadata`,
+`reconcileSeasonMapping`, `refreshShowServicePresence`), others (
+recording service health, per-episode availability) don't yet and
+become explicit schema work in their own later B-steps, not something
+Ops can shortcut by reaching into the database directly. Deployment:
+one more service in the same Docker Compose stack (§11.3) alongside
+`lcars`, not folded into its own container — a small, deliberate
+addition to that section, not a change to it.
+
+**B.1's own two follow-on schema questions, resolved by reuse rather
+than asked separately** (both flagged as blocking by the design
+review, both closeable directly from precedent already in this
+document, same "low-stakes, easily revisable, resolved by close-
+reading" class of call §6.11/§6.6 already made without a separate
+round):
+- **Per-show due-for-refresh state**: a new `show.metadata_last_
+  refreshed_at` column (nullable `DateTime`), stamped at the end of
+  `metadata.fetch_and_populate()` (§6.7/A.8) every time it runs,
+  regardless of whether any individual source branch inside it
+  succeeded — the exact same per-entity "last time this was checked"
+  shape `season.last_reconciled_at` (§5.5) already established, applied
+  one level up. A show just added (A.8's inline call) is therefore
+  already "refreshed today" and correctly skipped by Ops's very next
+  poll — no wasted re-fetch on the same day it was created.
+- **The on-open trigger is not a separate mutation** — it's the same
+  `dueForMetadataRefresh` query (below) called by whichever caller
+  happens first, Ops's own clock or a client on open, followed by the
+  existing `refreshShowMetadata` (A.8) for whatever comes back. The
+  once-per-day ceiling lives entirely in the timestamp column above, so
+  calling it twice on the same day — once from Ops, once from a client
+  opening — is naturally idempotent no matter which fires first; no new
+  mutation, no new concept, "not stacking" falls out of the shared
+  state rather than needing its own guard.
+- **New `Query.dueForMetadataRefresh`** (§8's "deliberately designed
+  query shapes" precedent): shows where `status = WATCHING` **and**
+  actively airing (reusing A.10's own `_show_is_airing` predicate — any
+  episode with a null or future `air_date_utc` — verbatim, not
+  re-derived; §6.7's "watching-status, actively-airing shows" reads as
+  one combined filter, not two independent background jobs, confirmed
+  by its own very next sentence: "Not-airing/not-watching shows get no
+  background refresh") **and** not yet refreshed since the start of
+  "today" in `home_timezone` (§6.13) — the first real consumer of that
+  setting, exactly the cadence it was already named for. A `ShowConnection`,
+  same Relay-cursor shape as every other list field (§8/A.2).
+
+  **Real consequence of reusing `_show_is_airing`, made explicit rather
+  than left implicit**: that predicate's own docstring (A.10) states "a
+  movie has no episode rows at all, so it's always non-airing" — reused
+  here unchanged, a `media_shape = movie` show can therefore **never**
+  appear in `dueForMetadataRefresh`, regardless of `status`, permanently.
+  Deliberate, not an oversight: a `watching` movie is, almost by
+  definition, already released (its own `status` implies someone is
+  partway through or has already watched it), so its metadata (cast/
+  synopsis/poster/duration) has little reason to keep changing the way an
+  actively-airing episodic show's does — the whole reason a *daily*
+  cadence exists. File-availability changes for a movie are B.3's job
+  (Radarr polling), a different concern from metadata content. Same
+  "low-stakes, easily revisable" class of call as A.13/A.14's own
+  self-flagged scope splits — reversible by simply dropping the airing
+  gate for `media_shape = movie` specifically, if real use shows a movie
+  genuinely needs a periodic re-fetch after all.
+
+  A second, smaller consequence of `metadata.fetch_and_populate()`
+  stamping unconditionally (above): `addShow` always creates a `planned`
+  show (A.11's own test note), so every show is stamped "refreshed today"
+  at creation regardless of eligibility — a show flipped to `watching`
+  later the same day is correctly `dueForMetadataRefresh`-eligible only
+  from the next day on. Self-correcting, one day's delay at most, and
+  arguably right (it genuinely was just fetched) — noted here so a future
+  audit reads it as understood, not rediscovers it.
+
 ### 11.3 Hosting & build pipeline
 
 - **Containerized (Docker), deployed as an additional service in the
@@ -1969,6 +2060,20 @@ data-model design in §1–§10 — full rationale in the discussion memo.
 - A Docker image also makes the eventual Rust rewrite a clean drop-in
   swap of one image for another, with no change to how it's deployed
   or how it joins the Sonarr stack.
+
+**Ops's own deployment, added 2026-08-09 (B.1, §11.2)**: the same
+image, a second service entry in the same compose stack, not a second
+Dockerfile — `pip install .` already picks up both `lcars`/`ops` as
+sibling packages under `src/` (`[tool.setuptools.packages.find]`), and
+Ops needs none of `lcars`'s own build-time inputs (no `schema.graphql`
+package-data, no Alembic migrations to run against a mounted volume —
+it never touches the database). The compose `ops` service overrides
+`command` to `ops run` instead of the image's default
+`alembic upgrade head && lcars`, and gets its own environment
+(`OPS_LCARS_URL` pointing at the `lcars` service's internal compose
+address, `OPS_LCARS_BEARER_TOKEN`/`_FILE` — same A.23 secret-file
+convention, a copy of the same value configured on the `lcars` side of
+the bearer-token check, §8).
 
 ### 11.4 ID scheme
 

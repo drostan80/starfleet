@@ -23,6 +23,7 @@ from lcars import (
     radarr_client,
     sonarr_client,
     tmdb_client,
+    util,
 )
 from lcars.server import build_app
 
@@ -1842,6 +1843,115 @@ async def test_next_up_is_paginated(client, migrated_db):
     )
     assert len(data["nextUp"]["edges"]) == 1
     assert data["nextUp"]["pageInfo"]["hasNextPage"] is True
+
+
+# --- dueForMetadataRefresh (§6.7, B.1) --------------------------------------
+
+DUE_FOR_METADATA_REFRESH_QUERY = """
+    query { dueForMetadataRefresh { edges { node { id } } } }
+"""
+
+SHOW_METADATA_REFRESH_QUERY = """
+    query($id: ID!) { show(id: $id) { id metadataLastRefreshedAt } }
+"""
+
+
+def _set_metadata_last_refreshed_at(migrated_db: Path, show_id: str, value: str | None) -> None:
+    conn = db.get_connection()
+    conn.execute("UPDATE show SET metadata_last_refreshed_at = ? WHERE id = ?", (value, show_id))
+    conn.commit()
+
+
+async def test_due_for_metadata_refresh_excludes_a_non_watching_show(client, migrated_db):
+    show = await add_show(client, titleRomaji="Just Planned")  # addShow default: PLANNED
+    _insert_episode_with_air_date(migrated_db, "e-due001", show["id"], None)  # airing
+    data = await gql(client, DUE_FOR_METADATA_REFRESH_QUERY, headers=auth_headers())
+    ids_ = {e["node"]["id"] for e in data["dueForMetadataRefresh"]["edges"]}
+    assert show["id"] not in ids_
+
+
+async def test_due_for_metadata_refresh_excludes_a_fully_aired_watching_show(client, migrated_db):
+    show = await _add_watching_show(client, titleRomaji="Fully Aired")
+    _insert_episode_with_air_date(migrated_db, "e-due002", show["id"], "2020-01-01T00:00:00Z")
+    # Isolate the airing check from the "already refreshed today" one — addShow's own
+    # inline fetch already stamped this at creation, above.
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    data = await gql(client, DUE_FOR_METADATA_REFRESH_QUERY, headers=auth_headers())
+    ids_ = {e["node"]["id"] for e in data["dueForMetadataRefresh"]["edges"]}
+    assert show["id"] not in ids_
+
+
+async def test_due_for_metadata_refresh_excludes_a_show_already_refreshed_today(
+    client, migrated_db
+):
+    show = await _add_watching_show(client, titleRomaji="Refreshed Today")
+    _insert_episode_with_air_date(migrated_db, "e-due003", show["id"], None)  # airing
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], util.now_utc_iso())
+    data = await gql(client, DUE_FOR_METADATA_REFRESH_QUERY, headers=auth_headers())
+    ids_ = {e["node"]["id"] for e in data["dueForMetadataRefresh"]["edges"]}
+    assert show["id"] not in ids_
+
+
+async def test_due_for_metadata_refresh_includes_a_never_refreshed_watching_airing_show(
+    client, migrated_db
+):
+    show = await _add_watching_show(client, titleRomaji="Never Refreshed")
+    _insert_episode_with_air_date(migrated_db, "e-due004", show["id"], None)  # airing
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    data = await gql(client, DUE_FOR_METADATA_REFRESH_QUERY, headers=auth_headers())
+    ids_ = {e["node"]["id"] for e in data["dueForMetadataRefresh"]["edges"]}
+    assert show["id"] in ids_
+
+
+async def test_due_for_metadata_refresh_includes_a_show_refreshed_yesterday(client, migrated_db):
+    show = await _add_watching_show(client, titleRomaji="Refreshed Yesterday")
+    _insert_episode_with_air_date(migrated_db, "e-due005", show["id"], "2099-01-01T00:00:00Z")
+    yesterday = (datetime.now(UTC) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], yesterday)
+    data = await gql(client, DUE_FOR_METADATA_REFRESH_QUERY, headers=auth_headers())
+    ids_ = {e["node"]["id"] for e in data["dueForMetadataRefresh"]["edges"]}
+    assert show["id"] in ids_
+
+
+async def test_due_for_metadata_refresh_excludes_a_watching_movie(client, migrated_db):
+    # Deliberate, documented consequence of reusing _show_is_airing (A.10)
+    # verbatim (SCOPE.md §11.2's B.1 note): a movie has no episode rows at
+    # all, so it's always "non-airing" — a watching movie therefore never
+    # qualifies for the daily background pass, regardless of status or how
+    # long ago (or never) it was refreshed.
+    movie = await add_show(
+        client, mediaShape="MOVIE", trackingSpace="TV", titleRomaji="A Watched Film"
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { id } }",
+        {"id": movie["id"]},
+        headers=auth_headers(),
+    )
+    _set_metadata_last_refreshed_at(migrated_db, movie["id"], None)  # never refreshed either
+    data = await gql(client, DUE_FOR_METADATA_REFRESH_QUERY, headers=auth_headers())
+    ids_ = {e["node"]["id"] for e in data["dueForMetadataRefresh"]["edges"]}
+    assert movie["id"] not in ids_
+
+
+async def test_refresh_show_metadata_stamps_metadata_last_refreshed_at(client, migrated_db):
+    show = await add_show(client)
+    before = await gql(
+        client, SHOW_METADATA_REFRESH_QUERY, {"id": show["id"]}, headers=auth_headers()
+    )
+    assert before["show"]["metadataLastRefreshedAt"] is not None  # addShow's own inline fetch
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    after = await gql(
+        client,
+        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert after["refreshShowMetadata"]["id"] == show["id"]
+    data = await gql(
+        client, SHOW_METADATA_REFRESH_QUERY, {"id": show["id"]}, headers=auth_headers()
+    )
+    assert data["show"]["metadataLastRefreshedAt"] is not None
 
 
 # --- full-text search (§6.5, A.12) -------------------------------------------

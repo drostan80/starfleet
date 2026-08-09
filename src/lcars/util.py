@@ -8,6 +8,7 @@ validates rather than reformats.
 """
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from ariadne import ScalarType
 from graphql import GraphQLError
@@ -32,6 +33,22 @@ def _parse(value: str) -> datetime:
         return datetime.fromisoformat(value)
     except (TypeError, ValueError) as exc:
         raise GraphQLError(f"not a valid ISO-8601 DateTime: {value!r}") from exc
+
+
+def start_of_today_utc(home_timezone: str) -> str:
+    """The start of "today" in `home_timezone` (§6.13), expressed as the
+    same Z-suffixed UTC string every stored timestamp uses — so it's
+    directly comparable via plain string comparison, same as every other
+    consumer of this format (pagination.py's cursors, utc_iso_offset()).
+
+    §6.13's home_timezone was built (A.16) with no consumer at all;
+    B.1's daily-metadata-refresh ceiling is its first real one — "not
+    stacking" buckets by the user's own day boundary, not a UTC one, per
+    §6.7's own framing.
+    """
+    now_local = datetime.now(ZoneInfo(home_timezone))
+    start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start_local.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def add_days(iso_timestamp: str, days: int) -> str:
