@@ -228,6 +228,27 @@ class LcarsClient:
         data = await self._query(query)
         return data["backfillFileAvailability"]
 
+    async def audit_local_files(self) -> dict:
+        """§5.2/§6.10, B.3b — the local file audit: two passes per
+        configured service (a pure-API current-state reconciliation,
+        plus a filesystem-reading orphan/untracked-show discovery pass
+        — see schema.graphql's auditLocalFiles docstring for the full
+        rationale). Never called by scheduler.py's own automatic loop —
+        only by the explicit `ops audit-local-files` CLI command
+        (cli.py), run deliberately by a human."""
+        query = """
+        mutation {
+          auditLocalFiles {
+            episodesCorrected
+            showsCorrected
+            orphanFiles { showId path parsedSeason parsedEpisode }
+            untrackedShows { service title externalId path }
+          }
+        }
+        """
+        data = await self._query(query)
+        return data["auditLocalFiles"]
+
     async def recommended_availability_poll_interval_seconds(self) -> int:
         """§5.2/§6.7, B.3 — LCARS computes Ops's own adaptive cadence
         (300s/900s/3600s) server-side, from data only it holds (watching

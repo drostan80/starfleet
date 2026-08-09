@@ -781,6 +781,34 @@ type AvailabilityPollResult {
 }
 
 # ---------------------------------------------------------------------------
+# §5.2/§6.10 local file audit (B.3b)
+# ---------------------------------------------------------------------------
+
+"A file physically present in a tracked show's own Sonarr/Radarr-reported folder that neither service's own current file record accounts for — auditLocalFiles' own filesystem-reading half (local_audit.py). Report-only: no existing episode/show row to correct, so nothing is written automatically. season/episode are parsed from the filename itself (both of the user's own real Sonarr naming templates always carry S{season}E{episode} somewhere in it) and are null if that parse fails — a parse failure is itself a finding, not silently skipped."
+type OrphanFile {
+  showId: ID!
+  path: String!
+  parsedSeason: Int
+  parsedEpisode: Int
+}
+
+"A show/movie Sonarr or Radarr's own library tracks that has no matching show_external_id crosswalk entry in LCARS at all — auditLocalFiles' other filesystem-adjacent finding. Not auto-created (§5.1's own addShow flow is the only way a show enters LCARS) — listed here for the user to add by hand if they want it tracked. No folder walk happens for these; there's no LCARS row yet to cross-reference against."
+type UntrackedRemoteShow {
+  service: String!
+  title: String!
+  externalId: Int!
+  path: String
+}
+
+"auditLocalFiles' own confirmation summary — same human/Ops-facing-count spirit as AvailabilityPollResult above, not itself the source of truth for what changed."
+type LocalFileAuditResult {
+  episodesCorrected: Int!
+  showsCorrected: Int!
+  orphanFiles: [OrphanFile!]!
+  untrackedShows: [UntrackedRemoteShow!]!
+}
+
+# ---------------------------------------------------------------------------
 # §6.12 data export/import
 # ---------------------------------------------------------------------------
 
@@ -934,6 +962,26 @@ type Mutation {
   window; existing correct state is simply reapplied, not corrupted.
   """
   backfillFileAvailability: AvailabilityPollResult!
+  """
+  §5.2/§6.10, B.3b — the local file audit: two passes per configured
+  service. A pure-API current-state reconciliation (Sonarr's
+  episode?includeEpisodeFile=true / Radarr's own movie?tmdbId=, both
+  independent of and a cross-check against pollFileAvailability's own
+  /history-based state) corrects availableViaSonarr/availableViaRadarr
+  + the matching filePath directly, no filesystem access needed. A
+  second pass, needing LCARS's own container to have the same media
+  volume mount Sonarr/Radarr already have, walks each *tracked* show's
+  own reported folder for files neither service's current record
+  accounts for (orphanFiles) and separately lists any Sonarr/Radarr-
+  known show LCARS doesn't track at all (untrackedShows) — both
+  report-only, never auto-corrected/auto-created. Gracefully skips the
+  filesystem pass (not an error) for any show whose reported path
+  isn't accessible, e.g. before the volume mount is added. Not part of
+  Ops's own automatic loop — deliberately absent from run_forever's
+  scheduling, same reasoning as backfillFileAvailability above, run
+  via `ops audit-local-files` at a moment of the caller's own choosing.
+  """
+  auditLocalFiles: LocalFileAuditResult!
   """
   §6.1/§6.8, A.9 — clamps/rounds silently to the 0-20 quarter-point
   scale rather than rejecting out-of-range input. Also pushes to

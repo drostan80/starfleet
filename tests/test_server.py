@@ -4418,6 +4418,17 @@ BACKFILL_FILE_AVAILABILITY = """
     mutation { backfillFileAvailability { episodesUpdated showsUpdated } }
 """
 
+AUDIT_LOCAL_FILES = """
+    mutation {
+      auditLocalFiles {
+        episodesCorrected
+        showsCorrected
+        orphanFiles { showId path parsedSeason parsedEpisode }
+        untrackedShows { service title externalId path }
+      }
+    }
+"""
+
 RECOMMENDED_INTERVAL_QUERY = """
     query { recommendedAvailabilityPollIntervalSeconds }
 """
@@ -4438,6 +4449,21 @@ async def test_backfill_file_availability_wiring_returns_zero_with_nothing_confi
     # backfill_file_availability(), not poll_file_availability().
     data = await gql(client, BACKFILL_FILE_AVAILABILITY, headers=auth_headers())
     assert data["backfillFileAvailability"] == {"episodesUpdated": 0, "showsUpdated": 0}
+
+
+async def test_audit_local_files_wiring_returns_empty_with_nothing_configured(client):
+    # Same not-configured no-op guard — the actual reconciliation/discovery logic
+    # (including the filesystem-reading orphan pass) is test_local_audit.py's job;
+    # this only locks in that the mutation is wired to local_audit.audit_local_files()
+    # and that its nested OrphanFile/UntrackedRemoteShow types resolve through real
+    # GraphQL with correct camelCase field names.
+    data = await gql(client, AUDIT_LOCAL_FILES, headers=auth_headers())
+    assert data["auditLocalFiles"] == {
+        "episodesCorrected": 0,
+        "showsCorrected": 0,
+        "orphanFiles": [],
+        "untrackedShows": [],
+    }
 
 
 async def test_recommended_availability_poll_interval_defaults_to_baseline(client):

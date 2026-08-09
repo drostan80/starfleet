@@ -1944,6 +1944,79 @@ background scheduler.
       itself having no CLI-level test coverage closed alongside the
       new subcommand, not deferred).
     - **Verified**: 354 tests passing (was 343), `ruff check .` clean.
+- [x] **B.3b — Local file audit** (§5.2/§6.10, §11.3). Originally
+  drafted as PC.1 (Pre-Cutover, "a script... not a new standing
+  feature") — raised by the user directly right after B.3's own commit
+  ("first one need to be validated by the presence of each actual
+  files… there should be a way to attach files present in the path but
+  not linked to sonarr/radarr too"), pulled forward once B.3's own
+  availability columns made it buildable, then reshaped substantially
+  during design; moved into Phase B as its own numbered step once it
+  became clear this is a permanent, re-runnable capability, not a
+  throwaway script — confirmed directly with the user, not assumed.
+  `SCOPE.md` §5.2's own "Resolved 2026-08-09 (B.3b)" note has the full
+  design history; short version:
+  - **Two mechanisms, discovered by testing, not assumed**: Sonarr's
+    `episode?includeEpisodeFile=true` and Radarr's own `movie?tmdbId=`
+    (already embedding `movieFile`) both report each service's
+    **current** file state directly, verified live before building
+    anything — reduces "LCARS says available but the file's gone" and
+    "a file exists LCARS never recorded" to a **pure API comparison**,
+    no filesystem access needed, keeping §6.10's "never scan the
+    filesystem" rule fully intact for those two cases. Only a genuine
+    orphan (no API record at all to compare against) needs the
+    filesystem — a deliberate, narrow exception, not a reversal.
+  - **A permanent mutation, not a one-off script** — the user confirmed
+    they want it re-runnable, not just once before Cutover. Needs
+    LCARS's own compose service to gain its first-ever filesystem mount
+    (`SCOPE.md` §11.3's own B.3b addendum: same media volume Sonarr/
+    Radarr already mount, at the identical container path, read-only)
+    — the orphan-discovery half gracefully no-ops per show if that
+    mount/path isn't accessible, not an error, so reconciliation still
+    works correctly before the mount exists.
+  - **Orphan/untracked findings are report-only** — `pending_review`'s
+    own `entity_type`/`entity_id` shape doesn't fit either case (no
+    existing row to attach to); an untracked remote show isn't
+    auto-created (`addShow` stays the only entry point). Both are
+    returned directly in the mutation's own result.
+  - **Untracked-show discovery is a flat list, not a folder walk** — the
+    user asked for the broader "also discover untracked shows" scope,
+    narrowed on review to listing only (title/external id/path); no
+    LCARS row exists yet to cross-reference a folder walk against.
+  - **Filename parsing**: one anchored regex (`S(\d{2,})E(\d{2,})`)
+    handles both of the user's own real Sonarr naming templates
+    (standard and anime) without template-detection; a file it can't
+    match is still reported (season/episode left null), not skipped.
+  - **Built**: `sonarr_client.py` — `all_series()`, `episodes()` gained
+    `include_episode_file: bool = False`. `radarr_client.py` —
+    `all_movies()` (`movie_by_tmdb_id()` already embedded `movieFile`,
+    confirmed live, no change needed there). New `local_audit.py`:
+    `audit_local_files()` (both services), `_audit_sonarr()`/
+    `_audit_radarr()` (reconciliation + discovery, one pass each).
+    `schema.graphql`: `OrphanFile`, `UntrackedRemoteShow`,
+    `LocalFileAuditResult`, `Mutation.auditLocalFiles`. `ops/
+    lcars_client.py`: `audit_local_files()`. `ops/cli.py`: `ops
+    audit-local-files` — prints both finding lists in full, not just
+    counts, since the point of an audit is a human reading what it
+    found.
+  - **Tests**: new `test_local_audit.py` (16 tests against a real
+    migrated SQLite DB with fake Sonarr/Radarr clients, plus real
+    `tmp_path` directories for the filesystem-reading half — both
+    correction directions, already-correct no-op, not-configured,
+    untracked-show listing without a folder walk, an unfetched-episode
+    skip, a mid-walk client error keeping earlier partial results,
+    orphan detection with and without a parseable filename, and a
+    gracefully-skipped inaccessible path). `test_server.py` (+1:
+    `auditLocalFiles` GraphQL wiring, including its nested
+    `OrphanFile`/`UntrackedRemoteShow` types resolving with correct
+    camelCase field names). `test_ops_lcars_client.py` (+1).
+    `test_ops_cli.py` (+3: bearer-token requirement, findings printed
+    in full, nothing extra printed when there are none).
+  - **Verified**: 375 tests passing (was 354), `ruff check .` clean, no
+    new migration needed (`available_checked_at` already existed on
+    both `episode`/`show`). Clean-install sanity check (fresh venv,
+    real `pip install`) confirmed `lcars.local_audit`/`ops.cli` both
+    import cleanly and `ops audit-local-files --help` is wired.
 - [ ] **B.4 — AniList `airingSchedule` polling.**
 - [ ] **B.5 — animeschedule.net polling.** Prefer the **REST API v3**
   (`/timetables/{airType}`, filtered by `anilist-ids` — avoids fuzzy
@@ -2068,14 +2141,17 @@ on Phase B/C. `SCOPE.md` §7.3/§7.4.
 time after core build/functionality work is done, just has to
 complete before full rollout.
 
-- [ ] **PC.1 — One-time audit/log of existing local files not
-  currently linked via Sonarr/Radarr.** So nothing already on disk
-  gets silently lost once aniq (and its own file-awareness) is
-  archived. Build as a script cross-referencing a real folder walk
-  against `available_via_sonarr`/`available_via_radarr` (§5.2) — no
-  new standing feature, just a one-off tool run once. Distinct from
-  the *ongoing* detection of newly-added non-service files, which
-  stays deliberately deferred (§9, §10.6) — don't build that here.
+- [ ] **PC.1 — Confirm the local file audit has actually been run.**
+  Originally scoped here as "build a script"; **built earlier instead,
+  as Phase B's own B.3b** (`auditLocalFiles`/`ops audit-local-files`),
+  once it became clear this needed to be a permanent, re-runnable
+  capability rather than a one-off pre-Cutover tool — see `SCOPE.md`
+  §5.2's "Resolved 2026-08-09 (B.3b)" note. This step is now just a
+  verification/reminder: run `ops audit-local-files` at least once
+  before Cutover, so nothing already on disk gets silently lost once
+  aniq (and its own file-awareness) is archived. Distinct from the
+  *ongoing* detection of newly-added non-service files, which stays
+  deliberately deferred (§9, §10.6).
 - [ ] **PC.2 — One-time historical imports**: Trakt watch history,
   AniList data, MAL legacy scores (§9/§6.1) — the only time data flows
   *into* LCARS from these sources rather than out.

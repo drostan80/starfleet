@@ -64,8 +64,26 @@ class SonarrClient:
         results = self._get("series", params={"tvdbId": tvdb_id})
         return results[0] if results else None
 
-    def episodes(self, series_id: int) -> list[dict]:
-        return self._get("episode", params={"seriesId": series_id})
+    def all_series(self) -> list[dict]:
+        """§5.2/§6.10, B.3b — every series Sonarr's own library tracks,
+        tvdbId/path included on each — the "does Sonarr know about a
+        show LCARS doesn't track at all" half of the local-file audit
+        (local_audit.py). No params: Sonarr's own `/series` with no
+        filter returns the whole library in one call."""
+        return self._get("series")
+
+    def episodes(self, series_id: int, include_episode_file: bool = False) -> list[dict]:
+        """`include_episode_file=True` (§5.2/§6.10, B.3b) embeds each
+        episode's current `episodeFile` (path included) directly when
+        `hasFile` is true — verified live: this is Sonarr's own
+        *current* state, independent of and a genuine cross-check
+        against the `/history` event log availability.py (B.3) already
+        polls. Defaults False — A.8's existing metadata-fetch caller
+        doesn't need the extra payload."""
+        params = {"seriesId": series_id}
+        if include_episode_file:
+            params["includeEpisodeFile"] = "true"
+        return self._get("episode", params=params)
 
     def history_page(self, page: int, page_size: int = 250) -> dict:
         """§5.2/§6.7, B.3 — one page of Sonarr's own grab/import event

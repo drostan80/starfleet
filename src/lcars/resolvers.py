@@ -31,6 +31,7 @@ from lcars import (
     export_import,
     fuzzy,
     ids,
+    local_audit,
     metadata,
     pagination,
     pending_review,
@@ -1136,6 +1137,19 @@ def resolve_backfill_file_availability(_, info):
     reasoning as pollFileAvailability."""
     conn = db.get_connection()
     return availability.backfill_file_availability(conn)
+
+
+@mutation.field("auditLocalFiles")
+def resolve_audit_local_files(_, info):
+    """§5.2/§6.10, B.3b — local_audit.py's own two-pass audit: a
+    pure-API current-state reconciliation (no require_client() — same
+    passive/not-a-changed_by-column reasoning as pollFileAvailability/
+    backfillFileAvailability) plus a filesystem-reading orphan/
+    untracked-show discovery pass. Not called by Ops's own automatic
+    loop, only by `ops audit-local-files` — see its own schema.graphql
+    docstring for the full rationale."""
+    conn = db.get_connection()
+    return local_audit.audit_local_files(conn)
 
 
 @query.field("recommendedAvailabilityPollIntervalSeconds")

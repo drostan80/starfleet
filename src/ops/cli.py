@@ -57,6 +57,45 @@ def _cmd_backfill_availability(args: argparse.Namespace) -> None:
     asyncio.run(_main())
 
 
+def _cmd_audit_local_files(args: argparse.Namespace) -> None:
+    """§5.2/§6.10, B.3b — the manual trigger for auditLocalFiles: never
+    called by `ops run`'s own loop, only by hand, at a moment of the
+    operator's own choosing. Prints both report-only finding lists
+    (orphan files, untracked remote shows) in full — the whole point of
+    an audit is a human reading what it found, not just a count."""
+    logging.basicConfig(level=logging.INFO)
+    cfg = config.load_config()
+    _require_bearer_token(cfg)
+    print(
+        "Auditing local files against Sonarr's/Radarr's current state — this will "
+        "block LCARS's other requests for the duration. Run this at a quiet moment, "
+        "not while anyone else is using it."
+    )
+
+    async def _main() -> None:
+        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token) as client:
+            result = await client.audit_local_files()
+            print(
+                f"Done: {result['episodesCorrected']} episode(s), "
+                f"{result['showsCorrected']} show(s) corrected."
+            )
+            if result["orphanFiles"]:
+                print(f"\n{len(result['orphanFiles'])} orphan file(s) found (not attached):")
+                for f in result["orphanFiles"]:
+                    season_episode = (
+                        f"S{f['parsedSeason']:02d}E{f['parsedEpisode']:02d}"
+                        if f["parsedSeason"] is not None
+                        else "season/episode unparseable"
+                    )
+                    print(f"  [{season_episode}] {f['path']}")
+            if result["untrackedShows"]:
+                print(f"\n{len(result['untrackedShows'])} untracked remote show(s) found:")
+                for s in result["untrackedShows"]:
+                    print(f"  [{s['service']}] {s['title']} ({s['externalId']}) — {s['path']}")
+
+    asyncio.run(_main())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ops", description="Starfleet's background scheduler.")
     subparsers = parser.add_subparsers(dest="command")
@@ -69,6 +108,12 @@ def main() -> None:
         help="one-time full Sonarr/Radarr history walk — run manually, blocks while it runs",
     )
     backfill.set_defaults(func=_cmd_backfill_availability)
+
+    audit = subparsers.add_parser(
+        "audit-local-files",
+        help="reconcile + discover local files against Sonarr/Radarr — run manually",
+    )
+    audit.set_defaults(func=_cmd_audit_local_files)
 
     # No subcommand at all ("ops" alone) still means "run" — same
     # by-hand default lcars/cli.py's own main() already established,

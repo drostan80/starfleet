@@ -363,18 +363,16 @@ use over to Data.
   the two diverged on anything meaningful during the (no-re-sync,
   §4.0) transition period. Not designed now — worth thinking about only
   once aniq is genuinely about to be retired for good.
-- **Pre-Cutover step, required, timing otherwise flexible**: a
-  one-time audit/log of existing local files not currently linked via
-  Sonarr/Radarr, so nothing already on disk gets silently lost or
-  forgotten once aniq (and its own file-awareness) is archived. Not
-  tied to a specific phase — can happen any time after the core
-  build/functionality work is done, as long as it's complete before
-  full rollout. Distinct from §9's *ongoing* detection of newly-added
-  non-service files, which stays deferred/low-priority — this is a
-  real, scheduled, one-time task. Likely built as a script
-  cross-referencing a folder walk against §5.2's
-  `available_via_sonarr`/`available_via_radarr` flags once those
-  exist, rather than a new standing feature.
+- **Pre-Cutover step, required, timing otherwise flexible**: confirm
+  the local file audit (§5.2/§6.10's B.3b — `auditLocalFiles`,
+  reachable via `ops audit-local-files`) has actually been run at
+  least once, so nothing already on disk gets silently lost or
+  forgotten once aniq (and its own file-awareness) is archived. **No
+  longer "likely built as a script"** — B.3b built this as a permanent
+  mutation once the user confirmed they want it re-runnable, not a
+  one-off tool, so this Pre-Cutover step is now a verification/
+  reminder, not a build task. Distinct from §9's *ongoing* detection of
+  newly-added non-service files, which stays deferred/low-priority.
 
 ---
 
@@ -750,6 +748,64 @@ animeschedule.net.
     already established for filesystem-touching work below, applied
     here to a different cost (blocking-duration, not a settled-rule
     reversal) — consistent with, not a departure from, that precedent.
+
+**Resolved 2026-08-09 (B.3b)**: the local file audit — raised by the
+user directly right after B.3's own commit ("first one need to be
+validated by the presence of each actual files… there should be a way
+to attach files present in the path but not linked to sonarr/radarr
+too"), which maps onto §4.4's own pre-Cutover "audit/log of existing
+local files not currently linked" item, pulled forward once B.3's
+availability columns made it buildable, then substantially reshaped
+during design. Full detail in `BUILD_PLAN.md`'s own B.3b entry; the
+key resolutions:
+- **Two mechanisms, not one, discovered by testing rather than
+  assumed**: Sonarr's `episode?includeEpisodeFile=true` and Radarr's
+  own `movie?tmdbId=` (already embedding `movieFile`) both report each
+  service's **current** file state directly — verified live before
+  building anything. That meant two of the three cases originally
+  discussed (LCARS says available but the file's gone; a file exists
+  that LCARS never recorded) reduce to a **pure API comparison**,
+  needing **no filesystem access at all** — §6.10's "query the API,
+  never scan the filesystem" rule stays fully intact for these. Only a
+  genuine orphan (Sonarr/Radarr never associated anything with the
+  file at all, so there's no API record of it to compare against) has
+  no API answer — that's the one piece that actually reads the
+  filesystem, a deliberate, narrow exception to §6.10, not a reversal
+  of it, matching exactly what §9 below already anticipated for this
+  class of tool.
+- **Not a one-off script — a permanent mutation** (`auditLocalFiles`),
+  once the user clarified they want to keep re-running it, not just
+  once before Cutover. Requires LCARS's own compose service to gain a
+  real filesystem mount for the first time ever (§11.3's own B.3b
+  addendum) — the orphan-discovery half gracefully no-ops (not an
+  error) for any show whose path isn't accessible, so the mutation
+  still works correctly (current-state reconciliation only) before
+  that mount exists.
+- **Orphan/untracked findings are report-only, never auto-written** —
+  `pending_review`'s own `entity_type`/`entity_id` shape doesn't fit
+  either case (no existing row to attach the finding to), and an
+  untracked remote show is deliberately not auto-created (§5.1's
+  `addShow` stays the only entry point). Both are returned directly in
+  the mutation's own result for the user to act on by hand.
+- **Untracked-show discovery is a flat list, not a folder walk** — the
+  user asked for the broader "also discover untracked shows" scope,
+  narrowed on review to just listing (title/external id/path): walking
+  a folder LCARS has no row to cross-reference against would only
+  produce noise.
+- **Filename parsing**: one regex (`S(\d{2,})E(\d{2,})`), anchored,
+  ignoring everything else — handles both of the user's own real
+  Sonarr naming templates (standard and anime) without needing to
+  detect which one produced a given file, since both always carry that
+  token. A file it can't match is still reported (season/episode left
+  null) rather than silently dropped — a parse failure is itself a
+  finding.
+- **Sequencing**: originally PC.1 (Pre-Cutover), moved into Phase B as
+  its own numbered step once it became clear this is a permanent
+  capability, not a throwaway script — confirmed directly with the
+  user rather than assumed. PC.1's own entry now just verifies this
+  has been run at least once before Cutover, not describes the
+  mechanism (`BUILD_PLAN.md`'s Pre-Cutover section, updated to match).
+
 - **Absolute numbering**: sourced as-is when a source reports an
   official value (even non-integer). When no source numbering exists,
   LCARS synthesizes one as `<preceding regular absolute number>.
@@ -2237,6 +2293,22 @@ it never touches the database). The compose `ops` service overrides
 address, `OPS_LCARS_BEARER_TOKEN`/`_FILE` — same A.23 secret-file
 convention, a copy of the same value configured on the `lcars` side of
 the bearer-token check, §8).
+
+**LCARS's own filesystem mount, added 2026-08-09 (B.3b, §5.2)**: the
+`lcars` compose service gains its first-ever filesystem mount — the
+same media volume Sonarr/Radarr already mount, at the identical
+container-internal path they use, so a show's own Sonarr/Radarr-
+reported `path` is directly usable from inside the LCARS container too
+with no translation. Confirmed against the user's own real stack:
+Sonarr/Radarr both mount `${DATA_PATH}:/data` where `DATA_PATH=
+/mnt/ranelagh/data` (their media NAS); `lcars` gets the same
+`${DATA_PATH}:/data:ro` line — read-only, since nothing in LCARS ever
+needs to write or delete a media file, only read one to confirm it
+exists (`auditLocalFiles`'s own orphan-discovery pass, §5.2's B.3b
+note). Everything else B.3/B.3b does (`pollFileAvailability`/
+`backfillFileAvailability`/`auditLocalFiles`'s own reconciliation half)
+stays API-only and needs no mount at all — this is strictly additive,
+not a change to how those already work.
 
 ### 11.4 ID scheme
 

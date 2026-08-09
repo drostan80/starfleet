@@ -238,6 +238,39 @@ async def test_backfill_file_availability_sends_no_variables_and_returns_the_res
     await client.aclose()
 
 
+async def test_audit_local_files_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        assert "auditLocalFiles" in payload["query"]
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "auditLocalFiles": {
+                        "episodesCorrected": 1,
+                        "showsCorrected": 2,
+                        "orphanFiles": [
+                            {"showId": "s-x", "path": "/x.mkv", "parsedSeason": 1,
+                             "parsedEpisode": 2}
+                        ],
+                        "untrackedShows": [
+                            {"service": "sonarr", "title": "Y", "externalId": 5, "path": "/y"}
+                        ],
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    result = await client.audit_local_files()
+    assert result["episodesCorrected"] == 1
+    assert result["showsCorrected"] == 2
+    assert result["orphanFiles"][0]["path"] == "/x.mkv"
+    assert result["untrackedShows"][0]["title"] == "Y"
+    await client.aclose()
+
+
 async def test_recommended_availability_poll_interval_seconds_returns_the_int():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

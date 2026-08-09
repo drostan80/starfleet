@@ -60,9 +60,21 @@ class RadarrClient:
 
     def movie_by_tmdb_id(self, tmdb_id: int) -> dict | None:
         """The matching movie already in Radarr's own library, or None
-        if this tmdb_id isn't tracked there at all — not an error."""
+        if this tmdb_id isn't tracked there at all — not an error. Its
+        own response already embeds `movieFile` (path included) when
+        present — Radarr's *current* state, no separate include-flag or
+        endpoint needed the way Sonarr's episodes() does (verified live:
+        confirmed on a real /movie?tmdbId= response before B.3b was
+        written)."""
         results = self._get("movie", params={"tmdbId": tmdb_id})
         return results[0] if results else None
+
+    def all_movies(self) -> list[dict]:
+        """§5.2/§6.10, B.3b — every movie Radarr's own library tracks,
+        tmdbId/path/movieFile included on each — the "does Radarr know
+        about a movie LCARS doesn't track at all" half of the
+        local-file audit (local_audit.py)."""
+        return self._get("movie")
 
     def history_page(self, page: int, page_size: int = 250) -> dict:
         """§5.2/§6.10, B.3 — Radarr's own grab/import event log, mirrors

@@ -1,0 +1,284 @@
+"""Local file audit — SCOPE.md §5.2/§6.10, BUILD_PLAN.md B.3b.
+
+Two genuinely different mechanisms, done inside one pass per service
+(`_audit_sonarr`/`_audit_radarr`) and bundled behind one mutation
+(`auditLocalFiles`), because they answer the same underlying question
+("is the database actually correct?") from two different angles:
+
+1. **Current-state reconciliation** — pure API, no filesystem access
+   at all, stays fully inside §6.10's "query the API, never scan the
+   filesystem" rule. Sonarr's `episode?includeEpisodeFile=true` and
+   Radarr's own `movie?tmdbId=` (which already embeds `movieFile`)
+   both report *current* truth about what files each service actually
+   has right now — a genuine, independent cross-check against B.3's
+   own `/history`-based polling (an event-log reconstruction that
+   could in principle drift: retention limits, a missed event).
+   Corrects `available_via_sonarr`/`available_via_radarr` + the
+   matching `file_path_*` directly, same columns `availability.py`
+   writes, same "not a changed_by-tracked field" reasoning (no
+   require_client()).
+
+2. **Orphan/untracked discovery** — the one piece that genuinely needs
+   to read the filesystem, since a file Sonarr/Radarr never associated
+   with anything has no API record to query in the first place. This is a
+   deliberate, narrow exception to §6.10 — not a reversal of it — the
+   same "rare, explicit, user-triggered utility" shape §9 already
+   anticipated. Report-only: an orphan file has no existing LCARS row
+   to correct (`pending_review`'s own `entity_type`/`entity_id` shape
+   doesn't fit an orphan any better), and an untracked remote show
+   isn't auto-created — both are returned in the mutation's own result
+   for the user to act on by hand (attach/`addShow`), never written
+   automatically. Needs LCARS's own container to have the identical
+   media volume mount Sonarr/Radarr already have (§11.3's B.3b
+   addendum) — gracefully skipped, not an error, if a show's own
+   reported path isn't accessible (e.g. the mount hasn't been added
+   yet).
+
+Not called by Ops's own automatic loop, same reasoning
+`backfill_file_availability()` (B.3) already established for a
+manually-triggered, potentially-slow operation — `ops
+audit-local-files` is the deliberate trigger. Resolved 2026-08-09
+directly with the user, after B.3's own commit; SCOPE.md §5.2's own
+addendum has the full design history.
+"""
+
+import logging
+import os
+import re
+
+from lcars import radarr_client, sonarr_client, util
+from lcars.config import get_current
+
+logger = logging.getLogger("lcars.local_audit")
+
+# Sonarr/Radarr's own supported media extensions (a deliberately small,
+# common set) — filters out subtitle/nfo/image files that legitimately
+# sit alongside a video file without being one themselves, so those
+# never get reported as false-positive orphans.
+_VIDEO_EXTENSIONS = {".mkv", ".mp4", ".avi", ".m4v", ".ts", ".mov", ".wmv"}
+
+# Matches both of the user's own real naming templates (standard and
+# anime) — both always carry "S{season:00}E{episode:00}" somewhere in
+# the filename regardless of what else surrounds it (episode title,
+# custom formats, media info, absolute number, release group). No
+# per-template detection needed — one anchored pattern handles both,
+# and files predating a template change besides. A file this can't
+# match still gets reported (season/episode left null), not skipped —
+# a parse failure is itself a finding, not silence.
+_SEASON_EPISODE_RE = re.compile(r"[Ss](\d{2,})[Ee](\d{2,})")
+
+
+def audit_local_files(conn) -> dict:
+    """Runs both services' reconciliation + discovery passes, returns
+    the combined result (schema.graphql's LocalFileAuditResult)."""
+    sonarr = _audit_sonarr(conn)
+    radarr = _audit_radarr(conn)
+    return {
+        "episodes_corrected": sonarr["episodes_corrected"],
+        "shows_corrected": radarr["shows_corrected"],
+        "orphan_files": sonarr["orphan_files"] + radarr["orphan_files"],
+        "untracked_shows": sonarr["untracked_shows"] + radarr["untracked_shows"],
+    }
+
+
+def _show_id_for_tvdb(conn, tvdb_id: int) -> str | None:
+    row = conn.execute(
+        "SELECT show_id FROM show_external_id WHERE service = 'tvdb' AND external_id = ?",
+        (str(tvdb_id),),
+    ).fetchone()
+    return row["show_id"] if row else None
+
+
+def _show_id_for_tmdb_movie(conn, tmdb_id: int) -> str | None:
+    row = conn.execute(
+        "SELECT s.id FROM show s"
+        " JOIN show_external_id sei ON sei.show_id = s.id"
+        " WHERE sei.service = 'tmdb' AND sei.external_id = ? AND s.media_shape = 'movie'",
+        (str(tmdb_id),),
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def _known_tvdb_ids(conn) -> set[str]:
+    rows = conn.execute("SELECT external_id FROM show_external_id WHERE service = 'tvdb'")
+    return {row["external_id"] for row in rows}
+
+
+def _known_tmdb_movie_ids(conn) -> set[str]:
+    rows = conn.execute(
+        "SELECT sei.external_id FROM show_external_id sei"
+        " JOIN show s ON s.id = sei.show_id"
+        " WHERE sei.service = 'tmdb' AND s.media_shape = 'movie'"
+    )
+    return {row["external_id"] for row in rows}
+
+
+def _walk_video_files(root: str) -> list[str]:
+    if not os.path.isdir(root):
+        return []  # the mount isn't there (yet), or the path is stale — not an error
+    found = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            if os.path.splitext(name)[1].lower() in _VIDEO_EXTENSIONS:
+                found.append(os.path.join(dirpath, name))
+    return found
+
+
+def _parse_season_episode(filename: str) -> tuple[int | None, int | None]:
+    match = _SEASON_EPISODE_RE.search(filename)
+    if not match:
+        return None, None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _audit_sonarr(conn) -> dict:
+    cfg = get_current()
+    empty = {"episodes_corrected": 0, "orphan_files": [], "untracked_shows": []}
+    if not cfg.sonarr_url or not cfg.sonarr_api_key:
+        return empty
+    known_tvdb_ids = _known_tvdb_ids(conn)
+    episodes_corrected = 0
+    orphan_files: list[dict] = []
+    untracked_shows: list[dict] = []
+    now = util.now_utc_iso()
+
+    try:
+        with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+            all_series = client.all_series()
+
+            for series in all_series:
+                tvdb_id = str(series["tvdbId"])
+                if tvdb_id not in known_tvdb_ids:
+                    untracked_shows.append(
+                        {
+                            "service": "sonarr",
+                            "title": series["title"],
+                            "external_id": series["tvdbId"],
+                            "path": series.get("path"),
+                        }
+                    )
+                    # Not this pass's job to walk a folder LCARS has nothing to match against.
+                    continue
+
+                show_id = _show_id_for_tvdb(conn, series["tvdbId"])
+                episodes = client.episodes(series["id"], include_episode_file=True)
+
+                known_file_paths: set[str] = set()
+                for ep in episodes:
+                    row = conn.execute(
+                        "SELECT id, available_via_sonarr FROM episode"
+                        " WHERE show_id = ? AND season = ? AND episode = ?",
+                        (show_id, ep["seasonNumber"], ep["episodeNumber"]),
+                    ).fetchone()
+                    if row is None:
+                        continue  # not yet fetched into LCARS — A.8's job, not this audit's
+                    episode_file = ep.get("episodeFile")
+                    if ep["hasFile"] and episode_file:
+                        known_file_paths.add(episode_file["path"])
+                        if row["available_via_sonarr"] != "available":
+                            conn.execute(
+                                "UPDATE episode SET available_via_sonarr = 'available',"
+                                " file_path_sonarr = ?, available_checked_at = ? WHERE id = ?",
+                                (episode_file["path"], now, row["id"]),
+                            )
+                            episodes_corrected += 1
+                    elif not ep["hasFile"] and row["available_via_sonarr"] == "available":
+                        conn.execute(
+                            "UPDATE episode SET available_via_sonarr = 'unavailable',"
+                            " file_path_sonarr = NULL, available_checked_at = ? WHERE id = ?",
+                            (now, row["id"]),
+                        )
+                        episodes_corrected += 1
+
+                series_path = series.get("path")
+                if series_path:
+                    for path in _walk_video_files(series_path):
+                        if path in known_file_paths:
+                            continue
+                        season, episode = _parse_season_episode(os.path.basename(path))
+                        orphan_files.append(
+                            {
+                                "show_id": show_id,
+                                "path": path,
+                                "parsed_season": season,
+                                "parsed_episode": episode,
+                            }
+                        )
+    except sonarr_client.SonarrError:
+        logger.exception("Sonarr local audit failed partway through — partial results kept")
+
+    conn.commit()
+    return {
+        "episodes_corrected": episodes_corrected,
+        "orphan_files": orphan_files,
+        "untracked_shows": untracked_shows,
+    }
+
+
+def _audit_radarr(conn) -> dict:
+    cfg = get_current()
+    empty = {"shows_corrected": 0, "orphan_files": [], "untracked_shows": []}
+    if not cfg.radarr_url or not cfg.radarr_api_key:
+        return empty
+    try:
+        with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+            all_movies = client.all_movies()
+    except radarr_client.RadarrError:
+        logger.exception("Radarr local audit failed to list movies — skipped this pass")
+        return empty
+
+    known_tmdb_ids = _known_tmdb_movie_ids(conn)
+    shows_corrected = 0
+    orphan_files: list[dict] = []
+    untracked_shows: list[dict] = []
+    now = util.now_utc_iso()
+
+    for movie in all_movies:
+        tmdb_id = str(movie["tmdbId"])
+        if tmdb_id not in known_tmdb_ids:
+            untracked_shows.append(
+                {"service": "radarr", "title": movie["title"], "external_id": movie["tmdbId"],
+                 "path": movie.get("path")}
+            )
+            continue
+
+        show_id = _show_id_for_tmdb_movie(conn, movie["tmdbId"])
+        row = conn.execute(
+            "SELECT available_via_radarr FROM show WHERE id = ?", (show_id,)
+        ).fetchone()
+        movie_file = movie.get("movieFile")
+        known_file_paths: set[str] = set()
+        if movie.get("hasFile") and movie_file:
+            known_file_paths.add(movie_file["path"])
+            if row["available_via_radarr"] != "available":
+                conn.execute(
+                    "UPDATE show SET available_via_radarr = 'available', file_path_radarr = ?,"
+                    " available_checked_at = ? WHERE id = ?",
+                    (movie_file["path"], now, show_id),
+                )
+                shows_corrected += 1
+        elif not movie.get("hasFile") and row["available_via_radarr"] == "available":
+            conn.execute(
+                "UPDATE show SET available_via_radarr = 'unavailable', file_path_radarr = NULL,"
+                " available_checked_at = ? WHERE id = ?",
+                (now, show_id),
+            )
+            shows_corrected += 1
+
+        movie_path = movie.get("path")
+        if movie_path:
+            for path in _walk_video_files(movie_path):
+                if path in known_file_paths:
+                    continue
+                season, episode = _parse_season_episode(os.path.basename(path))
+                orphan_files.append(
+                    {"show_id": show_id, "path": path, "parsed_season": season,
+                     "parsed_episode": episode}
+                )
+
+    conn.commit()
+    return {
+        "shows_corrected": shows_corrected,
+        "orphan_files": orphan_files,
+        "untracked_shows": untracked_shows,
+    }
