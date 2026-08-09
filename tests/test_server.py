@@ -950,6 +950,59 @@ async def test_anime_show_never_overwrites_a_caller_supplied_anilist_id(client, 
     assert links["anilist"] == "777"
 
 
+async def test_already_bare_anime_show_recovers_on_refresh(client, monkeypatch):
+    """The case that actually motivated A.24 — not a fresh add, but a
+    show *already sitting in the database* bare, as every anime show
+    Data bridged in before this fix does. It must recover on the next
+    `refreshShowMetadata`, with no re-add and no manual id entry."""
+    _patch_fribb_dataset(monkeypatch, dataset=[])  # nothing resolvable yet
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: None)
+    show = await add_show(client, trackingSpace="ANIME", tvdbId=555)
+
+    bare = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { synopsis externalIds { edges { node { service } } } }
+        }
+        """,
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    assert bare["show"]["synopsis"] is None
+    services = {e["node"]["service"] for e in bare["show"]["externalIds"]["edges"]}
+    assert services == {"tvdb"}, "precondition: the show really is bare"
+
+    # Now the dataset knows it (a refreshed Fribb download, or simply the
+    # first fetch that reaches the network) and AniList answers.
+    _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)  # tvdb 555 -> 111
+    fetched = []
+    monkeypatch.setattr(
+        anilist_client, "fetch_media",
+        lambda aid, *a, **kw: fetched.append(aid) or FAKE_ANILIST_MEDIA,
+    )
+    await gql(client, "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
+              {"i": show["id"]}, headers=auth_headers())
+
+    assert fetched == [111]
+    healed = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) {
+            synopsis posterUrl
+            externalIds { edges { node { service externalId } } }
+          }
+        }
+        """,
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    assert healed["show"]["synopsis"] == "A gold rush story."
+    assert healed["show"]["posterUrl"] == "https://anilist.co/img/cover.jpg"
+    links = {e["node"]["service"]: e["node"]["externalId"]
+             for e in healed["show"]["externalIds"]["edges"]}
+    assert links["anilist"] == "111"
+
+
 async def test_anime_show_with_no_resolvable_anilist_id_opens_a_review(client, monkeypatch):
     """§5.1 mandates the link; §3 principle 1 says flag, never gate —
     hard-rejecting would break Data's bridge on every anime add."""
