@@ -99,8 +99,35 @@ class Config:
     tmdb_api_key: str | None = None
 
 
+def _resolve_secret(value: str | None, env_var: str) -> str | None:
+    """File (lowest) < plain env var < `<env_var>_FILE`-pointed secret
+    file (highest) — resolved 2026-08-09, A.23 consolidation audit.
+    Plaintext `lcars.ini` alone doesn't fit a headless Docker deployment
+    as well as Compose's own `secrets:` mechanism, which mounts each
+    secret as a file (typically under `/run/secrets/<name>`) rather than
+    baking it into an env var or a file this app itself manages. A
+    `<VAR>_FILE` env var pointing at that mounted file — the same
+    convention the official postgres/mysql Docker images use — wins over
+    everything else when set, since it's the most explicit,
+    deployment-time-chosen source. `lcars.ini` isn't removed: some
+    values (`anilist_access_token`, minted interactively by `lcars
+    anilist-login`) are written by LCARS itself at runtime, which a
+    read-only secret mount can't support — see save_anilist_token()
+    below. Trailing whitespace/newline is stripped: a mounted secret
+    file almost always ends in one, and a bearer token silently
+    including it would fail every auth check with no obvious reason
+    why."""
+    value = os.environ.get(env_var, value)
+    file_path = os.environ.get(f"{env_var}_FILE")
+    if file_path:
+        value = Path(file_path).read_text().strip()
+    return value
+
+
 def load_config(config_path: Path = CONFIG_PATH) -> Config:
-    """File < env precedence, same as aniq's own load_config()."""
+    """File < env < env `_FILE` (Docker secret) precedence — see
+    _resolve_secret() above for the A.23 addition; everything else
+    matches aniq's own load_config() shape unchanged."""
     cfg = Config()
     if config_path.exists():
         parser = configparser.ConfigParser()
@@ -121,23 +148,23 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.anilist_access_token = parser["lcars"].get("anilist_access_token", fallback=None)
             cfg.home_timezone = parser["lcars"].get("home_timezone", fallback=cfg.home_timezone)
             cfg.tmdb_api_key = parser["lcars"].get("tmdb_api_key", fallback=None)
-    cfg.bearer_token = os.environ.get("LCARS_BEARER_TOKEN", cfg.bearer_token)
+    cfg.bearer_token = _resolve_secret(cfg.bearer_token, "LCARS_BEARER_TOKEN")
     env_db_path = os.environ.get("LCARS_DB_PATH")
     if env_db_path is not None:
         cfg.db_path = Path(env_db_path)
-    cfg.sonarr_url = os.environ.get("LCARS_SONARR_URL", cfg.sonarr_url)
-    cfg.sonarr_api_key = os.environ.get("LCARS_SONARR_API_KEY", cfg.sonarr_api_key)
-    cfg.radarr_url = os.environ.get("LCARS_RADARR_URL", cfg.radarr_url)
-    cfg.radarr_api_key = os.environ.get("LCARS_RADARR_API_KEY", cfg.radarr_api_key)
-    cfg.anilist_client_id = os.environ.get("LCARS_ANILIST_CLIENT_ID", cfg.anilist_client_id)
-    cfg.anilist_client_secret = os.environ.get(
-        "LCARS_ANILIST_CLIENT_SECRET", cfg.anilist_client_secret
+    cfg.sonarr_url = os.environ.get("LCARS_SONARR_URL", cfg.sonarr_url)  # not a secret
+    cfg.sonarr_api_key = _resolve_secret(cfg.sonarr_api_key, "LCARS_SONARR_API_KEY")
+    cfg.radarr_url = os.environ.get("LCARS_RADARR_URL", cfg.radarr_url)  # not a secret
+    cfg.radarr_api_key = _resolve_secret(cfg.radarr_api_key, "LCARS_RADARR_API_KEY")
+    cfg.anilist_client_id = _resolve_secret(cfg.anilist_client_id, "LCARS_ANILIST_CLIENT_ID")
+    cfg.anilist_client_secret = _resolve_secret(
+        cfg.anilist_client_secret, "LCARS_ANILIST_CLIENT_SECRET"
     )
-    cfg.anilist_access_token = os.environ.get(
-        "LCARS_ANILIST_ACCESS_TOKEN", cfg.anilist_access_token
+    cfg.anilist_access_token = _resolve_secret(
+        cfg.anilist_access_token, "LCARS_ANILIST_ACCESS_TOKEN"
     )
-    cfg.home_timezone = os.environ.get("LCARS_HOME_TIMEZONE", cfg.home_timezone)
-    cfg.tmdb_api_key = os.environ.get("LCARS_TMDB_API_KEY", cfg.tmdb_api_key)
+    cfg.home_timezone = os.environ.get("LCARS_HOME_TIMEZONE", cfg.home_timezone)  # not a secret
+    cfg.tmdb_api_key = _resolve_secret(cfg.tmdb_api_key, "LCARS_TMDB_API_KEY")
     return cfg
 
 

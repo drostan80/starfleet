@@ -55,6 +55,13 @@ async def client(migrated_db, monkeypatch):
     # themselves (see the "on-demand metadata fetch" test section below).
     config.set_current(config.Config())
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: None)
+    # A.20 — same reasoning as the AniList stub above: _fetch_sonarr now
+    # reconciles any newly-discovered season against the Fribb dataset
+    # immediately (season_mapping.reconcile_season), so every pre-A.20
+    # Sonarr-fetch test that links a tvdb id would otherwise make a real
+    # network call too. Tests exercising real Fribb matching already
+    # override this via their own _patch_fribb_dataset() call below.
+    monkeypatch.setattr(fribb, "load_dataset", lambda: [])
     app = build_app(BEARER_TOKEN)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -365,6 +372,103 @@ async def test_add_show_anilist_fetch_reuses_existing_studio_and_person(client, 
     assert len(data["studios"]["edges"]) == 1
 
 
+FAKE_ANILIST_MEDIA_WITH_RELATIONS = {
+    **FAKE_ANILIST_MEDIA,
+    "relations": {
+        "edges": [
+            {"node": {"id": 333, "idMal": 433, "format": "TV",
+                      "title": {"romaji": "Golden Kamuy 2", "english": None, "native": None}}},
+            {"node": {"id": 444, "idMal": None, "format": "MOVIE",
+                      "title": {"romaji": "Golden Kamuy Movie", "english": None, "native": None}}},
+            {"node": {"id": 999, "idMal": None, "format": "MANGA",
+                      "title": {"romaji": "Golden Kamuy (manga)", "english": None,
+                                "native": None}}},
+        ]
+    },
+}
+
+
+async def test_add_show_anilist_fetch_creates_relation_stub_shows(client, monkeypatch):
+    """A.21 (2026-08-09 consolidation audit) — show_relation.related_show_id
+    is a real, non-nullable FK; a relation to a show LCARS has never seen
+    must auto-create a tracked=false stub (§5.1's own promotion-target
+    framing), not fail or silently drop the edge. The MANGA-format relation
+    must be skipped entirely — not a show LCARS can ever track."""
+    monkeypatch.setattr(
+        anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_RELATIONS
+    )
+    show = await add_show(client, anilistId=111)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) {
+            relatedShows {
+              edges { node { displayTitle mediaShape trackingSpace tracked status } }
+            }
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    related = {e["node"]["displayTitle"]: e["node"] for e in data["show"]["relatedShows"]["edges"]}
+    assert set(related) == {"Golden Kamuy 2", "Golden Kamuy Movie"}  # manga relation excluded
+    assert related["Golden Kamuy 2"]["mediaShape"] == "EPISODIC"
+    assert related["Golden Kamuy 2"]["trackingSpace"] == "ANIME"
+    assert related["Golden Kamuy 2"]["tracked"] is False
+    assert related["Golden Kamuy 2"]["status"] == "PLANNED"
+    assert related["Golden Kamuy Movie"]["mediaShape"] == "MOVIE"
+
+    stub_data = await gql(
+        client,
+        """
+        query {
+          shows(first: 10) {
+            edges { node { displayTitle externalIds { edges { node { service externalId } } } } }
+          }
+        }
+        """,
+        headers=auth_headers(),
+    )
+    stub = next(
+        e["node"] for e in stub_data["shows"]["edges"]
+        if e["node"]["displayTitle"] == "Golden Kamuy 2"
+    )
+    links = {e["node"]["service"]: e["node"]["externalId"] for e in stub["externalIds"]["edges"]}
+    assert links["anilist"] == "333"
+    assert links["mal"] == "433"
+
+
+async def test_add_show_anilist_fetch_relation_reuses_existing_show(client, monkeypatch):
+    """When the related AniList id is already a real, tracked show in
+    LCARS, the edge must point at that show — no duplicate stub."""
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    existing = await add_show(client, anilistId=333, titleRomaji="Golden Kamuy 2")
+
+    monkeypatch.setattr(
+        anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_RELATIONS
+    )
+    show = await add_show(client, anilistId=111)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { relatedShows { edges { node { id } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    related_ids = {e["node"]["id"] for e in data["show"]["relatedShows"]["edges"]}
+    assert existing["id"] in related_ids
+
+    all_shows = await gql(
+        client,
+        "query { shows(first: 10) { edges { node { id } } } }",
+        headers=auth_headers(),
+    )
+    assert len(all_shows["shows"]["edges"]) == 3  # existing + the new show + the one real stub
+
+
 async def test_add_show_anilist_fetch_no_media_found_leaves_show_bare(client, monkeypatch):
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: None)
     show = await add_show(client, anilistId=12345)
@@ -403,6 +507,284 @@ async def test_add_show_sonarr_fetch_creates_episodes(client, monkeypatch):
     assert len(episodes) == 2
     assert {e["node"]["episode"] for e in episodes} == {1, 2}
     assert episodes[0]["node"]["runtimeMinutes"] == 24
+
+
+async def test_add_show_sonarr_fetch_creates_season_rows_and_sets_episode_season_id(
+    client, monkeypatch
+):
+    """A.20 (2026-08-09 consolidation audit) — the real gap: episodes
+    arriving from Sonarr for a season number never seen before must get
+    a `season` row (§5.5) and their own `episode.season_id` set, not just
+    an episode row with no season entity behind it."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)  # tvdb_id 555, seasons 1+2
+
+    def _ep(season, number):
+        return {"seasonNumber": season, "episodeNumber": number, "airDateUtc": None, "runtime": 24}
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1, 1), _ep(2, 1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) {
+            seasons { edges { node { seasonNumber anilistId malId source } } }
+            episodes { edges { node { season seasonEntity { seasonNumber anilistId } } } }
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    seasons = {s["node"]["seasonNumber"]: s["node"] for s in data["show"]["seasons"]["edges"]}
+    assert seasons[1]["anilistId"] == 111
+    assert seasons[2]["anilistId"] == 222
+    assert seasons[1]["source"] == "FRIBB"
+
+    episodes = {e["node"]["season"]: e["node"] for e in data["show"]["episodes"]["edges"]}
+    assert episodes[1]["seasonEntity"]["anilistId"] == 111
+    assert episodes[2]["seasonEntity"]["anilistId"] == 222
+
+
+async def test_add_show_sonarr_fetch_leaves_manual_override_season_untouched(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)
+
+    def _ep(number):
+        return {"seasonNumber": 1, "episodeNumber": number, "airDateUtc": None, "runtime": None}
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+    await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setSeasonMapping(showId: $id, seasonNumber: 1, anilistId: 999, malId: 999) { id }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    fake._episodes = [_ep(1)]  # simulate a later refetch discovering season 1's episodes
+    await gql(
+        client,
+        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { seasons { edges { node { anilistId manualOverride } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    season = data["show"]["seasons"]["edges"][0]["node"]
+    assert season["anilistId"] == 999  # untouched by the Fribb dataset's own 111
+    assert season["manualOverride"] is True
+
+
+async def test_add_show_sonarr_fetch_backfills_season_id_on_preexisting_episode(
+    client, monkeypatch
+):
+    """Simulates data written before A.20 existed: an episode row with
+    season_id already NULL, from a first fetch with no Fribb dataset
+    reachable at all. A later refetch (dataset now reachable) must
+    backfill season_id onto that same row, not just new ones."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+
+    def _ep(number):
+        return {"seasonNumber": 1, "episodeNumber": number, "airDateUtc": None, "runtime": None}
+
+    def _raise():
+        raise RuntimeError("no cache, no network")
+
+    monkeypatch.setattr(fribb, "load_dataset", lambda: _raise())
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { seasonEntity { id } } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    # unmatched, not null — season row exists even without a Fribb candidate
+    assert data["show"]["episodes"]["edges"][0]["node"]["seasonEntity"] is not None
+
+    _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)
+    conn = db.get_connection()
+    conn.execute("UPDATE episode SET season_id = NULL WHERE show_id = ?", (show["id"],))
+    conn.execute("DELETE FROM season WHERE show_id = ?", (show["id"],))
+    conn.commit()
+    await gql(
+        client,
+        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { episodes { edges { node { seasonEntity { anilistId } } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["episodes"]["edges"][0]["node"]["seasonEntity"]["anilistId"] == 111
+
+
+async def test_add_show_sonarr_fetch_fribb_failure_still_creates_season_and_opens_review(
+    client, monkeypatch
+):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+
+    def _raise():
+        raise RuntimeError("dataset unreachable")
+
+    monkeypatch.setattr(fribb, "load_dataset", _raise)
+
+    def _ep(number):
+        return {"seasonNumber": 1, "episodeNumber": number, "airDateUtc": None, "runtime": None}
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { seasons { edges { node { id source matched } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    season = data["show"]["seasons"]["edges"][0]["node"]
+    assert season["source"] == "UNMATCHED"
+    assert season["matched"] is False
+    reviews = await _pending_reviews_for(client, season["id"])
+    assert any(r["field"] == "anilist_id" and "dataset unreachable" in r["proposedValueChain"][-1]
+               for r in reviews)
+
+
+# --- episode-numbering-scheme automatic derivation (§5.5, A.22) -------------
+
+
+async def test_sonarr_fetch_derives_absolute_scheme_from_series_type(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+
+    def _ep(number):
+        return {"seasonNumber": 1, "episodeNumber": number, "airDateUtc": None, "runtime": None}
+
+    fake = _FakeSonarrClient(series={"id": 42, "seriesType": "anime"}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodeNumberingMapping { scheme source matched } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    mapping = data["show"]["episodeNumberingMapping"]
+    assert mapping["scheme"] == "ABSOLUTE"
+    assert mapping["source"] == "SONARR"
+    assert mapping["matched"] is True
+
+
+async def test_sonarr_fetch_derives_absolute_scheme_from_absolute_episode_number(
+    client, monkeypatch
+):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+    ep = {
+        "seasonNumber": 1,
+        "episodeNumber": 1,
+        "absoluteEpisodeNumber": 13,
+        "airDateUtc": None,
+        "runtime": None,
+    }
+    fake = _FakeSonarrClient(series={"id": 42, "seriesType": "standard"}, episodes=[ep])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodeNumberingMapping { scheme } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["episodeNumberingMapping"]["scheme"] == "ABSOLUTE"
+
+
+async def test_sonarr_fetch_derives_season_episode_scheme_by_default(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+
+    def _ep(number):
+        return {"seasonNumber": 1, "episodeNumber": number, "airDateUtc": None, "runtime": None}
+
+    fake = _FakeSonarrClient(series={"id": 42, "seriesType": "standard"}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodeNumberingMapping { scheme } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["episodeNumberingMapping"]["scheme"] == "SEASON_EPISODE"
+
+
+async def test_sonarr_fetch_never_overwrites_manual_numbering_scheme(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+
+    def _ep(number):
+        return {"seasonNumber": 1, "episodeNumber": number, "airDateUtc": None, "runtime": None}
+
+    fake = _FakeSonarrClient(series={"id": 42, "seriesType": "anime"}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+    await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setEpisodeNumberingScheme(showId: $id, scheme: SEASON_EPISODE) { id }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    fake._episodes = [_ep(2)]  # a later fetch would otherwise re-derive ABSOLUTE
+    await gql(
+        client,
+        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodeNumberingMapping { scheme source } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    mapping = data["show"]["episodeNumberingMapping"]
+    assert mapping["scheme"] == "SEASON_EPISODE"
+    assert mapping["source"] == "MANUAL"
 
 
 async def test_add_show_sonarr_fetch_no_op_when_not_in_sonarr_library(client, monkeypatch):

@@ -54,6 +54,7 @@ from lcars import (
     ids,
     pending_review,
     radarr_client,
+    season_mapping,
     sonarr_client,
     tmdb_client,
     util,
@@ -158,6 +159,84 @@ def _fetch_anilist(conn, show: dict) -> None:
         voice_actors = edge.get("voiceActors") or []
         if voice_actors and (voice_actors[0].get("name") or {}).get("full"):
             _link_person(conn, show["id"], voice_actors[0], "voice_actor", character_name)
+
+    for edge in (media.get("relations") or {}).get("edges") or []:
+        node = edge.get("node") or {}
+        is_trackable = node.get("format") in anilist_client.ANIME_RELATION_FORMATS
+        if node.get("id") is not None and is_trackable:
+            _link_relation(conn, show["id"], node)
+
+
+def _link_relation(conn, show_id: str, related_media: dict) -> None:
+    """§5.9 — `show_relation` is directed, written whenever a show's
+    AniList data reports a relation, one row for this direction only;
+    the other show's own fetch (if/when it happens) writes its own
+    direction independently. `related_show_id` is a real, non-nullable
+    FK (§5.9's own table definition), so a related show LCARS has never
+    seen before needs a real row to point at — resolved 2026-08-09
+    (A.21, asked directly): auto-create it as a `tracked = false` stub,
+    the same promotion-target shape §5.1's own "Show-row promotion
+    paths" already describes ("a bare tracked = false relation/
+    franchise stub becomes a real tracked show by flipping tracked =
+    true"). No franchise auto-creation here either way (A.8's own "no
+    auto franchise" precedent, §5.9 — a relation edge is not a
+    franchise membership, `franchise_member` stays a deliberate,
+    separate action)."""
+    related_anilist_id = str(related_media["id"])
+    existing_show = conn.execute(
+        "SELECT show_id FROM show_external_id WHERE service = 'anilist' AND external_id = ?",
+        (related_anilist_id,),
+    ).fetchone()
+    if existing_show is not None:
+        related_show_id = existing_show["show_id"]
+    else:
+        related_show_id = _create_relation_stub(conn, related_media, related_anilist_id)
+
+    now = util.now_utc_iso()
+    conn.execute(
+        "INSERT OR IGNORE INTO show_relation (show_id, related_show_id, created_at)"
+        " VALUES (?, ?, ?)",
+        (show_id, related_show_id, now),
+    )
+
+
+def _create_relation_stub(conn, related_media: dict, related_anilist_id: str) -> str:
+    title = related_media.get("title") or {}
+    romaji, english, native = title.get("romaji"), title.get("english"), title.get("native")
+    if romaji:
+        primary_title = "romaji"
+    elif english:
+        primary_title = "english"
+    elif native:
+        primary_title = "native"
+    else:
+        # AniList's own schema guarantees at least a romaji title exists for
+        # any real Media — an edge with none at all isn't a usable stub.
+        raise ValueError(f"AniList relation {related_anilist_id} has no title at all")
+
+    show_id = ids.generate_id(conn, "s")
+    now = util.now_utc_iso()
+    media_shape = "movie" if related_media.get("format") == "MOVIE" else "episodic"
+    conn.execute(
+        "INSERT INTO show"
+        " (id, media_shape, tracking_space, title_romaji, title_english, title_native,"
+        "  primary_title, status, tracked, created_at, updated_at)"
+        " VALUES (?, ?, 'anime', ?, ?, ?, ?, 'planned', 0, ?, ?)",
+        (show_id, media_shape, romaji, english, native, primary_title, now, now),
+    )
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'anilist', ?, ?, ?)",
+        (show_id, related_anilist_id, f"https://anilist.co/anime/{related_anilist_id}", now),
+    )
+    if related_media.get("idMal") is not None:
+        mal_id = str(related_media["idMal"])
+        conn.execute(
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES (?, 'mal', ?, ?, ?)",
+            (show_id, mal_id, f"https://myanimelist.net/anime/{mal_id}", now),
+        )
+    return show_id
 
 
 def _upsert_season(
@@ -336,28 +415,56 @@ def _fetch_sonarr(conn, show: dict) -> None:
             return  # not (yet) in Sonarr's own library — not an error, §5.1
         episodes = client.episodes(series["id"])
 
+    # A.20 (2026-08-09 consolidation pass) — real gap found in the audit:
+    # this function used to insert `episode` rows for whatever season
+    # numbers Sonarr reported without ever creating the corresponding
+    # `season` row (§5.5) or setting `episode.season_id`. Sonarr/TVDB is
+    # the only source that ever tells LCARS a season number exists at all
+    # (AniList doesn't — each AniList entry is already scoped to one
+    # season, per §5.5's own "TVDB groups a franchise's seasons... AniList
+    # splits each season" framing), so this is the one place a newly-
+    # discovered season number can be reconciled the moment it appears —
+    # same on-demand-immediately philosophy as every other A.8 branch,
+    # rather than leaving it as a bare unmatched row for a Phase B
+    # scheduler that doesn't exist yet. A season already known (existing
+    # `season` row, whatever its `manual_override`) is left untouched by
+    # `reconcile_season` itself — see that function's own docstring.
+    season_numbers = {ep.get("seasonNumber") for ep in episodes}
+    season_ids_by_number = _ensure_seasons(conn, show["id"], season_numbers)
+
     now = util.now_utc_iso()
     for ep in episodes:
         season_number = ep.get("seasonNumber")
         episode_number = ep.get("episodeNumber")
         if season_number is None or episode_number is None:
             continue
+        season_id = season_ids_by_number.get(season_number)
         existing = conn.execute(
             "SELECT id FROM episode WHERE show_id = ? AND season = ? AND episode = ?",
             (show["id"], season_number, episode_number),
         ).fetchone()
         if existing is not None:
-            continue  # never overwrite an already-tracked episode's own state
+            # A.20 — backfill season_id on a pre-existing row that predates
+            # this fix (or was inserted before its season was reconciled).
+            # Never touches any other column — "never overwrite an
+            # already-tracked episode's own state" still holds.
+            conn.execute(
+                "UPDATE episode SET season_id = ? WHERE id = ? AND season_id IS NULL",
+                (season_id, existing["id"]),
+            )
+            continue
         episode_id = ids.generate_id(conn, "e")
         conn.execute(
             "INSERT INTO episode"
-            " (id, show_id, season, episode, kind, air_date_utc, air_date_source,"
-            "  air_date_raw_sonarr, runtime_minutes, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 'regular', ?, 'sonarr', ?, ?, ?, ?)",
+            " (id, show_id, season, season_id, episode, kind, air_date_utc,"
+            "  air_date_source, air_date_raw_sonarr, runtime_minutes,"
+            "  created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, 'regular', ?, 'sonarr', ?, ?, ?, ?)",
             (
                 episode_id,
                 show["id"],
                 season_number,
+                season_id,
                 episode_number,
                 ep.get("airDateUtc"),
                 ep.get("airDateUtc"),
@@ -366,6 +473,119 @@ def _fetch_sonarr(conn, show: dict) -> None:
                 now,
             ),
         )
+
+    # A.22 — episode-numbering-scheme automatic derivation. Deferred at
+    # A.4 for lack of real data to derive from; A.8's own Sonarr fetch
+    # (this function) is exactly that data, so it's the natural place to
+    # attempt it, the same "on-demand, immediately" pattern as everything
+    # else here — not a separate background pass.
+    _derive_episode_numbering(conn, show["id"], series, episodes)
+
+
+def _ensure_seasons(conn, show_id: str, season_numbers: set) -> dict:
+    """Reconciles a `season` row (§5.5) for every distinct season number
+    just seen in a Sonarr fetch, creating one via `season_mapping.
+    reconcile_season()` (A.4/A.20) for any number with no existing row
+    yet. Returns {season_number: season_id}, including already-existing
+    seasons untouched by this call, for the caller to attach to episode
+    rows. Each reconciliation attempt is individually guarded (unlike
+    the rest of this module's branch-level `_guarded`) — a Fribb dataset
+    hiccup (§5.5, `fribb.load_dataset` can raise with no cache and no
+    network) must not abort the Sonarr episode import itself, which is
+    this function's actual point; on that failure the season row still
+    gets created, just left unmatched, with its own pending_review entry
+    for the failure specifically (distinct from a genuine "no candidate
+    found" review — same field name, different source, so both remain
+    individually traceable)."""
+    result = {}
+    for season_number in sorted(n for n in season_numbers if n is not None):
+        row = conn.execute(
+            "SELECT id FROM season WHERE show_id = ? AND season_number = ?",
+            (show_id, season_number),
+        ).fetchone()
+        if row is not None:
+            result[season_number] = row["id"]
+            continue
+        try:
+            season = season_mapping.reconcile_season(conn, show_id, season_number)
+            result[season_number] = season["id"]
+        except Exception as e:  # noqa: BLE001 — same bare-except reasoning as _guarded
+            season_id = ids.generate_id(conn, "z")
+            now = util.now_utc_iso()
+            conn.execute(
+                "INSERT INTO season"
+                " (id, show_id, season_number, source, matched, manual_override,"
+                "  created_at, updated_at)"
+                " VALUES (?, ?, ?, 'unmatched', 0, 0, ?, ?)",
+                (season_id, show_id, season_number, now, now),
+            )
+            pending_review.open_or_extend(
+                conn, "season", season_id, "anilist_id", "fribb", None, str(e)
+            )
+            conn.commit()
+            result[season_number] = season_id
+    return result
+
+
+def _derive_episode_numbering(conn, show_id: str, series: dict, episodes: list[dict]) -> None:
+    """Automatic numbering-scheme derivation (§5.5), deferred at A.4 for
+    lack of data, built here at A.22 once A.8's own Sonarr fetch supplies
+    it. Heuristic, deliberately simple (personal-tracker scale, same
+    reasoning §6.5's plain-LIKE search already leans on): Sonarr's own
+    `seriesType = 'anime'` flag, or any episode actually carrying a
+    populated `absoluteEpisodeNumber`, is a direct, reliable signal this
+    show uses absolute numbering in Sonarr's own data (the "Sonarr
+    absolute-order info" §5.5 names) — anything else defaults to
+    ordinary season+episode numbering, Sonarr's own standard convention.
+    AniList episode counts (§5.5's other named signal) aren't used here:
+    AniList has no numbering-scheme concept of its own to cross-check
+    against (each AniList entry is already one season, §5.5) — its
+    episode *count* only matters for validating a scheme already derived
+    from Sonarr, not for deriving one from nothing, so a not-linked/
+    not-configured Sonarr leaves this table unmatched rather than
+    guessing off AniList alone, same "no real data, stays honestly
+    unmapped" treatment as `season`. Never touches a `manual_override`
+    row (§3 principle 6) — same protection `setEpisodeNumberingScheme`
+    already gives it.
+    """
+    existing = conn.execute(
+        "SELECT * FROM episode_numbering_mapping WHERE show_id = ?", (show_id,)
+    ).fetchone()
+    if existing is not None and existing["manual_override"]:
+        return
+
+    is_absolute = series.get("seriesType") == "anime" or any(
+        ep.get("absoluteEpisodeNumber") is not None for ep in episodes
+    )
+    scheme = "absolute" if is_absolute else "season_episode"
+    now = util.now_utc_iso()
+
+    if existing is not None:
+        if existing["scheme"] != scheme:
+            pending_review.open_or_extend(
+                conn,
+                "episode_numbering_mapping",
+                existing["id"],
+                "scheme",
+                "sonarr",
+                existing["scheme"],
+                scheme,
+            )
+        conn.execute(
+            "UPDATE episode_numbering_mapping"
+            " SET scheme = ?, source = 'sonarr', matched = 1, updated_at = ?"
+            " WHERE id = ?",
+            (scheme, now, existing["id"]),
+        )
+    else:
+        mapping_id = ids.generate_id(conn, "n")
+        conn.execute(
+            "INSERT INTO episode_numbering_mapping"
+            " (id, show_id, scheme, source, matched, manual_override, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'sonarr', 1, 0, ?, ?)",
+            (mapping_id, show_id, scheme, now, now),
+        )
+    conn.commit()
 
 
 # --- Radarr (media_shape = movie) -------------------------------------------

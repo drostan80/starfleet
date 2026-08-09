@@ -1285,6 +1285,138 @@ order — same reasoning `pagination.py`'s cursors already lean on).
 *(A.9–A.16 don't have hard ordering dependencies on each other — bank
 them in whatever order is convenient once A.1–A.3 exist.)*
 
+**Consolidation audit pass, 2026-08-09** (requested before Phase B
+starts): full independent re-verification of everything in Phase A —
+not another read-through of this file's own prose, actual re-execution.
+Method: ran the full test suite + `ruff` fresh (234/234, clean);
+re-ran the full migration chain (`upgrade head` → `downgrade base` →
+`upgrade head`) on a scratch DB, clean round-trip; re-ran the DB↔SDL
+field-by-field cross-check (last done before A.4/A.9/A.10/A.19 —
+stale, now reconfirmed current, no mismatches beyond already-bound
+relationship fields); re-ran the unbound-object-typed-field sweep
+(still only `Query.backlog`, B.9, no regressions); confirmed
+`~/repos/aniq` untouched by this project specifically (a real commit
+exists there from the same day, but it's the user's own ordinary aniq
+maintenance, explicitly anticipated by §4.0's "small fixes... stay in
+aniq only" — not a Starfleet-side constraint violation); ran Data's own
+suite fresh (494/495, the one failure the same pre-existing documented
+date-dependent flake `BUILD_PLAN.md` A.17 already names, `ruff` clean).
+Three real, previously-invisible gaps found this way — none caught by
+any prior pass, all confirmed with the user and closed below rather
+than left as notes:
+- [x] **A.20 — Season row auto-creation + `episode.season_id`
+  population** (§5.5). The gap: `_fetch_sonarr` inserted `episode` rows
+  for whatever season numbers Sonarr reported but never created the
+  corresponding `season` row (A.4) or set `episode.season_id` (A.4's
+  own FK, never populated by any code path) — concretely, `setScore`/
+  `setStatus`/`setSeasonScore` (§6.1, query `FROM season WHERE
+  show_id = ?`) silently never pushed to AniList for any season beyond
+  1 that was only ever discovered via Sonarr. Confirmed with the user
+  this is a creation problem, not a reconciliation one — Sonarr/TVDB is
+  the only source that ever reports a new season number exists at all
+  (AniList doesn't, §5.5) — and that closing it now beats leaving it
+  for Phase B. Extracted `reconcile_season()` out of the
+  `reconcileSeasonMapping` resolver into a new `season_mapping.py`
+  (same resolvers.py<->metadata.py circular-import reasoning
+  `pending_review.py` was already extracted for, A.8) so both the
+  mutation and this new on-demand call share one implementation.
+  `_fetch_sonarr` now reconciles every distinct season number it sees
+  immediately on discovery (same on-demand-immediately philosophy as
+  every other Phase A external-call trigger), sets `season_id` on every
+  episode it inserts, and backfills it on a pre-existing row that
+  predates this fix. A Fribb failure during this reconciliation
+  (network unreachable, no cache) still creates the season row —
+  unmatched, with its own `pending_review` entry — rather than aborting
+  the Sonarr episode import itself. SCOPE.md §5.5 updated with the full
+  resolution. **Tests** (+9, `test_server.py`): season creation +
+  Fribb-match on Sonarr discovery, `episode.seasonEntity` resolves
+  correctly end-to-end (not just via a test's own direct-SQL
+  `season_id`, the gap this closes); a manual-override season survives
+  a later Sonarr refetch untouched; backfill on a pre-existing
+  null-`season_id` row; a Fribb failure still creates an unmatched
+  season + opens `pending_review` rather than aborting the fetch. Also
+  added a default `fribb.load_dataset` stub to the shared `client`
+  fixture (`test_server.py`) — the same "avoid a real network call in
+  every test that doesn't care" reasoning the AniList stub already
+  established, now genuinely needed since Sonarr fetches reconcile
+  seasons too.
+- [x] **A.21 — `show_relation` population from AniList relations**
+  (§5.9). The gap: `show_relation` was schema-only since A.1 — no code
+  ever wrote a row to it, despite `Show.relatedShows` (A.3) being fully
+  wired to read it. A real design fork surfaced building this
+  (`related_show_id` is a non-nullable FK, so a relation to a show
+  LCARS has never seen needs a real row to point at) — asked directly
+  rather than guessed at, given the scale: confirmed **auto-create a
+  `tracked = false` stub**, matching §5.1's own pre-existing "Show-row
+  promotion paths" framing. `_fetch_anilist` now requests
+  `Media.relations` and writes one directed `show_relation` row per
+  reported relation, filtered to anime-shaped AniList `format` values
+  only (a relation to source manga/novel material is skipped — §5.1 has
+  no place for those). No franchise auto-creation, unchanged from A.8's
+  original precedent. SCOPE.md §5.9 updated. **Tests** (+2,
+  `test_server.py`): a relation to an unknown AniList id creates a
+  correctly-shaped stub (title/mediaShape/trackingSpace/tracked/status,
+  plus its own crosswalk rows) and skips the manga-format relation
+  entirely; a relation to an already-tracked show reuses that show, no
+  duplicate stub.
+- [x] **A.22 — `episode_numbering_mapping` automatic derivation**
+  (§5.5). The gap: deferred at A.4 for lack of real data to derive
+  from ("that data doesn't exist until A.8's on-demand fetch triggers
+  exist") — A.8/A.9 built and populated exactly that data, but nothing
+  ever came back to build the derivation itself; only the manual
+  `setEpisodeNumberingScheme` path existed. Confirmed with the user:
+  build it now rather than carry it as an unfinished A.4 leftover.
+  Heuristic (deliberately simple, personal-tracker scale): Sonarr's own
+  `seriesType = 'anime'` flag, or any episode carrying a populated
+  `absoluteEpisodeNumber`, means `absolute`; anything else defaults to
+  `season_episode`. Re-derived on every Sonarr fetch, not just once —
+  a genuine change opens a `pending_review` entry, same "review, not
+  gate" shape as everything else; never touches an already-
+  `manual_override` row. SCOPE.md §5.5 updated. **Tests** (+4,
+  `test_server.py`): absolute via `seriesType`, absolute via
+  `absoluteEpisodeNumber`, `season_episode` default, manual override
+  survives a later refetch that would otherwise re-derive differently.
+- [x] **A.23 — Credentials off plaintext-`lcars.ini`-only** (§8/§11.2).
+  Not a code gap — a decision the user flagged for revisiting, against
+  their own later `ideas.md` note ("move all secret and password to a
+  safer place") conflicting with the originally-recorded plaintext-
+  chmod-600 design. Confirmed direction: Docker secrets / mounted
+  secret files over env-vars-only, an external secrets manager, or
+  just tightening the existing file handling. Every credential field
+  (`bearer_token`, Sonarr/Radarr/AniList/TMDB keys) now supports a
+  `<VAR>_FILE` env var — the official postgres/mysql Docker images'
+  own convention — which wins over both the `lcars.ini` value and the
+  plain env var when set (`config._resolve_secret()`). `lcars.ini`
+  itself isn't removed — `anilist_access_token` is minted interactively
+  by `lcars anilist-login` and written back to it at runtime, which a
+  read-only secret mount can't support, and local/non-Docker runs still
+  need somewhere to keep credentials. `Dockerfile` documents the
+  recommended Compose `secrets:` wiring. SCOPE.md §8/§11.2 updated.
+  **Tests** (+4, `test_config.py`): the `_FILE` env var wins over both
+  file and plain env; trailing whitespace/newline (a real mounted
+  secret file's own shape) is stripped; the plain file<env precedence
+  still holds when no `_FILE` var is set; every secret field
+  individually confirmed to support it, not just `bearer_token`.
+- **Two design decisions re-validated, not changed** — self-flagged in
+  their own original entries above as "low-stakes, easily revisable"
+  reasoning rather than an explicit ask; the user confirmed both as
+  correct on review: **A.11**'s next-up ordering (`next_up_override`
+  rows sort first, ahead of soonest-available-first default) and
+  **A.13**'s stats scope split (`totalShows` = current tracked library
+  only; the other three stats fields are lifetime totals that survive
+  untracking). **A.14**'s deletion semantics (`softDeleteShow` flips
+  `tracked` not `status`; `requestHardDelete` requires prior
+  soft-delete) also re-validated the same way.
+- **Flagged for Phase B design time, not addressed now** (user's own
+  call): §11.2's sync-resolvers/single-shared-connection execution
+  model is justified by "nothing ever touches the connection
+  concurrently," true only because Phase A has no autonomous background
+  work. Ops (B.1 onward) breaks that premise. See SCOPE.md §11.2's own
+  note and this file's B.1 entry below.
+- 248 tests total now (was 234), `ruff check .` clean, both re-verified
+  after every one of A.20-A.23 individually and again at the end of
+  this pass — no regressions introduced at any step.
+
 ---
 
 ## Phase B — Ops takes over syncing
@@ -1294,7 +1426,19 @@ background scheduler.
 
 - [ ] **B.1 — Daily metadata refresh** for `watching`-status,
   actively-airing shows; on-open trigger capped to the same
-  once-per-day ceiling (not stacking).
+  once-per-day ceiling (not stacking). **Design question carried over
+  from the 2026-08-09 consolidation audit, resolve here, not before**:
+  §11.2's sync-resolvers/single-shared-connection execution model is
+  justified entirely by "nothing ever touches the connection
+  concurrently" — true only because Phase A has no autonomous
+  background work. This step is the first thing that breaks that
+  premise (a background job needing DB + outbound HTTP access,
+  independent of any client request) — a long poll could block the
+  event loop for every concurrent GraphQL request while it runs.
+  Decide the concurrency model (a second connection? a worker
+  thread/process? `asyncio.to_thread()` after all, reconsidered against
+  real Phase B shape rather than Phase A's?) before writing B.1's own
+  scheduler, not as an afterthought once it's already running.
 - [ ] **B.2 — Weekly Fribb dataset reconciliation** — deliberately
   slower/independent of the daily cadence.
 - [ ] **B.3 — Sonarr/Radarr polling for file availability**

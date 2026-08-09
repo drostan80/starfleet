@@ -45,9 +45,25 @@ query ($mediaId: Int) {
         voiceActors(language: JAPANESE) { id name { full } }
       }
     }
+    relations {
+      edges {
+        node {
+          id
+          idMal
+          format
+          title { romaji english native }
+        }
+      }
+    }
   }
 }
 """
+
+# A.21 (2026-08-09) — only these AniList `format` values represent an
+# actual anime show worth a `show_relation` edge/stub at all; the same
+# relations list can include manga/novel source material, which §5.1's
+# show model has no place for (LCARS only tracks anime/TV/movies).
+ANIME_RELATION_FORMATS = frozenset({"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA"})
 
 
 class AniListError(Exception):

@@ -27,6 +27,22 @@ RUN pip install --no-cache-dir .
 # SCOPE.md §11.2, same reasoning as the .gitignore entries for them.
 # Alembic migrations ship in the image so the container can run them
 # on startup against a mounted volume.
+#
+# Credentials (A.23, §8/§11.2): prefer Docker Compose's own `secrets:`
+# block over lcars.ini in the Sonarr stack's compose file — mount each
+# credential as a file and point LCARS at it via a `<VAR>_FILE` env var,
+# e.g.:
+#   secrets:
+#     lcars_bearer_token: {file: ./secrets/lcars_bearer_token}
+#   services:
+#     lcars:
+#       secrets: [lcars_bearer_token]
+#       environment:
+#         LCARS_BEARER_TOKEN_FILE: /run/secrets/lcars_bearer_token
+# lcars.ini still works (file < env < env `_FILE` precedence,
+# config.py) — kept for local/non-Docker runs and for
+# anilist_access_token, which `lcars anilist-login` writes to it at
+# runtime, something a read-only secret mount can't support.
 COPY alembic.ini ./
 COPY migrations/ ./migrations/
 

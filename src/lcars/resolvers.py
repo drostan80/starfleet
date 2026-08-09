@@ -28,12 +28,12 @@ from lcars import (
     config,
     db,
     export_import,
-    fribb,
     fuzzy,
     ids,
     metadata,
     pagination,
     pending_review,
+    season_mapping,
     util,
 )
 
@@ -1676,89 +1676,14 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
 
 @mutation.field("reconcileSeasonMapping")
 def resolve_reconcile_season_mapping(_, info, show_id, season_number):
-    """Attempts automatic derivation against the Fribb/anime-lists
-    dataset (§5.5, `fribb.py`) for this season and applies the result
-    immediately (§3 principle 1) — except when the row is already
-    manual_override, which stays fully protected (§3 principle 6) and
-    doesn't even get a PendingReview logged for the disagreement
-    (asked/confirmed 2026-08-08, A.4: a review entry for something
-    already manually decided doesn't serve pending_review's "later
-    human awareness" purpose — last_reconciled_at still updates so the
-    row shows as checked). A genuine value change on a non-override
-    row — including a first-time "no candidate found", per §5.5's own
-    "stays usable locally in an unmapped state" framing — opens/
-    extends a PendingReview; an unchanged re-check (same value, or
-    still no candidate) does not, so repeated on-demand calls don't
-    spam the review queue. No require_client() — same reasoning as
-    setSeasonMapping just above: no changed_by-style column exists on
-    `season` to record it, and `source` already says the data came
-    from 'fribb', not who triggered the call.
-    """
+    """Thin GraphQL wrapper — the actual reconciliation logic moved to
+    `season_mapping.reconcile_season()` during A.20 (2026-08-09), so
+    A.20's own Sonarr-fetch-triggered reconciliation and this explicit
+    mutation share one implementation rather than two copies drifting
+    apart. See that function's docstring for the full behavior."""
     conn = db.get_connection()
     _require_show(conn, show_id)
-    now = util.now_utc_iso()
-
-    existing_row = conn.execute(
-        "SELECT * FROM season WHERE show_id = ? AND season_number = ?",
-        (show_id, season_number),
-    ).fetchone()
-    existing = dict(existing_row) if existing_row else None
-
-    if existing is not None and existing["manual_override"]:
-        conn.execute(
-            "UPDATE season SET last_reconciled_at = ?, updated_at = ? WHERE id = ?",
-            (now, now, existing["id"]),
-        )
-        conn.commit()
-        return _get_season(conn, existing["id"])
-
-    tvdb_row = conn.execute(
-        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'tvdb'",
-        (show_id,),
-    ).fetchone()
-    candidate = None
-    if tvdb_row is not None:
-        dataset = fribb.load_dataset()
-        index = fribb.build_tvdb_index(dataset)
-        tvdb_id = int(tvdb_row["external_id"])
-        candidate = fribb.resolve_season_candidate(index, tvdb_id, season_number)
-    anilist_id, mal_id = fribb.extract_ids(candidate)
-    matched = candidate is not None
-    source = "fribb" if matched else "unmatched"
-
-    if existing is not None:
-        season_id = existing["id"]
-        if existing["anilist_id"] != anilist_id:
-            pending_review.open_or_extend(
-                conn, "season", season_id, "anilist_id", "fribb", existing["anilist_id"], anilist_id
-            )
-        if existing["mal_id"] != mal_id:
-            pending_review.open_or_extend(
-                conn, "season", season_id, "mal_id", "fribb", existing["mal_id"], mal_id
-            )
-        conn.execute(
-            "UPDATE season"
-            " SET anilist_id = ?, mal_id = ?, source = ?, matched = ?,"
-            "     last_reconciled_at = ?, updated_at = ?"
-            " WHERE id = ?",
-            (anilist_id, mal_id, source, matched, now, now, season_id),
-        )
-    else:
-        season_id = ids.generate_id(conn, "z")
-        conn.execute(
-            "INSERT INTO season"
-            " (id, show_id, season_number, anilist_id, mal_id, source, matched,"
-            "  manual_override, last_reconciled_at, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
-            (season_id, show_id, season_number, anilist_id, mal_id, source, matched, now, now, now),
-        )
-        if not matched:
-            pending_review.open_or_extend(
-                conn, "season", season_id, "anilist_id", "fribb", None, None
-            )
-
-    conn.commit()
-    return _get_season(conn, season_id)
+    return season_mapping.reconcile_season(conn, show_id, season_number)
 
 
 @mutation.field("setEpisodeNumberingScheme")

@@ -868,6 +868,54 @@ the review queue. This mutation is what a **weekly scheduler** (Phase
 B) will call repeatedly once Ops exists — not built yet, out of scope
 here; A.4 only builds the reconciliation mechanism itself, on-demand.
 
+**A real gap found and closed 2026-08-09 (A.20, consolidation audit
+pass)**: A.4 above builds reconciliation for a `season` row that
+already exists, but nothing ever created that row for any season
+number beyond 1 (`addShow`'s own on-demand fetch, A.8, only ever
+creates `season_number = 1`). Sonarr/TVDB is the only source that ever
+reports a new season number exists at all — AniList has no independent
+channel for this, each AniList entry is already scoped to one season
+(this section's own opening paragraph) — so a multi-season show whose
+season 2+ was only ever discovered via a Sonarr episode fetch had no
+`season` row, and therefore no `episode.season_id` (dead FK, added
+A.4, never populated by any code path), and — the concretely serious
+consequence — `setScore`/`setStatus`/`setSeasonScore` (§6.1, both query
+`FROM season WHERE show_id = ?`) silently never pushed to that
+season's AniList entry at all. Fixed: `_fetch_sonarr` (`metadata.py`)
+now reconciles every distinct season number it sees against Fribb
+immediately (reusing `reconcile_season()`, extracted out of the
+`reconcileSeasonMapping` resolver into `season_mapping.py` so both
+share one implementation) the moment it's first discovered, and sets
+`episode.season_id` on every episode row it writes — including
+backfilling it on a pre-existing row that predates this fix. A Fribb
+failure during this on-demand reconciliation (network unreachable, no
+cache) still creates the season row, just unmatched, with its own
+`pending_review` entry for the failure — it must never abort the
+Sonarr episode import itself, which is `_fetch_sonarr`'s actual point.
+An already-existing `season` row (any `manual_override` state) is left
+exactly as `reconcile_season()` already treated it — no behavior
+change for a season that was already being reconciled correctly.
+
+**`episode_numbering_mapping`'s automatic derivation, deferred at A.4
+for lack of data, built 2026-08-09 (A.22)** once A.8/A.9's own Sonarr
+fetch supplied exactly that data. Heuristic, deliberately simple
+(personal-tracker scale, same reasoning §6.5's plain-`LIKE` search
+already leans on): Sonarr's own `seriesType = 'anime'` flag, or any
+episode carrying a populated `absoluteEpisodeNumber`, means `absolute`;
+anything else defaults to `season_episode`. AniList episode counts
+(this section's other named signal) aren't actually used as a
+derivation input — AniList has no numbering-scheme concept of its own
+to derive from (each entry is already one season) — so a not-linked/
+not-configured Sonarr leaves this table honestly unmatched rather than
+guessing off AniList alone, same treatment `season` itself gets.
+Never touches an already-`manual_override` row (§3 principle 6), same
+protection `setEpisodeNumberingScheme` already gives it. Re-derived on
+every Sonarr fetch (not just once at show-add time) so a scheme
+misjudged early (e.g. before absolute numbering appeared in the data)
+self-corrects on a later refetch, same "review, not gate" spirit as
+everything else in this section — a genuine value change opens a
+`pending_review` entry, an unchanged re-check does not.
+
 ### 5.6 `pending_review`
 
 ```
@@ -1038,6 +1086,32 @@ side-story vs. adaptation, etc.); confirmed generic on purpose, kept
 consistent with how the relation graph was already framed everywhere
 else in this document. Franchise auto-derivation treats every link the
 same way.
+
+**A real gap found and closed 2026-08-09 (A.21, consolidation audit
+pass)**: `show_relation` was schema-only from A.1 through A.19 — no
+code anywhere ever wrote a row to it, despite `Show.relatedShows`
+(A.3) being fully wired to read it. Fixed: `_fetch_anilist`
+(`metadata.py`) now requests `Media.relations` (AniList's own relation
+edges) alongside everything else it already fetches, and writes one
+`show_relation` row per reported relation (this show's own direction
+only, per this section's "directed edges, stored as-ingested" framing
+above — the related show's own eventual fetch writes its own direction
+independently). `related_show_id` is a real, non-nullable FK — a
+relation to a show LCARS has never seen before needs a real row to
+point at, resolved by asking directly rather than guessed at given the
+scale of the decision: **auto-create it as a `tracked = false` stub**
+(title/`media_shape` from AniList's own relation node, `tracking_space
+= anime`, `status = planned`), the same promotion-target shape this
+document's own §5.1 "Show-row promotion paths" already describes ("a
+bare `tracked = false` relation/franchise stub becomes a real tracked
+show by flipping `tracked = true`"). Only anime-shaped AniList
+`format` values (`TV`/`TV_SHORT`/`MOVIE`/`SPECIAL`/`OVA`/`ONA`)
+produce a stub or an edge at all — a relation to source material
+(`MANGA`/`NOVEL`/...) is skipped outright, since §5.1's show model has
+no place for those. No franchise auto-creation here either, unchanged
+from A.8's original "no auto franchise" precedent — a relation edge is
+not a franchise membership; `franchise_member` stays a deliberate,
+separate action, unaffected by this.
 
 **`next_up_override`** — added 2026-08-08 while drafting A.2, filling
 a gap: §6.4's cross-show next-up query was always described as having
@@ -1522,6 +1596,23 @@ of the token — what it checks incoming requests against — lives in
 sets for its AniList/Trakt `client_id`/`client_secret` (§11.2), not a
 new pattern.
 
+**Revisited 2026-08-09 (A.23, consolidation audit pass)**: flagged
+during the same pass, and against the user's own later note
+(`ideas.md`: "move all secret and password to a safer place") —
+plaintext-`lcars.ini`-only doesn't fit a headless Docker deployment as
+well as Docker Compose's own `secrets:` mechanism, which the user
+confirmed as the preferred direction over the alternatives (env-vars-
+only, an external secrets manager, or just tightening the existing
+file handling). Every credential this project treats as a secret
+(`bearer_token`, Sonarr/Radarr/AniList/TMDB keys) now also supports a
+`<VAR>_FILE` env var — the same convention the official postgres/mysql
+Docker images use — pointing at a Compose-mounted secret file; it wins
+over both the `lcars.ini` value and the plain env var when set (§11.2
+has the full precedence chain and the reason `lcars.ini` isn't
+removed: `anilist_access_token` is minted interactively by `lcars
+anilist-login` and written back to it at runtime, which a read-only
+secret mount can't support).
+
 Deliberately designed query/filter shapes (not generic pass-through
 filtering) for: shows by status, episodes airing in the next N days,
 the pending-review list, the backlog, full-text search, the cross-show
@@ -1674,6 +1765,23 @@ same `difflib`-style scoring aniq already uses. See §5.4.
     stable, then design and schedule this as a later phase (see
     `BUILD_PLAN.md`'s "Deliberately not on this plan" section, which
     tracks it the same way).
+13. **Holodeck's own auth model** — surfaced by the user's own working
+    notes (`ideas.md`, not yet a `BUILD_PLAN.md` step since P.1 hasn't
+    started): "have html client a login/password thing." §1/§8's single
+    static bearer token was designed around Data/Captain's Log — desktop/
+    CLI clients that can hold one shared secret in `config.ini` + keyring.
+    A browser client with its own per-user login/password doesn't fit
+    that shape directly (there's no `user` table, §1's own "no multi-user
+    support" framing) — needs its own small design pass (e.g. a
+    password gate in front of the same shared bearer token, rather than
+    real multi-user auth) before P.1 (§7.3) starts, not before Phase B.
+14. **Holodeck's playback mechanism** — also from `ideas.md`: "does the
+    html client use a html/browser player or local one? ... local first
+    then browser base." Not designed at all yet — mpv IPC (§4 Phase C)
+    is explicitly local-only/inherently-cannot-move-server-side for
+    Data, but Holodeck is a browser client with no local mpv process of
+    its own to speak to, so that precedent doesn't directly answer this
+    one. Needs its own design pass before P.1 starts.
 
 ---
 
@@ -1727,7 +1835,13 @@ data-model design in §1–§10 — full rationale in the discussion memo.
 - **Filenames**: database file `lcars.db`; config file `lcars.ini`
   (bearer token, Sonarr/Radarr/AniList credentials, home timezone
   default, etc. — same `config.ini` + `keyring` pattern aniq already
-  uses, per §8).
+  uses, per §8). **Credential precedence, revisited 2026-08-09 (A.23,
+  §8's own note has the full reasoning)**: `lcars.ini` value < plain
+  env var < `<VAR>_FILE` env var pointing at a Docker-secret-mounted
+  file — the last one wins when set. Applies to every credential field
+  (`bearer_token`, Sonarr/Radarr/AniList/TMDB keys); `sonarr_url`/
+  `radarr_url`/`home_timezone` aren't secrets and keep plain file<env
+  precedence only.
 - **DB execution model: sync resolvers, one shared connection** —
   resolved 2026-08-08 during A.3. The ORM-vs-not decision above didn't
   itself settle *how* a blocking stdlib driver (`sqlite3`) gets called
@@ -1743,6 +1857,18 @@ data-model design in §1–§10 — full rationale in the discussion memo.
   personal-scale framing used throughout this document. Explicitly
   **not** `asyncio.to_thread()`-wrapped calls — considered and rejected
   as unnecessary complexity for this scale.
+- **Flagged 2026-08-09 (consolidation audit pass), for resolution at
+  Phase B design time, not now**: this design's own justification —
+  "nothing ever touches the connection concurrently" — holds only
+  because Phase A has no autonomous background work; every DB access is
+  a direct consequence of a client's own request. Ops (Phase B, B.1
+  onward) introduces exactly that: background jobs needing DB access
+  *and* outbound HTTP calls to external services, running independently
+  of any client request. A long-running poll could block the event loop
+  for every concurrent GraphQL request while it runs. Not a bug today —
+  a decision whose stated premise expires the moment B.1 starts.
+  Confirmed with the user: address as part of B.1's own design work
+  (see `BUILD_PLAN.md`'s B.1 entry), not pulled forward into Phase A.
 
 ### 11.3 Hosting & build pipeline
 
