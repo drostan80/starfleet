@@ -141,3 +141,54 @@ def test_load_dataset_raises_on_network_error_with_no_cache_at_all(tmp_path):
     fake = _FakeClient(error=httpx.ConnectError("boom"))
     with pytest.raises(httpx.HTTPError):
         fribb.load_dataset(cache_path=cache_path, client=fake)
+
+
+# --- parse/index memoization (2026-08-09 consolidation audit) ---------------
+#
+# A.20 made reconciliation automatic and per-season, so a multi-season show
+# re-read and re-parsed the multi-megabyte dataset — and rebuilt its full
+# index — once per season, inside a sync resolver (§11.2). Memoized at the
+# source rather than at one call site, since B.2's weekly all-shows pass is
+# the real hammer.
+
+
+def test_load_dataset_parses_a_fresh_cache_only_once(tmp_path, monkeypatch):
+    cache_path = tmp_path / "anime-lists.json"
+    cache_path.write_text(json.dumps(SAMPLE))
+    fribb._parse_cache.clear()
+    parses = []
+    real_loads = json.loads
+    monkeypatch.setattr(
+        json, "loads", lambda s, *a, **kw: (parses.append(1), real_loads(s, *a, **kw))[1]
+    )
+
+    first = fribb.load_dataset(cache_path=cache_path)
+    second = fribb.load_dataset(cache_path=cache_path)
+
+    assert first is second, "the same parsed object should be handed back"
+    assert len(parses) == 1, f"dataset parsed {len(parses)} times, expected 1"
+
+
+def test_load_dataset_reparses_once_the_cache_file_changes(tmp_path):
+    cache_path = tmp_path / "anime-lists.json"
+    cache_path.write_text(json.dumps(SAMPLE))
+    fribb._parse_cache.clear()
+    first = fribb.load_dataset(cache_path=cache_path)
+
+    os.utime(cache_path, (0, 0))  # a different mtime == a different version
+    cache_path.write_text(json.dumps([]))
+    second = fribb.load_dataset(cache_path=cache_path)
+
+    assert second == [], "a rewritten cache must not serve the stale parse"
+    assert first is not second
+
+
+def test_build_tvdb_index_is_memoized_per_dataset_object():
+    fribb._index_cache.clear()
+    dataset = list(SAMPLE)
+    first = fribb.build_tvdb_index(dataset)
+    second = fribb.build_tvdb_index(dataset)
+    assert first is second
+
+    other = list(SAMPLE)  # a genuinely different object -> rebuilt
+    assert fribb.build_tvdb_index(other) is not first

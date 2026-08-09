@@ -1415,7 +1415,120 @@ than left as notes:
   note and this file's B.1 entry below.
 - 248 tests total now (was 234), `ruff check .` clean, both re-verified
   after every one of A.20-A.23 individually and again at the end of
-  this pass — no regressions introduced at any step.
+  this pass — no regressions introduced at any step. (**Corrected
+  2026-08-09**: A.20's own entry above originally claimed "+9" tests;
+  the real figure is +4. The `+9` came from a `-k` filter run whose
+  pattern also matched A.22's four plus one pre-existing A.3 test. The
+  per-step figures are A.20 +4, A.22 +4, A.21 +2, A.23 +4 = +14, which
+  is what 234→248 actually reflects.)
+
+**Second consolidation audit, 2026-08-09** — an independent re-run of
+the whole Phase A verification, deliberately not trusting the pass
+directly above. Same method, wider: full suite, `ruff` under extra rule
+sets, full migration chain, a *complete* Query/Mutation resolver-binding
+sweep (broader than the project's own object-typed-field sweep — it
+found scalar-returning mutations had never been checked at all; all 37
+are bound), runtime probes for behaviors no test covered, plus Data's
+own suite and CI. Findings and their resolutions:
+- [x] **A.24 — Anime shows resolve their own AniList link** (§5.1, §4
+  Phase A). **The most serious thing either audit found.** `_fetch_anilist`
+  needs a *show-level* `anilist` link and runs *before* `_fetch_sonarr`;
+  Data's bridge (A.17) never sends an `anilistId` — its own
+  `lcars_client.py` says so outright ("data's own add flow often
+  doesn't [have it]"). So **every anime show added through the primary
+  production path landed permanently bare** — no synopsis, poster, cast,
+  studio or duration — and silently, since the missing link was treated
+  as caller input rather than a failure. A.20 sharpened it: Fribb
+  already resolved the correct AniList id into the *season* row moments
+  later, one table away from the code that needed it. Verified before
+  fixing: `fetch_media` called zero times, every field null, unchanged
+  by an explicit `refreshShowMetadata` retry. Fixed by resolving the
+  show-level link first, from the same Fribb dataset (season 1, the
+  convention `addShow` and `_upsert_season` already assume), so the
+  existing fetch works on that same run. Never overwrites a
+  caller-supplied id (§3 principle 6). Unresolvable → `pending_review`,
+  never rejection: hard-rejecting would break Data's bridge on every
+  anime add, and §3 principle 1 governs. This also makes §5.1's "anime
+  **mandates** an AniList link, no exceptions" true rather than
+  aspirational — migration `7196ca889757`'s own comment had claimed
+  addShow/A.8 enforced it, which was simply false.
+- [x] **A.11 correction — `nextUp` orders by air date at both levels.**
+  A real unvetted change, and one the *first* audit missed while
+  explicitly re-validating A.11: §6.4 states exactly one default,
+  soonest-available-first, but A.11 used `ORDER BY season ASC, episode
+  ASC` for the intra-show "which episode is next" pick — a second rule
+  §6.4 never states. That imported Sonarr/TVDB's season-0-is-specials
+  filing convention into internal behavior: verified, `nextUp` offered a
+  season-0 special ahead of S1E1. Corrected directly by the user, whose
+  framing settles it: the internal database is the source of truth;
+  Fribb/AniList/Sonarr are sources that feed and periodically correct
+  it, and how *they* file an episode has no bearing on internal
+  ordering. Now `air_date_utc ASC` (nulls last, same rule as the
+  cross-show level), with `(season, episode)` retained only as a stable
+  tiebreak. Needs no `kind` taxonomy to be correct — a special simply
+  falls wherever it actually aired.
+- [x] **A.25 — Capture `absolute_number` and `kind` as source facts**
+  (§5.2). Neither was ever written by any code: Sonarr reports
+  `absoluteEpisodeNumber` and A.22 even read it (to derive the numbering
+  *scheme*) before discarding it, leaving A.22 labelling a scheme with
+  no numbers behind it; and every episode was stored `kind = 'regular'`,
+  season-0 specials included. Both are now captured. §5.2's synthesis
+  rule is implemented too (`<preceding regular absolute>.<index by air
+  date>` — 12.1, 12.2), as a **whole-show recompute after each fetch**,
+  since the indices are positional and a newly-discovered special shifts
+  every later one. A real interaction bug was caught by its own test
+  while building this: synthesis filled the column, which then blocked
+  the source-value backfill's `WHERE absolute_number IS NULL` — a real
+  reported number could never land after a guess. Source values now
+  always supersede synthesized ones (told apart by the fractional part).
+  New `setEpisodeKind` mutation: `kind` had been **read-only across the
+  entire API** since A.1, so a wrong value could never be corrected, and
+  Sonarr cannot distinguish `ova`/`bonus_movie` from `special` at all.
+  Framed deliberately as *capture, not behavior* — per the user: "the
+  source of truth is the internal database, anilist and fribb and sonarr
+  are used as sources of data... and mapped onto it." Nothing reads
+  `kind` to decide anything, and `nextUp` orders by air date precisely so
+  a source platform's convention cannot drive watch order.
+- [x] **Season-0 review noise removed** (A.20 regression). A.20
+  reconciled season 0 like any other season number, creating one
+  permanently unresolvable `pending_review` per show with specials —
+  season 0 is Sonarr/TVDB's specials bucket (§5.2), not a season with a
+  cross-service identity, so Fribb can never match it. Now skipped
+  entirely: no season row, no review, `episode.season_id` left NULL,
+  which is what that nullable column is for.
+- [x] **Fribb parse/index memoized** (A.20 regression). A.20 made
+  reconciliation per-season, so the multi-megabyte dataset was re-read,
+  re-parsed and re-indexed once per season inside a sync resolver
+  (§11.2, whose whole premise is that nothing blocks the event loop for
+  long) — measured 0.30s for a five-season show on a 3.2MB synthetic
+  set. Memoized at the source in `fribb.py` (parse keyed on file mtime,
+  index on dataset identity) rather than hoisted to one caller, because
+  **B.2's weekly all-shows pass is the real hammer** and would otherwise
+  repeat the waste per show.
+- [x] **Hygiene**: 22 stale `# noqa` directives removed, `RUF100` added
+  to the project's own `select` so suppressions stay honest rather than
+  being swept once and drifting again; `_get_season` deduplicated
+  (`resolvers.py` and `season_mapping.py` had drifted to different
+  signatures, `dict` vs `dict | None`).
+- **Two Phase B owners assigned** for §5 behavior that no step claimed:
+  `episode_movie_link`'s automatic `tmdb_match` derivation (new **B.8b**)
+  and §5.4's `local` pseudo-service rollup (**B.7**). Both genuinely need
+  B.3's data first — building either now would mean building against
+  nothing, the same reasoning A.4 used correctly when deferring numbering
+  derivation.
+- **Deliberately NOT built, on the user's own challenge**: several items
+  the first draft of this audit proposed turned out to be field-fidelity
+  work with no consumer. The user's test — "does it matter how it is
+  captured as long as every episode is captured and IDed locally and
+  mapped accordingly?" — is the right one, and it correctly knocked out
+  the original framing of the `kind` work (nothing reads `kind`;
+  classifying it changes no behavior, so it is captured as a source fact
+  and nothing more). The rule going forward: fix sources that aren't
+  feeding the database, and consumers that behave wrongly — not fields
+  that merely fail to match prose.
+- 265 tests total now (was 248), `ruff check .` clean, schema
+  re-validated, migration chain round-trips, unbound-field sweep still
+  only `Query.backlog` (B.9).
 
 ---
 
@@ -1462,12 +1575,37 @@ background scheduler.
   rate-limited? — its own concept, separate from any individual show's
   state.
 - [ ] **B.7 — `show_service_presence` periodic refresh** — same poll
-  cadence as the rest of this phase (§5.4).
+  cadence as the rest of this phase (§5.4). **Owner assigned here by the
+  2026-08-09 audit**: §5.4's `local` pseudo-service ("rolling up
+  per-episode `available_locally` into one show-level yes/no") has no
+  implementation and no other owner. It needs a *rollup* code path, not
+  just a schedule wrapped around A.7's
+  `refreshShowServicePresence(showId, service, candidateTitles)` — that
+  mutation resolves presence by fuzzy title matching against a service
+  catalog, which is structurally meaningless for `local` (there is no
+  catalog; it is one SQL aggregate over episode rows). Sequence after
+  **B.3**, which is what first populates `available_locally` — building
+  it earlier means aggregating over permanently-false data.
 - [ ] **B.8 — Air-date reconciliation**: priority Manual >
   animeschedule.net > AniList `airingSchedule` > Sonarr raw — governs
   which value *wins*, never gates the apply. Every automatic change,
   including one overwriting a manual value, applies immediately and
   logs a `pending_review` entry.
+- [ ] **B.8b — `episode_movie_link` automatic `tmdb_match` derivation**
+  (§5.1's movie↔`bonus_movie` addendum). **Added by the 2026-08-09
+  audit**: §5.1 specifies the full reconciliation ("internal ids are the
+  source of truth, external ids map onto them, a best guess applies
+  immediately with a `pending_review` entry on ambiguity, manual
+  override wins once set"), but only the `tmdb_match` enum value and
+  A.3's manual mutations ever existed — no step in Phase A, B or C
+  claimed the automatic half, so it was silently on track to never be
+  built. Deliberately sequenced **after B.3**: matching a `bonus_movie`
+  episode against a standalone Radarr-tracked movie show needs Radarr's
+  own file/library data, which B.3 is what fetches. Also depends on
+  `bonus_movie`-kind episodes actually existing — A.25 classifies
+  Sonarr season-0 rows as `special` only (Sonarr cannot distinguish
+  further), so promotion to `bonus_movie` is this step's own job, via
+  `setEpisodeKind` (A.25) or its own automatic path.
 - [ ] **B.9 — Backlog visualization** (§6.3): calendar-native counter
   line under a show's next-episode entry; mark-watched from it clears
   exactly one oldest episode per action.

@@ -51,6 +51,7 @@ from collections.abc import Callable
 
 from lcars import (
     anilist_client,
+    fribb,
     ids,
     pending_review,
     radarr_client,
@@ -77,6 +78,21 @@ def fetch_and_populate(conn, show_id: str) -> None:
     show = dict(row)
 
     if show["tracking_space"] == "anime":
+        # A.24 (2026-08-09) — identity BEFORE metadata. §5.1 mandates an
+        # AniList link for every anime show, but nothing enforced it and
+        # `_fetch_anilist` below silently no-ops without one. Data's own
+        # bridge (A.17) never sends an anilistId ("data's own add flow
+        # often doesn't [have it]", its lcars_client.py) — so every anime
+        # show it added landed permanently bare: no synopsis, poster,
+        # cast, studio or duration, and no pending_review either, because
+        # the missing link was treated as caller input rather than a
+        # failure. A.20 made this sharper still: Fribb already resolves
+        # the right AniList id into the *season* row moments later, one
+        # table away from the code that needed it. This closes the loop
+        # by resolving the show-level link first, from the same dataset,
+        # so the fetch below just works on this run rather than never.
+        _guarded(conn, show, "anilist", _ensure_anilist_link)
+        show = dict(conn.execute("SELECT * FROM show WHERE id = ?", (show["id"],)).fetchone())
         _guarded(conn, show, "anilist", _fetch_anilist)
     else:
         # A.19 — AniList already covers duration for anime (its own
@@ -95,7 +111,7 @@ def _guarded(conn, show: dict, service: str, fn: Callable[[object, dict], None])
     each client's own *Error class — see module docstring."""
     try:
         fn(conn, show)
-    except Exception as e:  # noqa: BLE001 — deliberate, see docstring
+    except Exception as e:
         pending_review.open_or_extend(
             conn, "show", show["id"], "metadata_fetch", service, None, str(e)
         )
@@ -110,6 +126,53 @@ def _external_id(conn, show_id: str, service: str) -> str | None:
 
 
 # --- AniList (tracking_space = anime) ---------------------------------------
+
+
+def _ensure_anilist_link(conn, show: dict) -> None:
+    """§5.1's "anime **mandates** an AniList link, no exceptions" — made
+    true rather than aspirational, A.24 (2026-08-09). Resolves the
+    show-level `anilist` `show_external_id` from the show's tvdb id via
+    the Fribb dataset when it's missing, using season 1 (the same
+    convention `addShow`'s own `anilistId` input and `_upsert_season`
+    already assume for "the show's" AniList entry).
+
+    Never overwrites an existing link — a caller-supplied id is a human
+    saying so, and outranks a dataset lookup (§3 principle 6). When the
+    show has no tvdb id either, or Fribb has no match, a `pending_review`
+    is opened rather than an error raised: hard-rejecting would break
+    Data's bridge on every anime add, and §3 principle 1's "apply, then
+    flag, never gate" governs here as everywhere else.
+    """
+    if _external_id(conn, show["id"], "anilist") is not None:
+        return
+    tvdb_id_str = _external_id(conn, show["id"], "tvdb")
+    if tvdb_id_str is None:
+        pending_review.open_or_extend(
+            conn, "show", show["id"], "anilist_id", "anilist", None,
+            "anime show has neither an AniList nor a tvdb id — cannot resolve (§5.1)",
+        )
+        conn.commit()
+        return
+
+    dataset = fribb.load_dataset()
+    index = fribb.build_tvdb_index(dataset)
+    candidate = fribb.resolve_season_candidate(index, int(tvdb_id_str), 1)
+    anilist_id, _mal_id = fribb.extract_ids(candidate)
+    if anilist_id is None:
+        pending_review.open_or_extend(
+            conn, "show", show["id"], "anilist_id", "fribb", None,
+            f"no AniList match for tvdb id {tvdb_id_str} (§5.1 requires one)",
+        )
+        conn.commit()
+        return
+
+    conn.execute(
+        "INSERT OR IGNORE INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'anilist', ?, ?, ?)",
+        (show["id"], str(anilist_id), f"https://anilist.co/anime/{anilist_id}",
+         util.now_utc_iso()),
+    )
+    conn.commit()
 
 
 def _fetch_anilist(conn, show: dict) -> None:
@@ -446,26 +509,51 @@ def _fetch_sonarr(conn, show: dict) -> None:
         if existing is not None:
             # A.20 — backfill season_id on a pre-existing row that predates
             # this fix (or was inserted before its season was reconciled).
-            # Never touches any other column — "never overwrite an
-            # already-tracked episode's own state" still holds.
+            # A.25 — same for absolute_number, which no code ever wrote
+            # before. Both are pure source-fact capture on a column that is
+            # still empty; neither touches any state a human may have set,
+            # so "never overwrite an already-tracked episode" still holds.
             conn.execute(
                 "UPDATE episode SET season_id = ? WHERE id = ? AND season_id IS NULL",
                 (season_id, existing["id"]),
             )
+            if ep.get("absoluteEpisodeNumber") is not None:
+                # Overwrites NULL *and* any previously-synthesized value:
+                # §5.2 sources as-is whenever a source reports an official
+                # number, and only synthesizes "when no source numbering
+                # exists" — so a real value always supersedes a guess.
+                # Fractional part tells them apart (see
+                # _synthesize_absolute_numbers). Caught by a test: without
+                # the second clause, synthesis ran first, filled the column,
+                # and permanently blocked the real value from ever landing.
+                conn.execute(
+                    "UPDATE episode SET absolute_number = ?"
+                    " WHERE id = ? AND (absolute_number IS NULL"
+                    "   OR absolute_number <> CAST(absolute_number AS INTEGER))",
+                    (ep["absoluteEpisodeNumber"], existing["id"]),
+                )
             continue
         episode_id = ids.generate_id(conn, "e")
         conn.execute(
             "INSERT INTO episode"
-            " (id, show_id, season, season_id, episode, kind, air_date_utc,"
-            "  air_date_source, air_date_raw_sonarr, runtime_minutes,"
+            " (id, show_id, season, season_id, episode, kind, absolute_number,"
+            "  air_date_utc, air_date_source, air_date_raw_sonarr, runtime_minutes,"
             "  created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, 'regular', ?, 'sonarr', ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sonarr', ?, ?, ?, ?)",
             (
                 episode_id,
                 show["id"],
                 season_number,
                 season_id,
                 episode_number,
+                # A.25 — capture what the source actually says. §5.2's `kind`
+                # records how the source files an episode; season 0 is
+                # Sonarr/TVDB's specials bucket. Deliberately NOT a behavior
+                # input: nothing reads `kind` to decide anything, and
+                # `nextUp` orders by air date precisely so an external
+                # platform's filing convention can't drive watch order.
+                "special" if season_number == 0 else "regular",
+                ep.get("absoluteEpisodeNumber"),
                 ep.get("airDateUtc"),
                 ep.get("airDateUtc"),
                 ep.get("runtime"),
@@ -480,6 +568,53 @@ def _fetch_sonarr(conn, show: dict) -> None:
     # attempt it, the same "on-demand, immediately" pattern as everything
     # else here — not a separate background pass.
     _derive_episode_numbering(conn, show["id"], series, episodes)
+    _synthesize_absolute_numbers(conn, show["id"])
+
+
+def _synthesize_absolute_numbers(conn, show_id: str) -> None:
+    """§5.2's synthesis rule (A.25): "When no source numbering exists,
+    LCARS synthesizes one as `<preceding regular absolute number>.
+    <sequential index by air/publish date>` — e.g. a special airing
+    between S1E12 and S2E1 becomes `12.1`; a second one before S2E1
+    becomes `12.2`."
+
+    Whole-show recompute rather than incremental, deliberately: the
+    indices are positional, so a newly-discovered special landing
+    mid-season shifts every later one. Recomputing the lot after each
+    fetch is the only way they stay correct, and it is cheap at this
+    project's scale (one show's episodes).
+
+    Only ever writes rows whose absolute number this function itself
+    synthesized — a real source-reported value (A.25's capture, above)
+    is never overwritten, and a synthesized value is always recomputed
+    from scratch. The two are told apart by the fractional part: a
+    source value is a whole number, a synthesized one never is.
+    """
+    rows = conn.execute(
+        "SELECT id, absolute_number, air_date_utc, season, episode FROM episode"
+        " WHERE show_id = ?"
+        " ORDER BY air_date_utc IS NULL, air_date_utc ASC, season ASC, episode ASC",
+        (show_id,),
+    ).fetchall()
+
+    preceding = 0.0
+    index_after = 0
+    now = util.now_utc_iso()
+    for row in rows:
+        source_number = row["absolute_number"]
+        is_source_value = source_number is not None and float(source_number).is_integer()
+        if is_source_value:
+            preceding = float(source_number)
+            index_after = 0
+            continue
+        index_after += 1
+        synthesized = round(preceding + index_after / 10.0, 4)
+        if source_number != synthesized:
+            conn.execute(
+                "UPDATE episode SET absolute_number = ?, updated_at = ? WHERE id = ?",
+                (synthesized, now, row["id"]),
+            )
+    conn.commit()
 
 
 def _ensure_seasons(conn, show_id: str, season_numbers: set) -> dict:
@@ -498,7 +633,16 @@ def _ensure_seasons(conn, show_id: str, season_numbers: set) -> dict:
     found" review — same field name, different source, so both remain
     individually traceable)."""
     result = {}
-    for season_number in sorted(n for n in season_numbers if n is not None):
+    # Season 0 is Sonarr/TVDB's specials bucket (§5.2), not a season with
+    # a cross-service identity — AniList has no "season 0" entry to map
+    # to, so Fribb can never match one. A.20 originally reconciled it
+    # like any other number, which created one permanently unresolvable
+    # pending_review per show with specials (found in the 2026-08-09
+    # audit): pure noise in the queue this project routes all human
+    # attention through. Skipped entirely now — `episode.season_id` stays
+    # NULL for specials, which is the honest answer and exactly what that
+    # nullable column is for.
+    for season_number in sorted(n for n in season_numbers if n is not None and n > 0):
         row = conn.execute(
             "SELECT id FROM season WHERE show_id = ? AND season_number = ?",
             (show_id, season_number),
@@ -509,7 +653,7 @@ def _ensure_seasons(conn, show_id: str, season_numbers: set) -> dict:
         try:
             season = season_mapping.reconcile_season(conn, show_id, season_number)
             result[season_number] = season["id"]
-        except Exception as e:  # noqa: BLE001 — same bare-except reasoning as _guarded
+        except Exception as e:
             season_id = ids.generate_id(conn, "z")
             now = util.now_utc_iso()
             conn.execute(

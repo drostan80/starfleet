@@ -26,7 +26,7 @@ from lcars import (
 )
 from lcars.server import build_app
 
-BEARER_TOKEN = "test-token-123"  # noqa: S105 (test fixture, not a real secret)
+BEARER_TOKEN = "test-token-123"
 
 
 @pytest.fixture
@@ -677,6 +677,106 @@ async def test_add_show_sonarr_fetch_fribb_failure_still_creates_season_and_open
                for r in reviews)
 
 
+# --- source-fact capture: absolute_number + kind (§5.2, A.25) ---------------
+#
+# Both are *capture*, not behavior: nothing reads `kind` to decide anything,
+# and nextUp orders by air date precisely so a source platform's filing
+# convention can't drive watch order.
+
+
+async def test_sonarr_fetch_captures_absolute_episode_number(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+    eps = [
+        {"seasonNumber": 1, "episodeNumber": 1, "absoluteEpisodeNumber": 1,
+         "airDateUtc": None, "runtime": None},
+        {"seasonNumber": 2, "episodeNumber": 1, "absoluteEpisodeNumber": 13,
+         "airDateUtc": None, "runtime": None},
+    ]
+    fake = _FakeSonarrClient(series={"id": 42, "seriesType": "anime"}, episodes=eps)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { episodes { edges { node { season absoluteNumber } } } }
+        }
+        """,
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    by_season = {e["node"]["season"]: e["node"] for e in data["show"]["episodes"]["edges"]}
+    assert by_season[1]["absoluteNumber"] == 1
+    assert by_season[2]["absoluteNumber"] == 13
+
+
+async def test_sonarr_fetch_backfills_absolute_number_on_existing_episode(client, monkeypatch):
+    """A refetch fills a column that was empty, without disturbing
+    anything a human may have set on that row."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+    bare = {"seasonNumber": 1, "episodeNumber": 1, "airDateUtc": None, "runtime": None}
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[bare])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    fake._episodes = [{**bare, "absoluteEpisodeNumber": 7}]
+    await gql(client, "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
+              {"i": show["id"]}, headers=auth_headers())
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { absoluteNumber } } } } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    assert data["show"]["episodes"]["edges"][0]["node"]["absoluteNumber"] == 7
+
+
+async def test_sonarr_fetch_captures_season_zero_as_special_kind(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+
+    def _ep(season, number):
+        return {"seasonNumber": season, "episodeNumber": number,
+                "airDateUtc": None, "runtime": None}
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(0, 1), _ep(1, 1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { season kind } } } } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    by_season = {e["node"]["season"]: e["node"]["kind"] for e in data["show"]["episodes"]["edges"]}
+    assert by_season == {0: "SPECIAL", 1: "REGULAR"}
+
+
+async def test_set_episode_kind_overrides_the_captured_value(client, migrated_db):
+    """Sonarr can't tell special from ova/bonus_movie; `kind` was
+    read-only across the whole API until this mutation existed."""
+    show = await add_show(client)
+    _insert_next_up_episode(migrated_db, "e-knd001", show["id"], season=0, episode=1)
+    data = await gql(
+        client,
+        "mutation($i: ID!) { setEpisodeKind(episodeId: $i, kind: BONUS_MOVIE) { id kind } }",
+        {"i": "e-knd001"}, headers=auth_headers(),
+    )
+    assert data["setEpisodeKind"]["kind"] == "BONUS_MOVIE"
+
+
+async def test_set_episode_kind_rejects_unknown_episode(client):
+    resp = await client.post(
+        "/",
+        json={
+            "query": 'mutation { setEpisodeKind(episodeId: "e-nope00", kind: OVA) { id } }',
+        },
+        headers=auth_headers(),
+    )
+    assert "no such episode" in resp.text
+
+
 # --- episode-numbering-scheme automatic derivation (§5.5, A.22) -------------
 
 
@@ -785,6 +885,127 @@ async def test_sonarr_fetch_never_overwrites_manual_numbering_scheme(client, mon
     mapping = data["show"]["episodeNumberingMapping"]
     assert mapping["scheme"] == "SEASON_EPISODE"
     assert mapping["source"] == "MANUAL"
+
+
+async def test_anime_show_with_only_tvdb_id_still_gets_anilist_metadata(client, monkeypatch):
+    """A.24 — the gap this closes: Data's bridge (A.17) never sends an
+    anilistId, so every anime show it added landed permanently bare, even
+    though Fribb resolves the right id one table away. LCARS now resolves
+    the show-level link itself, before the fetch that needs it."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)  # tvdb 555 -> anilist 111
+    fetched = []
+
+    def _spy(anilist_id, *a, **kw):
+        fetched.append(anilist_id)
+        return FAKE_ANILIST_MEDIA
+
+    monkeypatch.setattr(anilist_client, "fetch_media", _spy)
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    show = await add_show(client, trackingSpace="ANIME", tvdbId=555)  # no anilistId
+
+    assert fetched == [111], "AniList should have been fetched with the Fribb-resolved id"
+    data = await gql(
+        client,
+        """
+        query($id: ID!) { show(id: $id) {
+            synopsis posterUrl
+            externalIds { edges { node { service externalId } } }
+        } }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["synopsis"] == "A gold rush story."
+    assert data["show"]["posterUrl"] == "https://anilist.co/img/cover.jpg"
+    edges = data["show"]["externalIds"]["edges"]
+    links = {e["node"]["service"]: e["node"]["externalId"] for e in edges}
+    assert links["anilist"] == "111"  # §5.1's mandate now actually satisfied
+
+
+async def test_anime_show_never_overwrites_a_caller_supplied_anilist_id(client, monkeypatch):
+    """A human-supplied id outranks a dataset lookup (§3 principle 6)."""
+    _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)  # would resolve tvdb 555 -> 111
+    fetched = []
+    monkeypatch.setattr(
+        anilist_client, "fetch_media",
+        lambda aid, *a, **kw: fetched.append(aid) or FAKE_ANILIST_MEDIA,
+    )
+    show = await add_show(client, trackingSpace="ANIME", tvdbId=555, anilistId=777)
+    assert fetched == [777]
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { externalIds { edges { node { service externalId } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    edges = data["show"]["externalIds"]["edges"]
+    links = {e["node"]["service"]: e["node"]["externalId"] for e in edges}
+    assert links["anilist"] == "777"
+
+
+async def test_anime_show_with_no_resolvable_anilist_id_opens_a_review(client, monkeypatch):
+    """§5.1 mandates the link; §3 principle 1 says flag, never gate —
+    hard-rejecting would break Data's bridge on every anime add."""
+    _patch_fribb_dataset(monkeypatch, dataset=[])  # no match for anything
+    show = await add_show(client, trackingSpace="ANIME", tvdbId=555)
+    reviews = await _pending_reviews_for(client, show["id"])
+    assert any(r["field"] == "anilist_id" for r in reviews), reviews
+    # ...and the show still exists and is usable, not rejected
+    data = await gql(client, "query($id: ID!) { show(id: $id) { id } }",
+                     {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["id"] == show["id"]
+
+
+async def test_sonarr_fetch_skips_season_zero_entirely(client, monkeypatch):
+    """Season 0 is Sonarr/TVDB's specials bucket (§5.2), not a season with
+    a cross-service identity — A.20 originally reconciled it like any
+    other, creating one permanently unresolvable pending_review per show
+    with specials. No season row, no review, season_id stays NULL."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)
+
+    def _ep(season, number):
+        return {"seasonNumber": season, "episodeNumber": number,
+                "airDateUtc": None, "runtime": None}
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(0, 1), _ep(1, 1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) { show(id: $id) {
+            seasons { edges { node { seasonNumber } } }
+            episodes { edges { node { season seasonEntity { seasonNumber } } } }
+        } }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    numbers = {e["node"]["seasonNumber"] for e in data["show"]["seasons"]["edges"]}
+    assert numbers == {1}, "no season row should exist for season 0"
+    by_season = {e["node"]["season"]: e["node"] for e in data["show"]["episodes"]["edges"]}
+    assert by_season[0]["seasonEntity"] is None  # specials carry no season identity
+    assert by_season[1]["seasonEntity"]["seasonNumber"] == 1
+
+    all_reviews = await gql(
+        client,
+        "query { pendingReviews { edges { node { entityType field } } } }",
+        headers=auth_headers(),
+    )
+    season_reviews = [
+        e["node"] for e in all_reviews["pendingReviews"]["edges"]
+        if e["node"]["entityType"] == "season"
+    ]
+    assert season_reviews == [], f"season 0 should generate no review noise: {season_reviews}"
 
 
 async def test_add_show_sonarr_fetch_no_op_when_not_in_sonarr_library(client, monkeypatch):
@@ -1493,6 +1714,65 @@ async def test_next_up_picks_the_earliest_unwatched_episode_per_show(client, mig
     assert entry["episode"]["episode"] == 2
 
 
+async def test_next_up_picks_by_air_date_not_season_number(client, migrated_db):
+    """§6.4 states one default — soonest-available-first — and it governs
+    the intra-show pick too. A.11 used `season ASC, episode ASC` there,
+    which imported Sonarr/TVDB's season-0-is-specials filing convention
+    into internal behavior: a special outranked the actual premiere.
+    Internal air date is the source of truth; how a source platform
+    files an episode has no bearing on what to watch next."""
+    show = await _add_watching_show(client, titleRomaji="Has Specials")
+    # A season-0 special that aired *after* the premiere, and the premiere.
+    _insert_next_up_episode(
+        migrated_db, "e-nu0100", show["id"], season=0, episode=1,
+        air_date_utc="2026-03-01T00:00:00Z",
+    )
+    _insert_next_up_episode(
+        migrated_db, "e-nu0101", show["id"], season=1, episode=1,
+        air_date_utc="2026-01-01T00:00:00Z",
+    )
+    data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
+    entry = next(
+        e["node"] for e in data["nextUp"]["edges"] if e["node"]["show"]["id"] == show["id"]
+    )
+    assert entry["episode"]["id"] == "e-nu0101"  # the premiere, not the special
+
+
+async def test_next_up_offers_a_special_when_it_genuinely_aired_first(client, migrated_db):
+    """The converse, and why air-date order needs no `kind` taxonomy: a
+    pre-air special really is next when it really aired first."""
+    show = await _add_watching_show(client, titleRomaji="Pre-air Special")
+    _insert_next_up_episode(
+        migrated_db, "e-nu0102", show["id"], season=0, episode=1,
+        air_date_utc="2025-12-01T00:00:00Z",
+    )
+    _insert_next_up_episode(
+        migrated_db, "e-nu0103", show["id"], season=1, episode=1,
+        air_date_utc="2026-01-01T00:00:00Z",
+    )
+    data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
+    entry = next(
+        e["node"] for e in data["nextUp"]["edges"] if e["node"]["show"]["id"] == show["id"]
+    )
+    assert entry["episode"]["id"] == "e-nu0102"
+
+
+async def test_next_up_unknown_air_date_sorts_after_known_ones(client, migrated_db):
+    show = await _add_watching_show(client, titleRomaji="Unknown Date")
+    _insert_next_up_episode(
+        migrated_db, "e-nu0104", show["id"], season=1, episode=1, air_date_utc=None,
+    )
+    _insert_next_up_episode(
+        migrated_db, "e-nu0105", show["id"], season=2, episode=1,
+        air_date_utc="2026-01-01T00:00:00Z",
+    )
+    data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
+    entry = next(
+        e["node"] for e in data["nextUp"]["edges"] if e["node"]["show"]["id"] == show["id"]
+    )
+    assert entry["episode"]["id"] == "e-nu0105"  # known date wins over unknown
+
+
 async def test_next_up_is_paginated(client, migrated_db):
     show_a = await _add_watching_show(client, titleRomaji="Show A")
     show_b = await _add_watching_show(client, titleRomaji="Show B")
@@ -2066,7 +2346,7 @@ async def test_confirm_hard_delete_cascades_across_every_related_table(client, m
         ("franchise_member", "show_id"),
         ("next_up_override", "show_id"),
     ]:
-        row = conn.execute(f"SELECT 1 FROM {table} WHERE {column} = ?", (show["id"],)).fetchone()  # noqa: S608
+        row = conn.execute(f"SELECT 1 FROM {table} WHERE {column} = ?", (show["id"],)).fetchone()
         assert row is None, f"{table} still has a row for the deleted show"
 
     assert (
@@ -3748,3 +4028,89 @@ async def test_episodes_airing_soon_filters_by_date_window(client, migrated_db):
     )
     ids = {e["node"]["id"] for e in data["episodesAiringSoon"]["edges"]}
     assert ids == {"e-soon01"}
+
+
+# --- absolute_number synthesis (§5.2, A.25) ---------------------------------
+
+
+async def test_absolute_number_synthesis_numbers_specials_between_regulars(
+    client, monkeypatch
+):
+    """§5.2: 'a special airing between S1E12 and S2E1 becomes 12.1; a
+    second one before S2E1 becomes 12.2'."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+    eps = [
+        {"seasonNumber": 1, "episodeNumber": 12, "absoluteEpisodeNumber": 12,
+         "airDateUtc": "2026-01-01T00:00:00Z", "runtime": None},
+        {"seasonNumber": 0, "episodeNumber": 1,
+         "airDateUtc": "2026-01-05T00:00:00Z", "runtime": None},
+        {"seasonNumber": 0, "episodeNumber": 2,
+         "airDateUtc": "2026-01-09T00:00:00Z", "runtime": None},
+        {"seasonNumber": 2, "episodeNumber": 1, "absoluteEpisodeNumber": 13,
+         "airDateUtc": "2026-02-01T00:00:00Z", "runtime": None},
+    ]
+    fake = _FakeSonarrClient(series={"id": 42, "seriesType": "anime"}, episodes=eps)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { episodes { edges { node { season episode absoluteNumber } } } }
+        }
+        """,
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    got = {
+        (e["node"]["season"], e["node"]["episode"]): e["node"]["absoluteNumber"]
+        for e in data["show"]["episodes"]["edges"]
+    }
+    assert got[(1, 12)] == 12      # source value, untouched
+    assert got[(0, 1)] == 12.1     # first special after absolute 12
+    assert got[(0, 2)] == 12.2     # second one
+    assert got[(2, 1)] == 13       # source value, untouched
+
+
+async def test_absolute_number_synthesis_recomputes_when_a_special_is_inserted(
+    client, monkeypatch
+):
+    """Indices are positional, so a newly-discovered special landing
+    between two existing ones must renumber the later one."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+    base = [
+        {"seasonNumber": 1, "episodeNumber": 1, "absoluteEpisodeNumber": 1,
+         "airDateUtc": "2026-01-01T00:00:00Z", "runtime": None},
+        {"seasonNumber": 0, "episodeNumber": 9,
+         "airDateUtc": "2026-01-20T00:00:00Z", "runtime": None},
+    ]
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=base)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    # A special that aired *earlier* shows up on a later fetch.
+    fake._episodes = base + [
+        {"seasonNumber": 0, "episodeNumber": 8,
+         "airDateUtc": "2026-01-10T00:00:00Z", "runtime": None},
+    ]
+    await gql(client, "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
+              {"i": show["id"]}, headers=auth_headers())
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { episodes { edges { node { season episode absoluteNumber } } } }
+        }
+        """,
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    got = {
+        (e["node"]["season"], e["node"]["episode"]): e["node"]["absoluteNumber"]
+        for e in data["show"]["episodes"]["edges"]
+    }
+    assert got[(1, 1)] == 1
+    assert got[(0, 8)] == 1.1   # earlier-airing special takes the first slot
+    assert got[(0, 9)] == 1.2   # the pre-existing one renumbered behind it

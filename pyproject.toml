@@ -58,7 +58,11 @@ line-length = 100
 src = ["src"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+# RUF100 added 2026-08-09 (consolidation audit): 22 stale `# noqa`
+# directives for non-enabled rules had accumulated unnoticed. Keeping
+# the rule on means suppressions stay honest rather than being swept
+# once and drifting again.
+select = ["E", "F", "I", "UP", "B", "RUF100"]
 
 [tool.ruff.lint.per-file-ignores]
 # Hand-written SQL DDL (§11.2) — column-aligned CHECK/enum lists read far

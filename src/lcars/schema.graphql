@@ -910,6 +910,16 @@ type Mutation {
   setEpisodeAirDate(episodeId: ID!, airDateUtc: DateTime!): Episode!
   setEpisodeRuntimeOverride(episodeId: ID!, runtimeMinutes: Int): Episode!
 
+  """
+  Manual override of §5.2's `kind`. Sonarr cannot distinguish
+  special/ova/bonus_movie — it only files everything non-regular under
+  season 0 — so auto-classification (A.25) can honestly go no further
+  than `special`, and this is the only way to record the rest. Added
+  2026-08-09: `kind` had been read-only across the entire API since
+  A.1, so a wrong value could never be corrected at all.
+  """
+  setEpisodeKind(episodeId: ID!, kind: EpisodeKind!): Episode!
+
   # -- 5.5 id-mapper manual overrides (§3 principle 6: manual wins once set) --
   """
   Replaces setShowIdMapping 2026-08-08 (A.4). Upserts by (showId,

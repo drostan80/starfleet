@@ -45,6 +45,22 @@ DATASET_MAX_AGE_SECONDS = 7 * 24 * 3600
 # sample fetch, 2026-08-08.
 _MISSING = (None, "", "unknown")
 
+# In-process parse cache, keyed by (cache path, file mtime) — added
+# 2026-08-09 in the consolidation audit. `anime-list-full.json` is
+# multi-megabyte, and A.20 made reconciliation automatic: one full
+# read+parse (and, at the call site, one full index build) happened per
+# *season* of every show fetched. Measured 0.30s for a five-season show
+# on a 3.2MB synthetic set; the real dataset is larger. That cost lands
+# inside a sync resolver on the single shared connection (§11.2), whose
+# whole justification is that nothing blocks the event loop for long.
+# Memoized here at the source rather than hoisted to one caller,
+# because Phase B's B.2 (weekly reconciliation across *every* show) is
+# the real hammer and would otherwise repeat the same waste per show.
+# Keyed on mtime so a refreshed download is picked up immediately
+# without any explicit invalidation.
+_parse_cache: dict[tuple[str, int], list[dict]] = {}
+_index_cache: dict[int, dict[int, list[dict]]] = {}
+
 
 def _dataset_is_stale(path: Path, max_age: float) -> bool:
     return not path.exists() or time.time() - path.stat().st_mtime > max_age
@@ -63,7 +79,7 @@ def load_dataset(
     useful (if slightly out of date) even when GitHub is unreachable.
     """
     if not _dataset_is_stale(cache_path, max_age):
-        return json.loads(cache_path.read_text())
+        return _read_cached(cache_path)
 
     owns_client = client is None
     client = client or httpx.Client(timeout=30.0)
@@ -73,7 +89,7 @@ def load_dataset(
         data = response.json()
     except httpx.HTTPError:
         if cache_path.exists():
-            return json.loads(cache_path.read_text())
+            return _read_cached(cache_path)
         raise
     finally:
         if owns_client:
@@ -84,15 +100,38 @@ def load_dataset(
     return data
 
 
+def _read_cached(cache_path: Path) -> list[dict]:
+    """Parse-once-per-file-version — see `_parse_cache`'s own note."""
+    key = (str(cache_path), cache_path.stat().st_mtime_ns)
+    cached = _parse_cache.get(key)
+    if cached is None:
+        cached = json.loads(cache_path.read_text())
+        _parse_cache.clear()  # only ever one dataset version worth keeping
+        _parse_cache[key] = cached
+    return cached
+
+
 def build_tvdb_index(dataset: list[dict]) -> dict[int, list[dict]]:
     """Keyed by tvdb_id — TVDB groups a franchise's seasons under one
     series id, so one key commonly maps to several dataset entries
-    (one per AniList-side season split)."""
+    (one per AniList-side season split).
+
+    Memoized on the dataset object's identity (2026-08-09 audit): the
+    per-season reconciliation A.20 introduced rebuilt this full index
+    once per season, on top of re-parsing the file. Identity is the
+    right key precisely because `load_dataset` now returns the *same*
+    list object for an unchanged file — a new download produces a new
+    object and therefore a new index, with no explicit invalidation."""
+    cached = _index_cache.get(id(dataset))
+    if cached is not None:
+        return cached
     index: dict[int, list[dict]] = {}
     for entry in dataset:
         if entry.get("tvdb_id") in _MISSING or entry.get("anilist_id") in _MISSING:
             continue
         index.setdefault(entry["tvdb_id"], []).append(entry)
+    _index_cache.clear()  # same one-version-at-a-time policy as _parse_cache
+    _index_cache[id(dataset)] = index
     return index
 
 

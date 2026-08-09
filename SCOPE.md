@@ -446,7 +446,7 @@ enum:
 | Axis | Values | Notes |
 |---|---|---|
 | `media_shape` | `episodic` \| `movie` | |
-| `tracking_space` | `tv` \| `anime` | `anime` **mandates** an AniList link, no exceptions — applies orthogonally to `media_shape`, an anime movie still requires one. `tv`'s Sonarr link is optional. |
+| `tracking_space` | `tv` \| `anime` | `anime` **mandates** an AniList link, no exceptions — applies orthogonally to `media_shape`, an anime movie still requires one. `tv`'s Sonarr link is optional. **Enforced for real as of 2026-08-09 (A.24)** — see below. |
 | `file_source` | independent Sonarr/Radarr availability flags, not one exclusive value | For `media_shape = episodic`: lives on the **episode** row, not the show row (per-episode, not per-show) — **validated against real library data (§10)**: confirmed correct at per-episode granularity, and refined from a single enum to two independent booleans — see §5.2, `available_via_sonarr`/`available_via_radarr`. For `media_shape = movie`: lives on **`show` itself** instead — see the movie-tracking fields below, added 2026-08-08 while drafting A.2. |
 
 Other fields:
@@ -506,6 +506,32 @@ Other fields:
   "watched"); `episode.state = skipped` exists specifically to clear
   per-episode backlog counters (§6.3) on an accumulating list, which a
   single movie doesn't have.
+
+**The `anime` → AniList-link mandate, made real 2026-08-09 (A.24,
+second consolidation audit)**: nothing had ever enforced it. Migration
+`7196ca889757`'s own comment asserted it was "an application-layer
+invariant (enforced by addShow/on-demand-fetch, A.8)" — false;
+`addShow` accepted an anime show with zero external ids, and
+`_fetch_anilist` merely returned early, treating the absence as caller
+input rather than a failure. The concrete harm was severe and silent:
+Data's bridge (A.17) never sends an `anilistId` — its own
+`lcars_client.py` says so ("data's own add flow often doesn't [have
+it]") — so **every anime show added through the primary production path
+stayed permanently bare**: no synopsis, poster, cast, studio credits or
+duration, unfixable even by `refreshShowMetadata`. A.20 made it sharper
+still, resolving the correct AniList id into the *season* row moments
+later without ever applying it one level up.
+
+Resolved by making identity resolution precede metadata fetch: for an
+anime show with no show-level `anilist` link, LCARS resolves one itself
+from the Fribb dataset via the show's tvdb id (season 1 — the
+convention `addShow`'s own `anilistId` input and `_upsert_season`
+already assume), writes a real `show_external_id` row, and only then
+fetches. A caller-supplied id is never overwritten (§3 principle 6).
+When nothing can be resolved — no tvdb id, or no Fribb match — a
+`pending_review` opens and the show is still created: hard rejection
+would break Data's bridge on every anime add, and §3 principle 1's
+"apply, then flag, never gate" governs here as everywhere else.
 
 **Movie ↔ Sonarr-tracked-episode reconciliation** (added 2026-08-08,
 A.2): the *same* film can exist both as a standalone Radarr-tracked
@@ -616,6 +642,37 @@ episode
   by watched-or-skipped both. Skipped gets distinct visual treatment
   and is filterable, separately from watched, in backlog/calendar
   views.
+**Implemented 2026-08-09 (A.25, second consolidation audit)** — both
+`absolute_number` and `kind` had been specified here since A.1 but were
+never written by any code. Sonarr reports `absoluteEpisodeNumber` and
+A.22 already read it (to derive the numbering *scheme*, §5.5) before
+discarding it, which left A.22 labelling a scheme with no numbers
+behind it; every episode was stored `kind = 'regular'`, season-0
+specials included. Now:
+- **`absolute_number`, sourced as-is** from Sonarr's own
+  `absoluteEpisodeNumber` when reported.
+- **`absolute_number`, synthesized** per this section's own rule when no
+  source value exists, as a **whole-show recompute after each fetch** —
+  the indices are positional, so a newly-discovered special landing
+  mid-season shifts every later one, and only a full recompute keeps
+  them right. A real source value always supersedes a synthesized one
+  (told apart by the fractional part: source values are whole numbers).
+- **`kind`**: season 0 captured as `special`. Sonarr cannot distinguish
+  `special` from `ova` or `bonus_movie` — it only files everything
+  non-regular under season 0 — so automatic classification honestly
+  stops there, and a new `setEpisodeKind` mutation covers the rest.
+  That mutation also closes a real hole: `kind` had been **read-only
+  across the entire API** since A.1, so a wrong value could never be
+  corrected at all.
+
+**These are deliberately *capture*, not behavior inputs.** Nothing reads
+`kind` to decide anything, and §6.4's `nextUp` orders by air date
+precisely so a source platform's filing convention cannot drive watch
+order. Per the user (2026-08-09): the internal database is the source of
+truth; AniList/Fribb/Sonarr are sources that feed and periodically
+correct it, and their classifications are mapped in, never authoritative
+over internal behavior.
+
 - **Season+episode vs. absolute numbering reconciliation** is per-show
   (which side uses which scheme varies — TVDB/Sonarr can itself use an
   "absolute order" scheme for a given anime) — see
@@ -1240,10 +1297,31 @@ one unified "what's next" view regardless of why an episode is next.
 Defaults to soonest-available-first, with manual reordering supported
 on top (same auto-default-plus-override shape as franchise ordering).
 
+**Corrected 2026-08-09 (second consolidation audit), directly by the
+user**: the intra-show "which episode is next" pick below used
+`(season, episode)` order from A.11 until this fix — a *second*
+ordering rule this section never states. §6.4 defines exactly one
+default, soonest-available-first, and it governs both levels: which
+episode within a show, and which show first. The old numbering order
+imported an external platform's filing convention into internal
+behavior — Sonarr/TVDB park specials in season 0, so `season ASC` made
+every special outrank the actual premiere (verified: `nextUp` returned
+a season-0 special ahead of S1E1). The user's own framing settles why
+that is wrong in principle, not just in effect: *"the source of truth
+is the internal database, anilist and fribb and sonarr are used as
+sources of data where needed, and mapped onto it"* — so how a source
+platform files an episode has no bearing on internal ordering, and the
+whole special/season-0 classification question is irrelevant to watch
+order. Now `air_date_utc` ascending (nulls last, same rule as the
+cross-show level), with `(season, episode)` kept only as a stable
+tiebreak between two episodes sharing an air date. Needs no `kind`
+taxonomy to be correct — a special falls wherever it actually aired.
+
 **Implemented 2026-08-08 (A.11)**: a show contributes an entry if
 `status = watching` or `pacedCadenceDays` is set (A.10), and it has an
 unwatched, locally-available episode (§5.2) — the earliest one by
-`(season, episode)`. "Soonest-available-first" reads as
+~~`(season, episode)`~~ air date (corrected above).
+"Soonest-available-first" reads as
 `episode.air_date_utc` ascending; `next_up_override` (already built,
 A.3/§5.9 addendum) rows sort first, by their own `sortOrder`, ahead of
 every default-ordered entry. Not table-backed (one computed row per

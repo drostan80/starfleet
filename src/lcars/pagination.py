@@ -71,7 +71,7 @@ def paginate(
     limit = last if backward else first
     order = "DESC" if backward else "ASC"
 
-    sql = f"SELECT rowid, * FROM {table} WHERE {where_sql} ORDER BY rowid {order}"  # noqa: S608
+    sql = f"SELECT rowid, * FROM {table} WHERE {where_sql} ORDER BY rowid {order}"
     if limit is not None:
         sql += " LIMIT ?"
         args.append(limit)
@@ -172,6 +172,6 @@ def _exists(
     extra_clause: str,
     boundary_rowid: int,
 ) -> bool:
-    sql = f"SELECT 1 FROM {table} WHERE ({base_where}) AND {extra_clause} LIMIT 1"  # noqa: S608
+    sql = f"SELECT 1 FROM {table} WHERE ({base_where}) AND {extra_clause} LIMIT 1"
     row = conn.execute(sql, [*base_args, boundary_rowid]).fetchone()
     return row is not None

@@ -65,7 +65,7 @@ def _real_columns(conn, table: str) -> list[str]:
     `table` is always one of this module's own `EXPORT_IMPORT_TABLES`
     constants, never raw input — same non-issue as ids.py/pagination.py's
     equivalent f-string use."""
-    return [row[1] for row in conn.execute(f"PRAGMA table_xinfo({table})") if row[6] == 0]  # noqa: S608
+    return [row[1] for row in conn.execute(f"PRAGMA table_xinfo({table})") if row[6] == 0]
 
 
 def export_data(conn) -> str:
@@ -73,7 +73,7 @@ def export_data(conn) -> str:
     row of every table in `EXPORT_IMPORT_TABLES`."""
     tables = {}
     for table in EXPORT_IMPORT_TABLES:
-        tables[table] = [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]  # noqa: S608
+        tables[table] = [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
     return json.dumps({"schema_version": SCHEMA_VERSION, "tables": tables})
 
 
@@ -106,7 +106,7 @@ def import_data(conn, raw_json: str) -> dict[str, int]:
                 placeholders = ", ".join("?" for _ in columns)
                 column_list = ", ".join(columns)
                 conn.execute(
-                    f"INSERT INTO {table} ({column_list}) VALUES ({placeholders})",  # noqa: S608
+                    f"INSERT INTO {table} ({column_list}) VALUES ({placeholders})",
                     [row[c] for c in columns],
                 )
             counts[table] = len(rows)

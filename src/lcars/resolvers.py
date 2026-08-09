@@ -183,11 +183,6 @@ def _require_episode(conn, episode_id: str) -> dict:
     return episode
 
 
-def _get_season(conn, season_id: str) -> dict | None:
-    row = conn.execute("SELECT * FROM season WHERE id = ?", (season_id,)).fetchone()
-    return dict(row) if row else None
-
-
 # -- AniList push (§6.1/§6.8, A.9) -------------------------------------------
 #
 # LCARS's own AniList OAuth session (config.anilist_access_token, `lcars
@@ -344,7 +339,7 @@ def _require_filter_preset(conn, preset_id: str) -> dict:
 
 
 @query.field("show")
-def resolve_show(_, info, id):  # noqa: A002 (id shadows builtin — matches the GraphQL arg name)
+def resolve_show(_, info, id):
     return _get_show(db.get_connection(), id)
 
 
@@ -354,7 +349,7 @@ def resolve_shows(_, info, **page_args):
 
 
 @query.field("episode")
-def resolve_episode(_, info, id):  # noqa: A002
+def resolve_episode(_, info, id):
     return _get_episode(db.get_connection(), id)
 
 
@@ -405,7 +400,24 @@ def resolve_next_up(_, info, **page_args):
     (`episode.air_date_utc` ascending; a null air date, possible for a
     manually-linked file with no known date, sorts last within this
     group rather than first, since "soonest" doesn't apply to
-    "unknown")."""
+    "unknown").
+
+    **Corrected 2026-08-09 (consolidation audit)**: the intra-show
+    "which episode is next" pick used `ORDER BY season ASC, episode ASC`
+    from A.11 through this fix — a second, different ordering rule §6.4
+    never states. §6.4 defines exactly one default, soonest-available-
+    first, and it governs *both* levels. The old numbering order also
+    imported an external platform's convention into internal behavior:
+    Sonarr/TVDB park specials in season 0, so `season ASC` made every
+    special outrank the actual premiere — verified, `nextUp` offered a
+    season-0 special ahead of S1E1. Air-date order needs no `kind`
+    taxonomy to get this right: a special simply falls wherever it
+    actually aired. Internal air date is the source of truth here; how
+    a source platform files an episode has no bearing on it (§3
+    principle 5's "LCARS is unconditionally authoritative", applied to
+    ordering). Same null-sorts-last rule as the cross-show level, for
+    the same reason; `(season, episode)` remains only as a stable
+    tiebreak between two episodes sharing one air date."""
     conn = db.get_connection()
     shows = conn.execute(
         "SELECT id FROM show WHERE status = 'watching' OR paced_cadence_days IS NOT NULL"
@@ -416,7 +428,8 @@ def resolve_next_up(_, info, **page_args):
         episode = conn.execute(
             "SELECT * FROM episode"
             " WHERE show_id = ? AND state = 'unwatched' AND available_locally = 1"
-            " ORDER BY season ASC, episode ASC LIMIT 1",
+            " ORDER BY air_date_utc IS NULL, air_date_utc ASC, season ASC, episode ASC"
+            " LIMIT 1",
             (show["id"],),
         ).fetchone()
         if episode is None:
@@ -543,7 +556,7 @@ def resolve_stats(_, info):
 
 
 @query.field("person")
-def resolve_person(_, info, id):  # noqa: A002
+def resolve_person(_, info, id):
     return _get_person(db.get_connection(), id)
 
 
@@ -553,7 +566,7 @@ def resolve_people(_, info, **page_args):
 
 
 @query.field("studio")
-def resolve_studio(_, info, id):  # noqa: A002
+def resolve_studio(_, info, id):
     return _get_studio(db.get_connection(), id)
 
 
@@ -563,7 +576,7 @@ def resolve_studios(_, info, **page_args):
 
 
 @query.field("franchise")
-def resolve_franchise(_, info, id):  # noqa: A002
+def resolve_franchise(_, info, id):
     return _get_franchise(db.get_connection(), id)
 
 
@@ -573,7 +586,7 @@ def resolve_franchises(_, info, **page_args):
 
 
 @query.field("tag")
-def resolve_tag(_, info, id):  # noqa: A002
+def resolve_tag(_, info, id):
     return _get_tag(db.get_connection(), id)
 
 
@@ -583,7 +596,7 @@ def resolve_tags(_, info, **page_args):
 
 
 @query.field("filterPreset")
-def resolve_filter_preset(_, info, id):  # noqa: A002
+def resolve_filter_preset(_, info, id):
     return _get_filter_preset(db.get_connection(), id)
 
 
@@ -750,7 +763,7 @@ def resolve_episode_show(obj, info):
 def resolve_episode_season_entity(obj, info):
     if obj.get("season_id") is None:
         return None
-    return _get_season(db.get_connection(), obj["season_id"])
+    return season_mapping.get_season(db.get_connection(), obj["season_id"])
 
 
 @episode_type.field("linkedMovieShow")
@@ -952,7 +965,7 @@ def resolve_tag_shows(obj, info, **page_args):
 
 
 @mutation.field("addShow")
-def resolve_add_show(_, info, input):  # noqa: A002 (matches the GraphQL arg name)
+def resolve_add_show(_, info, input):
     conn = db.get_connection()
     primary = input["primary_title"]
     title_field = f"title_{primary}"
@@ -1087,7 +1100,7 @@ def resolve_set_season_score(_, info, season_id, score):
     — same clamp/round as setScore, but scoped to one season and its
     own AniList entry only, not every season the show has."""
     conn = db.get_connection()
-    season = _get_season(conn, season_id)
+    season = season_mapping.get_season(conn, season_id)
     if season is None:
         raise GraphQLError(f"no such season: {season_id}")
     clamped = max(0.0, min(20.0, score))
@@ -1099,7 +1112,7 @@ def resolve_set_season_score(_, info, season_id, score):
     season["score"] = rounded
     _push_season_score(conn, season, fallback_show_score=None)  # A.9 — best-effort
     conn.commit()
-    return _get_season(conn, season_id)
+    return season_mapping.get_season(conn, season_id)
 
 
 @mutation.field("setTracked")
@@ -1341,7 +1354,7 @@ def resolve_confirm_hard_delete(_, info, show_id, retyped_title):
         placeholders = ", ".join("?" for _ in season_ids)
         conn.execute(
             "DELETE FROM pending_review"
-            f" WHERE entity_type = 'season' AND entity_id IN ({placeholders})",  # noqa: S608
+            f" WHERE entity_type = 'season' AND entity_id IN ({placeholders})",
             season_ids,
         )
     conn.execute("DELETE FROM show WHERE id = ?", (show_id,))
@@ -1542,6 +1555,26 @@ def resolve_set_episode_runtime_override(_, info, episode_id, runtime_minutes=No
     return _get_episode(conn, episode_id)
 
 
+@mutation.field("setEpisodeKind")
+def resolve_set_episode_kind(_, info, episode_id, kind):
+    """§5.2's `kind`, manually. Sonarr only tells us "season 0", so
+    A.25's auto-classification stops honestly at `special`; ova and
+    bonus_movie have no reliable automatic signal and need this. No
+    history table — §5.7 lists exactly four (status/score/air_date/
+    tracked) and kind isn't among them, same as
+    setEpisodeRuntimeOverride just above."""
+    conn = db.get_connection()
+    now = util.now_utc_iso()
+    cur = conn.execute(
+        "UPDATE episode SET kind = ?, updated_at = ? WHERE id = ?",
+        (kind, now, episode_id),
+    )
+    if cur.rowcount == 0:
+        raise GraphQLError(f"no such episode: {episode_id}")
+    conn.commit()
+    return _get_episode(conn, episode_id)
+
+
 # -- 5.4 external links -----------------------------------------------------
 
 
@@ -1668,7 +1701,7 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
             (season_id, show_id, season_number, anilist_id, mal_id, now, now),
         )
     conn.commit()
-    return _get_season(conn, season_id)
+    return season_mapping.get_season(conn, season_id)
 
 
 # -- 5.5 id-mapper automatic reconciliation (A.4, §3 principle 1) -----------
@@ -1750,7 +1783,7 @@ def resolve_set_episode_movie_link(_, info, episode_id, movie_show_id):
 
 
 @mutation.field("resolvePendingReview")
-def resolve_resolve_pending_review(_, info, id, resolution_note=None):  # noqa: A002
+def resolve_resolve_pending_review(_, info, id, resolution_note=None):
     conn = db.get_connection()
     client = require_client(info)
     if client not in RESOLVING_CLIENTS:
@@ -1920,7 +1953,7 @@ def resolve_create_filter_preset(_, info, name, filter_json):
 
 
 @mutation.field("updateFilterPreset")
-def resolve_update_filter_preset(_, info, id, name=None, filter_json=None):  # noqa: A002
+def resolve_update_filter_preset(_, info, id, name=None, filter_json=None):
     """name/filterJson are both optional — a partial update, only the
     fields actually provided change."""
     conn = db.get_connection()
@@ -1937,7 +1970,7 @@ def resolve_update_filter_preset(_, info, id, name=None, filter_json=None):  # n
 
 
 @mutation.field("deleteFilterPreset")
-def resolve_delete_filter_preset(_, info, id):  # noqa: A002
+def resolve_delete_filter_preset(_, info, id):
     conn = db.get_connection()
     cur = conn.execute("DELETE FROM filter_preset WHERE id = ?", (id,))
     if cur.rowcount == 0:
@@ -1955,7 +1988,7 @@ def resolve_export_data(_, info):
 
 
 @mutation.field("importData")
-def resolve_import_data(_, info, json):  # noqa: A002 (matches the GraphQL arg name)
+def resolve_import_data(_, info, json):
     conn = db.get_connection()
     try:
         counts = export_import.import_data(conn, json)

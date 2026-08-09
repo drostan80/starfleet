@@ -52,7 +52,7 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
             (now, now, existing["id"]),
         )
         conn.commit()
-        return _get_season(conn, existing["id"])
+        return get_season(conn, existing["id"])
 
     tvdb_row = conn.execute(
         "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'tvdb'",
@@ -100,9 +100,14 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
             )
 
     conn.commit()
-    return _get_season(conn, season_id)
+    return get_season(conn, season_id)
 
 
-def _get_season(conn, season_id: str) -> dict:
+def get_season(conn, season_id: str) -> dict | None:
+    """The single definition — `resolvers.py` imports this rather than
+    keeping its own copy. Deduplicated 2026-08-09: the two had drifted to
+    different signatures (`dict` here, `dict | None` there), which is the
+    kind of divergence that eventually bites at the one call site that
+    assumed the other one's contract."""
     row = conn.execute("SELECT * FROM season WHERE id = ?", (season_id,)).fetchone()
-    return dict(row)
+    return dict(row) if row else None
