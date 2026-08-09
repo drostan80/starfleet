@@ -85,6 +85,128 @@ async def test_due_for_metadata_refresh_empty_result_is_a_clean_no_op():
     await client.aclose()
 
 
+async def test_reconcile_season_mapping_sends_the_right_variables():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {"id": "s-abc123", "season": 2}
+        return httpx.Response(200, json={"data": {"reconcileSeasonMapping": {"id": "z-xyz"}}})
+
+    client = _client(handler)
+    result = await client.reconcile_season_mapping("s-abc123", 2)
+    assert result == {"id": "z-xyz"}
+    await client.aclose()
+
+
+async def test_due_for_season_reconciliation_walks_every_page():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        calls.append(payload["variables"]["after"])
+        if payload["variables"]["after"] is None:
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "dueForSeasonReconciliation": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "z-page01",
+                                        "seasonNumber": 1,
+                                        "show": {"id": "s-a"},
+                                    }
+                                }
+                            ],
+                            "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+                        }
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "dueForSeasonReconciliation": {
+                        "edges": [
+                            {"node": {"id": "z-page02", "seasonNumber": 2, "show": {"id": "s-b"}}}
+                        ],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    seasons = await client.due_for_season_reconciliation()
+    assert [s["id"] for s in seasons] == ["z-page01", "z-page02"]
+    assert calls == [None, "cursor-1"]
+    await client.aclose()
+
+
+async def test_all_seasons_walks_shows_then_each_shows_seasons():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        if "shows" in payload["query"] and "seasons" not in payload["query"]:
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "shows": {
+                            "edges": [{"node": {"id": "s-a"}}, {"node": {"id": "s-b"}}],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                },
+            )
+        show_id = payload["variables"]["id"]
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "show": {
+                        "seasons": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": f"z-{show_id}",
+                                        "seasonNumber": 1,
+                                        "show": {"id": show_id},
+                                    }
+                                }
+                            ],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    seasons = await client.all_seasons()
+    assert {s["id"] for s in seasons} == {"z-s-a", "z-s-b"}
+    await client.aclose()
+
+
+async def test_all_seasons_empty_library_is_a_clean_no_op():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "shows": {
+                        "edges": [],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    assert await client.all_seasons() == []
+    await client.aclose()
+
+
 async def test_raises_lcars_auth_error_on_401():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={})

@@ -1954,6 +1954,125 @@ async def test_refresh_show_metadata_stamps_metadata_last_refreshed_at(client, m
     assert data["show"]["metadataLastRefreshedAt"] is not None
 
 
+# --- dueForSeasonReconciliation (§5.5, B.2) ---------------------------------
+
+DUE_FOR_SEASON_RECONCILIATION_QUERY = """
+    query {
+      dueForSeasonReconciliation {
+        edges { node { id seasonNumber show { id } } }
+      }
+    }
+"""
+
+
+def _insert_season(
+    migrated_db: Path,
+    season_id: str,
+    show_id: str,
+    season_number: int,
+    last_reconciled_at: str | None = None,
+) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        """
+        INSERT INTO season
+            (id, show_id, season_number, source, matched, manual_override,
+             last_reconciled_at, created_at, updated_at)
+        VALUES (?, ?, ?, 'unmatched', 0, 0, ?, '2026-08-09T00:00:00Z', '2026-08-09T00:00:00Z')
+        """,
+        (season_id, show_id, season_number, last_reconciled_at),
+    )
+    conn.commit()
+
+
+async def test_due_for_season_reconciliation_excludes_a_non_watching_shows_season(
+    client, migrated_db
+):
+    show = await add_show(client, titleRomaji="Just Planned")  # addShow default: PLANNED
+    _insert_episode_with_air_date(migrated_db, "e-dsr001", show["id"], None)  # airing
+    _insert_season(migrated_db, "z-dsr001", show["id"], 1)
+    data = await gql(client, DUE_FOR_SEASON_RECONCILIATION_QUERY, headers=auth_headers())
+    show_ids = {e["node"]["show"]["id"] for e in data["dueForSeasonReconciliation"]["edges"]}
+    assert show["id"] not in show_ids
+
+
+async def test_due_for_season_reconciliation_excludes_a_fully_aired_watching_shows_season(
+    client, migrated_db
+):
+    show = await _add_watching_show(client, titleRomaji="Fully Aired")
+    _insert_episode_with_air_date(migrated_db, "e-dsr002", show["id"], "2020-01-01T00:00:00Z")
+    _insert_season(migrated_db, "z-dsr002", show["id"], 1)
+    data = await gql(client, DUE_FOR_SEASON_RECONCILIATION_QUERY, headers=auth_headers())
+    show_ids = {e["node"]["show"]["id"] for e in data["dueForSeasonReconciliation"]["edges"]}
+    assert show["id"] not in show_ids
+
+
+async def test_due_for_season_reconciliation_excludes_a_season_reconciled_this_week(
+    client, migrated_db
+):
+    show = await _add_watching_show(client, titleRomaji="Reconciled Recently")
+    _insert_episode_with_air_date(migrated_db, "e-dsr003", show["id"], None)  # airing
+    recent = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_season(migrated_db, "z-dsr003", show["id"], 1, last_reconciled_at=recent)
+    data = await gql(client, DUE_FOR_SEASON_RECONCILIATION_QUERY, headers=auth_headers())
+    season_ids = {e["node"]["id"] for e in data["dueForSeasonReconciliation"]["edges"]}
+    assert "z-dsr003" not in season_ids
+
+
+async def test_due_for_season_reconciliation_includes_a_never_reconciled_season(
+    client, migrated_db
+):
+    show = await _add_watching_show(client, titleRomaji="Never Reconciled")
+    _insert_episode_with_air_date(migrated_db, "e-dsr004", show["id"], None)  # airing
+    _insert_season(migrated_db, "z-dsr004", show["id"], 1, last_reconciled_at=None)
+    data = await gql(client, DUE_FOR_SEASON_RECONCILIATION_QUERY, headers=auth_headers())
+    season_ids = {e["node"]["id"] for e in data["dueForSeasonReconciliation"]["edges"]}
+    assert "z-dsr004" in season_ids
+
+
+async def test_due_for_season_reconciliation_includes_a_season_reconciled_eight_days_ago(
+    client, migrated_db
+):
+    show = await _add_watching_show(client, titleRomaji="Stale Reconciliation")
+    _insert_episode_with_air_date(migrated_db, "e-dsr005", show["id"], None)  # airing
+    stale = (datetime.now(UTC) - timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_season(migrated_db, "z-dsr005", show["id"], 1, last_reconciled_at=stale)
+    data = await gql(client, DUE_FOR_SEASON_RECONCILIATION_QUERY, headers=auth_headers())
+    season_ids = {e["node"]["id"] for e in data["dueForSeasonReconciliation"]["edges"]}
+    assert "z-dsr005" in season_ids
+
+
+async def test_due_for_season_reconciliation_includes_every_season_of_an_airing_show(
+    client, migrated_db
+):
+    # Confirmed directly, 2026-08-09: "whole show airing -> all its seasons
+    # weekly" — an already-finished earlier season of a still-airing show is
+    # included too, not just the specific season currently airing.
+    show = await _add_watching_show(client, titleRomaji="Multi-Season Airing Show")
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, state,"
+        " created_at, updated_at)"
+        " VALUES ('e-dsr006', ?, 2, 1, 'regular', NULL, 'unwatched',"
+        " '2026-08-09T00:00:00Z', '2026-08-09T00:00:00Z')",
+        (show["id"],),
+    )
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, state,"
+        " created_at, updated_at)"
+        " VALUES ('e-dsr007', ?, 1, 1, 'regular', '2020-01-01T00:00:00Z', 'unwatched',"
+        " '2026-08-09T00:00:00Z', '2026-08-09T00:00:00Z')",
+        (show["id"],),
+    )
+    conn.commit()
+    _insert_season(migrated_db, "z-dsr006", show["id"], 1, last_reconciled_at=None)
+    _insert_season(migrated_db, "z-dsr007", show["id"], 2, last_reconciled_at=None)
+    data = await gql(client, DUE_FOR_SEASON_RECONCILIATION_QUERY, headers=auth_headers())
+    season_ids = {e["node"]["id"] for e in data["dueForSeasonReconciliation"]["edges"]}
+    assert "z-dsr006" in season_ids  # season 1, already finished, still swept
+    assert "z-dsr007" in season_ids  # season 2, the one actually airing
+
+
 # --- full-text search (§6.5, A.12) -------------------------------------------
 
 SEARCH_QUERY = """

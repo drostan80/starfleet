@@ -89,6 +89,27 @@ class LcarsClient:
 
         return payload["data"]
 
+    async def _walk_connection(
+        self, query: str, field_name: str, variables: dict | None = None
+    ) -> list[dict]:
+        """Generic Relay-cursor page walker — every flat top-level
+        `dueForX`/`shows` query shares this exact shape (B.1/B.2); the
+        nested `show { seasons }` walk in all_seasons() below needs its
+        own inline loop instead, since its connection lives one level
+        deeper than `data[field_name]`."""
+        variables = dict(variables or {})
+        items: list[dict] = []
+        after = None
+        while True:
+            variables["after"] = after
+            data = await self._query(query, variables)
+            connection = data[field_name]
+            items.extend(edge["node"] for edge in connection["edges"])
+            if not connection["pageInfo"]["hasNextPage"]:
+                break
+            after = connection["pageInfo"]["endCursor"]
+        return items
+
     async def due_for_metadata_refresh(self) -> list[dict]:
         """§6.7/B.1 — every show the daily pass owes a refresh, walked
         across every page (Query.dueForMetadataRefresh, itself already
@@ -102,16 +123,59 @@ class LcarsClient:
           }
         }
         """
-        shows: list[dict] = []
-        after = None
-        while True:
-            data = await self._query(query, {"after": after})
-            connection = data["dueForMetadataRefresh"]
-            shows.extend(edge["node"] for edge in connection["edges"])
-            if not connection["pageInfo"]["hasNextPage"]:
-                break
-            after = connection["pageInfo"]["endCursor"]
-        return shows
+        return await self._walk_connection(query, "dueForMetadataRefresh")
+
+    async def due_for_season_reconciliation(self) -> list[dict]:
+        """§5.5/B.2 — the weekly tier: every season of a watching+
+        actively-airing show not Fribb-reconciled in the last 7 days
+        (Query.dueForSeasonReconciliation, already filtered server-side
+        — self-gating, so Ops can check this as often as convenient)."""
+        query = """
+        query($after: String) {
+          dueForSeasonReconciliation(first: 50, after: $after) {
+            edges { node { id seasonNumber show { id } } }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+        """
+        return await self._walk_connection(query, "dueForSeasonReconciliation")
+
+    async def all_seasons(self) -> list[dict]:
+        """§5.5/B.2 — the monthly tier: every season of every show,
+        unconditional. No due-query exists for this tier (SCOPE.md
+        §5.5's B.2 note: Ops's own monthly timer is the correctness
+        boundary, not a stored ceiling) — walks the full library
+        directly: every show, then every one of its seasons."""
+        shows_query = """
+        query($after: String) {
+          shows(first: 50, after: $after) {
+            edges { node { id } }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+        """
+        seasons_query = """
+        query($id: ID!, $after: String) {
+          show(id: $id) {
+            seasons(first: 50, after: $after) {
+              edges { node { id seasonNumber show { id } } }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+        """
+        shows = await self._walk_connection(shows_query, "shows")
+        seasons: list[dict] = []
+        for show in shows:
+            after = None
+            while True:
+                data = await self._query(seasons_query, {"id": show["id"], "after": after})
+                connection = data["show"]["seasons"]
+                seasons.extend(edge["node"] for edge in connection["edges"])
+                if not connection["pageInfo"]["hasNextPage"]:
+                    break
+                after = connection["pageInfo"]["endCursor"]
+        return seasons
 
     async def refresh_show_metadata(self, show_id: str) -> dict:
         """The exact same manual-retry mutation A.8 built
@@ -123,3 +187,16 @@ class LcarsClient:
         """
         data = await self._query(query, {"id": show_id})
         return data["refreshShowMetadata"]
+
+    async def reconcile_season_mapping(self, show_id: str, season_number: int) -> dict:
+        """The exact same mutation A.4 built (`reconcileSeasonMapping`)
+        — both B.2 tiers (weekly and monthly) call this one mutation, no
+        Ops-specific variant, same precedent refresh_show_metadata()
+        above already established."""
+        query = """
+        mutation($id: ID!, $season: Int!) {
+          reconcileSeasonMapping(showId: $id, seasonNumber: $season) { id }
+        }
+        """
+        data = await self._query(query, {"id": show_id, "season": season_number})
+        return data["reconcileSeasonMapping"]

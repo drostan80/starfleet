@@ -825,6 +825,9 @@ type Query {
   "§6.7/B.1 — watching-status, actively-airing shows not yet metadata-refreshed since the start of today (home_timezone, §6.13). Ops's own daily-pass query; a client's on-open trigger calls this same query, not a separate mutation — whichever caller sees a show here first, refreshShowMetadata (A.8) satisfies it, and the ceiling is naturally 'not stacking' regardless of which fires first."
   dueForMetadataRefresh(first: Int, after: String, last: Int, before: String): ShowConnection!
 
+  "§5.5/B.2 — every season of a watching+actively-airing show (all of that show's seasons, not just the one currently airing) not reconciled against the Fribb dataset in the last 7 days. Ops's own weekly-tier query — self-gating (a season only appears once genuinely stale), so it can be checked as often as convenient without over-reconciling."
+  dueForSeasonReconciliation(first: Int, after: String, last: Int, before: String): SeasonConnection!
+
   franchise(id: ID!): Franchise
   franchises(first: Int, after: String, last: Int, before: String): FranchiseConnection!
 

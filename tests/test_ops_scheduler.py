@@ -1,48 +1,92 @@
-"""ops.scheduler — B.1. run_once() is the real unit under test; a fake
-LcarsClient stand-in (not the real httpx-backed one) keeps these tests
-focused on the scheduler's own looping/error-isolation logic, already
-separately covered by test_ops_lcars_client.py for the transport layer.
+"""ops.scheduler — B.1 (daily metadata refresh), B.2 (Fribb
+reconciliation, weekly + monthly tiers). Each run_*_once() is the real
+unit under test; a fake LcarsClient stand-in (not the real
+httpx-backed one) keeps these tests focused on the scheduler's own
+looping/error-isolation logic, already separately covered by
+test_ops_lcars_client.py for the transport layer.
 """
-
-import asyncio
 
 import pytest
 
 from ops.lcars_client import LcarsError
-from ops.scheduler import run_forever, run_once
+from ops.scheduler import (
+    _loop,
+    run_daily_and_weekly_once,
+    run_forever,
+    run_monthly_once,
+    run_once,
+    run_weekly_once,
+)
+
+
+def _season(season_id: str, show_id: str, season_number: int = 1) -> dict:
+    return {"id": season_id, "seasonNumber": season_number, "show": {"id": show_id}}
 
 
 class _FakeClient:
-    def __init__(self, due: list[dict], fail_ids: set[str] | None = None) -> None:
-        self._due = due
-        self._fail_ids = fail_ids or set()
+    def __init__(
+        self,
+        due_shows: list[dict] | None = None,
+        due_seasons: list[dict] | None = None,
+        all_seasons_: list[dict] | None = None,
+        fail_show_ids: set[str] | None = None,
+        fail_season_ids: set[str] | None = None,
+    ) -> None:
+        self._due_shows = due_shows or []
+        self._due_seasons = due_seasons or []
+        self._all_seasons = all_seasons_ or []
+        self._fail_show_ids = fail_show_ids or set()
+        self._fail_season_ids = fail_season_ids or set()
         self.refreshed: list[str] = []
+        self.reconciled: list[tuple[str, int]] = []
 
     async def due_for_metadata_refresh(self) -> list[dict]:
-        return self._due
+        return self._due_shows
 
     async def refresh_show_metadata(self, show_id: str) -> dict:
-        if show_id in self._fail_ids:
+        if show_id in self._fail_show_ids:
             raise LcarsError(f"boom: {show_id}")
         self.refreshed.append(show_id)
         return {"id": show_id}
 
+    async def due_for_season_reconciliation(self) -> list[dict]:
+        return self._due_seasons
+
+    async def all_seasons(self) -> list[dict]:
+        return self._all_seasons
+
+    async def reconcile_season_mapping(self, show_id: str, season_number: int) -> dict:
+        season_id = next(
+            s["id"]
+            for s in (self._due_seasons + self._all_seasons)
+            if s["show"]["id"] == show_id and s["seasonNumber"] == season_number
+        )
+        if season_id in self._fail_season_ids:
+            raise LcarsError(f"boom: {season_id}")
+        self.reconciled.append((show_id, season_number))
+        return {"id": season_id}
+
+
+# --- run_once (B.1) ---------------------------------------------------------
+
 
 async def test_run_once_refreshes_every_due_show():
-    client = _FakeClient([{"id": "s-a"}, {"id": "s-b"}])
+    client = _FakeClient(due_shows=[{"id": "s-a"}, {"id": "s-b"}])
     count = await run_once(client)
     assert count == 2
     assert client.refreshed == ["s-a", "s-b"]
 
 
 async def test_run_once_is_a_clean_no_op_with_nothing_due():
-    client = _FakeClient([])
+    client = _FakeClient()
     assert await run_once(client) == 0
     assert client.refreshed == []
 
 
 async def test_run_once_a_single_shows_failure_does_not_stop_the_rest():
-    client = _FakeClient([{"id": "s-a"}, {"id": "s-b"}, {"id": "s-c"}], fail_ids={"s-b"})
+    client = _FakeClient(
+        due_shows=[{"id": "s-a"}, {"id": "s-b"}, {"id": "s-c"}], fail_show_ids={"s-b"}
+    )
     count = await run_once(client)
     assert count == 2  # s-a and s-c succeeded, s-b's failure was caught
     assert client.refreshed == ["s-a", "s-c"]
@@ -53,32 +97,109 @@ async def test_run_once_raises_if_the_due_query_itself_fails():
         async def due_for_metadata_refresh(self):
             raise LcarsError("dueForMetadataRefresh unreachable")
 
-    client = _BrokenClient([])
+    client = _BrokenClient()
     with pytest.raises(LcarsError):
         await run_once(client)
 
 
-async def test_run_forever_survives_a_non_lcars_error_and_keeps_looping(monkeypatch):
+# --- run_weekly_once (B.2, weekly tier) -------------------------------------
+
+
+async def test_run_weekly_once_reconciles_every_due_season():
+    client = _FakeClient(due_seasons=[_season("z-a", "s-a"), _season("z-b", "s-b", 2)])
+    count = await run_weekly_once(client)
+    assert count == 2
+    assert client.reconciled == [("s-a", 1), ("s-b", 2)]
+
+
+async def test_run_weekly_once_is_a_clean_no_op_with_nothing_due():
+    client = _FakeClient()
+    assert await run_weekly_once(client) == 0
+    assert client.reconciled == []
+
+
+async def test_run_weekly_once_a_single_seasons_failure_does_not_stop_the_rest():
+    client = _FakeClient(
+        due_seasons=[_season("z-a", "s-a"), _season("z-b", "s-b"), _season("z-c", "s-c")],
+        fail_season_ids={"z-b"},
+    )
+    count = await run_weekly_once(client)
+    assert count == 2
+    assert client.reconciled == [("s-a", 1), ("s-c", 1)]
+
+
+# --- run_monthly_once (B.2, monthly tier) -----------------------------------
+
+
+async def test_run_monthly_once_reconciles_every_season_unconditionally():
+    client = _FakeClient(
+        all_seasons_=[_season("z-a", "s-a"), _season("z-b", "s-a", 2), _season("z-c", "s-c")]
+    )
+    count = await run_monthly_once(client)
+    assert count == 3
+    assert client.reconciled == [("s-a", 1), ("s-a", 2), ("s-c", 1)]
+
+
+async def test_run_monthly_once_a_single_seasons_failure_does_not_stop_the_rest():
+    client = _FakeClient(
+        all_seasons_=[_season("z-a", "s-a"), _season("z-b", "s-b")], fail_season_ids={"z-a"}
+    )
+    count = await run_monthly_once(client)
+    assert count == 1
+    assert client.reconciled == [("s-b", 1)]
+
+
+# --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
+
+
+async def test_run_daily_and_weekly_once_sums_both_tiers():
+    client = _FakeClient(due_shows=[{"id": "s-a"}], due_seasons=[_season("z-a", "s-b")])
+    count = await run_daily_and_weekly_once(client)
+    assert count == 2
+    assert client.refreshed == ["s-a"]
+    assert client.reconciled == [("s-b", 1)]
+
+
+# --- _loop (the shared per-tier while-loop primitive) -----------------------
+
+
+async def test_loop_survives_a_non_lcars_error_and_keeps_ticking(monkeypatch):
     """A genuinely unanticipated exception (not just LcarsError) must
-    still be caught — run_forever is what an unattended daemon actually
-    calls, so a bare uncaught exception here would silently kill the
+    still be caught — this loop is what an unattended daemon actually
+    runs, so a bare uncaught exception here would silently kill the
     whole process rather than logging and retrying next interval."""
 
-    class _BrokenClient(_FakeClient):
-        async def due_for_metadata_refresh(self):
-            raise RuntimeError("totally unexpected — not an LcarsError")
+    async def broken_coro_fn(client):
+        raise RuntimeError("totally unexpected — not an LcarsError")
 
     sleep_calls = []
 
     async def fake_sleep(seconds):
         sleep_calls.append(seconds)
         if len(sleep_calls) >= 2:
-            raise asyncio.CancelledError  # stop the infinite loop after 2 ticks
+            raise SystemExit  # stop the infinite loop after 2 ticks
 
     monkeypatch.setattr("ops.scheduler.asyncio.sleep", fake_sleep)
-    client = _BrokenClient([])
-    with pytest.raises(asyncio.CancelledError):
-        await run_forever(client, interval_seconds=1)
+    with pytest.raises(SystemExit):
+        await _loop(broken_coro_fn, _FakeClient(), interval_seconds=1, label="test")
     # Reached a second tick — the first RuntimeError was caught, logged, and
     # didn't stop the loop.
     assert len(sleep_calls) == 2
+
+
+# --- run_forever (wiring only — each loop's own behavior is covered above) --
+
+
+async def test_run_forever_wires_up_both_the_hourly_and_monthly_loops(monkeypatch):
+    calls = []
+
+    async def fake_loop(coro_fn, client, interval_seconds, label):
+        calls.append((coro_fn.__name__, interval_seconds, label))
+
+    monkeypatch.setattr("ops.scheduler._loop", fake_loop)
+    client = _FakeClient()
+    await run_forever(client, interval_seconds=3600, monthly_interval_seconds=2592000)
+    assert set(calls) == {
+        ("run_daily_and_weekly_once", 3600, "daily+weekly"),
+        ("run_monthly_once", 2592000, "monthly"),
+    }

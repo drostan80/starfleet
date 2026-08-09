@@ -925,6 +925,49 @@ the review queue. This mutation is what a **weekly scheduler** (Phase
 B) will call repeatedly once Ops exists — not built yet, out of scope
 here; A.4 only builds the reconciliation mechanism itself, on-demand.
 
+**Cadence resolved 2026-08-09 (B.2)**: `BUILD_PLAN.md`'s own B.2 entry
+only said "weekly Fribb dataset reconciliation," with no query/filter
+shape settled anywhere — unlike B.1, which got a full design-question
+paragraph. Asked directly rather than assumed, given the shape of the
+question directly mirrors B.1's own already-resolved one. Confirmed:
+**two tiers, not one**, refining "weekly" into a real cadence split:
+- **Weekly**: every season belonging to a show that is both
+  `status = WATCHING` **and** actively airing (A.10's `_show_is_airing`
+  predicate, show-level, reused unchanged — confirmed explicitly: an
+  airing show's *other*, already-finished seasons get the faster
+  cadence too, not just the specific season currently airing).
+  Confirmed to mirror B.1's own combined filter exactly ("Airing AND
+  watching (like B.1)") — a `PLANNED`-but-airing show waits for the
+  monthly sweep below, same as B.1's own metadata refresh does.
+- **Monthly**: an unconditional complete sweep of every season of every
+  show, regardless of status/airing — matches the second consolidation
+  audit's own "B.2's weekly all-shows pass" framing (`BUILD_PLAN.md`,
+  A.20's Fribb-memoization note), just corrected to the cadence this
+  round actually settled on for the *unconditional* half specifically —
+  see `BUILD_PLAN.md`'s B.2 entry for the resolution of that apparent
+  conflict. No per-season "due" gating on this tier at all: Ops's own
+  monthly timer *is* the gate, and `reconcile_season()` is already
+  idempotent (only opens `pending_review` on a genuine value change),
+  so re-checking an already-correct season costs little — reconfirmed
+  cheap in practice by A.25's own Fribb dataset memoization.
+
+**Weekly tier's own "due" mechanism, mechanical continuation of B.1's
+resolved shape** (§11.2's B.1 note: "every Ops responsibility... needs
+a real mutation/query to act through"): a new `Query.dueForSeasonReconciliation`
+returns every `Season` (not `Show` — `Season.show.id`/`.seasonNumber`
+already exist, §5.5, exactly what `reconcileSeasonMapping` needs, so
+Ops acts on one flat list with no extra per-show round trip) belonging
+to a watching+airing show, further filtered to `last_reconciled_at IS
+NULL OR < now - 7 days` — reusing `season.last_reconciled_at` (A.4) the
+same way B.1 reused `show.metadata_last_refreshed_at`, so a season A.20
+already reconciled hours earlier (via a live Sonarr fetch) isn't
+redundantly re-checked the same week. Deliberately **not**
+`home_timezone`-bucketed the way B.1's daily ceiling is: §6.13 names
+only "the daily metadata-refresh/on-open-cap cadence" as a
+`home_timezone` consumer, not the weekly one — a plain
+`util.utc_iso_offset(-7)` cutoff is used instead, no day-boundary
+precision needed at week granularity.
+
 **A real gap found and closed 2026-08-09 (A.20, consolidation audit
 pass)**: A.4 above builds reconciliation for a `season` row that
 already exists, but nothing ever created that row for any season

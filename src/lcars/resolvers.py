@@ -482,6 +482,36 @@ def resolve_due_for_metadata_refresh(_, info, **page_args):
     return pagination.paginate_list(due, **page_args)
 
 
+@query.field("dueForSeasonReconciliation")
+def resolve_due_for_season_reconciliation(_, info, **page_args):
+    """§5.5/B.2 — the weekly tier: every season of a watching+actively-
+    airing show (the whole show's airing status gates ALL its seasons,
+    not just the one currently airing — confirmed directly, 2026-08-09:
+    "whole show airing -> all its seasons weekly"), not reconciled
+    against Fribb in the last 7 days. Reuses `_show_is_airing` (A.10)
+    verbatim, same combined watching+airing filter `dueForMetadataRefresh`
+    (B.1) already uses — confirmed to mirror it exactly ("Airing AND
+    watching (like B.1)"). Deliberately not `home_timezone`-bucketed like
+    B.1's daily cutoff — §6.13 doesn't name the weekly cadence as a
+    consumer, so a plain 7-days-ago cutoff (`util.utc_iso_offset(-7)`)
+    is used instead. Same computed-in-Python-first shape as
+    `dueForMetadataRefresh`/`nextUp` — the airing check isn't one column
+    comparison, so it can't be a single SQL WHERE."""
+    conn = db.get_connection()
+    watching_shows = conn.execute("SELECT * FROM show WHERE status = 'watching'").fetchall()
+    airing_show_ids = [s["id"] for s in watching_shows if _show_is_airing(conn, s["id"])]
+    if not airing_show_ids:
+        return pagination.paginate_list([], **page_args)
+    cutoff = util.utc_iso_offset(-7)
+    placeholders = ",".join("?" for _ in airing_show_ids)
+    due = conn.execute(
+        f"SELECT * FROM season WHERE show_id IN ({placeholders})"
+        " AND (last_reconciled_at IS NULL OR last_reconciled_at < ?)",
+        (*airing_show_ids, cutoff),
+    ).fetchall()
+    return pagination.paginate_list([dict(s) for s in due], **page_args)
+
+
 @next_up_entry_type.field("show")
 def resolve_next_up_entry_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])

@@ -36,7 +36,16 @@ class Config:
     # refreshed_at), so this only controls how promptly a newly-due show
     # gets picked up, not correctness — an hourly default catches
     # anything due well within the same day without hammering the API.
+    # Also drives B.2's weekly tier (dueForSeasonReconciliation) —
+    # self-gating the same way, so it rides this same cadence rather than
+    # needing its own interval (SCOPE.md §5.5's B.2 note).
     poll_interval_seconds: int = 3600
+    # §5.5/B.2 — the monthly tier's own interval: an unconditional,
+    # ungated sweep of every season of every show, so unlike
+    # poll_interval_seconds above, this genuinely *is* the correctness
+    # boundary — Ops's own timer, not a stored "due" ceiling. 30 days,
+    # matching the cadence it's named for.
+    monthly_poll_interval_seconds: int = 30 * 24 * 3600
 
 
 def _resolve_secret(value: str | None, env_var: str) -> str | None:
@@ -65,9 +74,15 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.poll_interval_seconds = parser["ops"].getint(
                 "poll_interval_seconds", fallback=cfg.poll_interval_seconds
             )
+            cfg.monthly_poll_interval_seconds = parser["ops"].getint(
+                "monthly_poll_interval_seconds", fallback=cfg.monthly_poll_interval_seconds
+            )
     cfg.lcars_url = os.environ.get("OPS_LCARS_URL", cfg.lcars_url)  # not a secret
     cfg.lcars_bearer_token = _resolve_secret(cfg.lcars_bearer_token, "OPS_LCARS_BEARER_TOKEN")
     env_interval = os.environ.get("OPS_POLL_INTERVAL_SECONDS")
     if env_interval is not None:
         cfg.poll_interval_seconds = int(env_interval)
+    env_monthly_interval = os.environ.get("OPS_MONTHLY_POLL_INTERVAL_SECONDS")
+    if env_monthly_interval is not None:
+        cfg.monthly_poll_interval_seconds = int(env_monthly_interval)
     return cfg

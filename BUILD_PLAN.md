@@ -1680,8 +1680,121 @@ background scheduler.
   - 293 tests passing after these three fixes (was 290 before them, 266
     at Phase A's own close), `ruff check .` clean, unbound-field sweep
     unaffected.
-- [ ] **B.2 — Weekly Fribb dataset reconciliation** — deliberately
-  slower/independent of the daily cadence.
+- [x] **B.2 — Fribb dataset reconciliation, two tiers** — deliberately
+  slower/independent of the daily cadence. `BUILD_PLAN.md`'s own text
+  here was one line, unlike B.1's full design-question paragraph —
+  asked directly rather than assumed, since the same "how does Ops
+  discover what's due" fork B.1 already resolved applies here too, with
+  no `SCOPE.md` text settling it for B.2 specifically. Confirmed:
+  **weekly** for seasons of `WATCHING`+actively-airing shows (every
+  season of that show, not just the one currently airing — reuses
+  A.10's `_show_is_airing`, show-level, unchanged, same combined filter
+  B.1 already uses — "Airing AND watching (like B.1)"), **monthly** for
+  an unconditional complete sweep of every season of every show. Full
+  rationale in `SCOPE.md` §5.5's own "Cadence resolved 2026-08-09 (B.2)"
+  note.
+  - **Apparent conflict with the second consolidation audit's own
+    "B.2's weekly all-shows pass" wording** (`BUILD_PLAN.md`, A.20's
+    Fribb-memoization note, written before this round): read literally
+    that would mean the weekly tier itself sweeps everything, no
+    filtering — this round's resolution instead puts the *unconditional,
+    no-filtering* sweep on the **monthly** tier, and scopes the weekly
+    one to watching+airing only. Not a contradiction so much as that
+    earlier note pre-dating this round's actual two-tier design — noted
+    here rather than silently reconciled, since a future audit reading
+    both notes should see the resolution, not have to guess which one
+    is current (this one is).
+  - **Built**: new `Query.dueForSeasonReconciliation` (`schema.graphql`)
+    — a `SeasonConnection!`, watching+airing shows' seasons (computed in
+    Python via `_show_is_airing`, same `paginate_list()` pattern
+    `dueForMetadataRefresh`/`nextUp` already use — not one raw SQL
+    `WHERE`, same reasoning as both) not yet reconciled in the last 7
+    days (`season.last_reconciled_at`, plain `util.utc_iso_offset(-7)`
+    cutoff, no `home_timezone` bucketing — §6.13 doesn't name the weekly
+    cadence as a consumer, unlike the daily one). `ops/scheduler.py`
+    gained `run_weekly_once()` (walks `dueForSeasonReconciliation`,
+    calls `reconcileSeasonMapping` per season) and `run_monthly_once()`
+    (walks every show via `Query.shows`, every season via `Show.seasons`,
+    calls `reconcileSeasonMapping` unconditionally — no due-query needed
+    for this tier at all). **Two loops, not three timers**: since
+    `dueForSeasonReconciliation` is already self-gating (a season only
+    ever appears once truly 7+ days stale, regardless of how often it's
+    checked), the weekly tier rides the *same* hourly check cadence B.1's
+    daily tier already uses (`run_once()` then `run_weekly_once()`, same
+    tick) rather than needing its own separate timer — only the monthly
+    tier is genuinely unconditional/not self-limiting, so it alone gets
+    its own, much longer-period loop, run concurrently
+    (`asyncio.gather`) alongside the hourly one. Ops is still the one
+    peer client B.1 established, just with more scheduled work, matching
+    §11.2's B.1 note's own "B.2–B.10 inherit this" framing.
+    `ops/lcars_client.py` gained `due_for_season_reconciliation()` (same
+    page-walking shape as `due_for_metadata_refresh()`), `all_seasons()`
+    (walks `shows` → `seasons` across every page of both), and
+    `reconcile_season_mapping(show_id, season_number)`. `ops/config.py`
+    gained `monthly_poll_interval_seconds` (default 30 days) — the
+    existing `poll_interval_seconds` (B.1, hourly default) now covers
+    both the daily and weekly due-checks, no new interval needed for the
+    self-gating tier.
+  - **Tests**: `test_server.py`
+    (`dueForSeasonReconciliation`: excludes a non-watching show's season,
+    excludes a fully-aired watching show's season, excludes a
+    watching+airing show's season already reconciled this week, includes
+    a never-reconciled one and one reconciled 8 days ago, includes every
+    season of a multi-season watching+airing show not just the airing
+    one). `test_ops_lcars_client.py` (+ due_for_season_reconciliation/
+    all_seasons page-walking, reconcile_season_mapping variable shape).
+    `test_ops_scheduler.py` (+ run_weekly_once/run_monthly_once/
+    run_daily_and_weekly_once: each calls reconcileSeasonMapping/
+    refreshShowMetadata once per item returned, a single item's failure
+    doesn't stop the rest; `_loop` survives a non-LcarsError and keeps
+    ticking; `run_forever` wires the hourly and monthly loops with the
+    right coroutine/interval each — no real asyncio.gather timing
+    needed, `_loop` itself is monkeypatched for this one).
+  - **Verified**: 312 tests passing (was 293 at B.1's close), `ruff
+    check .` clean. No new migration — B.2 needed no schema/column
+    change, only a new query over `season.last_reconciled_at` (already
+    existed since A.4). Unbound-field sweep re-run —
+    `dueForSeasonReconciliation` now bound, only `Query.backlog` (B.9)
+    remains. **Beyond the mocked unit tests**: a real in-process
+    end-to-end run (same method as B.1's own) — added a watching+airing
+    show with an unreconciled season, confirmed
+    `dueForSeasonReconciliation` finds it, `run_weekly_once` reconciles
+    it through Ops's real client, confirmed the weekly ceiling then
+    suppresses it — and confirmed the monthly tier still picks the same
+    season up unconditionally afterward, proving the two tiers are
+    genuinely independent, not accidentally sharing one ceiling.
+    Reconfirmed a real non-editable `pip install .` (the Dockerfile's
+    own path) still picks up every new `ops` module cleanly.
+  - **A real concern raised by review before checking this off, checked
+    empirically rather than assumed either way**: the monthly tier has
+    no "due" gate at all by design (above) — does an unresolvable season
+    (no `tvdb` link, empty/no Fribb candidate) accumulate a fresh
+    `pending_review` row every month, forever, since nothing ever stops
+    `reconcile_season()` from being called on it again? Verified
+    directly on a scratch DB: created a season with a real `anilist_id`,
+    no `tvdb` link, `manual_override = 0`, an empty Fribb dataset (so
+    resolution always comes back "no candidate"), and ran
+    `run_monthly_once` three times in a row. **Result: exactly one
+    `pending_review` row throughout, not growing.** `reconcile_season()`
+    (A.4) already guards this precisely: `_open_or_extend_pending_review`
+    only writes when the *resolved value itself changes* from what's
+    stored — once a season's resolution stabilizes (even at "unmatched"),
+    identical re-checks write nothing further, the same guarantee that
+    already protects `reconcileSeasonMapping`'s own on-demand calls and
+    A.20's Sonarr-triggered ones. The monthly tier having no due-gate of
+    its own doesn't bypass this — it inherits it, since all three
+    callers share one `reconcile_season()` implementation. Not a false
+    alarm to have checked: this is exactly the review's own actual job
+    (§5.6) whenever a resolution genuinely *does* flip between runs
+    (e.g. a flaky external dataset) — that's intended drift-detection,
+    not a bug, and is identical regardless of polling cadence.
+  - **Recorded, not fixed — accepted at this project's scale**:
+    `all_seasons()` is N+1 by construction (one `shows` page-walk, then
+    one `seasons` page-walk *per show*) — fine monthly against a
+    personal-tracker-sized library, but the first place Ops does
+    per-entity fan-out rather than one query. B.3 (Sonarr/Radarr polling
+    per episode) will face the same shape — worth a real query-design
+    pass there rather than assuming this pattern always scales.
 - [ ] **B.3 — Sonarr/Radarr polling for file availability**
   (queue/episode-file/movie-file endpoints, never a filesystem scan).
   This is where `available_via_sonarr`/`available_via_radarr` (§5.2)
