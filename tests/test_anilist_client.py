@@ -87,6 +87,34 @@ def test_fetch_media_raises_on_timeout():
         anilist_client.fetch_media(123, client=fake)
 
 
+# --- fetch_airing_schedule (B.4) ----------------------------------------------
+
+
+def test_fetch_airing_schedule_returns_episode_count_and_nodes():
+    nodes = [{"episode": 1, "airingAt": 1700000000}, {"episode": 2, "airingAt": 1700604800}]
+    fake = _FakeClient(
+        response=_FakeResponse(
+            payload={"data": {"Media": {"episodes": 12, "airingSchedule": {"nodes": nodes}}}}
+        )
+    )
+    result = anilist_client.fetch_airing_schedule(123, client=fake)
+    assert result == {"episodes": 12, "nodes": nodes}
+    assert fake.last_variables == {"mediaId": 123}
+
+
+def test_fetch_airing_schedule_returns_none_for_an_unknown_id():
+    fake = _FakeClient(response=_FakeResponse(payload={"data": {"Media": None}}))
+    assert anilist_client.fetch_airing_schedule(999999, client=fake) is None
+
+
+def test_fetch_airing_schedule_raises_on_graphql_errors():
+    fake = _FakeClient(
+        response=_FakeResponse(payload={"errors": [{"message": "Invalid mediaId"}]})
+    )
+    with pytest.raises(anilist_client.AniListError, match="Invalid mediaId"):
+        anilist_client.fetch_airing_schedule(123, client=fake)
+
+
 # --- OAuth (A.9) --------------------------------------------------------------
 
 

@@ -1635,11 +1635,88 @@ as AniList/Sonarr/Radarr.
   creation (§4, Phase A) — is independent of this cadence.
 - **Air-date source priority**: Manual > animeschedule.net (REST API
   v3, `/timetables`, preferred over its RSS feeds — §10.1) > AniList
-  `airingSchedule` > Sonarr raw. This governs which value *wins* when
-  applied automatically — it does **not** gate the apply.
-  Every automatic change from any source, including one overwriting a
-  manual value, applies immediately and logs a `pending_review` entry
-  (§3.1/§5.6).
+  `airingSchedule` > Sonarr raw. **Revised 2026-08-09 (B.4) — this now
+  genuinely gates for AniList/Sonarr**: the original framing here ("does
+  not gate the apply... including one overwriting a manual value") was
+  built as B.4's first draft, then corrected directly on the user's own
+  reasoning before commit — see the B.4 note immediately below for why.
+  Manual is hard-protected from AniList and Sonarr specifically, the
+  same shape `season.manual_override` already gives season mapping (§3
+  principle 6). Whether animeschedule.net (B.5, not built yet) gets an
+  exemption from that gate — since it's specifically the source for
+  genuine real-world reschedule events, not just another opinion to
+  rank — is an open question for B.5's own design pass, not resolved
+  here.
+
+  **Resolved 2026-08-09 (B.4), AniList `airingSchedule` — the first of
+  these automatic sources actually built** (Sonarr raw is a one-time
+  seed at episode creation, `metadata.py`'s own `_fetch_and_populate`;
+  animeschedule.net is B.5, not built yet). `BUILD_PLAN.md`'s own B.4
+  line named the source but not the mechanism, cadence, or per-season
+  scoping — asked directly, then verified against AniList's real API
+  (three separate live `Media` entries) rather than assumed:
+  - **No new due-query/mutation/cadence** — folded directly into
+    `metadata.fetch_and_populate()`'s existing `tracking_space =
+    "anime"` branch, riding the exact same daily
+    `dueForMetadataRefresh`/`refreshShowMetadata` cadence B.1 already
+    built. Confirmed with the user: air dates change far less urgently
+    than file availability (B.3's own reason for a dedicated adaptive
+    loop), so daily is plenty, and `dueForMetadataRefresh` already
+    selects the identical show set B.4 needs (watching + actively
+    airing).
+  - **Per-season, not per-show** — `season.anilist_id` (§5.5's own
+    Fribb-resolved crosswalk), not the single show-level `anilist_id`
+    `_fetch_anilist` uses for general metadata: a split-cour sequel
+    season is a wholly separate AniList `Media` entry. Verified live
+    against three real `Media` entries (One Piece's own single
+    long-running entry, Attack on Titan S3 Part 2, Jujutsu Kaisen S2)
+    that `airingSchedule.episode` always resets to 1 for that specific
+    `Media` entry — matches directly onto `episode.episode` (also
+    season-scoped) with no numbering-offset translation needed, an
+    early hypothesis disproven by testing before it shaped the design.
+  - **Full schedule, not `notYetAired`-filtered** — confirmed with the
+    user: reconciles an already-aired episode's date too (e.g. one
+    Sonarr originally seeded wrong), matching this section's own
+    "reconciliation" framing rather than a lookahead.
+  - **Manual dates hard-protected — revised after the first draft
+    shipped, on the user's own reasoning**: the first draft matched
+    this section's original "does not gate" text literally (unconditional
+    writes, even over a manual value). Reviewed against the user
+    directly: only a genuine reschedule signal (animeschedule.net, B.5
+    — a real-world disruption like a sports broadcast preempting a
+    timeslot) should override a value they've deliberately corrected;
+    AniList/Sonarr repeatedly re-asserting stale data over an
+    already-fixed value is the "stubborn weekly rewrite" failure mode
+    to avoid. `_reconcile_air_dates` now skips outright (no write, no
+    `pending_review`) whenever `air_date_source = 'manual'` — the same
+    hard-gate shape `season_mapping.py`'s own `reconcile_season()`
+    already gives `season.manual_override` (§3 principle 6), extended
+    to per-episode air dates. This section's own priority-order text
+    above is corrected to match.
+  - **Season-split guard, confirmed live, not hypothetical**: a single
+    TVDB season can span *multiple* separate AniList `Media` entries —
+    Attack on Titan's own Season 3 is one 22-episode TVDB season across
+    two AniList entries of 12 and 10 episodes each, confirmed by
+    querying both directly. `season.anilist_id` can only point at one
+    of them, so per-episode matching silently misapplies dates across
+    the cour boundary whenever LCARS's own episode count for a season
+    exceeds that AniList entry's own reported total. Guarded: skip that
+    season's reconciliation entirely, open a `pending_review` on the
+    **season** row (`entity_type = "season"`, `field = "anilist_id"`)
+    rather than each individual episode, so a human can investigate.
+    **Deliberately not built as part of B.4, flagged as a real,
+    separate follow-up**: the fuller fix — a human resolving that
+    review by specifying an actual episode-range split ("episodes X-Y
+    are Media A, P-Q are Media B") — needs a genuinely new, structured
+    way to store a multi-entry-per-season mapping; `pending_review`'s
+    own resolution is free-text only today, so it can record the
+    finding but not yet the fix. Not scheduled in `BUILD_PLAN.md` —
+    would extend §5.5's own season-mapping model, likely alongside a
+    future B.2-adjacent revisit.
+  - `pending_review.open_or_extend(conn, "episode", ..., "air_date_utc",
+    "anilist", ...)` is the actual write-path for a genuine correction,
+    keyed by the **episode's** own id, same shared mechanism A.4/A.8
+    already use.
 - **Service-level health**: per-integration reachability/rate-limit
   status (Sonarr/Radarr/AniList/animeschedule.net), distinct from any
   individual show's tracking state. Tracked by Ops (Phase B's

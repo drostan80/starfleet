@@ -33,6 +33,15 @@ def utc_iso_offset_hours(hours: float) -> str:
     return (datetime.now(UTC) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def unix_to_iso(timestamp: int) -> str:
+    """A Unix epoch-seconds timestamp (AniList's own `airingAt` shape,
+    §5.2/§6.7, B.4) to the same Z-suffixed UTC string every stored
+    timestamp uses — verified live against AniList's real API before
+    being written: `airingSchedule.nodes.airingAt` is seconds, not
+    milliseconds."""
+    return datetime.fromtimestamp(timestamp, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _parse(value: str) -> datetime:
     try:
         # datetime.fromisoformat handles the "Z" suffix natively (3.12+,

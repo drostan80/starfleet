@@ -102,6 +102,17 @@ def fetch_and_populate(conn, show_id: str) -> None:
         _guarded(conn, show, "sonarr", _fetch_sonarr)
     elif show["media_shape"] == "movie":
         _guarded(conn, show, "radarr", _fetch_radarr)
+    if show["tracking_space"] == "anime":
+        # B.4 — deliberately its own guarded call *after* the Sonarr fetch
+        # above, not alongside _fetch_anilist earlier: on a show's very
+        # first fetch (addShow), episode rows don't exist yet until
+        # _fetch_sonarr just ran — reconciling air dates any earlier would
+        # find nothing to match against on every first-ever fetch, only
+        # correcting on the *next* refresh cycle a full day later. A
+        # per-season loop against each season's own anilist_id besides, a
+        # genuinely different id than _fetch_anilist's single show-level
+        # one (see _reconcile_air_dates's own docstring).
+        _guarded(conn, show, "anilist", _reconcile_air_dates)
 
     # B.1, §6.7/§11.2 — stamped unconditionally, regardless of which (if
     # any) branch above actually succeeded: this is an "attempt" marker,
@@ -242,6 +253,109 @@ def _fetch_anilist(conn, show: dict) -> None:
         is_trackable = node.get("format") in anilist_client.ANIME_RELATION_FORMATS
         if node.get("id") is not None and is_trackable:
             _link_relation(conn, show["id"], node)
+
+
+def _reconcile_air_dates(conn, show: dict) -> None:
+    """§5.2/§6.7, B.4 — AniList `airingSchedule` air-date reconciliation.
+    A separate pass from `_fetch_anilist` above, its own `_guarded()`
+    call in `fetch_and_populate` below, deliberately: that function's
+    single `fetch_media()` call is scoped to the show-level AniList id
+    (season 1's, by `_upsert_season`'s own convention); this one needs
+    a *different* AniList id per season (`season.anilist_id`, B.2's own
+    Fribb-resolved crosswalk — a split-cour sequel is a wholly separate
+    AniList Media entry from its first cour), so it's a real per-season
+    loop, not a single call.
+
+    Rides the exact same cadence `_fetch_anilist` does — no new
+    due-query/mutation (confirmed with the user, B.4): Ops's daily pass
+    already selects watching+actively-airing shows only
+    (`dueForMetadataRefresh`), the same set B.4 needs, so a dedicated
+    poll would only duplicate that filter for no benefit.
+
+    Fetches the *full* airingSchedule (not `notYetAired`-filtered) so
+    an already-aired episode's date gets reconciled too, not just
+    upcoming ones (confirmed with the user) — matching §6.7's own
+    "reconciliation" framing rather than a lookahead.
+
+    **Manual dates are protected, revised 2026-08-09 after this
+    function's first draft shipped** — the user's own reasoning: only
+    a genuine reschedule signal (animeschedule.net, B.5, not yet built
+    — real-world disruptions like a sports broadcast preempting a
+    timeslot) should override a value they've deliberately corrected;
+    AniList/Sonarr repeatedly re-asserting stale or wrong data over an
+    already-fixed value is exactly the "stubborn weekly rewrite" the
+    user flagged as the failure mode to avoid. So this function skips
+    outright (no write, no `pending_review`) whenever the existing
+    `air_date_source` is already `'manual'` — the same hard-gate shape
+    `season_mapping.py`'s own `reconcile_season()` already gives
+    `season.manual_override` (§3 principle 6), extended here to
+    per-episode manual air dates specifically for AniList/Sonarr.
+    `SCOPE.md` §6.7's own text is corrected to match.
+
+    **Season-split guard, same date, real and confirmed live** (not
+    hypothetical) — a single TVDB season can span *multiple* separate
+    AniList Media entries (Attack on Titan's own Season 3: one
+    22-episode TVDB season, two AniList entries of 12 and 10 episodes
+    each). `season.anilist_id` can only point at one of them, so if
+    LCARS's own episode count for a season exceeds that Media entry's
+    own reported `episodes` count, per-episode matching is unsafe —
+    skipped entirely, with a `pending_review` opened on the *season*
+    (not each individual episode) so a human can investigate and fix
+    the underlying season/anilist_id mapping. The fuller fix — letting
+    a human resolve that review by specifying an actual episode-range
+    split (episodes X-Y are Media A, P-Q are Media B) — needs a real,
+    structured way to store that mapping that doesn't exist yet
+    (`pending_review`'s own resolution is free-text only); flagged as
+    a genuine follow-up, deliberately not built as part of B.4.
+    """
+    seasons = conn.execute(
+        "SELECT id, season_number, anilist_id FROM season"
+        " WHERE show_id = ? AND anilist_id IS NOT NULL",
+        (show["id"],),
+    ).fetchall()
+    now = util.now_utc_iso()
+    for season in seasons:
+        result = anilist_client.fetch_airing_schedule(season["anilist_id"])
+        if not result or not result["nodes"]:
+            continue
+
+        anilist_episode_count = result["episodes"]
+        lcars_episode_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM episode WHERE show_id = ? AND season = ?",
+            (show["id"], season["season_number"]),
+        ).fetchone()["n"]
+        if anilist_episode_count is not None and lcars_episode_count > anilist_episode_count:
+            pending_review.open_or_extend(
+                conn, "season", season["id"], "anilist_id", "anilist", None,
+                f"season {season['season_number']} has {lcars_episode_count} episode(s) in "
+                f"LCARS but AniList media {season['anilist_id']} only covers "
+                f"{anilist_episode_count} — likely spans multiple AniList entries; "
+                "air-date reconciliation skipped for this season",
+            )
+            continue
+
+        for node in result["nodes"]:
+            episode_row = conn.execute(
+                "SELECT id, air_date_utc, air_date_source FROM episode"
+                " WHERE show_id = ? AND season = ? AND episode = ?",
+                (show["id"], season["season_number"], node["episode"]),
+            ).fetchone()
+            if episode_row is None:
+                continue  # not yet fetched into LCARS — A.8's Sonarr fetch's job, not this one's
+            if episode_row["air_date_source"] == "manual":
+                continue  # hard-protected — see this function's own docstring
+            new_air_date = util.unix_to_iso(node["airingAt"])
+            if episode_row["air_date_utc"] == new_air_date:
+                continue
+            pending_review.open_or_extend(
+                conn, "episode", episode_row["id"], "air_date_utc", "anilist",
+                episode_row["air_date_utc"], new_air_date,
+            )
+            conn.execute(
+                "UPDATE episode SET air_date_utc = ?, air_date_source = 'anilist',"
+                " updated_at = ? WHERE id = ?",
+                (new_air_date, now, episode_row["id"]),
+            )
 
 
 def _link_relation(conn, show_id: str, related_media: dict) -> None:

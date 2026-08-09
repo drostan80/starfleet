@@ -2017,7 +2017,97 @@ background scheduler.
     both `episode`/`show`). Clean-install sanity check (fresh venv,
     real `pip install`) confirmed `lcars.local_audit`/`ops.cli` both
     import cleanly and `ops audit-local-files --help` is wired.
-- [ ] **B.4 — AniList `airingSchedule` polling.**
+- [x] **B.4 — AniList `airingSchedule` polling.** `BUILD_PLAN.md`'s own
+  one-liner named the source but not the mechanism, cadence, or
+  per-season scoping — asked directly, then verified against AniList's
+  real API (three separate live `Media` entries) rather than assumed.
+  `SCOPE.md` §6.7's own "Resolved 2026-08-09 (B.4)" note has the full
+  design history; short version:
+  - **No new due-query/mutation/cadence** — folded directly into
+    `metadata.fetch_and_populate()`'s existing daily/on-demand
+    anime-branch, riding B.1's own `dueForMetadataRefresh`/
+    `refreshShowMetadata` cadence exactly as-is. Confirmed with the
+    user: air dates don't need B.3's own adaptive-cadence treatment.
+  - **Per-season, not per-show**: `season.anilist_id` (§5.5's Fribb
+    crosswalk), not `_fetch_anilist`'s single show-level id — a
+    split-cour sequel is a separate AniList `Media` entry. Verified
+    live against three real `Media` entries that `airingSchedule.
+    episode` always resets to 1 per entry, matching directly onto
+    `episode.episode` with no numbering offset — an early hypothesis
+    (broadcast-continuous numbering) tested and disproven before it
+    shaped anything.
+  - **Full schedule fetched, not `notYetAired`-only** — reconciles
+    already-aired episodes' dates too, confirmed with the user.
+  - **Manual dates hard-protected — revised after the first draft
+    shipped, on the user's own reasoning**: the first draft matched
+    §6.7's original "does not gate" text literally (unconditional
+    writes, even over a manual value) and was reviewed against the
+    user before pushing. Corrected: only a genuine reschedule signal
+    (animeschedule.net, B.5, not built yet — a real-world disruption
+    like a sports broadcast preempting a timeslot) should override a
+    value the user deliberately set; AniList/Sonarr repeatedly
+    re-asserting stale data over an already-fixed value is the
+    "stubborn weekly rewrite" failure mode the user flagged. Now skips
+    outright (no write, no `pending_review`) whenever `air_date_source
+    = 'manual'` — the same hard-gate shape `season_mapping.py`'s own
+    `reconcile_season()` already gives `season.manual_override` (§3
+    principle 6). `SCOPE.md` §6.7's own priority-order text corrected
+    to match.
+  - **Season-split guard, confirmed live, not hypothetical**: a single
+    TVDB season can span *multiple* separate AniList `Media` entries —
+    confirmed by querying both of Attack on Titan Season 3's two real
+    entries directly (12 + 10 episodes, one 22-episode TVDB season).
+    `season.anilist_id` can only point at one, so per-episode matching
+    silently misapplies dates across the cour boundary whenever LCARS's
+    own episode count for a season exceeds that entry's own reported
+    total. Guarded: skip the season's reconciliation entirely, open a
+    `pending_review` on the season row itself (not each episode).
+    Deliberately not extended to a full fix (a human resolving the
+    review with an actual episode-range split) — that needs a genuinely
+    new, structured multi-entry-per-season mapping `pending_review`'s
+    free-text resolution can't represent; flagged as a real follow-up,
+    not scheduled here.
+  - **Real ordering bug caught before commit**: the first draft placed
+    the new reconciliation call *before* `_fetch_sonarr` in
+    `fetch_and_populate` — on a show's very first-ever fetch, episode
+    rows don't exist yet at that point, so every brand-new anime show
+    would get zero AniList correction until the *next* day's refresh.
+    Moved to run after the Sonarr/Radarr fetch instead, so a new show
+    gets correct air dates immediately.
+  - **Built**: `util.py` — `unix_to_iso()` (AniList's own `airingAt`
+    shape, epoch seconds). `anilist_client.py` — `fetch_airing_
+    schedule()`, a separate lighter query from `fetch_media()` (no
+    cast/relations payload), returning `{episodes, nodes}` — the
+    episode count is what the season-split guard compares against. `
+    metadata.py` — `_reconcile_air_dates()`, its own `_guarded()` call
+    in `fetch_and_populate()`, positioned after the Sonarr/Radarr fetch
+    (see the ordering fix above). No schema/migration/Ops changes at
+    all — this rides existing machinery entirely.
+  - **Tests**: `test_anilist_client.py` (+3: `fetch_airing_schedule`'s
+    own client-layer coverage, including its `{episodes, nodes}`
+    shape). `test_server.py` (+6, end-to-end through real GraphQL:
+    corrects a Sonarr-seeded date + logs `pending_review` keyed by the
+    episode's own id; a manual date survives untouched with no new
+    review; a no-op when the value's already correct; skips a season
+    that spans multiple AniList entries, opening a season-level review
+    instead of writing wrong-cour dates; skips a season with no
+    `anilist_id` at all, `fetch_airing_schedule` never even called;
+    skips an AniList-reported episode LCARS hasn't fetched yet). Ten
+    pre-existing AniList-stubbing call sites also needed a matching
+    `fetch_airing_schedule` stub — caught by a real timing regression
+    (the suite's own runtime jumped ~30s from unstubbed real network
+    calls silently succeeding under `_guarded`'s broad exception catch,
+    not a test failure) before it was fixed.
+  - **Verified**: 384 tests passing (was 375 at B.3b's close), `ruff
+    check .` clean. Beyond the mocked tests — real, live verification
+    against AniList's actual public API: `fetch_airing_schedule(21)`
+    (One Piece) returned 25 real upcoming episodes, `util.unix_to_iso()`
+    on a real `airingAt` value converted correctly, and the season-split
+    scenario itself was confirmed against two real AniList `Media`
+    entries (Attack on Titan S3 Part 1/Part 2) before the guard was
+    written. Clean-install sanity check (fresh venv, real `pip
+    install`) confirmed `lcars.metadata`/`lcars.anilist_client` import
+    cleanly.
 - [ ] **B.5 — animeschedule.net polling.** Prefer the **REST API v3**
   (`/timetables/{airType}`, filtered by `anilist-ids` — avoids fuzzy
   matching entirely since Chabrol already has the AniList id via

@@ -56,6 +56,14 @@ async def client(migrated_db, monkeypatch):
     # themselves (see the "on-demand metadata fetch" test section below).
     config.set_current(config.Config())
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: None)
+    # B.4 — same reasoning: metadata.py's _reconcile_air_dates calls this
+    # once per season with a real anilist_id, so any test that overrides
+    # fetch_media above to return real data (setting season 1's anilist_id
+    # via _upsert_season) would otherwise make a real network call here
+    # too. Tests exercising the real reconciliation behavior re-monkeypatch
+    # this themselves (see the "AniList airingSchedule reconciliation"
+    # test section below).
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     # A.20 — same reasoning as the AniList stub above: _fetch_sonarr now
     # reconciles any newly-discovered season against the Fribb dataset
     # immediately (season_mapping.reconcile_season), so every pre-A.20
@@ -325,6 +333,7 @@ class _FakeRadarrClient:
 
 async def test_add_show_anilist_fetch_populates_metadata_season_and_cast(client, monkeypatch):
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     show = await add_show(client, anilistId=12345)
 
     data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
@@ -361,6 +370,7 @@ async def test_add_show_anilist_fetch_reuses_existing_studio_and_person(client, 
     """Upsert-by-AniList-id (metadata.py's own _link_studio/_link_person) —
     two shows sharing a studio/voice actor shouldn't duplicate either row."""
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     await add_show(client, anilistId=111, titleRomaji="Show One")
     await add_show(client, anilistId=222, titleRomaji="Show Two")
 
@@ -398,6 +408,7 @@ async def test_add_show_anilist_fetch_creates_relation_stub_shows(client, monkey
     monkeypatch.setattr(
         anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_RELATIONS
     )
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     show = await add_show(client, anilistId=111)
 
     data = await gql(
@@ -446,6 +457,7 @@ async def test_add_show_anilist_fetch_relation_reuses_existing_show(client, monk
     """When the related AniList id is already a real, tracked show in
     LCARS, the edge must point at that show — no duplicate stub."""
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     existing = await add_show(client, anilistId=333, titleRomaji="Golden Kamuy 2")
 
     monkeypatch.setattr(
@@ -902,6 +914,7 @@ async def test_anime_show_with_only_tvdb_id_still_gets_anilist_metadata(client, 
         return FAKE_ANILIST_MEDIA
 
     monkeypatch.setattr(anilist_client, "fetch_media", _spy)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
 
@@ -934,6 +947,7 @@ async def test_anime_show_never_overwrites_a_caller_supplied_anilist_id(client, 
         anilist_client, "fetch_media",
         lambda aid, *a, **kw: fetched.append(aid) or FAKE_ANILIST_MEDIA,
     )
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     show = await add_show(client, trackingSpace="ANIME", tvdbId=555, anilistId=777)
     assert fetched == [777]
     data = await gql(
@@ -981,6 +995,7 @@ async def test_already_bare_anime_show_recovers_on_refresh(client, monkeypatch):
         anilist_client, "fetch_media",
         lambda aid, *a, **kw: fetched.append(aid) or FAKE_ANILIST_MEDIA,
     )
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     await gql(client, "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
               {"i": show["id"]}, headers=auth_headers())
 
@@ -1126,6 +1141,7 @@ async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(cl
     # whatever was unreachable is back — retry via refreshShowMetadata,
     # the manual-fix-by-user path (confirmed 2026-08-08)
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     refreshed = await gql(
         client,
         'mutation($id: ID!) { refreshShowMetadata(showId: $id) { posterUrl } }',
@@ -1197,10 +1213,263 @@ async def test_add_show_tmdb_fetch_skipped_for_anime(client, monkeypatch):
     media_shape (an anime movie still goes through AniList, §5.1)."""
     config.set_current(config.Config(tmdb_api_key="key"))
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     fake = _FakeTmdbClient(movie_runtime=112)
     monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
     await add_show(client, anilistId=12345)
     assert fake.calls == []
+
+
+# --- AniList airingSchedule reconciliation (§5.2/§6.7, B.4) -----------------
+# Rides the exact same daily/on-demand cadence as the rest of metadata.py's
+# fetch_and_populate — no new mutation/due-query, so these are exercised
+# through the same addShow/refreshShowMetadata paths as everything above.
+
+
+async def test_anilist_air_date_reconciliation_corrects_a_sonarr_seeded_date(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(
+        anilist_client, "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {
+            "episodes": 12, "nodes": [{"episode": 1, "airingAt": 1735689600}],
+        },
+    )
+
+    def _ep(number):
+        return {
+            "seasonNumber": 1, "episodeNumber": number,
+            "airDateUtc": "2020-01-01T00:00:00Z", "runtime": 24,
+        }
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, anilistId=12345, tvdbId=67890)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { episodes { edges { node { id episode airDateUtc airDateSource } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    ep = data["show"]["episodes"]["edges"][0]["node"]
+    assert ep["airDateUtc"] == "2025-01-01T00:00:00Z"  # AniList's own value, not Sonarr's
+    assert ep["airDateSource"] == "ANILIST"
+    # pending_review entries here are keyed by the *episode's* own id
+    # (entity_type="episode"), not the show's — §5.6's own per-row shape.
+    reviews = await _pending_reviews_for(client, ep["id"])
+    reviews = [r for r in reviews if r["field"] == "air_date_utc"]
+    assert len(reviews) == 1
+    assert reviews[0]["source"] == "anilist"
+    assert reviews[0]["previousValue"] == "2020-01-01T00:00:00Z"
+
+
+async def test_anilist_air_date_reconciliation_never_overwrites_a_manual_date(client, monkeypatch):
+    """Revised 2026-08-09, directly on the user's own reasoning: only a
+    genuine reschedule signal (animeschedule.net, B.5, not built yet)
+    should override a date the user deliberately set — AniList/Sonarr
+    repeatedly re-asserting stale data over an already-fixed value is
+    the "stubborn weekly rewrite" failure mode the user flagged.
+    Manual gets the same hard-gate protection season.manual_override
+    already gives season mapping (§3 principle 6) — no write, no
+    pending_review at all, not just logged for later review."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(
+        anilist_client, "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {
+            "episodes": 12, "nodes": [{"episode": 1, "airingAt": 1735689600}],
+        },
+    )
+
+    def _ep(number):
+        return {
+            "seasonNumber": 1, "episodeNumber": number,
+            "airDateUtc": "2020-01-01T00:00:00Z", "runtime": 24,
+        }
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, anilistId=12345, tvdbId=67890)
+    episode_id = (await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    ))["show"]["episodes"]["edges"][0]["node"]["id"]
+    await gql(
+        client,
+        "mutation($id: ID!, $d: DateTime!) {"
+        " setEpisodeAirDate(episodeId: $id, airDateUtc: $d) { airDateSource } }",
+        {"id": episode_id, "d": "2030-06-01T00:00:00Z"},
+        headers=auth_headers(),
+    )
+    # addShow's own inline fetch already reconciled sonarr -> anilist once
+    # (correctly — the episode was still 'sonarr'-sourced at that point) —
+    # capture the chain length *after* the manual override, so the
+    # assertion below only checks nothing *new* got added on top of it.
+    before = [
+        r for r in await _pending_reviews_for(client, episode_id) if r["field"] == "air_date_utc"
+    ]
+
+    await gql(
+        client,
+        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }',
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        "query($id: ID!) {"
+        " show(id: $id) { episodes { edges { node { airDateUtc airDateSource } } } } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    ep = data["show"]["episodes"]["edges"][0]["node"]
+    assert ep["airDateUtc"] == "2030-06-01T00:00:00Z"  # the manual value survives, untouched
+    assert ep["airDateSource"] == "MANUAL"
+    after = [
+        r for r in await _pending_reviews_for(client, episode_id) if r["field"] == "air_date_utc"
+    ]
+    assert after == before  # refreshShowMetadata added nothing new
+
+
+async def test_anilist_air_date_reconciliation_is_a_no_op_when_unchanged(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(
+        anilist_client, "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {
+            "episodes": 12, "nodes": [{"episode": 1, "airingAt": 1735689600}],
+        },
+    )
+
+    def _ep(number):
+        return {
+            "seasonNumber": 1, "episodeNumber": number,
+            "airDateUtc": "2025-01-01T00:00:00Z", "runtime": 24,  # already AniList's own value
+        }
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, anilistId=12345, tvdbId=67890)
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    episode_id = data["show"]["episodes"]["edges"][0]["node"]["id"]
+
+    all_reviews = await _pending_reviews_for(client, episode_id)
+    reviews = [r for r in all_reviews if r["field"] == "air_date_utc"]
+    assert reviews == []
+
+
+async def test_anilist_air_date_reconciliation_skips_a_season_with_no_anilist_id(
+    client, monkeypatch
+):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    # fetch_media returns None (default fixture behavior) — season 1 never
+    # gets an anilist_id at all, so the reconciliation loop has nothing to
+    # iterate; fetch_airing_schedule must never even be called.
+    calls = []
+    monkeypatch.setattr(
+        anilist_client, "fetch_airing_schedule",
+        lambda *a, **kw: calls.append(1) or [],
+    )
+
+    def _ep(number):
+        return {"seasonNumber": 1, "episodeNumber": number, "airDateUtc": None, "runtime": 24}
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    await add_show(client, anilistId=12345)
+    assert calls == []
+
+
+async def test_anilist_air_date_reconciliation_skips_a_season_that_spans_multiple_anilist_entries(
+    client, monkeypatch
+):
+    """Real, confirmed-live scenario, not hypothetical: Attack on
+    Titan's own Season 3 is one 22-episode TVDB season split across two
+    separate AniList Media entries (12 + 10 episodes). season.anilist_id
+    can only point at one of them, so if LCARS's own episode count for
+    the season exceeds that entry's own reported total, per-episode
+    matching is unsafe — skip the whole season, open a pending_review
+    on the *season* (not each episode) instead of silently writing
+    dates from the wrong cour."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(
+        anilist_client, "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {
+            "episodes": 10,  # this Media entry only covers 10 episodes...
+            "nodes": [{"episode": n, "airingAt": 1735689600 + n * 86400} for n in range(1, 11)],
+        },
+    )
+
+    def _ep(number):
+        return {
+            "seasonNumber": 1, "episodeNumber": number,
+            "airDateUtc": "2020-01-01T00:00:00Z", "runtime": 24,
+        }
+
+    # ...but LCARS has 22 episodes for this season (the real, full TVDB split).
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(n) for n in range(1, 23)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, anilistId=12345, tvdbId=67890)
+
+    data = await gql(
+        client,
+        "query($id: ID!) {"
+        " show(id: $id) { episodes { edges { node { episode airDateUtc airDateSource } } } } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    # None of the 22 episodes were touched — no partial/wrong-cour writes.
+    for edge in data["show"]["episodes"]["edges"]:
+        assert edge["node"]["airDateUtc"] == "2020-01-01T00:00:00Z"
+        assert edge["node"]["airDateSource"] == "SONARR"
+    seasons = await gql(
+        client,
+        "query($id: ID!) {"
+        " show(id: $id) { seasons { edges { node { id seasonNumber } } } } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    season_id = seasons["show"]["seasons"]["edges"][0]["node"]["id"]
+    all_reviews = await _pending_reviews_for(client, season_id)
+    reviews = [r for r in all_reviews if r["field"] == "anilist_id"]
+    assert len(reviews) == 1
+    assert "22" in reviews[0]["proposedValueChain"][0]
+    assert "10" in reviews[0]["proposedValueChain"][0]
+
+
+async def test_anilist_air_date_reconciliation_skips_an_unfetched_episode(client, monkeypatch):
+    """AniList reports an episode LCARS has no row for at all (Sonarr
+    hasn't fetched it yet) — skipped gracefully, not an error."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(
+        anilist_client, "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {
+            "episodes": 12, "nodes": [{"episode": 99, "airingAt": 1735689600}],
+        },
+    )
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[])  # Sonarr has nothing yet
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    await add_show(client, anilistId=12345, tvdbId=67890)  # must not raise
+    # No episode row exists at all here, so there's no entity id to filter
+    # pending_review by — check globally instead that no episode-level
+    # air_date_utc entry got created from anything at all.
+    reviews = await gql(
+        client, "query { pendingReviews { edges { node { entityType field } } } }",
+        headers=auth_headers(),
+    )
+    air_date_reviews = [
+        r["node"] for r in reviews["pendingReviews"]["edges"]
+        if r["node"]["entityType"] == "episode" and r["node"]["field"] == "air_date_utc"
+    ]
+    assert air_date_reviews == []
 
 
 async def test_add_show_tmdb_fetch_skips_silently_when_not_configured(client):

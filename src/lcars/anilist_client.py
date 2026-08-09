@@ -59,6 +59,17 @@ query ($mediaId: Int) {
 }
 """
 
+_AIRING_SCHEDULE_QUERY = """
+query ($mediaId: Int) {
+  Media(id: $mediaId) {
+    episodes
+    airingSchedule {
+      nodes { episode airingAt }
+    }
+  }
+}
+"""
+
 # A.21 (2026-08-09) — only these AniList `format` values represent an
 # actual anime show worth a `show_relation` edge/stub at all; the same
 # relations list can include manga/novel source material, which §5.1's
@@ -145,6 +156,43 @@ def fetch_media(anilist_id: int, client: httpx.Client | None = None) -> dict | N
     former isn't)."""
     data = _graphql_request(_MEDIA_QUERY, {"mediaId": anilist_id}, token=None, client=client)
     return data["Media"]
+
+
+def fetch_airing_schedule(anilist_id: int, client: httpx.Client | None = None) -> dict | None:
+    """§5.2/§6.7, B.4 — a season's own `airingSchedule` (or None if
+    AniList has no such id): `{"episodes": int|None, "nodes": [...]}`
+    — `nodes` is `episode`/`airingAt` per entry, the *full* schedule
+    (not `notYetAired`-filtered) so already-aired episodes get
+    reconciled too, not just upcoming ones (§6.7's "reconciliation"
+    framing, confirmed with the user). A separate, lighter query from
+    fetch_media() above — metadata.py's own `_reconcile_air_dates`
+    calls this once per season, not once per show, so the heavier
+    cast/relations payload fetch_media() carries would be pure waste
+    here. Verified live against three real AniList Media entries
+    before being written: `episode` is always 1-based *for that
+    specific Media entry* — a split-cour sequel season restarts at 1,
+    it does not continue the previous cour's broadcast count —
+    matching `season.anilist_id`'s own per-season crosswalk (§5.5)
+    directly onto `episode.episode` (also season-scoped), no numbering
+    offset needed.
+
+    `episodes` (that Media entry's own total episode count) exists so
+    a caller can detect a genuinely different, real failure mode: a
+    single TVDB season spanning *multiple* AniList Media entries (e.g.
+    Attack on Titan's own Season 3, one 22-episode TVDB season across
+    two 12/10-episode AniList entries — confirmed live, not
+    hypothetical). `season.anilist_id` can only ever point at one of
+    those, so per-episode matching is only valid when LCARS's own
+    episode count for that season doesn't exceed this number —
+    metadata.py's own `_reconcile_air_dates` is what actually acts on
+    this, not this function."""
+    data = _graphql_request(
+        _AIRING_SCHEDULE_QUERY, {"mediaId": anilist_id}, token=None, client=client
+    )
+    media = data["Media"]
+    if media is None:
+        return None
+    return {"episodes": media.get("episodes"), "nodes": media["airingSchedule"]["nodes"]}
 
 
 def exchange_code(
