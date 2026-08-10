@@ -812,6 +812,20 @@ key resolutions:
   untracked remote show is deliberately not auto-created (§5.1's
   `addShow` stays the only entry point). Both are returned directly in
   the mutation's own result for the user to act on by hand.
+
+  **Resolved 2026-08-10 (B.11 reconnaissance)**: this "returned
+  directly from a one-shot mutation call, never scheduled" shape was
+  found to be a real gap while planning B.11's calendar render-path
+  switch — LCARS's `show` table turned out to be completely empty
+  (nothing has ever called `addShow` for real yet), and switching the
+  calendar's row source to LCARS-tracked shows means any show added
+  directly in Sonarr/AniList after the one-time backfill (B.11d) would
+  silently never surface. Confirmed with the user: `untracked_shows`
+  discovery moves onto Ops's recurring schedule and persists findings
+  in a small new reviewable list (B.11e) rather than only returning
+  them from a manual call — but still **never auto-`addShow`s**; the
+  "deliberately not auto-created" decision in this same paragraph
+  stays intact, only the "how do findings surface" half changes.
 - **Untracked-show discovery is a flat list, not a folder walk** — the
   user asked for the broader "also discover untracked shows" scope,
   narrowed on review to just listing (title/external id/path): walking
@@ -1576,15 +1590,22 @@ owns both deferred pieces.
 ambiguity about whether B.11 replaces the calendar's core render path
 now or Phase C does was raised directly with the user — confirmed
 **Replacing** (B.11 switches the render path itself, not Phase C).
-B.11 split into numbered sub-steps (B.11a/B.11b/B.11c) given the size
-of that rewrite; B.11a (LCARS read-query foundation + status bar
-service-health indicators, since `Query.serviceHealth` needed no
-LCARS-side change) is built and verified. During B.11 reconnaissance,
-Data's existing `B`-view predicate and LCARS's `Query.backlog`
-predicate were found to be genuinely divergent (different show-shape/
-airing/status eligibility rules) — surfaced to the user rather than
-silently reconciled; user chose to ship the counter (B.11c) against
-`Query.backlog` as-is, no reconciliation needed.
+B.11 split into numbered sub-steps given the size of that rewrite;
+B.11a (LCARS read-query foundation + status bar service-health
+indicators, since `Query.serviceHealth` needed no LCARS-side change)
+is built and verified. B.11b's own reconnaissance surfaced two more
+real gaps (no date-windowed episode query; LCARS's `show` table
+completely empty) — see §5.2's own "Resolved 2026-08-10 (B.11
+reconnaissance)" note and `BUILD_PLAN.md`'s B.11 entry for the full
+breakdown — which grew the sub-step list to B.11c (new
+`episodesInRange` query) through B.11g (this section's own deferred
+counter/mark-watched pieces, previously labeled B.11c before the
+regrow). During reconnaissance, Data's existing `B`-view predicate and
+LCARS's `Query.backlog` predicate were also found to be genuinely
+divergent (different show-shape/airing/status eligibility rules) —
+surfaced to the user rather than silently reconciled; user chose to
+ship the counter (now B.11g) against `Query.backlog` as-is, no
+reconciliation needed.
 
 ### 6.4 Cross-show "next up" query (Phase A/B)
 

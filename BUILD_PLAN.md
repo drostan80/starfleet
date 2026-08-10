@@ -2680,10 +2680,67 @@ background scheduler.
       leads `_status_bar_text()`) still renders correctly alongside
       an active status-bar note. 502 tests passing after the fix,
       `ruff check`/`format` clean.
-  - [ ] **B.11b — calendar core render path**: switch from local
-    Sonarr/AniList computation to LCARS reads for tracking/air-date/
-    availability state, per the confirmed **Replacing** scope above.
-  - [ ] **B.11c — B.9's two deferred Data-side pieces**: the
+  - **B.11b reconnaissance, 2026-08-10**: before writing any Data-side
+    code, enumerated what the calendar's render path actually consumes
+    (`_refresh_visible_rows()`: `airDateUtc`, `seasonNumber`,
+    `episodeNumber`, series title, episode title, `hasFile`, plus
+    Sonarr-queue-derived downloading state and AniList track status)
+    against what LCARS's schema already exposes (`backlog`, `nextUp`,
+    `episodesAiringSoon`, `serviceHealth`). Two real gaps found, both
+    checked with the user rather than decided unilaterally since
+    neither is answered in BUILD_PLAN.md/SCOPE.md:
+    - **No date-windowed episode query exists.**
+      `episodesAiringSoon(days)` only covers future N days from *now*;
+      Data's `calendar_nav.CalendarState.step_back()` has no floor, so
+      the calendar can page arbitrarily far into the past. Confirmed
+      with the user: build a genuine new query (`episodesInRange`, own
+      sub-step B.11c below) as a natural extension of
+      `episodesAiringSoon`'s own pattern — not a design decision, an
+      implementation detail the plan already implied.
+    - **LCARS's `show` table is completely empty** — checked directly
+      (`sqlite3 lcars.db "SELECT COUNT(*) FROM show"` → 0). §5.1 makes
+      `addShow` the only entry point and nothing auto-bulk-imports an
+      existing Sonarr/Radarr library, so switching the calendar's row
+      source to LCARS-tracked shows as-is would blank the calendar
+      entirely on day one. Confirmed with the user: backfill first
+      (own sub-step B.11d below), run for real against the live
+      library, *then* switch. The user also raised a related ongoing
+      concern while answering — shows added directly in Sonarr/AniList
+      after the backfill (bypassing Data's `addShow` bridge) need a
+      way to be "picked up" too, not just the one-time backfill.
+      Checked further: B.3b's `auditLocalFiles` already computes
+      exactly this (`untracked_shows`), but only as a one-shot
+      CLI-triggered report, never on Ops's recurring schedule, nothing
+      persisted between runs. Asked the user how findings should
+      surface long-term; confirmed **recurring sweep, log for
+      review** — a small new persisted reviewable list, Ops-driven,
+      never auto-`addShow` (keeps §5.1/B.3b's existing "an untracked
+      remote show is deliberately not auto-created" decision intact
+      rather than reversing it) — own sub-step B.11e below.
+  - [ ] **B.11c — `episodesInRange` query**: new starfleet-side query,
+    same pagination/style as `episodesAiringSoon`/`backlog`, an
+    arbitrary `(start, end)` window rather than a future-only
+    N-day one.
+  - [ ] **B.11d — show backfill**: one-time/repeatable pass (CLI
+    and/or mutation, same shape as `auditLocalFiles`'s own manual
+    trigger) that walks Sonarr's/Radarr's full catalog and calls
+    `addShow` for anything not yet tracked in LCARS. Run for real
+    against the user's live Sonarr/Radarr library once built —
+    LCARS's `show` table needs actual rows before B.11f's render-path
+    switch can show anything.
+  - [ ] **B.11e — ongoing untracked-show sweep**: extend
+    `auditLocalFiles`'s existing `untracked_shows` computation (or a
+    dedicated variant) onto Ops's recurring schedule, persisting
+    findings to a small new reviewable list/query rather than only
+    returning them from a one-shot mutation call — so a show added
+    directly in Sonarr/AniList after the B.11d backfill doesn't
+    silently fall out of sync. Never auto-creates a show.
+  - [ ] **B.11f — calendar core render path**: switch from local
+    Sonarr/AniList computation to LCARS reads (via B.11c's
+    `episodesInRange`) for tracking/air-date/availability state, per
+    the confirmed **Replacing** scope above. Depends on B.11c and a
+    completed B.11d backfill run.
+  - [ ] **B.11g — B.9's two deferred Data-side pieces**: the
     calendar-native counter line under a show's next-episode entry
     (backed by `Query.backlog` as-is — asked the user directly
     whether Data's existing B-view predicate and LCARS's
