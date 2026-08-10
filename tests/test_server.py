@@ -145,7 +145,7 @@ async def test_mutation_without_client_header_rejected(client):
     resp = await client.post(
         "/",
         json={
-            "query": 'mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { id } }',
+            "query": "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { id } }",
             "variables": {"id": show["id"]},
         },
         headers=auth_headers(client_name=None),
@@ -387,13 +387,30 @@ FAKE_ANILIST_MEDIA_WITH_RELATIONS = {
     **FAKE_ANILIST_MEDIA,
     "relations": {
         "edges": [
-            {"node": {"id": 333, "idMal": 433, "format": "TV",
-                      "title": {"romaji": "Golden Kamuy 2", "english": None, "native": None}}},
-            {"node": {"id": 444, "idMal": None, "format": "MOVIE",
-                      "title": {"romaji": "Golden Kamuy Movie", "english": None, "native": None}}},
-            {"node": {"id": 999, "idMal": None, "format": "MANGA",
-                      "title": {"romaji": "Golden Kamuy (manga)", "english": None,
-                                "native": None}}},
+            {
+                "node": {
+                    "id": 333,
+                    "idMal": 433,
+                    "format": "TV",
+                    "title": {"romaji": "Golden Kamuy 2", "english": None, "native": None},
+                }
+            },
+            {
+                "node": {
+                    "id": 444,
+                    "idMal": None,
+                    "format": "MOVIE",
+                    "title": {"romaji": "Golden Kamuy Movie", "english": None, "native": None},
+                }
+            },
+            {
+                "node": {
+                    "id": 999,
+                    "idMal": None,
+                    "format": "MANGA",
+                    "title": {"romaji": "Golden Kamuy (manga)", "english": None, "native": None},
+                }
+            },
         ]
     },
 }
@@ -445,7 +462,8 @@ async def test_add_show_anilist_fetch_creates_relation_stub_shows(client, monkey
         headers=auth_headers(),
     )
     stub = next(
-        e["node"] for e in stub_data["shows"]["edges"]
+        e["node"]
+        for e in stub_data["shows"]["edges"]
         if e["node"]["displayTitle"] == "Golden Kamuy 2"
     )
     links = {e["node"]["service"]: e["node"]["externalId"] for e in stub["externalIds"]["edges"]}
@@ -492,6 +510,7 @@ async def test_add_show_anilist_fetch_no_media_found_leaves_show_bare(client, mo
 
 async def test_add_show_sonarr_fetch_creates_episodes(client, monkeypatch):
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+
     def _ep(number):
         return {
             "seasonNumber": 1,
@@ -586,7 +605,7 @@ async def test_add_show_sonarr_fetch_leaves_manual_override_season_untouched(cli
     fake._episodes = [_ep(1)]  # simulate a later refetch discovering season 1's episodes
     await gql(
         client,
-        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }',
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
@@ -642,7 +661,7 @@ async def test_add_show_sonarr_fetch_backfills_season_id_on_preexisting_episode(
     conn.commit()
     await gql(
         client,
-        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }',
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
@@ -686,8 +705,10 @@ async def test_add_show_sonarr_fetch_fribb_failure_still_creates_season_and_open
     assert season["source"] == "UNMATCHED"
     assert season["matched"] is False
     reviews = await _pending_reviews_for(client, season["id"])
-    assert any(r["field"] == "anilist_id" and "dataset unreachable" in r["proposedValueChain"][-1]
-               for r in reviews)
+    assert any(
+        r["field"] == "anilist_id" and "dataset unreachable" in r["proposedValueChain"][-1]
+        for r in reviews
+    )
 
 
 # --- source-fact capture: absolute_number + kind (§5.2, A.25) ---------------
@@ -701,10 +722,20 @@ async def test_sonarr_fetch_captures_absolute_episode_number(client, monkeypatch
     config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
     _patch_fribb_dataset(monkeypatch, dataset=[])
     eps = [
-        {"seasonNumber": 1, "episodeNumber": 1, "absoluteEpisodeNumber": 1,
-         "airDateUtc": None, "runtime": None},
-        {"seasonNumber": 2, "episodeNumber": 1, "absoluteEpisodeNumber": 13,
-         "airDateUtc": None, "runtime": None},
+        {
+            "seasonNumber": 1,
+            "episodeNumber": 1,
+            "absoluteEpisodeNumber": 1,
+            "airDateUtc": None,
+            "runtime": None,
+        },
+        {
+            "seasonNumber": 2,
+            "episodeNumber": 1,
+            "absoluteEpisodeNumber": 13,
+            "airDateUtc": None,
+            "runtime": None,
+        },
     ]
     fake = _FakeSonarrClient(series={"id": 42, "seriesType": "anime"}, episodes=eps)
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
@@ -717,7 +748,8 @@ async def test_sonarr_fetch_captures_absolute_episode_number(client, monkeypatch
           show(id: $id) { episodes { edges { node { season absoluteNumber } } } }
         }
         """,
-        {"id": show["id"]}, headers=auth_headers(),
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     by_season = {e["node"]["season"]: e["node"] for e in data["show"]["episodes"]["edges"]}
     assert by_season[1]["absoluteNumber"] == 1
@@ -735,12 +767,17 @@ async def test_sonarr_fetch_backfills_absolute_number_on_existing_episode(client
     show = await add_show(client, trackingSpace="TV", tvdbId=555)
 
     fake._episodes = [{**bare, "absoluteEpisodeNumber": 7}]
-    await gql(client, "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
-              {"i": show["id"]}, headers=auth_headers())
+    await gql(
+        client,
+        "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
+        {"i": show["id"]},
+        headers=auth_headers(),
+    )
     data = await gql(
         client,
         "query($id: ID!) { show(id: $id) { episodes { edges { node { absoluteNumber } } } } }",
-        {"id": show["id"]}, headers=auth_headers(),
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     assert data["show"]["episodes"]["edges"][0]["node"]["absoluteNumber"] == 7
 
@@ -750,8 +787,12 @@ async def test_sonarr_fetch_captures_season_zero_as_special_kind(client, monkeyp
     _patch_fribb_dataset(monkeypatch, dataset=[])
 
     def _ep(season, number):
-        return {"seasonNumber": season, "episodeNumber": number,
-                "airDateUtc": None, "runtime": None}
+        return {
+            "seasonNumber": season,
+            "episodeNumber": number,
+            "airDateUtc": None,
+            "runtime": None,
+        }
 
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(0, 1), _ep(1, 1)])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
@@ -760,7 +801,8 @@ async def test_sonarr_fetch_captures_season_zero_as_special_kind(client, monkeyp
     data = await gql(
         client,
         "query($id: ID!) { show(id: $id) { episodes { edges { node { season kind } } } } }",
-        {"id": show["id"]}, headers=auth_headers(),
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     by_season = {e["node"]["season"]: e["node"]["kind"] for e in data["show"]["episodes"]["edges"]}
     assert by_season == {0: "SPECIAL", 1: "REGULAR"}
@@ -774,7 +816,8 @@ async def test_set_episode_kind_overrides_the_captured_value(client, migrated_db
     data = await gql(
         client,
         "mutation($i: ID!) { setEpisodeKind(episodeId: $i, kind: BONUS_MOVIE) { id kind } }",
-        {"i": "e-knd001"}, headers=auth_headers(),
+        {"i": "e-knd001"},
+        headers=auth_headers(),
     )
     assert data["setEpisodeKind"]["kind"] == "BONUS_MOVIE"
 
@@ -885,7 +928,7 @@ async def test_sonarr_fetch_never_overwrites_manual_numbering_scheme(client, mon
     fake._episodes = [_ep(2)]  # a later fetch would otherwise re-derive ABSOLUTE
     await gql(
         client,
-        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }',
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
@@ -944,7 +987,8 @@ async def test_anime_show_never_overwrites_a_caller_supplied_anilist_id(client, 
     _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)  # would resolve tvdb 555 -> 111
     fetched = []
     monkeypatch.setattr(
-        anilist_client, "fetch_media",
+        anilist_client,
+        "fetch_media",
         lambda aid, *a, **kw: fetched.append(aid) or FAKE_ANILIST_MEDIA,
     )
     monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
@@ -981,7 +1025,8 @@ async def test_already_bare_anime_show_recovers_on_refresh(client, monkeypatch):
           show(id: $id) { synopsis externalIds { edges { node { service } } } }
         }
         """,
-        {"id": show["id"]}, headers=auth_headers(),
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     assert bare["show"]["synopsis"] is None
     services = {e["node"]["service"] for e in bare["show"]["externalIds"]["edges"]}
@@ -992,12 +1037,17 @@ async def test_already_bare_anime_show_recovers_on_refresh(client, monkeypatch):
     _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)  # tvdb 555 -> 111
     fetched = []
     monkeypatch.setattr(
-        anilist_client, "fetch_media",
+        anilist_client,
+        "fetch_media",
         lambda aid, *a, **kw: fetched.append(aid) or FAKE_ANILIST_MEDIA,
     )
     monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
-    await gql(client, "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
-              {"i": show["id"]}, headers=auth_headers())
+    await gql(
+        client,
+        "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
+        {"i": show["id"]},
+        headers=auth_headers(),
+    )
 
     assert fetched == [111]
     healed = await gql(
@@ -1010,12 +1060,15 @@ async def test_already_bare_anime_show_recovers_on_refresh(client, monkeypatch):
           }
         }
         """,
-        {"id": show["id"]}, headers=auth_headers(),
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     assert healed["show"]["synopsis"] == "A gold rush story."
     assert healed["show"]["posterUrl"] == "https://anilist.co/img/cover.jpg"
-    links = {e["node"]["service"]: e["node"]["externalId"]
-             for e in healed["show"]["externalIds"]["edges"]}
+    links = {
+        e["node"]["service"]: e["node"]["externalId"]
+        for e in healed["show"]["externalIds"]["edges"]
+    }
     assert links["anilist"] == "111"
 
 
@@ -1027,8 +1080,12 @@ async def test_anime_show_with_no_resolvable_anilist_id_opens_a_review(client, m
     reviews = await _pending_reviews_for(client, show["id"])
     assert any(r["field"] == "anilist_id" for r in reviews), reviews
     # ...and the show still exists and is usable, not rejected
-    data = await gql(client, "query($id: ID!) { show(id: $id) { id } }",
-                     {"id": show["id"]}, headers=auth_headers())
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
     assert data["show"]["id"] == show["id"]
 
 
@@ -1041,8 +1098,12 @@ async def test_sonarr_fetch_skips_season_zero_entirely(client, monkeypatch):
     _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)
 
     def _ep(season, number):
-        return {"seasonNumber": season, "episodeNumber": number,
-                "airDateUtc": None, "runtime": None}
+        return {
+            "seasonNumber": season,
+            "episodeNumber": number,
+            "airDateUtc": None,
+            "runtime": None,
+        }
 
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(0, 1), _ep(1, 1)])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
@@ -1071,7 +1132,8 @@ async def test_sonarr_fetch_skips_season_zero_entirely(client, monkeypatch):
         headers=auth_headers(),
     )
     season_reviews = [
-        e["node"] for e in all_reviews["pendingReviews"]["edges"]
+        e["node"]
+        for e in all_reviews["pendingReviews"]["edges"]
         if e["node"]["entityType"] == "season"
     ]
     assert season_reviews == [], f"season 0 should generate no review noise: {season_reviews}"
@@ -1144,7 +1206,7 @@ async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(cl
     monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     refreshed = await gql(
         client,
-        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { posterUrl } }',
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { posterUrl } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
@@ -1230,16 +1292,20 @@ async def test_anilist_air_date_reconciliation_corrects_a_sonarr_seeded_date(cli
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
     monkeypatch.setattr(
-        anilist_client, "fetch_airing_schedule",
+        anilist_client,
+        "fetch_airing_schedule",
         lambda anilist_id, *a, **kw: {
-            "episodes": 12, "nodes": [{"episode": 1, "airingAt": 1735689600}],
+            "episodes": 12,
+            "nodes": [{"episode": 1, "airingAt": 1735689600}],
         },
     )
 
     def _ep(number):
         return {
-            "seasonNumber": 1, "episodeNumber": number,
-            "airDateUtc": "2020-01-01T00:00:00Z", "runtime": 24,
+            "seasonNumber": 1,
+            "episodeNumber": number,
+            "airDateUtc": "2020-01-01T00:00:00Z",
+            "runtime": 24,
         }
 
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
@@ -1280,26 +1346,33 @@ async def test_anilist_air_date_reconciliation_never_overwrites_a_manual_date(cl
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
     monkeypatch.setattr(
-        anilist_client, "fetch_airing_schedule",
+        anilist_client,
+        "fetch_airing_schedule",
         lambda anilist_id, *a, **kw: {
-            "episodes": 12, "nodes": [{"episode": 1, "airingAt": 1735689600}],
+            "episodes": 12,
+            "nodes": [{"episode": 1, "airingAt": 1735689600}],
         },
     )
 
     def _ep(number):
         return {
-            "seasonNumber": 1, "episodeNumber": number,
-            "airDateUtc": "2020-01-01T00:00:00Z", "runtime": 24,
+            "seasonNumber": 1,
+            "episodeNumber": number,
+            "airDateUtc": "2020-01-01T00:00:00Z",
+            "runtime": 24,
         }
 
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
     show = await add_show(client, anilistId=12345, tvdbId=67890)
-    episode_id = (await gql(
-        client,
-        "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
-        {"id": show["id"]}, headers=auth_headers(),
-    ))["show"]["episodes"]["edges"][0]["node"]["id"]
+    episode_id = (
+        await gql(
+            client,
+            "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    )["show"]["episodes"]["edges"][0]["node"]["id"]
     await gql(
         client,
         "mutation($id: ID!, $d: DateTime!) {"
@@ -1317,14 +1390,16 @@ async def test_anilist_air_date_reconciliation_never_overwrites_a_manual_date(cl
 
     await gql(
         client,
-        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }',
-        {"id": show["id"]}, headers=auth_headers(),
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     data = await gql(
         client,
         "query($id: ID!) {"
         " show(id: $id) { episodes { edges { node { airDateUtc airDateSource } } } } }",
-        {"id": show["id"]}, headers=auth_headers(),
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     ep = data["show"]["episodes"]["edges"][0]["node"]
     assert ep["airDateUtc"] == "2030-06-01T00:00:00Z"  # the manual value survives, untouched
@@ -1335,20 +1410,95 @@ async def test_anilist_air_date_reconciliation_never_overwrites_a_manual_date(cl
     assert after == before  # refreshShowMetadata added nothing new
 
 
-async def test_anilist_air_date_reconciliation_is_a_no_op_when_unchanged(client, monkeypatch):
+async def test_anilist_air_date_reconciliation_never_overwrites_an_animeschedule_date(
+    client, monkeypatch
+):
+    """§6.7/B.8 — closing a real gap B.5 exposed: this function predates
+    B.5 and only ever guarded 'manual'; an animeschedule-sourced date
+    (a genuine reschedule signal, ranked *above* AniList in §6.7's
+    priority order) must survive an AniList reconciliation pass just
+    as a manual one does — no write, no new pending_review."""
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
     monkeypatch.setattr(
-        anilist_client, "fetch_airing_schedule",
+        anilist_client,
+        "fetch_airing_schedule",
         lambda anilist_id, *a, **kw: {
-            "episodes": 12, "nodes": [{"episode": 1, "airingAt": 1735689600}],
+            "episodes": 12,
+            "nodes": [{"episode": 1, "airingAt": 1735689600}],
         },
     )
 
     def _ep(number):
         return {
-            "seasonNumber": 1, "episodeNumber": number,
-            "airDateUtc": "2025-01-01T00:00:00Z", "runtime": 24,  # already AniList's own value
+            "seasonNumber": 1,
+            "episodeNumber": number,
+            "airDateUtc": "2020-01-01T00:00:00Z",
+            "runtime": 24,
+        }
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, anilistId=12345, tvdbId=67890)
+    episode_id = (
+        await gql(
+            client,
+            "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    )["show"]["episodes"]["edges"][0]["node"]["id"]
+
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE episode SET air_date_utc = ?, air_date_source = 'animeschedule' WHERE id = ?",
+        ("2030-06-01T00:00:00Z", episode_id),
+    )
+    conn.commit()
+    before = [
+        r for r in await _pending_reviews_for(client, episode_id) if r["field"] == "air_date_utc"
+    ]
+
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        "query($id: ID!) {"
+        " show(id: $id) { episodes { edges { node { airDateUtc airDateSource } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    ep = data["show"]["episodes"]["edges"][0]["node"]
+    assert ep["airDateUtc"] == "2030-06-01T00:00:00Z"  # the animeschedule value survives
+    assert ep["airDateSource"] == "ANIMESCHEDULE"
+    after = [
+        r for r in await _pending_reviews_for(client, episode_id) if r["field"] == "air_date_utc"
+    ]
+    assert after == before  # refreshShowMetadata added nothing new
+
+
+async def test_anilist_air_date_reconciliation_is_a_no_op_when_unchanged(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {
+            "episodes": 12,
+            "nodes": [{"episode": 1, "airingAt": 1735689600}],
+        },
+    )
+
+    def _ep(number):
+        return {
+            "seasonNumber": 1,
+            "episodeNumber": number,
+            "airDateUtc": "2025-01-01T00:00:00Z",
+            "runtime": 24,  # already AniList's own value
         }
 
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
@@ -1357,7 +1507,8 @@ async def test_anilist_air_date_reconciliation_is_a_no_op_when_unchanged(client,
     data = await gql(
         client,
         "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
-        {"id": show["id"]}, headers=auth_headers(),
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     episode_id = data["show"]["episodes"]["edges"][0]["node"]["id"]
 
@@ -1375,7 +1526,8 @@ async def test_anilist_air_date_reconciliation_skips_a_season_with_no_anilist_id
     # iterate; fetch_airing_schedule must never even be called.
     calls = []
     monkeypatch.setattr(
-        anilist_client, "fetch_airing_schedule",
+        anilist_client,
+        "fetch_airing_schedule",
         lambda *a, **kw: calls.append(1) or [],
     )
 
@@ -1402,7 +1554,8 @@ async def test_anilist_air_date_reconciliation_skips_a_season_that_spans_multipl
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
     monkeypatch.setattr(
-        anilist_client, "fetch_airing_schedule",
+        anilist_client,
+        "fetch_airing_schedule",
         lambda anilist_id, *a, **kw: {
             "episodes": 10,  # this Media entry only covers 10 episodes...
             "nodes": [{"episode": n, "airingAt": 1735689600 + n * 86400} for n in range(1, 11)],
@@ -1411,8 +1564,10 @@ async def test_anilist_air_date_reconciliation_skips_a_season_that_spans_multipl
 
     def _ep(number):
         return {
-            "seasonNumber": 1, "episodeNumber": number,
-            "airDateUtc": "2020-01-01T00:00:00Z", "runtime": 24,
+            "seasonNumber": 1,
+            "episodeNumber": number,
+            "airDateUtc": "2020-01-01T00:00:00Z",
+            "runtime": 24,
         }
 
     # ...but LCARS has 22 episodes for this season (the real, full TVDB split).
@@ -1424,7 +1579,8 @@ async def test_anilist_air_date_reconciliation_skips_a_season_that_spans_multipl
         client,
         "query($id: ID!) {"
         " show(id: $id) { episodes { edges { node { episode airDateUtc airDateSource } } } } }",
-        {"id": show["id"]}, headers=auth_headers(),
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     # None of the 22 episodes were touched — no partial/wrong-cour writes.
     for edge in data["show"]["episodes"]["edges"]:
@@ -1432,9 +1588,9 @@ async def test_anilist_air_date_reconciliation_skips_a_season_that_spans_multipl
         assert edge["node"]["airDateSource"] == "SONARR"
     seasons = await gql(
         client,
-        "query($id: ID!) {"
-        " show(id: $id) { seasons { edges { node { id seasonNumber } } } } }",
-        {"id": show["id"]}, headers=auth_headers(),
+        "query($id: ID!) { show(id: $id) { seasons { edges { node { id seasonNumber } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     season_id = seasons["show"]["seasons"]["edges"][0]["node"]["id"]
     all_reviews = await _pending_reviews_for(client, season_id)
@@ -1450,9 +1606,11 @@ async def test_anilist_air_date_reconciliation_skips_an_unfetched_episode(client
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
     monkeypatch.setattr(
-        anilist_client, "fetch_airing_schedule",
+        anilist_client,
+        "fetch_airing_schedule",
         lambda anilist_id, *a, **kw: {
-            "episodes": 12, "nodes": [{"episode": 99, "airingAt": 1735689600}],
+            "episodes": 12,
+            "nodes": [{"episode": 99, "airingAt": 1735689600}],
         },
     )
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[])  # Sonarr has nothing yet
@@ -1462,11 +1620,13 @@ async def test_anilist_air_date_reconciliation_skips_an_unfetched_episode(client
     # pending_review by — check globally instead that no episode-level
     # air_date_utc entry got created from anything at all.
     reviews = await gql(
-        client, "query { pendingReviews { edges { node { entityType field } } } }",
+        client,
+        "query { pendingReviews { edges { node { entityType field } } } }",
         headers=auth_headers(),
     )
     air_date_reviews = [
-        r["node"] for r in reviews["pendingReviews"]["edges"]
+        r["node"]
+        for r in reviews["pendingReviews"]["edges"]
         if r["node"]["entityType"] == "episode" and r["node"]["field"] == "air_date_utc"
     ]
     assert air_date_reviews == []
@@ -1841,7 +2001,7 @@ async def test_paced_next_date_is_null_when_not_in_paced_mode(client, migrated_d
     _insert_episode_with_air_date(migrated_db, "e-past02", show["id"], "2020-01-01T00:00:00Z")
     await gql(
         client,
-        'mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }',
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
@@ -1963,9 +2123,7 @@ async def test_next_up_excludes_a_show_with_no_unwatched_available_episode(clien
     # watched already — shouldn't count
     _insert_next_up_episode(migrated_db, "e-nu0002", show["id"], state="watched")
     # not locally available — shouldn't count either
-    _insert_next_up_episode(
-        migrated_db, "e-nu0003", show["id"], episode=2, available=False
-    )
+    _insert_next_up_episode(migrated_db, "e-nu0003", show["id"], episode=2, available=False)
     data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
     show_ids = {e["node"]["show"]["id"] for e in data["nextUp"]["edges"]}
     assert show["id"] not in show_ids
@@ -2056,11 +2214,19 @@ async def test_next_up_picks_by_air_date_not_season_number(client, migrated_db):
     show = await _add_watching_show(client, titleRomaji="Has Specials")
     # A season-0 special that aired *after* the premiere, and the premiere.
     _insert_next_up_episode(
-        migrated_db, "e-nu0100", show["id"], season=0, episode=1,
+        migrated_db,
+        "e-nu0100",
+        show["id"],
+        season=0,
+        episode=1,
         air_date_utc="2026-03-01T00:00:00Z",
     )
     _insert_next_up_episode(
-        migrated_db, "e-nu0101", show["id"], season=1, episode=1,
+        migrated_db,
+        "e-nu0101",
+        show["id"],
+        season=1,
+        episode=1,
         air_date_utc="2026-01-01T00:00:00Z",
     )
     data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
@@ -2075,11 +2241,19 @@ async def test_next_up_offers_a_special_when_it_genuinely_aired_first(client, mi
     pre-air special really is next when it really aired first."""
     show = await _add_watching_show(client, titleRomaji="Pre-air Special")
     _insert_next_up_episode(
-        migrated_db, "e-nu0102", show["id"], season=0, episode=1,
+        migrated_db,
+        "e-nu0102",
+        show["id"],
+        season=0,
+        episode=1,
         air_date_utc="2025-12-01T00:00:00Z",
     )
     _insert_next_up_episode(
-        migrated_db, "e-nu0103", show["id"], season=1, episode=1,
+        migrated_db,
+        "e-nu0103",
+        show["id"],
+        season=1,
+        episode=1,
         air_date_utc="2026-01-01T00:00:00Z",
     )
     data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
@@ -2092,10 +2266,19 @@ async def test_next_up_offers_a_special_when_it_genuinely_aired_first(client, mi
 async def test_next_up_unknown_air_date_sorts_after_known_ones(client, migrated_db):
     show = await _add_watching_show(client, titleRomaji="Unknown Date")
     _insert_next_up_episode(
-        migrated_db, "e-nu0104", show["id"], season=1, episode=1, air_date_utc=None,
+        migrated_db,
+        "e-nu0104",
+        show["id"],
+        season=1,
+        episode=1,
+        air_date_utc=None,
     )
     _insert_next_up_episode(
-        migrated_db, "e-nu0105", show["id"], season=2, episode=1,
+        migrated_db,
+        "e-nu0105",
+        show["id"],
+        season=2,
+        episode=1,
         air_date_utc="2026-01-01T00:00:00Z",
     )
     data = await gql(client, NEXT_UP_QUERY, headers=auth_headers())
@@ -2221,7 +2404,7 @@ async def test_refresh_show_metadata_stamps_metadata_last_refreshed_at(client, m
     _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
     after = await gql(
         client,
-        'mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }',
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
@@ -2601,7 +2784,7 @@ async def test_request_hard_delete_requires_soft_delete_first(client):
     resp = await client.post(
         "/",
         json={
-            "query": 'mutation($id: ID!) { requestHardDelete(showId: $id) { id } }',
+            "query": "mutation($id: ID!) { requestHardDelete(showId: $id) { id } }",
             "variables": {"id": show["id"]},
         },
         headers=auth_headers(),
@@ -2733,9 +2916,7 @@ async def test_confirm_hard_delete_rejects_wrong_retyped_title(client, migrated_
 
 async def test_confirm_hard_delete_cascades_across_every_related_table(client, migrated_db):
     conn = db.get_connection()
-    show = await add_show(
-        client, titleRomaji="Doomed Show", anilistId=999, tvdbId=888
-    )
+    show = await add_show(client, titleRomaji="Doomed Show", anilistId=999, tvdbId=888)
 
     _insert_next_up_episode(migrated_db, "e-hd0001", show["id"], episode=1, state="unwatched")
     _insert_next_up_episode(migrated_db, "e-hd0002", show["id"], episode=2, state="unwatched")
@@ -2870,9 +3051,7 @@ async def test_confirm_hard_delete_cascades_across_every_related_table(client, m
         " '2026-08-08T00:00:00Z')",
         (show["id"],),
     )
-    season_row = conn.execute(
-        "SELECT id FROM season WHERE show_id = ?", (show["id"],)
-    ).fetchone()
+    season_row = conn.execute("SELECT id FROM season WHERE show_id = ?", (show["id"],)).fetchone()
     conn.execute(
         "INSERT INTO pending_review"
         " (id, entity_type, entity_id, field, proposed_value_chain, source, created_at)"
@@ -2885,7 +3064,7 @@ async def test_confirm_hard_delete_cascades_across_every_related_table(client, m
     await _soft_delete_request_and_backdate(client, migrated_db, show["id"])
     result = await gql(
         client,
-        'mutation($id: ID!, $t: String!) { confirmHardDelete(showId: $id, retypedTitle: $t) }',
+        "mutation($id: ID!, $t: String!) { confirmHardDelete(showId: $id, retypedTitle: $t) }",
         {"id": show["id"], "t": "Doomed Show"},
         headers=auth_headers(),
     )
@@ -2926,9 +3105,7 @@ async def test_confirm_hard_delete_cascades_across_every_related_table(client, m
     assert other_link is not None
     assert other_link["movie_show_id"] is None
     assert (
-        conn.execute(
-            "SELECT 1 FROM pending_review WHERE id IN ('r-hdtst1', 'r-hdtst2')"
-        ).fetchone()
+        conn.execute("SELECT 1 FROM pending_review WHERE id IN ('r-hdtst1', 'r-hdtst2')").fetchone()
         is None
     )
     assert conn.execute("SELECT 1 FROM show WHERE id = ?", (other_show["id"],)).fetchone()
@@ -2964,7 +3141,7 @@ async def test_import_data_rejects_schema_version_mismatch(client):
     resp = await client.post(
         "/",
         json={
-            "query": 'mutation($j: String!) { importData(json: $j) { schemaVersion } }',
+            "query": "mutation($j: String!) { importData(json: $j) { schemaVersion } }",
             "variables": {"j": bad_export},
         },
         headers=auth_headers(),
@@ -3071,9 +3248,9 @@ async def test_add_watch_event_marks_episode_watched(client, migrated_db):
     )
     assert data["addWatchEvent"]["season"] == 1
 
-    episode_state = db.get_connection().execute(
-        "SELECT state FROM episode WHERE id = 'e-tst001'"
-    ).fetchone()
+    episode_state = (
+        db.get_connection().execute("SELECT state FROM episode WHERE id = 'e-tst001'").fetchone()
+    )
     assert episode_state["state"] == "watched"
 
 
@@ -3124,7 +3301,7 @@ async def test_delete_watch_event_reverts_episode_state_when_last_one(client, mi
     await _insert_episode(migrated_db, show["id"])
     added = await gql(
         client,
-        'mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }',
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
@@ -3138,9 +3315,9 @@ async def test_delete_watch_event_reverts_episode_state_when_last_one(client, mi
     )
     assert result["deleteWatchEvent"] is True
 
-    episode_state = db.get_connection().execute(
-        "SELECT state FROM episode WHERE id = 'e-tst001'"
-    ).fetchone()
+    episode_state = (
+        db.get_connection().execute("SELECT state FROM episode WHERE id = 'e-tst001'").fetchone()
+    )
     assert episode_state["state"] == "unwatched"
 
 
@@ -3149,13 +3326,13 @@ async def test_delete_watch_event_keeps_state_watched_if_rewatch_remains(client,
     await _insert_episode(migrated_db, show["id"])
     first = await gql(
         client,
-        'mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }',
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
     await gql(
         client,
-        'mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }',
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
@@ -3167,9 +3344,9 @@ async def test_delete_watch_event_keeps_state_watched_if_rewatch_remains(client,
         headers=auth_headers(),
     )
 
-    episode_state = db.get_connection().execute(
-        "SELECT state FROM episode WHERE id = 'e-tst001'"
-    ).fetchone()
+    episode_state = (
+        db.get_connection().execute("SELECT state FROM episode WHERE id = 'e-tst001'").fetchone()
+    )
     assert episode_state["state"] == "watched"
 
 
@@ -3209,9 +3386,11 @@ async def test_mark_season_watched_creates_one_watch_event_per_episode(client, m
     watched = sorted(e["episode"] for e in data["markSeasonWatched"])
     assert watched == [1, 2, 3]
 
-    states = db.get_connection().execute(
-        "SELECT state FROM episode WHERE show_id = ? AND season = 1", (show["id"],)
-    ).fetchall()
+    states = (
+        db.get_connection()
+        .execute("SELECT state FROM episode WHERE show_id = ? AND season = 1", (show["id"],))
+        .fetchall()
+    )
     assert all(s["state"] == "watched" for s in states)
 
 
@@ -3234,13 +3413,14 @@ async def test_mark_episode_range_watched(client, migrated_db):
     watched = sorted(e["episode"] for e in data["markEpisodeRangeWatched"])
     assert watched == [2, 3, 4]
 
-    rows = db.get_connection().execute(
-        "SELECT episode, state FROM episode WHERE show_id = ? AND season = 1", (show["id"],)
-    ).fetchall()
-    states = {
-        row["episode"]: row["state"]
-        for row in rows
-    }
+    rows = (
+        db.get_connection()
+        .execute(
+            "SELECT episode, state FROM episode WHERE show_id = ? AND season = 1", (show["id"],)
+        )
+        .fetchall()
+    )
+    states = {row["episode"]: row["state"] for row in rows}
     assert states == {1: "unwatched", 2: "watched", 3: "watched", 4: "watched", 5: "unwatched"}
 
 
@@ -3297,7 +3477,7 @@ async def test_set_episode_air_date_requires_client_header(client, migrated_db):
         "/",
         json={
             "query": (
-                'mutation($id: ID!) { setEpisodeAirDate(episodeId: $id, '
+                "mutation($id: ID!) { setEpisodeAirDate(episodeId: $id, "
                 'airDateUtc: "2026-09-01T12:00:00Z") { id } }'
             ),
             "variables": {"id": episode_id},
@@ -3468,8 +3648,7 @@ async def test_refresh_show_service_presence_independent_per_service(client):
         headers=auth_headers(),
     )
     by_service = {
-        e["node"]["service"]: e["node"]["present"]
-        for e in data["show"]["servicePresence"]["edges"]
+        e["node"]["service"]: e["node"]["present"] for e in data["show"]["servicePresence"]["edges"]
     }
     assert by_service == {"sonarr": True, "radarr": False}
 
@@ -3572,8 +3751,7 @@ async def test_set_season_mapping_creates_then_updates(client):
         headers=auth_headers(),
     )
     seasons = {
-        e["node"]["seasonNumber"]: e["node"]["anilistId"]
-        for e in data["show"]["seasons"]["edges"]
+        e["node"]["seasonNumber"]: e["node"]["anilistId"] for e in data["show"]["seasons"]["edges"]
     }
     assert seasons == {1: 999, 2: 222}
 
@@ -3819,9 +3997,7 @@ async def test_set_episode_numbering_scheme(client):
 
 async def test_set_episode_movie_link_both_directions_queryable(client, migrated_db):
     tv_show = await add_show(client, titleRomaji="Some Series")
-    movie_show = await add_show(
-        client, mediaShape="MOVIE", titleRomaji="Some Series: The Movie"
-    )
+    movie_show = await add_show(client, mediaShape="MOVIE", titleRomaji="Some Series: The Movie")
     bonus_episode_id = await _insert_episode(
         migrated_db, tv_show["id"], episode_id="e-bmovi1", kind="bonus_movie"
     )
@@ -3901,7 +4077,7 @@ async def test_resolve_pending_review_rejects_non_interactive_client(client, mig
     resp = await client.post(
         "/",
         json={
-            "query": 'mutation($id: ID!) { resolvePendingReview(id: $id) { id } }',
+            "query": "mutation($id: ID!) { resolvePendingReview(id: $id) { id } }",
             "variables": {"id": review_id},
         },
         headers=auth_headers("sonarr_sync"),
@@ -3921,7 +4097,7 @@ async def test_pending_reviews_query_defaults_to_unresolved_only(client, migrate
 
     await gql(
         client,
-        'mutation($id: ID!) { resolvePendingReview(id: $id) { id } }',
+        "mutation($id: ID!) { resolvePendingReview(id: $id) { id } }",
         {"id": review_id},
         headers=auth_headers("data"),
     )
@@ -4118,9 +4294,7 @@ async def test_people_and_studios_top_level_queries(client):
     _insert_person("p-listme", "Someone")
     _insert_studio("d-listme", "Some Studio")
 
-    people = await gql(
-        client, "{ people { edges { node { id name } } } }", headers=auth_headers()
-    )
+    people = await gql(client, "{ people { edges { node { id name } } } }", headers=auth_headers())
     assert any(e["node"]["id"] == "p-listme" for e in people["people"]["edges"])
 
     studios = await gql(
@@ -4261,7 +4435,7 @@ async def test_next_up_order_create_then_update(client):
 
     updated = await gql(
         client,
-        'mutation($id: ID!) { setNextUpOrder(showId: $id, sortOrder: 9) { sortOrder } }',
+        "mutation($id: ID!) { setNextUpOrder(showId: $id, sortOrder: 9) { sortOrder } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
@@ -4390,7 +4564,7 @@ async def test_delete_tag_cascades_from_shows(client):
     resp = await client.post(
         "/",
         json={
-            "query": 'mutation($id: ID!) { deleteTag(tagId: $id) }',
+            "query": "mutation($id: ID!) { deleteTag(tagId: $id) }",
             "variables": {"id": tag_id},
         },
         headers=auth_headers(),
@@ -4399,9 +4573,7 @@ async def test_delete_tag_cascades_from_shows(client):
 
 
 async def test_tags_top_level_query(client):
-    await gql(
-        client, 'mutation { createTag(name: "list-me") { id } }', headers=auth_headers()
-    )
+    await gql(client, 'mutation { createTag(name: "list-me") { id } }', headers=auth_headers())
     data = await gql(client, "{ tags { edges { node { name } } } }", headers=auth_headers())
     assert "list-me" in [e["node"]["name"] for e in data["tags"]["edges"]]
 
@@ -4490,11 +4662,7 @@ async def test_update_filter_preset_is_a_partial_update(client):
 async def test_update_filter_preset_requires_existing_id(client):
     resp = await client.post(
         "/",
-        json={
-            "query": (
-                'mutation { updateFilterPreset(id: "q-nosuch", name: "X") { id } }'
-            )
-        },
+        json={"query": ('mutation { updateFilterPreset(id: "q-nosuch", name: "X") { id } }')},
         headers=auth_headers(),
     )
     assert "errors" in resp.json()
@@ -4593,22 +4761,38 @@ async def test_episodes_airing_soon_filters_by_date_window(client, migrated_db):
 # --- absolute_number synthesis (§5.2, A.25) ---------------------------------
 
 
-async def test_absolute_number_synthesis_numbers_specials_between_regulars(
-    client, monkeypatch
-):
+async def test_absolute_number_synthesis_numbers_specials_between_regulars(client, monkeypatch):
     """§5.2: 'a special airing between S1E12 and S2E1 becomes 12.1; a
     second one before S2E1 becomes 12.2'."""
     config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
     _patch_fribb_dataset(monkeypatch, dataset=[])
     eps = [
-        {"seasonNumber": 1, "episodeNumber": 12, "absoluteEpisodeNumber": 12,
-         "airDateUtc": "2026-01-01T00:00:00Z", "runtime": None},
-        {"seasonNumber": 0, "episodeNumber": 1,
-         "airDateUtc": "2026-01-05T00:00:00Z", "runtime": None},
-        {"seasonNumber": 0, "episodeNumber": 2,
-         "airDateUtc": "2026-01-09T00:00:00Z", "runtime": None},
-        {"seasonNumber": 2, "episodeNumber": 1, "absoluteEpisodeNumber": 13,
-         "airDateUtc": "2026-02-01T00:00:00Z", "runtime": None},
+        {
+            "seasonNumber": 1,
+            "episodeNumber": 12,
+            "absoluteEpisodeNumber": 12,
+            "airDateUtc": "2026-01-01T00:00:00Z",
+            "runtime": None,
+        },
+        {
+            "seasonNumber": 0,
+            "episodeNumber": 1,
+            "airDateUtc": "2026-01-05T00:00:00Z",
+            "runtime": None,
+        },
+        {
+            "seasonNumber": 0,
+            "episodeNumber": 2,
+            "airDateUtc": "2026-01-09T00:00:00Z",
+            "runtime": None,
+        },
+        {
+            "seasonNumber": 2,
+            "episodeNumber": 1,
+            "absoluteEpisodeNumber": 13,
+            "airDateUtc": "2026-02-01T00:00:00Z",
+            "runtime": None,
+        },
     ]
     fake = _FakeSonarrClient(series={"id": 42, "seriesType": "anime"}, episodes=eps)
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
@@ -4621,30 +4805,38 @@ async def test_absolute_number_synthesis_numbers_specials_between_regulars(
           show(id: $id) { episodes { edges { node { season episode absoluteNumber } } } }
         }
         """,
-        {"id": show["id"]}, headers=auth_headers(),
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     got = {
         (e["node"]["season"], e["node"]["episode"]): e["node"]["absoluteNumber"]
         for e in data["show"]["episodes"]["edges"]
     }
-    assert got[(1, 12)] == 12      # source value, untouched
-    assert got[(0, 1)] == 12.1     # first special after absolute 12
-    assert got[(0, 2)] == 12.2     # second one
-    assert got[(2, 1)] == 13       # source value, untouched
+    assert got[(1, 12)] == 12  # source value, untouched
+    assert got[(0, 1)] == 12.1  # first special after absolute 12
+    assert got[(0, 2)] == 12.2  # second one
+    assert got[(2, 1)] == 13  # source value, untouched
 
 
-async def test_absolute_number_synthesis_recomputes_when_a_special_is_inserted(
-    client, monkeypatch
-):
+async def test_absolute_number_synthesis_recomputes_when_a_special_is_inserted(client, monkeypatch):
     """Indices are positional, so a newly-discovered special landing
     between two existing ones must renumber the later one."""
     config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
     _patch_fribb_dataset(monkeypatch, dataset=[])
     base = [
-        {"seasonNumber": 1, "episodeNumber": 1, "absoluteEpisodeNumber": 1,
-         "airDateUtc": "2026-01-01T00:00:00Z", "runtime": None},
-        {"seasonNumber": 0, "episodeNumber": 9,
-         "airDateUtc": "2026-01-20T00:00:00Z", "runtime": None},
+        {
+            "seasonNumber": 1,
+            "episodeNumber": 1,
+            "absoluteEpisodeNumber": 1,
+            "airDateUtc": "2026-01-01T00:00:00Z",
+            "runtime": None,
+        },
+        {
+            "seasonNumber": 0,
+            "episodeNumber": 9,
+            "airDateUtc": "2026-01-20T00:00:00Z",
+            "runtime": None,
+        },
     ]
     fake = _FakeSonarrClient(series={"id": 42}, episodes=base)
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
@@ -4652,11 +4844,19 @@ async def test_absolute_number_synthesis_recomputes_when_a_special_is_inserted(
 
     # A special that aired *earlier* shows up on a later fetch.
     fake._episodes = base + [
-        {"seasonNumber": 0, "episodeNumber": 8,
-         "airDateUtc": "2026-01-10T00:00:00Z", "runtime": None},
+        {
+            "seasonNumber": 0,
+            "episodeNumber": 8,
+            "airDateUtc": "2026-01-10T00:00:00Z",
+            "runtime": None,
+        },
     ]
-    await gql(client, "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
-              {"i": show["id"]}, headers=auth_headers())
+    await gql(
+        client,
+        "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
+        {"i": show["id"]},
+        headers=auth_headers(),
+    )
 
     data = await gql(
         client,
@@ -4665,15 +4865,16 @@ async def test_absolute_number_synthesis_recomputes_when_a_special_is_inserted(
           show(id: $id) { episodes { edges { node { season episode absoluteNumber } } } }
         }
         """,
-        {"id": show["id"]}, headers=auth_headers(),
+        {"id": show["id"]},
+        headers=auth_headers(),
     )
     got = {
         (e["node"]["season"], e["node"]["episode"]): e["node"]["absoluteNumber"]
         for e in data["show"]["episodes"]["edges"]
     }
     assert got[(1, 1)] == 1
-    assert got[(0, 8)] == 1.1   # earlier-airing special takes the first slot
-    assert got[(0, 9)] == 1.2   # the pre-existing one renumbered behind it
+    assert got[(0, 8)] == 1.1  # earlier-airing special takes the first slot
+    assert got[(0, 9)] == 1.2  # the pre-existing one renumbered behind it
 
 
 # --- file availability polling (§5.2/§6.7, B.3) — GraphQL wiring only; the ---
@@ -4794,9 +4995,7 @@ async def test_show_availability_fields_resolve_through_real_graphql(client, mig
         client, mediaShape="MOVIE", trackingSpace="TV", titleRomaji="Availability Movie"
     )
     conn = db.get_connection()
-    conn.execute(
-        "UPDATE show SET available_via_radarr = 'downloading' WHERE id = ?", (show["id"],)
-    )
+    conn.execute("UPDATE show SET available_via_radarr = 'downloading' WHERE id = ?", (show["id"],))
     conn.commit()
     data = await gql(
         client,

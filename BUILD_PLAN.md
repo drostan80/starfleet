@@ -2205,11 +2205,43 @@ background scheduler.
   catalog; it is one SQL aggregate over episode rows). Sequence after
   **B.3**, which is what first populates `available_locally` — building
   it earlier means aggregating over permanently-false data.
-- [ ] **B.8 — Air-date reconciliation**: priority Manual >
-  animeschedule.net > AniList `airingSchedule` > Sonarr raw — governs
-  which value *wins*, never gates the apply. Every automatic change,
-  including one overwriting a manual value, applies immediately and
-  logs a `pending_review` entry.
+- [x] **B.8 — Air-date reconciliation.** This line's own original text
+  ("never gates the apply, including one overwriting a manual value")
+  was already stale by the time this step was reached — B.4 corrected
+  that framing on the user's own reasoning before B.4 was even
+  committed, and §6.7 was updated to match at the time (see B.4's own
+  entry above). So most of B.8 was already built as a side effect of
+  B.4+B.5, not started fresh here.
+  - **Built**: the one real gap this step actually closed, found by
+    checking the current priority order (`Manual > animeschedule.net >
+    AniList > Sonarr raw`, §6.7) against what B.4's own code actually
+    did, not assumed: `metadata._reconcile_air_dates` (B.4) predates
+    B.5 and only ever guarded `air_date_source = 'manual'` — an
+    animeschedule-sourced date (ranked *above* AniList) survived only
+    until AniList's own next daily pass silently overwrote it, a live
+    violation of the documented priority order in already-shipped,
+    already-pushed code. One-line fix: the guard now skips
+    `('manual', 'animeschedule')`, not just `'manual'` — same
+    no-write/no-`pending_review` treatment as the manual case (a
+    lower-priority source correctly declining to overwrite a
+    higher-priority one isn't something to flag). Verified the other
+    two write paths (Sonarr's own INSERT-only seed at episode creation,
+    the manual-set mutation) needed no equivalent fix — grepped every
+    `air_date_utc =` write site in `src/lcars/` to confirm exactly
+    three exist, not assumed.
+  - **Sequencing confirmed with the user**: found while starting B.6 in
+    document order; asked directly whether to fix this live gap first
+    or defer to when B.8 came up in order — user chose fix-now.
+  - **Verified**: 411 tests passing (was 410 before this fix), `ruff
+    check .`/`ruff format --check` clean. New test
+    (`test_anilist_air_date_reconciliation_never_overwrites_an_
+    animeschedule_date`) mirrors the existing manual-date test exactly,
+    seeding `air_date_source = 'animeschedule'` directly via `db.
+    get_connection()` (no GraphQL mutation writes that source directly)
+    and asserting `refreshShowMetadata` neither changes the value nor
+    opens a new `pending_review`. Clean-install sanity check (fresh
+    venv, real `pip install`) confirmed `lcars.metadata` still imports
+    cleanly.
 - [ ] **B.8b — `episode_movie_link` automatic `tmdb_match` derivation**
   (§5.1's movie↔`bonus_movie` addendum). **Added by the 2026-08-09
   audit**: §5.1 specifies the full reconciliation ("internal ids are the
@@ -2315,8 +2347,8 @@ complete before full rollout.
   *ongoing* detection of newly-added non-service files, which stays
   deliberately deferred (§9, §10.6).
 - [ ] **PC.2 — One-time historical imports**: Trakt watch history,
-  AniList data, MAL legacy scores (§9/§6.1) — the only time data flows
-  *into* LCARS from these sources rather than out.
+  AniList data, MAL legacy scores (§9/§6.1) if they are unique to MAL, score should be taken first and primarily from Anilist. — the only time data flows
+  *into* LCARS from these sources rather than out for now, a future way to check on discrepency between outside trackers and personal database and reconciliation shouuld be build at a later status_change
 
 ---
 

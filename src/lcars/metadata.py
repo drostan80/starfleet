@@ -173,7 +173,12 @@ def _ensure_anilist_link(conn, show: dict) -> None:
     tvdb_id_str = _external_id(conn, show["id"], "tvdb")
     if tvdb_id_str is None:
         pending_review.open_or_extend(
-            conn, "show", show["id"], "anilist_id", "anilist", None,
+            conn,
+            "show",
+            show["id"],
+            "anilist_id",
+            "anilist",
+            None,
             "anime show has neither an AniList nor a tvdb id — cannot resolve (§5.1)",
         )
         conn.commit()
@@ -185,7 +190,12 @@ def _ensure_anilist_link(conn, show: dict) -> None:
     anilist_id, _mal_id = fribb.extract_ids(candidate)
     if anilist_id is None:
         pending_review.open_or_extend(
-            conn, "show", show["id"], "anilist_id", "fribb", None,
+            conn,
+            "show",
+            show["id"],
+            "anilist_id",
+            "fribb",
+            None,
             f"no AniList match for tvdb id {tvdb_id_str} (§5.1 requires one)",
         )
         conn.commit()
@@ -194,8 +204,7 @@ def _ensure_anilist_link(conn, show: dict) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO show_external_id (show_id, service, external_id, url, created_at)"
         " VALUES (?, 'anilist', ?, ?, ?)",
-        (show["id"], str(anilist_id), f"https://anilist.co/anime/{anilist_id}",
-         util.now_utc_iso()),
+        (show["id"], str(anilist_id), f"https://anilist.co/anime/{anilist_id}", util.now_utc_iso()),
     )
     conn.commit()
 
@@ -279,18 +288,31 @@ def _reconcile_air_dates(conn, show: dict) -> None:
 
     **Manual dates are protected, revised 2026-08-09 after this
     function's first draft shipped** — the user's own reasoning: only
-    a genuine reschedule signal (animeschedule.net, B.5, not yet built
-    — real-world disruptions like a sports broadcast preempting a
-    timeslot) should override a value they've deliberately corrected;
-    AniList/Sonarr repeatedly re-asserting stale or wrong data over an
-    already-fixed value is exactly the "stubborn weekly rewrite" the
-    user flagged as the failure mode to avoid. So this function skips
-    outright (no write, no `pending_review`) whenever the existing
-    `air_date_source` is already `'manual'` — the same hard-gate shape
+    a genuine reschedule signal (animeschedule.net, B.5) should
+    override a value they've deliberately corrected; AniList/Sonarr
+    repeatedly re-asserting stale or wrong data over an already-fixed
+    value is exactly the "stubborn weekly rewrite" the user flagged as
+    the failure mode to avoid. So this function skips outright (no
+    write, no `pending_review`) whenever the existing `air_date_source`
+    is already `'manual'` — the same hard-gate shape
     `season_mapping.py`'s own `reconcile_season()` already gives
     `season.manual_override` (§3 principle 6), extended here to
     per-episode manual air dates specifically for AniList/Sonarr.
     `SCOPE.md` §6.7's own text is corrected to match.
+
+    **Also skips `'animeschedule'`, added 2026-08-09 (B.8) — closing a
+    real gap B.5 exposed**: B.5 shipped animeschedule.net as a genuine
+    reconciliation source, ranked *above* AniList in §6.7's priority
+    order (`Manual > animeschedule.net > AniList > Sonarr raw`). This
+    function predates B.5 and only ever guarded against `'manual'`, so
+    an animeschedule-sourced date survived only until this same daily
+    pass next ran and silently overwrote it — a live violation of that
+    priority order in already-shipped code, not a hypothetical. Same
+    treatment as the manual case: skip outright, no write, no
+    `pending_review` (there's nothing to flag — a lower-priority source
+    correctly declining to overwrite a higher-priority one is expected
+    behavior, the same reasoning the manual-date skip above already
+    uses).
 
     **Season-split guard, same date, real and confirmed live** (not
     hypothetical) — a single TVDB season can span *multiple* separate
@@ -326,7 +348,12 @@ def _reconcile_air_dates(conn, show: dict) -> None:
         ).fetchone()["n"]
         if anilist_episode_count is not None and lcars_episode_count > anilist_episode_count:
             pending_review.open_or_extend(
-                conn, "season", season["id"], "anilist_id", "anilist", None,
+                conn,
+                "season",
+                season["id"],
+                "anilist_id",
+                "anilist",
+                None,
                 f"season {season['season_number']} has {lcars_episode_count} episode(s) in "
                 f"LCARS but AniList media {season['anilist_id']} only covers "
                 f"{anilist_episode_count} — likely spans multiple AniList entries; "
@@ -342,14 +369,19 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             ).fetchone()
             if episode_row is None:
                 continue  # not yet fetched into LCARS — A.8's Sonarr fetch's job, not this one's
-            if episode_row["air_date_source"] == "manual":
+            if episode_row["air_date_source"] in ("manual", "animeschedule"):
                 continue  # hard-protected — see this function's own docstring
             new_air_date = util.unix_to_iso(node["airingAt"])
             if episode_row["air_date_utc"] == new_air_date:
                 continue
             pending_review.open_or_extend(
-                conn, "episode", episode_row["id"], "air_date_utc", "anilist",
-                episode_row["air_date_utc"], new_air_date,
+                conn,
+                "episode",
+                episode_row["id"],
+                "air_date_utc",
+                "anilist",
+                episode_row["air_date_utc"],
+                new_air_date,
             )
             conn.execute(
                 "UPDATE episode SET air_date_utc = ?, air_date_source = 'anilist',"
@@ -563,9 +595,7 @@ def _fetch_tmdb_duration(conn, show: dict) -> None:
         )
 
 
-def _resolve_and_store_tmdb_id(
-    conn, show: dict, client: "tmdb_client.TmdbClient"
-) -> str | None:
+def _resolve_and_store_tmdb_id(conn, show: dict, client: "tmdb_client.TmdbClient") -> str | None:
     """Only the episodic (TV) side has a bridge to resolve through — a
     movie with no tmdb id at all has nothing this function can do
     about it (no title-search feature exists, out of A.19's own

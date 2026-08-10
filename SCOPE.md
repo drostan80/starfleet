@@ -1690,7 +1690,15 @@ as AniList/Sonarr/Radarr.
     hard-gate shape `season_mapping.py`'s own `reconcile_season()`
     already gives `season.manual_override` (§3 principle 6), extended
     to per-episode air dates. This section's own priority-order text
-    above is corrected to match.
+    above is corrected to match. **Extended 2026-08-09 (B.8)** to also
+    skip `air_date_source = 'animeschedule'`, closing a real gap B.5
+    exposed: this guard predates B.5, so an animeschedule-sourced date
+    (ranked *above* AniList in this section's own priority order)
+    survived only until AniList's next daily pass silently overwrote
+    it — a live violation in already-shipped code, found by checking
+    the actual guard condition against the documented order rather
+    than assumed. Same no-write/no-`pending_review` treatment as the
+    manual case.
   - **Season-split guard, confirmed live, not hypothetical**: a single
     TVDB season can span *multiple* separate AniList `Media` entries —
     Attack on Titan's own Season 3 is one 22-episode TVDB season across
