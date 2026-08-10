@@ -236,6 +236,32 @@ async def test_poll_anime_schedule_sends_no_variables_and_returns_the_result():
     await client.aclose()
 
 
+async def test_poll_local_service_presence_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        return httpx.Response(200, json={"data": {"pollLocalServicePresence": {"showsUpdated": 3}}})
+
+    client = _client(handler)
+    result = await client.poll_local_service_presence()
+    assert result == {"showsUpdated": 3}
+    await client.aclose()
+
+
+async def test_poll_catalog_service_presence_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        return httpx.Response(
+            200, json={"data": {"pollCatalogServicePresence": {"showsUpdated": 7}}}
+        )
+
+    client = _client(handler)
+    result = await client.poll_catalog_service_presence()
+    assert result == {"showsUpdated": 7}
+    await client.aclose()
+
+
 async def test_backfill_file_availability_sends_no_variables_and_returns_the_result():
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read())
@@ -265,8 +291,12 @@ async def test_audit_local_files_sends_no_variables_and_returns_the_result():
                         "episodesCorrected": 1,
                         "showsCorrected": 2,
                         "orphanFiles": [
-                            {"showId": "s-x", "path": "/x.mkv", "parsedSeason": 1,
-                             "parsedEpisode": 2}
+                            {
+                                "showId": "s-x",
+                                "path": "/x.mkv",
+                                "parsedSeason": 1,
+                                "parsedEpisode": 2,
+                            }
                         ],
                         "untrackedShows": [
                             {"service": "sonarr", "title": "Y", "externalId": 5, "path": "/y"}

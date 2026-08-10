@@ -4921,6 +4921,14 @@ POLL_ANIME_SCHEDULE = """
     mutation { pollAnimeSchedule { episodesUpdated flagged } }
 """
 
+POLL_LOCAL_SERVICE_PRESENCE = """
+    mutation { pollLocalServicePresence { showsUpdated } }
+"""
+
+POLL_CATALOG_SERVICE_PRESENCE = """
+    mutation { pollCatalogServicePresence { showsUpdated } }
+"""
+
 
 async def test_poll_file_availability_returns_zero_with_nothing_configured(client):
     # No Sonarr/Radarr credentials in the client fixture's default config (§4.9's
@@ -4937,6 +4945,20 @@ async def test_backfill_file_availability_wiring_returns_zero_with_nothing_confi
     # backfill_file_availability(), not poll_file_availability().
     data = await gql(client, BACKFILL_FILE_AVAILABILITY, headers=auth_headers())
     assert data["backfillFileAvailability"] == {"episodesUpdated": 0, "showsUpdated": 0}
+
+
+async def test_poll_local_service_presence_returns_zero_with_no_tracked_shows(client):
+    # Actual rollup logic is test_service_presence.py's job; this only locks
+    # in that the mutation is wired to service_presence.refresh_local_presence().
+    data = await gql(client, POLL_LOCAL_SERVICE_PRESENCE, headers=auth_headers())
+    assert data["pollLocalServicePresence"] == {"showsUpdated": 0}
+
+
+async def test_poll_catalog_service_presence_returns_zero_with_nothing_configured(client):
+    # Same not-configured no-op guard as pollFileAvailability — actual
+    # catalog-matching logic is test_service_presence.py's job.
+    data = await gql(client, POLL_CATALOG_SERVICE_PRESENCE, headers=auth_headers())
+    assert data["pollCatalogServicePresence"] == {"showsUpdated": 0}
 
 
 async def test_audit_local_files_wiring_returns_empty_with_nothing_configured(client):

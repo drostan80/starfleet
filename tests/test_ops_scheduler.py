@@ -15,10 +15,13 @@ from ops.scheduler import (
     _loop,
     run_animeschedule_once,
     run_availability_once,
+    run_catalog_presence_once,
     run_daily_and_weekly_once,
     run_forever,
+    run_local_presence_once,
     run_monthly_once,
     run_once,
+    run_season_reconciliation_once,
     run_weekly_once,
 )
 
@@ -38,6 +41,8 @@ class _FakeClient:
         availability_result: dict | None = None,
         recommended_interval: int = 3600,
         animeschedule_result: dict | None = None,
+        local_presence_result: dict | None = None,
+        catalog_presence_result: dict | None = None,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
@@ -53,6 +58,8 @@ class _FakeClient:
             "episodesUpdated": 0,
             "flagged": 0,
         }
+        self._local_presence_result = local_presence_result or {"showsUpdated": 0}
+        self._catalog_presence_result = catalog_presence_result or {"showsUpdated": 0}
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -90,6 +97,12 @@ class _FakeClient:
 
     async def poll_anime_schedule(self) -> dict:
         return self._animeschedule_result
+
+    async def poll_local_service_presence(self) -> dict:
+        return self._local_presence_result
+
+    async def poll_catalog_service_presence(self) -> dict:
+        return self._catalog_presence_result
 
 
 # --- run_once (B.1) ---------------------------------------------------------
@@ -153,25 +166,63 @@ async def test_run_weekly_once_a_single_seasons_failure_does_not_stop_the_rest()
     assert client.reconciled == [("s-a", 1), ("s-c", 1)]
 
 
-# --- run_monthly_once (B.2, monthly tier) -----------------------------------
+# --- run_season_reconciliation_once (B.2, monthly tier's own reconciliation half) --
 
 
-async def test_run_monthly_once_reconciles_every_season_unconditionally():
+async def test_run_season_reconciliation_once_reconciles_every_season_unconditionally():
     client = _FakeClient(
         all_seasons_=[_season("z-a", "s-a"), _season("z-b", "s-a", 2), _season("z-c", "s-c")]
     )
-    count = await run_monthly_once(client)
+    count = await run_season_reconciliation_once(client)
     assert count == 3
     assert client.reconciled == [("s-a", 1), ("s-a", 2), ("s-c", 1)]
 
 
-async def test_run_monthly_once_a_single_seasons_failure_does_not_stop_the_rest():
+async def test_run_season_reconciliation_once_a_single_seasons_failure_does_not_stop_the_rest():
     client = _FakeClient(
         all_seasons_=[_season("z-a", "s-a"), _season("z-b", "s-b")], fail_season_ids={"z-a"}
     )
-    count = await run_monthly_once(client)
+    count = await run_season_reconciliation_once(client)
     assert count == 1
     assert client.reconciled == [("s-b", 1)]
+
+
+# --- run_catalog_presence_once (B.7, rides the same monthly tier) -----------
+
+
+async def test_run_catalog_presence_once_returns_shows_updated():
+    client = _FakeClient(catalog_presence_result={"showsUpdated": 4})
+    assert await run_catalog_presence_once(client) == 4
+
+
+async def test_run_catalog_presence_once_is_zero_with_nothing_updated():
+    client = _FakeClient()
+    assert await run_catalog_presence_once(client) == 0
+
+
+# --- run_monthly_once (the unit run_forever's monthly loop calls) -----------
+
+
+async def test_run_monthly_once_sums_reconciliation_and_catalog_presence():
+    client = _FakeClient(
+        all_seasons_=[_season("z-a", "s-a")], catalog_presence_result={"showsUpdated": 2}
+    )
+    count = await run_monthly_once(client)
+    assert count == 3
+    assert client.reconciled == [("s-a", 1)]
+
+
+# --- run_local_presence_once (B.7, rides the hourly tick) -------------------
+
+
+async def test_run_local_presence_once_returns_shows_updated():
+    client = _FakeClient(local_presence_result={"showsUpdated": 5})
+    assert await run_local_presence_once(client) == 5
+
+
+async def test_run_local_presence_once_is_zero_with_nothing_updated():
+    client = _FakeClient()
+    assert await run_local_presence_once(client) == 0
 
 
 # --- run_availability_once (B.3) --------------------------------------------
@@ -259,14 +310,15 @@ async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_it
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
 
 
-async def test_run_daily_and_weekly_once_sums_all_three_tiers():
+async def test_run_daily_and_weekly_once_sums_all_four_tiers():
     client = _FakeClient(
         due_shows=[{"id": "s-a"}],
         due_seasons=[_season("z-a", "s-b")],
         animeschedule_result={"episodesUpdated": 1, "flagged": 1},
+        local_presence_result={"showsUpdated": 1},
     )
     count = await run_daily_and_weekly_once(client)
-    assert count == 4
+    assert count == 5
     assert client.refreshed == ["s-a"]
     assert client.reconciled == [("s-b", 1)]
 
@@ -317,7 +369,7 @@ async def test_run_forever_wires_up_all_three_loops(monkeypatch):
     client = _FakeClient()
     await run_forever(client, interval_seconds=3600, monthly_interval_seconds=2592000)
     assert set(calls) == {
-        ("run_daily_and_weekly_once", 3600, "daily+weekly+animeschedule"),
-        ("run_monthly_once", 2592000, "monthly"),
+        ("run_daily_and_weekly_once", 3600, "daily+weekly+animeschedule+local_presence"),
+        ("run_monthly_once", 2592000, "monthly+catalog_presence"),
     }
     assert availability_calls == [client]

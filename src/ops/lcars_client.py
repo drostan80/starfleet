@@ -263,6 +263,29 @@ class LcarsClient:
         data = await self._query(query)
         return data["pollAnimeSchedule"]
 
+    async def poll_local_service_presence(self) -> dict:
+        """§5.4/§6.7, B.7 — the `local` pseudo-service rollup
+        (pollLocalServicePresence): pure SQL aggregate, no external
+        dependency, negligible cost. Rides the same hourly tick as
+        run_daily_and_weekly_once, unlike poll_catalog_service_presence
+        below."""
+        query = """
+        mutation { pollLocalServicePresence { showsUpdated } }
+        """
+        data = await self._query(query)
+        return data["pollLocalServicePresence"]
+
+    async def poll_catalog_service_presence(self) -> dict:
+        """§5.4/§6.7, B.7 — the Sonarr/Radarr catalog-matching sweep
+        (pollCatalogServicePresence): real N×M cost, confirmed with the
+        user — rides B.2's own monthly cadence instead of the hourly
+        tick, no new interval."""
+        query = """
+        mutation { pollCatalogServicePresence { showsUpdated } }
+        """
+        data = await self._query(query)
+        return data["pollCatalogServicePresence"]
+
     async def recommended_availability_poll_interval_seconds(self) -> int:
         """§5.2/§6.7, B.3 — LCARS computes Ops's own adaptive cadence
         (300s/900s/3600s) server-side, from data only it holds (watching

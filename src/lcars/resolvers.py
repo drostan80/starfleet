@@ -38,6 +38,7 @@ from lcars import (
     pending_review,
     season_mapping,
     service_health,
+    service_presence,
     util,
 )
 
@@ -1172,6 +1173,23 @@ def resolve_poll_anime_schedule(_, info):
     as pollFileAvailability/auditLocalFiles above."""
     conn = db.get_connection()
     return animeschedule.poll_anime_schedule(conn)
+
+
+@mutation.field("pollLocalServicePresence")
+def resolve_poll_local_service_presence(_, info):
+    """§5.4/§6.7, B.7 — service_presence.py's own local rollup. No
+    require_client() — same passive/not-a-changed_by-column reasoning
+    refreshShowServicePresence itself already established."""
+    conn = db.get_connection()
+    return {"shows_updated": service_presence.refresh_local_presence(conn)}
+
+
+@mutation.field("pollCatalogServicePresence")
+def resolve_poll_catalog_service_presence(_, info):
+    """§5.4/§6.7, B.7 — service_presence.py's own Sonarr/Radarr catalog
+    sweep. Same passive reasoning as pollLocalServicePresence above."""
+    conn = db.get_connection()
+    return {"shows_updated": service_presence.refresh_catalog_presence(conn)}
 
 
 @query.field("recommendedAvailabilityPollIntervalSeconds")

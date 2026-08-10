@@ -378,6 +378,11 @@ type ShowServicePresenceEdge {
   cursor: String!
 }
 
+"pollLocalServicePresence's/pollCatalogServicePresence's own confirmation summary — same human/Ops-facing-count spirit as AvailabilityPollResult, counting only a real change (new row or a present flip), not every show checked."
+type ServicePresencePollResult {
+  showsUpdated: Int!
+}
+
 type ShowServicePresenceConnection {
   edges: [ShowServicePresenceEdge!]!
   pageInfo: PageInfo!
@@ -1149,6 +1154,29 @@ type Mutation {
   last time but absent now, or vice versa, is just an updated fact).
   """
   refreshShowServicePresence(showId: ID!, service: String!, candidateTitles: [String!]!): ShowServicePresence!
+  """
+  §5.4/§6.7, B.7 — the `local` pseudo-service's own automatic rollup:
+  one show at a time, `present` = any episode with `availableLocally`
+  true (episodic) or the show's own `availableLocally` (movie) — both
+  already-generated columns, B.3, no external dependency at all.
+  Global sweep, no per-item argument, same shape pollFileAvailability
+  already established. Negligible cost — rides Ops's existing hourly
+  tick, unlike pollCatalogServicePresence below.
+  """
+  pollLocalServicePresence: ServicePresencePollResult!
+  """
+  §5.4/§6.7, B.7 — Sonarr (episodic shows) + Radarr (movie shows)
+  presence, automated: fetches each service's whole catalog and
+  fuzzy-matches every tracked show of the matching mediaShape against
+  it. Real N×M cost, confirmed with the user — unlike
+  pollLocalServicePresence above, this does NOT ride the hourly tick;
+  it's an unconditional, no-per-show-due-gating sweep on B.2's own
+  existing monthly cadence (no new interval). AniList/MAL presence is
+  NOT covered — a real, checked blocker (anilist_client.py has no
+  search/catalog endpoint, mal_client.py doesn't exist yet), not a
+  silently-skipped design choice.
+  """
+  pollCatalogServicePresence: ServicePresencePollResult!
 
   # -- 5.6 pending_review ----------------------------------------------------
   """

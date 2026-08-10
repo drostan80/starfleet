@@ -2257,18 +2257,63 @@ background scheduler.
     loop's own untracked-show `continue` skipped the call that was
     supposed to fail before ever reaching it — fixed by tracking that
     series too, so the configured failure genuinely fires.
-- [ ] **B.7 — `show_service_presence` periodic refresh** — same poll
-  cadence as the rest of this phase (§5.4). **Owner assigned here by the
-  2026-08-09 audit**: §5.4's `local` pseudo-service ("rolling up
-  per-episode `available_locally` into one show-level yes/no") has no
-  implementation and no other owner. It needs a *rollup* code path, not
-  just a schedule wrapped around A.7's
-  `refreshShowServicePresence(showId, service, candidateTitles)` — that
-  mutation resolves presence by fuzzy title matching against a service
-  catalog, which is structurally meaningless for `local` (there is no
-  catalog; it is one SQL aggregate over episode rows). Sequence after
-  **B.3**, which is what first populates `available_locally` — building
-  it earlier means aggregating over permanently-false data.
+- [x] **B.7 — `show_service_presence` periodic refresh.**
+  - **Scope resolved with the user — this line's own "AniList/MAL
+    presence, periodic" reading was checked, not assumed, and turned
+    out blocked**: `anilist_client.py` has no search/catalog-listing
+    endpoint at all (only `fetch_media(anilist_id)`, a single-entry
+    lookup), and `mal_client.py` doesn't exist yet (B.10). Reported as
+    a real, checked finding — same shape as B.5's `/timetables` 401 —
+    not silently skipped or half-built around. Scope: `local` +
+    Sonarr + Radarr, the three genuinely buildable now.
+  - **Cadence resolved with the user**: `local`'s rollup is a pure SQL
+    aggregate (zero external dependency, negligible cost) and rides
+    Ops's hourly tick. Sonarr/Radarr catalog matching is real N×M cost
+    (fetch a whole catalog, fuzzy-match every tracked show of the
+    matching mediaShape against it) — the same class of concern that
+    produced B.3's seed-and-skip design and `backfillFileAvailability`'s
+    manual-only carve-out. Asked directly rather than default to the
+    hourly tick: chose **"a slower dedicated tier"** over due-gating
+    (like B.2's weekly `dueForSeasonReconciliation`) or riding the
+    hourly tick unconditionally. Built by reusing B.2's own existing
+    monthly cadence directly (`run_monthly_once` renamed/composed, not
+    a new interval) — same "no new interval unless a real technical
+    constraint forces one" precedent B.1/B.4/B.5's own cadence
+    decisions already established.
+  - **Built**: `service_presence.py` — `refresh_local_presence`
+    (episodic: any episode with `available_locally`; movie: the
+    show's own `available_locally`, both already-generated columns,
+    B.3) and `refresh_catalog_presence` (Sonarr `all_series()`/Radarr
+    `all_movies()` — the same client methods `local_audit.py`, B.3b,
+    already established LCARS calling directly — fuzzy-matched via
+    `fuzzy.best_match()`, §5.4/A.7, unchanged). Two new mutations,
+    `pollLocalServicePresence`/`pollCatalogServicePresence`, global
+    sweep shape (no per-item argument), same as B.3's
+    `pollFileAvailability`. `service_health.py` (B.6) hooked at the
+    new Sonarr/Radarr catalog calls too — every real outbound call
+    this project makes now reports through it.
+  - **Real bug caught before commit, not hypothetical**: the first
+    draft's `_upsert_presence` wrote `present`+`checked_at`
+    unconditionally on every call, only *counting* real changes.
+    Since `refresh_local_presence` runs this once per tracked show
+    every hour, forever, that meant a permanent steady-state stream of
+    pointless UPDATEs whose only effect was a timestamp nothing reads
+    (no due-gate consumes `checked_at` here — the user chose
+    unconditional sweeps over one). Fixed: an unchanged existing row
+    is now left completely untouched — genuinely idempotent, zero
+    writes once local state is stable. Regression test added, clock
+    monkeypatched to a distinguishable value across two calls (plain
+    wall-clock comparison couldn't reliably prove no write happened,
+    since `now_utc_iso()`'s own second-level precision could hide one
+    within the same second).
+  - **Verified**: 446 tests passing (was 421), `ruff check .`/`ruff
+    format --check` clean. `src/ops/cli.py` grepped directly (not
+    inferred from the passing suite alone) to confirm no reference to
+    the renamed `run_monthly_once`/new `run_season_reconciliation_once`
+    functions. Clean-install sanity check (fresh venv, real `pip
+    install`) confirmed every new/changed module imports cleanly and
+    `lcars.server.build_schema()` resolves both new mutations as real,
+    bound schema members (108 types total).
 - [x] **B.8 — Air-date reconciliation.** This line's own original text
   ("never gates the apply, including one overwriting a manual value")
   was already stale by the time this step was reached — B.4 corrected

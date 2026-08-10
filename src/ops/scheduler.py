@@ -1,7 +1,9 @@
 """The polling loops themselves — B.1 (daily metadata refresh), B.2
 (Fribb reconciliation, two tiers: weekly + monthly), B.3 (file
 availability, one adaptive-cadence loop), B.5 (animeschedule.net RSS
-sweep, riding B.1's own hourly tick).
+sweep, riding B.1's own hourly tick), B.7 (show_service_presence
+refresh, split across two cadences — the `local` rollup rides the
+hourly tick, Sonarr/Radarr catalog matching rides B.2's monthly one).
 
 Each `run_*_once()` is the real, testable unit — one full sweep,
 exercised directly by a test with no infinite loop or real sleep
@@ -59,11 +61,15 @@ async def run_weekly_once(client: LcarsClient) -> int:
     return reconciled
 
 
-async def run_monthly_once(client: LcarsClient) -> int:
-    """§5.5/B.2 — the monthly tier: every season of every show,
-    unconditional — no due-query for this tier, Ops's own monthly timer
-    is the correctness boundary (SCOPE.md §5.5's B.2 note). Same
-    per-item error isolation as the other two tiers."""
+async def run_season_reconciliation_once(client: LcarsClient) -> int:
+    """§5.5/B.2 — the monthly tier's own season-reconciliation half:
+    every season of every show, unconditional — no due-query for this
+    tier, Ops's own monthly timer is the correctness boundary
+    (SCOPE.md §5.5's B.2 note). Same per-item error isolation as the
+    other tiers. Renamed from run_monthly_once (B.7) now that a second,
+    unrelated sweep (catalog service-presence) shares this same
+    cadence — see run_monthly_once below, the actual unit the loop
+    calls each tick."""
     seasons = await client.all_seasons()
     reconciled = 0
     for season in seasons:
@@ -78,6 +84,31 @@ async def run_monthly_once(client: LcarsClient) -> int:
                 season["seasonNumber"],
             )
     return reconciled
+
+
+async def run_catalog_presence_once(client: LcarsClient) -> int:
+    """§5.4/§6.7, B.7 — the Sonarr/Radarr catalog-matching sweep
+    (pollCatalogServicePresence): no per-item loop, the mutation itself
+    covers every tracked show of the matching mediaShape in one call —
+    same shape run_availability_once/run_animeschedule_once already
+    use. Rides B.2's own monthly cadence (run_monthly_once below), not
+    the hourly tick — real N×M cost, confirmed with the user
+    (service_presence.py's own module docstring has the full
+    reasoning)."""
+    result = await client.poll_catalog_service_presence()
+    return result["showsUpdated"]
+
+
+async def run_monthly_once(client: LcarsClient) -> int:
+    """B.2's season-reconciliation tier and B.7's catalog
+    service-presence sweep share one loop/interval — same "no new
+    interval unless a real technical constraint forces one" precedent
+    B.1/B.4/B.5's own cadence decisions already established, applied
+    here to the monthly tier instead of the hourly one. Returns the
+    combined count, for the caller to log."""
+    reconciled = await run_season_reconciliation_once(client)
+    presence = await run_catalog_presence_once(client)
+    return reconciled + presence
 
 
 async def run_availability_once(client: LcarsClient) -> int:
@@ -99,18 +130,31 @@ async def run_animeschedule_once(client: LcarsClient) -> int:
     return result["episodesUpdated"] + result["flagged"]
 
 
+async def run_local_presence_once(client: LcarsClient) -> int:
+    """§5.4/§6.7, B.7 — the `local` pseudo-service rollup
+    (pollLocalServicePresence): pure SQL aggregate, no external
+    dependency, negligible cost — rides the hourly tick, unlike B.7's
+    other half (run_catalog_presence_once, which rides the monthly one
+    instead — service_presence.py's own module docstring has the cost
+    reasoning)."""
+    result = await client.poll_local_service_presence()
+    return result["showsUpdated"]
+
+
 async def run_daily_and_weekly_once(client: LcarsClient) -> int:
-    """B.1's daily tier, B.2's weekly tier, and B.5's animeschedule
-    sweep share one loop/interval (run_forever's own docstring explains
-    why the weekly tier doesn't need its own timer; B.5's own module
-    docstring explains why animeschedule can't wait for a daily one —
-    its feed's rolling window rotates faster than that) — this is the
-    single unit that loop actually calls each tick. Returns the
-    combined count, for the caller to log."""
+    """B.1's daily tier, B.2's weekly tier, B.5's animeschedule sweep,
+    and B.7's local-presence rollup share one loop/interval
+    (run_forever's own docstring explains why the weekly tier doesn't
+    need its own timer; B.5's own module docstring explains why
+    animeschedule can't wait for a daily one; B.7's local rollup is
+    negligible-cost SQL, no reason at all not to share this tick) —
+    this is the single unit that loop actually calls each tick.
+    Returns the combined count, for the caller to log."""
     daily = await run_once(client)
     weekly = await run_weekly_once(client)
     animeschedule = await run_animeschedule_once(client)
-    return daily + weekly + animeschedule
+    local_presence = await run_local_presence_once(client)
+    return daily + weekly + animeschedule + local_presence
 
 
 async def _loop(coro_fn, client: LcarsClient, interval_seconds: int, label: str) -> None:
@@ -165,14 +209,25 @@ async def run_forever(
     rides that identical tick too — no per-item due-gating to be
     self-limiting about, it just needs "more often than daily" (its own
     module docstring has the rolling-window reasoning), and hourly
-    already satisfies that with no fourth loop needed. The monthly tier
-    is unconditional/not self-limiting, so it gets its own,
-    much-longer-period loop (SCOPE.md §5.5's B.2 note, BUILD_PLAN.md's
-    B.2 entry). B.3's availability loop is its own third, dynamic-
-    interval loop — it can't share either of the other two: faster than
-    the hourly one when urgent, but not on a fixed cadence at all."""
+    already satisfies that with no fourth loop needed. B.7's `local`
+    presence rollup rides it too — negligible SQL-only cost, no reason
+    not to share. The monthly tier is unconditional/not self-limiting,
+    so it gets its own, much-longer-period loop (SCOPE.md §5.5's B.2
+    note, BUILD_PLAN.md's B.2 entry); B.7's own Sonarr/Radarr catalog
+    matching shares *that* tier instead — real N×M cost, confirmed with
+    the user, the same "unconditional sweep, the tier itself is the
+    correctness boundary" shape B.2's own reconciliation already uses,
+    reused rather than adding a fourth interval. B.3's availability
+    loop is its own third, dynamic-interval loop — it can't share
+    either of the other two: faster than the hourly one when urgent,
+    but not on a fixed cadence at all."""
     await asyncio.gather(
-        _loop(run_daily_and_weekly_once, client, interval_seconds, "daily+weekly+animeschedule"),
-        _loop(run_monthly_once, client, monthly_interval_seconds, "monthly"),
+        _loop(
+            run_daily_and_weekly_once,
+            client,
+            interval_seconds,
+            "daily+weekly+animeschedule+local_presence",
+        ),
+        _loop(run_monthly_once, client, monthly_interval_seconds, "monthly+catalog_presence"),
         _availability_loop(client),
     )

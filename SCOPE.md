@@ -976,6 +976,33 @@ scheduler (Ops) is what will actually drive this on a live clock;
 A.7's own job was the reconciliation *mechanism*, callable on-demand,
 same split as A.4's `reconcileSeasonMapping`.
 
+**Resolved 2026-08-09 (B.7)** — the paragraph above's "on a live
+clock" is now only **partially** true; a future reader should not
+assume every service listed in `show_service_presence`'s own `service`
+column is actually kept fresh automatically:
+- **`local` and Sonarr/Radarr are covered** — `local` is a pure SQL
+  rollup (`episode.available_locally`/`show.available_locally`, both
+  already-generated columns, B.3) with zero external dependency, so it
+  rides Ops's hourly tick. Sonarr/Radarr fetch their whole catalog
+  (`sonarr_client.all_series()`/`radarr_client.all_movies()` — the
+  same client methods `local_audit.py`, B.3b, already established
+  LCARS calling directly) and fuzzy-match every tracked show of the
+  matching `media_shape` against it. **Confirmed with the user**: this
+  is genuinely expensive (N×M string comparisons), so it does *not*
+  ride the hourly tick — an unconditional, no-per-show-due-gating
+  sweep on B.2's own existing monthly cadence instead (no new
+  interval, same "the tier itself is the correctness boundary" shape
+  B.2's own monthly reconciliation already uses).
+- **AniList/MAL are NOT covered — a real, checked blocker, not a
+  silently-deferred choice**: `anilist_client.py` has no search/
+  catalog-listing endpoint at all, only `fetch_media(anilist_id)` (a
+  single-entry lookup by a known id — no way to ask "does anything
+  matching this title exist"); `mal_client.py` doesn't exist yet
+  (B.10, not built). Presence for these two services stays whatever
+  the on-demand `refreshShowServicePresence` mutation last wrote (or
+  never-checked, if it was never called) until a future step gives
+  LCARS the client capability this needs.
+
 ### 5.5 id-mapper / reconciliation tables
 
 **`show`/`season`/`episode` are three independently-identified,
