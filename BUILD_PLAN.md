@@ -2351,7 +2351,7 @@ background scheduler.
     opens a new `pending_review`. Clean-install sanity check (fresh
     venv, real `pip install`) confirmed `lcars.metadata` still imports
     cleanly.
-- [ ] **B.8b — `episode_movie_link` automatic `tmdb_match` derivation**
+- [x] **B.8b — `episode_movie_link` automatic `tmdb_match` derivation**
   (§5.1's movie↔`bonus_movie` addendum). **Added by the 2026-08-09
   audit**: §5.1 specifies the full reconciliation ("internal ids are the
   source of truth, external ids map onto them, a best guess applies
@@ -2359,13 +2359,78 @@ background scheduler.
   override wins once set"), but only the `tmdb_match` enum value and
   A.3's manual mutations ever existed — no step in Phase A, B or C
   claimed the automatic half, so it was silently on track to never be
-  built. Deliberately sequenced **after B.3**: matching a `bonus_movie`
-  episode against a standalone Radarr-tracked movie show needs Radarr's
-  own file/library data, which B.3 is what fetches. Also depends on
-  `bonus_movie`-kind episodes actually existing — A.25 classifies
-  Sonarr season-0 rows as `special` only (Sonarr cannot distinguish
-  further), so promotion to `bonus_movie` is this step's own job, via
-  `setEpisodeKind` (A.25) or its own automatic path.
+  built.
+  - **Resolved 2026-08-10**: two genuinely open questions in this
+    entry's own text, both settled before writing any code — one by
+    checking the actual API/schema shape, one directly with the user.
+  - **`bonus_movie` promotion — settled by checking A.25's own text,
+    no automatic path exists to build**: this entry's phrasing ("via
+    `setEpisodeKind` (A.25) or its own automatic path") read as open,
+    but A.25 already resolved it: "Sonarr cannot distinguish `special`
+    from `ova` or `bonus_movie` at all... automatic classification
+    honestly stops there" (SCOPE.md §5.2). Confirmed independently:
+    `episode` has no title column at all (`schema.graphql`), so there
+    is no signal to classify on even in principle. `setEpisodeKind`
+    (A.25, manual) stays the only route into `bonus_movie` — this step
+    only processes rows already carrying that kind.
+  - **Candidate pool for the automatic match — asked the user
+    directly, per the standing instruction**: checked `sonarr_client.py`
+    first, confirming a season-0 episode carries no title and no
+    TMDB-comparable id at all (Sonarr is TVDB-native), so literal
+    id/title matching from the episode side is impossible, not merely
+    ambiguous. Two real designs remained — broad fuzzy title match
+    across every tracked Radarr movie show (`service_presence.py`'s
+    own approach, B.7), or narrowing candidates via `show_relation`
+    (every tracked `media_shape = 'movie'` show already related to the
+    episode's parent show, either direction — the same graph A.21's
+    `_link_relation` already populates). User chose relation-graph-
+    narrowing: `episode_movie_link` auto-applies a real identity write
+    (unlike B.7's suggestion-only presence flag), so a smaller,
+    higher-confidence pool was preferred over a broader fuzzy net.
+  - **Built** (`episode_movie_link.py`, new): `reconcile_episode_movie_
+    links(conn)` — for every `bonus_movie`-kind episode without a
+    `manual_override` link, exactly one relation-graph candidate
+    applies immediately (`source = 'tmdb_match'`); zero records a real
+    `unmatched` row (self-heals later if a relation edge appears);
+    more than one opens a `pending_review` (`field =
+    "episode_movie_link"`), with the same chain-dedup guard B.5's
+    `animeschedule.py` established (a repeat sweep re-seeing the
+    identical candidate set is not a new finding) kept local to this
+    module for the same reason B.5's own note gives. Also closes the
+    other real gap `availability.py`'s own B.3 docstring explicitly
+    named as this step's job, not its own: mirrors a matched link's
+    movie show's `available_via_radarr`/`file_path_radarr` onto the
+    linked `bonus_movie` episode (`tmdb_match` or `manual` links
+    alike), only writing on a genuine change — same idempotency
+    lesson B.7's `_upsert_presence` had to learn the hard way, applied
+    here from the start. New `reconcileEpisodeMovieLinks` mutation
+    (`EpisodeMovieLinkReconcileResult`: `matched`/`flagged`/
+    `unmatched`/`availabilitySynced`). No external HTTP call anywhere
+    in the sweep (pure internal SQL reconciliation) — no `service_
+    health` hook applies, and per the "no new interval unless a real
+    technical constraint forces one" precedent it rides Ops's existing
+    hourly tick alongside B.7's local-presence rollup, not a new one.
+  - **Real bug caught in review, before commit**: the availability-sync
+    half's first draft joined `episode_movie_link` -> `episode` -> `show`
+    with no `kind`/`media_shape` guard at all. The automatic derivation
+    above only ever creates rows that satisfy both, but `setEpisodeMovie
+    Link` (A.3, manual) checks neither — a manual link against a
+    `regular`/`special` episode, or against an episodic show, would have
+    written a real Radarr availability value onto a row where it's
+    meaningless (§5.2: `available_via_radarr` "only ever populated for
+    `bonus_movie` kind"; §5.1: movie-only on the show side), silently
+    flipping the *generated* `available_locally` column for an episode
+    with no Radarr file of its own. Fixed by adding both guards directly
+    to the sync query; regression tests cover both directions plus a
+    self-healing flip-to-`unmatched` case (a previously-matched
+    candidate later untracked).
+  - **Verified**: 467 tests passing (was 446), `ruff check .`/`ruff
+    format --check` clean, clean-install sanity check (fresh venv,
+    real `pip install`) confirmed the schema still builds (109 types,
+    `reconcileEpisodeMovieLinks` present on `Mutation`) and every
+    existing migration still applies cleanly head-to-head — no new
+    migration needed, `episode_movie_link`'s table already had
+    everything this step needed since A.2.
 - [ ] **B.9 — Backlog visualization** (§6.3): calendar-native counter
   line under a show's next-episode entry; mark-watched from it clears
   exactly one oldest episode per action.

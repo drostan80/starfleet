@@ -561,6 +561,31 @@ episode_movie_link
   created_at / updated_at
 ```
 
+**Resolved 2026-08-10 (B.8b)**: the automatic `tmdb_match` half never
+existed until this step (only the enum value and A.3's manual
+mutation did). Checked before designing anything: a `bonus_movie`-kind
+episode carries no title and no TMDB-comparable id at all (Sonarr is
+TVDB-native; `episode` itself has no title column), so matching can't
+work from the episode side directly. Candidates are narrowed via
+`show_relation` instead — every tracked `media_shape = 'movie'` show
+already related to the episode's parent show (either direction, same
+graph A.21's `_link_relation` populates) — confirmed with the user
+over the alternative (a broad fuzzy title match across every tracked
+movie show, `service_presence.py`'s own B.7 approach): this field
+auto-applies a real identity write, unlike B.7's suggestion-only
+presence flag, so the narrower, higher-confidence pool was preferred.
+Exactly one candidate applies immediately; zero is a real `unmatched`
+outcome; more than one opens a `pending_review`. `bonus_movie`
+promotion itself is explicitly **not** part of this mechanism — A.25
+already established Sonarr can't distinguish it from `special`/`ova`
+at all, so there is no automatic classification signal to build
+against; `setEpisodeKind` (manual) stays the only route in. See
+`episode_movie_link.py`'s own module docstring and BUILD_PLAN.md's
+B.8b entry for the full reasoning, including the availability-sync
+half (`available_via_radarr`/`file_path_radarr` mirrored from a
+matched link's movie show onto the episode — the gap §5.2's B.3 note
+leaves open below).
+
 **Show-row promotion paths** (three, all distinct):
 - A bare `tracked = false` relation/franchise stub becomes a real
   tracked show by flipping `tracked = true` on the *existing* row —

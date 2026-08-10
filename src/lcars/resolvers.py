@@ -29,6 +29,7 @@ from lcars import (
     availability,
     config,
     db,
+    episode_movie_link,
     export_import,
     fuzzy,
     ids,
@@ -1190,6 +1191,15 @@ def resolve_poll_catalog_service_presence(_, info):
     sweep. Same passive reasoning as pollLocalServicePresence above."""
     conn = db.get_connection()
     return {"shows_updated": service_presence.refresh_catalog_presence(conn)}
+
+
+@mutation.field("reconcileEpisodeMovieLinks")
+def resolve_reconcile_episode_movie_links(_, info):
+    """§5.1/§6.7, B.8b — episode_movie_link.py's own automatic
+    tmdb_match derivation. No require_client() — same passive/not-a-
+    changed_by-column reasoning as pollLocalServicePresence above."""
+    conn = db.get_connection()
+    return episode_movie_link.reconcile_episode_movie_links(conn)
 
 
 @query.field("recommendedAvailabilityPollIntervalSeconds")

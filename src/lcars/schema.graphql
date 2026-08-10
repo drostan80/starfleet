@@ -824,6 +824,18 @@ type AnimeSchedulePollResult {
 }
 
 # ---------------------------------------------------------------------------
+# §5.1's movie <-> bonus_movie addendum, automatic tmdb_match derivation (B.8b)
+# ---------------------------------------------------------------------------
+
+"reconcileEpisodeMovieLinks's own confirmation summary. matched: a bonus_movie episode resolved to exactly one show_relation-linked movie show, applied immediately (source TMDB_MATCH). flagged: more than one candidate — pending_review (field \"episode_movie_link\"), a human needs to confirm which. unmatched: zero candidates right now — a real, self-healing outcome, not an error. availabilitySynced: a linked episode's availableViaRadarr/filePathRadarr mirrored from its matched movie show (§5.2 — availability.py's own B.3 docstring names this as this mutation's job, not its own)."
+type EpisodeMovieLinkReconcileResult {
+  matched: Int!
+  flagged: Int!
+  unmatched: Int!
+  availabilitySynced: Int!
+}
+
+# ---------------------------------------------------------------------------
 # §6.7 per-integration service-health tracking (B.6)
 # ---------------------------------------------------------------------------
 
@@ -1177,6 +1189,27 @@ type Mutation {
   silently-skipped design choice.
   """
   pollCatalogServicePresence: ServicePresencePollResult!
+
+  """
+  §5.1/§6.7, B.8b — episode_movie_link's own automatic tmdb_match
+  derivation: for every bonus_movie-kind episode without a
+  manual_override link, narrows candidates via show_relation (every
+  tracked movie show already related to the episode's parent show,
+  either direction) rather than a broad fuzzy title match — this field
+  auto-applies, unlike pollCatalogServicePresence's own suggestion-only
+  presence flag, so a narrower/higher-confidence candidate pool was
+  the deliberate choice (confirmed with the user, module docstring has
+  the full reasoning). Exactly one candidate applies immediately;
+  zero is a real "unmatched" outcome; more than one opens a
+  pending_review. Also mirrors a matched link's movie show's own
+  availableViaRadarr/filePathRadarr onto the linked episode
+  (availabilitySynced) — the gap availability.py's own B.3 docstring
+  explicitly leaves for this mutation. No external HTTP call anywhere
+  in this sweep (pure internal SQL reconciliation), so it rides Ops's
+  existing hourly tick alongside pollLocalServicePresence, not a new
+  interval.
+  """
+  reconcileEpisodeMovieLinks: EpisodeMovieLinkReconcileResult!
 
   # -- 5.6 pending_review ----------------------------------------------------
   """

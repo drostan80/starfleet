@@ -17,6 +17,7 @@ from ops.scheduler import (
     run_availability_once,
     run_catalog_presence_once,
     run_daily_and_weekly_once,
+    run_episode_movie_link_reconciliation_once,
     run_forever,
     run_local_presence_once,
     run_monthly_once,
@@ -43,6 +44,7 @@ class _FakeClient:
         animeschedule_result: dict | None = None,
         local_presence_result: dict | None = None,
         catalog_presence_result: dict | None = None,
+        episode_movie_link_result: dict | None = None,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
@@ -60,6 +62,12 @@ class _FakeClient:
         }
         self._local_presence_result = local_presence_result or {"showsUpdated": 0}
         self._catalog_presence_result = catalog_presence_result or {"showsUpdated": 0}
+        self._episode_movie_link_result = episode_movie_link_result or {
+            "matched": 0,
+            "flagged": 0,
+            "unmatched": 0,
+            "availabilitySynced": 0,
+        }
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -103,6 +111,9 @@ class _FakeClient:
 
     async def poll_catalog_service_presence(self) -> dict:
         return self._catalog_presence_result
+
+    async def reconcile_episode_movie_links(self) -> dict:
+        return self._episode_movie_link_result
 
 
 # --- run_once (B.1) ---------------------------------------------------------
@@ -310,17 +321,39 @@ async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_it
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
 
 
-async def test_run_daily_and_weekly_once_sums_all_four_tiers():
+async def test_run_daily_and_weekly_once_sums_all_five_tiers():
     client = _FakeClient(
         due_shows=[{"id": "s-a"}],
         due_seasons=[_season("z-a", "s-b")],
         animeschedule_result={"episodesUpdated": 1, "flagged": 1},
         local_presence_result={"showsUpdated": 1},
+        episode_movie_link_result={
+            "matched": 1,
+            "flagged": 0,
+            "unmatched": 0,
+            "availabilitySynced": 0,
+        },
     )
     count = await run_daily_and_weekly_once(client)
-    assert count == 5
+    assert count == 6
     assert client.refreshed == ["s-a"]
     assert client.reconciled == [("s-b", 1)]
+
+
+# --- run_episode_movie_link_reconciliation_once (B.8b) -----------------------
+
+
+async def test_run_episode_movie_link_reconciliation_once_sums_all_four_counts():
+    client = _FakeClient(
+        episode_movie_link_result={
+            "matched": 1,
+            "flagged": 2,
+            "unmatched": 3,
+            "availabilitySynced": 4,
+        }
+    )
+    count = await run_episode_movie_link_reconciliation_once(client)
+    assert count == 10
 
 
 # --- _loop (the shared per-tier while-loop primitive) -----------------------
@@ -369,7 +402,11 @@ async def test_run_forever_wires_up_all_three_loops(monkeypatch):
     client = _FakeClient()
     await run_forever(client, interval_seconds=3600, monthly_interval_seconds=2592000)
     assert set(calls) == {
-        ("run_daily_and_weekly_once", 3600, "daily+weekly+animeschedule+local_presence"),
+        (
+            "run_daily_and_weekly_once",
+            3600,
+            "daily+weekly+animeschedule+local_presence+episode_movie_links",
+        ),
         ("run_monthly_once", 2592000, "monthly+catalog_presence"),
     }
     assert availability_calls == [client]

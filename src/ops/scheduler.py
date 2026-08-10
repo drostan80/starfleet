@@ -3,7 +3,9 @@
 availability, one adaptive-cadence loop), B.5 (animeschedule.net RSS
 sweep, riding B.1's own hourly tick), B.7 (show_service_presence
 refresh, split across two cadences — the `local` rollup rides the
-hourly tick, Sonarr/Radarr catalog matching rides B.2's monthly one).
+hourly tick, Sonarr/Radarr catalog matching rides B.2's monthly one),
+B.8b (episode_movie_link automatic tmdb_match derivation, also riding
+the hourly tick — pure internal SQL, no external HTTP call at all).
 
 Each `run_*_once()` is the real, testable unit — one full sweep,
 exercised directly by a test with no infinite loop or real sleep
@@ -141,20 +143,36 @@ async def run_local_presence_once(client: LcarsClient) -> int:
     return result["showsUpdated"]
 
 
+async def run_episode_movie_link_reconciliation_once(client: LcarsClient) -> int:
+    """§5.1/§6.7, B.8b — episode_movie_link's own automatic tmdb_match
+    derivation (reconcileEpisodeMovieLinks): no per-item loop, the
+    mutation itself covers every bonus_movie-kind episode in one call,
+    same shape run_local_presence_once above already uses. No external
+    HTTP call in the sweep at all, so it shares that same hourly tick
+    rather than needing its own interval. Returns the combined
+    matched+flagged+unmatched+availabilitySynced count."""
+    result = await client.reconcile_episode_movie_links()
+    return (
+        result["matched"] + result["flagged"] + result["unmatched"] + result["availabilitySynced"]
+    )
+
+
 async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     """B.1's daily tier, B.2's weekly tier, B.5's animeschedule sweep,
-    and B.7's local-presence rollup share one loop/interval
-    (run_forever's own docstring explains why the weekly tier doesn't
-    need its own timer; B.5's own module docstring explains why
-    animeschedule can't wait for a daily one; B.7's local rollup is
-    negligible-cost SQL, no reason at all not to share this tick) —
-    this is the single unit that loop actually calls each tick.
-    Returns the combined count, for the caller to log."""
+    B.7's local-presence rollup, and B.8b's episode_movie_link
+    reconciliation share one loop/interval (run_forever's own docstring
+    explains why the weekly tier doesn't need its own timer; B.5's own
+    module docstring explains why animeschedule can't wait for a daily
+    one; B.7's local rollup and B.8b's reconciliation are both
+    negligible-cost, no-external-HTTP SQL, no reason at all not to
+    share this tick) — this is the single unit that loop actually calls
+    each tick. Returns the combined count, for the caller to log."""
     daily = await run_once(client)
     weekly = await run_weekly_once(client)
     animeschedule = await run_animeschedule_once(client)
     local_presence = await run_local_presence_once(client)
-    return daily + weekly + animeschedule + local_presence
+    episode_movie_links = await run_episode_movie_link_reconciliation_once(client)
+    return daily + weekly + animeschedule + local_presence + episode_movie_links
 
 
 async def _loop(coro_fn, client: LcarsClient, interval_seconds: int, label: str) -> None:
@@ -211,7 +229,9 @@ async def run_forever(
     module docstring has the rolling-window reasoning), and hourly
     already satisfies that with no fourth loop needed. B.7's `local`
     presence rollup rides it too — negligible SQL-only cost, no reason
-    not to share. The monthly tier is unconditional/not self-limiting,
+    not to share. B.8b's episode_movie_link reconciliation shares it for
+    the identical reason — no external HTTP call in that sweep either.
+    The monthly tier is unconditional/not self-limiting,
     so it gets its own, much-longer-period loop (SCOPE.md §5.5's B.2
     note, BUILD_PLAN.md's B.2 entry); B.7's own Sonarr/Radarr catalog
     matching shares *that* tier instead — real N×M cost, confirmed with
@@ -226,7 +246,7 @@ async def run_forever(
             run_daily_and_weekly_once,
             client,
             interval_seconds,
-            "daily+weekly+animeschedule+local_presence",
+            "daily+weekly+animeschedule+local_presence+episode_movie_links",
         ),
         _loop(run_monthly_once, client, monthly_interval_seconds, "monthly+catalog_presence"),
         _availability_loop(client),

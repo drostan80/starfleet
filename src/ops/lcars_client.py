@@ -286,6 +286,25 @@ class LcarsClient:
         data = await self._query(query)
         return data["pollCatalogServicePresence"]
 
+    async def reconcile_episode_movie_links(self) -> dict:
+        """§5.1/§6.7, B.8b — episode_movie_link.py's own automatic
+        tmdb_match derivation: no external HTTP call anywhere in the
+        sweep (pure internal SQL reconciliation), so it rides the same
+        hourly tick as run_daily_and_weekly_once, alongside
+        poll_local_service_presence above."""
+        query = """
+        mutation {
+          reconcileEpisodeMovieLinks {
+            matched
+            flagged
+            unmatched
+            availabilitySynced
+          }
+        }
+        """
+        data = await self._query(query)
+        return data["reconcileEpisodeMovieLinks"]
+
     async def recommended_availability_poll_interval_seconds(self) -> int:
         """§5.2/§6.7, B.3 — LCARS computes Ops's own adaptive cadence
         (300s/900s/3600s) server-side, from data only it holds (watching

@@ -262,6 +262,30 @@ async def test_poll_catalog_service_presence_sends_no_variables_and_returns_the_
     await client.aclose()
 
 
+async def test_reconcile_episode_movie_links_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "reconcileEpisodeMovieLinks": {
+                        "matched": 1,
+                        "flagged": 2,
+                        "unmatched": 3,
+                        "availabilitySynced": 4,
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    result = await client.reconcile_episode_movie_links()
+    assert result == {"matched": 1, "flagged": 2, "unmatched": 3, "availabilitySynced": 4}
+    await client.aclose()
+
+
 async def test_backfill_file_availability_sends_no_variables_and_returns_the_result():
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read())

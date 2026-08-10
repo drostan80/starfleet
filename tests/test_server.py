@@ -4929,6 +4929,12 @@ POLL_CATALOG_SERVICE_PRESENCE = """
     mutation { pollCatalogServicePresence { showsUpdated } }
 """
 
+RECONCILE_EPISODE_MOVIE_LINKS = """
+    mutation {
+      reconcileEpisodeMovieLinks { matched flagged unmatched availabilitySynced }
+    }
+"""
+
 
 async def test_poll_file_availability_returns_zero_with_nothing_configured(client):
     # No Sonarr/Radarr credentials in the client fixture's default config (§4.9's
@@ -4959,6 +4965,19 @@ async def test_poll_catalog_service_presence_returns_zero_with_nothing_configure
     # catalog-matching logic is test_service_presence.py's job.
     data = await gql(client, POLL_CATALOG_SERVICE_PRESENCE, headers=auth_headers())
     assert data["pollCatalogServicePresence"] == {"showsUpdated": 0}
+
+
+async def test_reconcile_episode_movie_links_returns_zero_with_no_bonus_movie_episodes(client):
+    # Actual derivation/availability-sync logic is test_episode_movie_link.py's
+    # job; this only locks in that the mutation is wired to
+    # episode_movie_link.reconcile_episode_movie_links() with the right shape.
+    data = await gql(client, RECONCILE_EPISODE_MOVIE_LINKS, headers=auth_headers())
+    assert data["reconcileEpisodeMovieLinks"] == {
+        "matched": 0,
+        "flagged": 0,
+        "unmatched": 0,
+        "availabilitySynced": 0,
+    }
 
 
 async def test_audit_local_files_wiring_returns_empty_with_nothing_configured(client):
