@@ -96,6 +96,79 @@ def _cmd_audit_local_files(args: argparse.Namespace) -> None:
     asyncio.run(_main())
 
 
+def _cmd_preview_show_backfill(args: argparse.Namespace) -> None:
+    """§5.1/§5.2, B.11d — dry-run, no writes: prints exactly what
+    `ops backfill-shows` would create right now. Always run this
+    first."""
+    logging.basicConfig(level=logging.INFO)
+    cfg = config.load_config()
+    _require_bearer_token(cfg)
+
+    async def _main() -> None:
+        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token) as client:
+            preview = await client.preview_show_backfill()
+            if not preview:
+                print("Nothing to backfill — every Sonarr/Radarr item is already tracked.")
+                return
+            print(f"{len(preview)} untracked show(s) would be created:")
+            for item in preview:
+                print(
+                    f"  [{item['service']}] {item['title']} ({item['externalId']}) — "
+                    f"{item['trackingSpace']}/{item['mediaShape']}"
+                )
+
+    asyncio.run(_main())
+
+
+def _cmd_backfill_shows(args: argparse.Namespace) -> None:
+    """§5.1/§5.2, B.11d — the real run: one addShow-equivalent per
+    untracked Sonarr/Radarr item, throttled between anime-classified
+    adds (real AniList calls) to stay inside AniList's rate budget —
+    can take real minutes on a large library, hence the long client
+    timeout below rather than the default 10s every other command
+    here uses. Always shows the same preview `ops
+    preview-show-backfill` would, and requires an explicit typed
+    confirmation before writing anything — the same "dry run first,
+    show it, then write" shape auditLocalFiles' own report-only
+    findings already establish, just with the write itself, so a human
+    reads the list before it becomes real rows."""
+    logging.basicConfig(level=logging.INFO)
+    cfg = config.load_config()
+    _require_bearer_token(cfg)
+
+    async def _main() -> None:
+        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token, timeout=1800.0) as client:
+            preview = await client.preview_show_backfill()
+            if not preview:
+                print("Nothing to backfill — every Sonarr/Radarr item is already tracked.")
+                return
+            print(f"{len(preview)} untracked show(s) will be created:")
+            for item in preview:
+                print(
+                    f"  [{item['service']}] {item['title']} ({item['externalId']}) — "
+                    f"{item['trackingSpace']}/{item['mediaShape']}"
+                )
+            confirmed = input(f"\nType 'yes' to create these {len(preview)} show(s): ").strip()
+            if confirmed != "yes":
+                print("Cancelled — nothing was created.")
+                return
+            print(
+                "Backfilling — this will block LCARS's other requests for the duration "
+                "(real minutes, throttled against AniList's own rate budget for anime "
+                "shows). Run this at a quiet moment, not while anyone else is using it."
+            )
+            result = await client.backfill_untracked_shows()
+            print(f"\nDone: {len(result['created'])} show(s) created.")
+            for s in result["created"]:
+                print(f"  [{s['service']}] {s['title']} -> {s['showId']}")
+            if result["failed"]:
+                print(f"\n{len(result['failed'])} item(s) failed:")
+                for f in result["failed"]:
+                    print(f"  [{f['service']}] {f['title']}: {f['error']}")
+
+    asyncio.run(_main())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ops", description="Starfleet's background scheduler.")
     subparsers = parser.add_subparsers(dest="command")
@@ -114,6 +187,18 @@ def main() -> None:
         help="reconcile + discover local files against Sonarr/Radarr — run manually",
     )
     audit.set_defaults(func=_cmd_audit_local_files)
+
+    preview_backfill = subparsers.add_parser(
+        "preview-show-backfill",
+        help="dry-run: list untracked Sonarr/Radarr shows that would be created — run manually",
+    )
+    preview_backfill.set_defaults(func=_cmd_preview_show_backfill)
+
+    backfill_shows = subparsers.add_parser(
+        "backfill-shows",
+        help="create every untracked Sonarr/Radarr show in LCARS — run manually, asks to confirm",
+    )
+    backfill_shows.set_defaults(func=_cmd_backfill_shows)
 
     # No subcommand at all ("ops" alone) still means "run" — same
     # by-hand default lcars/cli.py's own main() already established,

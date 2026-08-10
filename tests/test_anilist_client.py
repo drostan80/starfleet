@@ -62,9 +62,7 @@ def test_fetch_media_returns_none_for_an_unknown_id():
 
 
 def test_fetch_media_raises_on_graphql_errors():
-    fake = _FakeClient(
-        response=_FakeResponse(payload={"errors": [{"message": "Invalid mediaId"}]})
-    )
+    fake = _FakeClient(response=_FakeResponse(payload={"errors": [{"message": "Invalid mediaId"}]}))
     with pytest.raises(anilist_client.AniListError, match="Invalid mediaId"):
         anilist_client.fetch_media(123, client=fake)
 
@@ -108,11 +106,39 @@ def test_fetch_airing_schedule_returns_none_for_an_unknown_id():
 
 
 def test_fetch_airing_schedule_raises_on_graphql_errors():
-    fake = _FakeClient(
-        response=_FakeResponse(payload={"errors": [{"message": "Invalid mediaId"}]})
-    )
+    fake = _FakeClient(response=_FakeResponse(payload={"errors": [{"message": "Invalid mediaId"}]}))
     with pytest.raises(anilist_client.AniListError, match="Invalid mediaId"):
         anilist_client.fetch_airing_schedule(123, client=fake)
+
+
+# --- fetch_my_list_status (B.11d) ----------------------------------------------
+
+
+def test_fetch_my_list_status_returns_the_viewer_status():
+    payload = {"data": {"Media": {"mediaListEntry": {"status": "CURRENT"}}}}
+    fake = _FakeClient(response=_FakeResponse(payload=payload))
+    result = anilist_client.fetch_my_list_status("tok", 123, client=fake)
+    assert result == "CURRENT"
+    assert fake.last_variables == {"mediaId": 123}
+    assert fake.last_headers == {"Authorization": "Bearer tok"}  # authenticated, unlike fetch_media
+
+
+def test_fetch_my_list_status_returns_none_with_no_list_entry():
+    fake = _FakeClient(
+        response=_FakeResponse(payload={"data": {"Media": {"mediaListEntry": None}}})
+    )
+    assert anilist_client.fetch_my_list_status("tok", 123, client=fake) is None
+
+
+def test_fetch_my_list_status_returns_none_for_an_unknown_id():
+    fake = _FakeClient(response=_FakeResponse(payload={"data": {"Media": None}}))
+    assert anilist_client.fetch_my_list_status("tok", 999999, client=fake) is None
+
+
+def test_fetch_my_list_status_raises_on_graphql_errors():
+    fake = _FakeClient(response=_FakeResponse(payload={"errors": [{"message": "Invalid mediaId"}]}))
+    with pytest.raises(anilist_client.AniListError, match="Invalid mediaId"):
+        anilist_client.fetch_my_list_status("tok", 123, client=fake)
 
 
 # --- OAuth (A.9) --------------------------------------------------------------
@@ -182,9 +208,7 @@ def test_save_media_list_entry_status_only_omits_score_variable():
 
 def test_save_media_list_entry_raises_ani_list_auth_error_on_401():
     fake = _FakeClient(
-        response=_FakeResponse(
-            status_code=401, payload={"errors": [{"message": "Invalid token"}]}
-        )
+        response=_FakeResponse(status_code=401, payload={"errors": [{"message": "Invalid token"}]})
     )
     with pytest.raises(anilist_client.AniListAuthError, match="anilist-login"):
         anilist_client.save_media_list_entry("bad-tok", 123, score=17.0, client=fake)

@@ -195,6 +195,38 @@ def fetch_airing_schedule(anilist_id: int, client: httpx.Client | None = None) -
     return {"episodes": media.get("episodes"), "nodes": media["airingSchedule"]["nodes"]}
 
 
+_MY_LIST_STATUS_QUERY = """
+query ($mediaId: Int) {
+  Media(id: $mediaId) {
+    mediaListEntry { status }
+  }
+}
+"""
+
+
+def fetch_my_list_status(
+    token: str, anilist_id: int, client: httpx.Client | None = None
+) -> str | None:
+    """B.11d — the authenticated viewer's own current list status for
+    `anilist_id` (`mediaListEntry` on a `Media` query resolves to the
+    token's own viewer, AniList's standard behavior — same shape
+    fetch_media()'s query would need `token` added to if it ever
+    wanted this). A one-time bootstrap read used only when backfilling
+    a show LCARS has never tracked before (confirmed with the user,
+    2026-08-10): seeds the new show's initial LCARS status, not an
+    ongoing sync — LCARS stays the source of truth for every push/pull
+    after this. Returns None if AniList has no such id, or the viewer
+    has no list entry for it at all (never added to their list)."""
+    data = _graphql_request(
+        _MY_LIST_STATUS_QUERY, {"mediaId": anilist_id}, token=token, client=client
+    )
+    media = data["Media"]
+    if media is None:
+        return None
+    entry = media.get("mediaListEntry")
+    return entry["status"] if entry else None
+
+
 def exchange_code(
     client_id: str,
     client_secret: str,

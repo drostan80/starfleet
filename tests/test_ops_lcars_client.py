@@ -351,6 +351,59 @@ async def test_audit_local_files_sends_no_variables_and_returns_the_result():
     await client.aclose()
 
 
+async def test_preview_show_backfill_sends_no_variables_and_returns_the_list():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        assert "previewShowBackfill" in payload["query"]
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "previewShowBackfill": [
+                        {
+                            "service": "sonarr",
+                            "title": "Y",
+                            "externalId": 5,
+                            "trackingSpace": "ANIME",
+                            "mediaShape": "EPISODIC",
+                        }
+                    ]
+                }
+            },
+        )
+
+    client = _client(handler)
+    result = await client.preview_show_backfill()
+    assert result[0]["title"] == "Y"
+    assert result[0]["trackingSpace"] == "ANIME"
+    await client.aclose()
+
+
+async def test_backfill_untracked_shows_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        assert "backfillUntrackedShows" in payload["query"]
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "backfillUntrackedShows": {
+                        "created": [{"showId": "s-x", "service": "sonarr", "title": "Y"}],
+                        "failed": [],
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    result = await client.backfill_untracked_shows()
+    assert result["created"][0]["title"] == "Y"
+    assert result["failed"] == []
+    await client.aclose()
+
+
 async def test_recommended_availability_poll_interval_seconds_returns_the_int():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

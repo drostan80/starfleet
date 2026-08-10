@@ -73,10 +73,13 @@ def test_audit_local_files_calls_the_client_and_prints_findings(monkeypatch, cap
         "episodesCorrected": 2,
         "showsCorrected": 1,
         "orphanFiles": [
-            {"showId": "s-x", "path": "/data/x/orphan.mkv", "parsedSeason": 1,
-             "parsedEpisode": 3},
-            {"showId": "s-y", "path": "/data/y/weird.mkv", "parsedSeason": None,
-             "parsedEpisode": None},
+            {"showId": "s-x", "path": "/data/x/orphan.mkv", "parsedSeason": 1, "parsedEpisode": 3},
+            {
+                "showId": "s-y",
+                "path": "/data/y/weird.mkv",
+                "parsedSeason": None,
+                "parsedEpisode": None,
+            },
         ],
         "untrackedShows": [
             {"service": "sonarr", "title": "New Show", "externalId": 12345, "path": "/data/new"}
@@ -116,12 +119,161 @@ def test_audit_local_files_prints_nothing_extra_with_no_findings(monkeypatch, ca
     }
     with (
         patch("ops.config.load_config", return_value=cfg),
-        patch(
-            "ops.cli.LcarsClient.audit_local_files", new_callable=AsyncMock, return_value=result
-        ),
+        patch("ops.cli.LcarsClient.audit_local_files", new_callable=AsyncMock, return_value=result),
         patch("ops.cli.LcarsClient.aclose", new_callable=AsyncMock),
     ):
         cli.main()
     out = capsys.readouterr().out
     assert "orphan file(s)" not in out
     assert "untracked remote show(s)" not in out
+
+
+# --- B.11d: preview-show-backfill / backfill-shows --------------------------
+
+_PREVIEW = [
+    {
+        "service": "sonarr",
+        "title": "New Show",
+        "externalId": 12345,
+        "trackingSpace": "ANIME",
+        "mediaShape": "EPISODIC",
+    }
+]
+
+
+def test_preview_show_backfill_requires_bearer_token_first(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["ops", "preview-show-backfill"])
+    with patch("ops.config.load_config", return_value=config.Config()):
+        with pytest.raises(SystemExit, match="lcars_bearer_token"):
+            cli.main()
+
+
+def test_preview_show_backfill_prints_the_list(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["ops", "preview-show-backfill"])
+    cfg = config.Config(lcars_bearer_token="test-token")
+    with (
+        patch("ops.config.load_config", return_value=cfg),
+        patch(
+            "ops.cli.LcarsClient.preview_show_backfill",
+            new_callable=AsyncMock,
+            return_value=_PREVIEW,
+        ) as preview,
+        patch("ops.cli.LcarsClient.aclose", new_callable=AsyncMock),
+    ):
+        cli.main()
+    preview.assert_called_once()
+    out = capsys.readouterr().out
+    assert "1 untracked show(s) would be created" in out
+    assert "[sonarr] New Show (12345) — ANIME/EPISODIC" in out
+
+
+def test_preview_show_backfill_prints_nothing_to_backfill_when_empty(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["ops", "preview-show-backfill"])
+    cfg = config.Config(lcars_bearer_token="test-token")
+    with (
+        patch("ops.config.load_config", return_value=cfg),
+        patch("ops.cli.LcarsClient.preview_show_backfill", new_callable=AsyncMock, return_value=[]),
+        patch("ops.cli.LcarsClient.aclose", new_callable=AsyncMock),
+    ):
+        cli.main()
+    out = capsys.readouterr().out
+    assert "Nothing to backfill" in out
+
+
+def test_backfill_shows_requires_bearer_token_first(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["ops", "backfill-shows"])
+    with patch("ops.config.load_config", return_value=config.Config()):
+        with pytest.raises(SystemExit, match="lcars_bearer_token"):
+            cli.main()
+
+
+def test_backfill_shows_does_nothing_to_backfill_when_empty(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["ops", "backfill-shows"])
+    cfg = config.Config(lcars_bearer_token="test-token")
+    with (
+        patch("ops.config.load_config", return_value=cfg),
+        patch("ops.cli.LcarsClient.preview_show_backfill", new_callable=AsyncMock, return_value=[]),
+        patch("ops.cli.LcarsClient.backfill_untracked_shows", new_callable=AsyncMock) as backfill,
+        patch("ops.cli.LcarsClient.aclose", new_callable=AsyncMock),
+    ):
+        cli.main()
+    out = capsys.readouterr().out
+    assert "Nothing to backfill" in out
+    backfill.assert_not_called()  # never even asked to confirm
+
+
+def test_backfill_shows_cancels_without_writing_on_a_non_yes_answer(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["ops", "backfill-shows"])
+    cfg = config.Config(lcars_bearer_token="test-token")
+    with (
+        patch("ops.config.load_config", return_value=cfg),
+        patch(
+            "ops.cli.LcarsClient.preview_show_backfill",
+            new_callable=AsyncMock,
+            return_value=_PREVIEW,
+        ),
+        patch("ops.cli.LcarsClient.backfill_untracked_shows", new_callable=AsyncMock) as backfill,
+        patch("ops.cli.LcarsClient.aclose", new_callable=AsyncMock),
+        patch("builtins.input", return_value="n"),
+    ):
+        cli.main()
+    out = capsys.readouterr().out
+    assert "Cancelled — nothing was created" in out
+    backfill.assert_not_called()
+
+
+def test_backfill_shows_confirms_and_calls_the_client(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["ops", "backfill-shows"])
+    cfg = config.Config(lcars_bearer_token="test-token")
+    result = {
+        "created": [{"showId": "s-x", "service": "sonarr", "title": "New Show"}],
+        "failed": [],
+    }
+    with (
+        patch("ops.config.load_config", return_value=cfg),
+        patch(
+            "ops.cli.LcarsClient.preview_show_backfill",
+            new_callable=AsyncMock,
+            return_value=_PREVIEW,
+        ),
+        patch(
+            "ops.cli.LcarsClient.backfill_untracked_shows",
+            new_callable=AsyncMock,
+            return_value=result,
+        ) as backfill,
+        patch("ops.cli.LcarsClient.aclose", new_callable=AsyncMock),
+        patch("builtins.input", return_value="yes"),
+    ):
+        cli.main()
+    backfill.assert_called_once()
+    out = capsys.readouterr().out
+    assert "1 show(s) created" in out
+    assert "[sonarr] New Show -> s-x" in out
+
+
+def test_backfill_shows_prints_failed_items(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["ops", "backfill-shows"])
+    cfg = config.Config(lcars_bearer_token="test-token")
+    result = {
+        "created": [],
+        "failed": [{"service": "sonarr", "title": "Bad Show", "error": "boom"}],
+    }
+    with (
+        patch("ops.config.load_config", return_value=cfg),
+        patch(
+            "ops.cli.LcarsClient.preview_show_backfill",
+            new_callable=AsyncMock,
+            return_value=_PREVIEW,
+        ),
+        patch(
+            "ops.cli.LcarsClient.backfill_untracked_shows",
+            new_callable=AsyncMock,
+            return_value=result,
+        ),
+        patch("ops.cli.LcarsClient.aclose", new_callable=AsyncMock),
+        patch("builtins.input", return_value="yes"),
+    ):
+        cli.main()
+    out = capsys.readouterr().out
+    assert "1 item(s) failed" in out
+    assert "[sonarr] Bad Show: boom" in out

@@ -249,6 +249,36 @@ class LcarsClient:
         data = await self._query(query)
         return data["auditLocalFiles"]
 
+    async def preview_show_backfill(self) -> list[dict]:
+        """§5.1/§5.2, B.11d — dry-run, no writes: exactly what
+        backfill_untracked_shows() below would create right now. Always
+        called first — the explicit `ops preview-show-backfill` CLI
+        command (cli.py)."""
+        query = """
+        { previewShowBackfill { service title externalId trackingSpace mediaShape } }
+        """
+        data = await self._query(query)
+        return data["previewShowBackfill"]
+
+    async def backfill_untracked_shows(self) -> dict:
+        """§5.1/§5.2, B.11d — the real run: one addShow-equivalent per
+        untracked Sonarr/Radarr item, throttled between anime-
+        classified adds — see schema.graphql's backfillUntrackedShows
+        docstring for the full rationale. Never called by scheduler.py's
+        own automatic loop — only by the explicit `ops backfill-shows`
+        CLI command (cli.py), run deliberately by a human, always after
+        `ops preview-show-backfill`."""
+        query = """
+        mutation {
+          backfillUntrackedShows {
+            created { showId service title }
+            failed { service title error }
+          }
+        }
+        """
+        data = await self._query(query)
+        return data["backfillUntrackedShows"]
+
     async def poll_anime_schedule(self) -> dict:
         """§6.7, B.5 — the global animeschedule.net RSS sweep
         (pollAnimeSchedule): no per-item argument, one call matches the

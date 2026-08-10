@@ -41,6 +41,8 @@ from lcars import (
     season_mapping,
     service_health,
     service_presence,
+    show_backfill,
+    shows,
     util,
 )
 
@@ -139,28 +141,6 @@ BINDABLES = [
 # (migrations/versions/7196ca889757_*.py) — checked here first too, for a
 # clean GraphQLError instead of a raw sqlite3.IntegrityError.
 RESOLVING_CLIENTS = {"data", "holodeck", "captains_log"}
-
-# Best-effort deep-link templates for AddShowInput's optional external ids
-# (SCOPE.md §5.4's show_external_id.url) — real-world, well-known URL
-# formats, not a design question. A.8's on-demand metadata fetch may
-# later refine/replace these once it exists.
-#
-# tmdb's own path segment depends on media_shape (movie vs. tv) — caught
-# during a full audit pass: the original single "/movie/{id}" template
-# would have produced a wrong link for a tmdbId supplied on an episodic
-# (tracking_space=tv) show. Not a hypothetical: §5.4 itself already notes
-# "Movies key primarily on TMDB... but [episodic shows] carry ... TMDB ids
-# too where they exist."
-EXTERNAL_ID_URL_TEMPLATES = {
-    "anilist": "https://anilist.co/anime/{id}",
-    "tvdb": "https://thetvdb.com/dereferrer/series/{id}",
-    "imdb": "https://www.imdb.com/title/{id}/",
-    "mal": "https://myanimelist.net/anime/{id}",
-}
-TMDB_URL_TEMPLATES = {
-    "movie": "https://www.themoviedb.org/movie/{id}",
-    "episodic": "https://www.themoviedb.org/tv/{id}",
-}
 
 
 def require_client(info) -> str:
@@ -1170,71 +1150,16 @@ def resolve_tag_shows(obj, info, **page_args):
 
 @mutation.field("addShow")
 def resolve_add_show(_, info, input):
+    """B.11d — the actual creation logic (insert, external-id links,
+    the inline A.8 metadata fetch) now lives in shows.create_show(),
+    extracted so show_backfill.py can call it directly without a
+    GraphQL request context — this resolver is a thin wrapper,
+    unchanged behavior/shape."""
     conn = db.get_connection()
-    primary = input["primary_title"]
-    title_field = f"title_{primary}"
-    if not input.get(title_field):
-        raise GraphQLError(
-            f"primaryTitle is {primary.upper()} but {title_field.replace('_', ' ', 1)}"
-            " (as camelCase) was not provided"
-        )
-
-    show_id = ids.generate_id(conn, "s")
-    now = util.now_utc_iso()
-    conn.execute(
-        """
-        INSERT INTO show (
-            id, media_shape, tracking_space,
-            title_romaji, title_english, title_native, primary_title,
-            status, tracked, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'planned', 1, ?, ?)
-        """,
-        (
-            show_id,
-            input["media_shape"],
-            input["tracking_space"],
-            input.get("title_romaji"),
-            input.get("title_english"),
-            input.get("title_native"),
-            primary,
-            now,
-            now,
-        ),
-    )
-
-    for service, key in (
-        ("anilist", "anilist_id"),
-        ("tvdb", "tvdb_id"),
-        ("imdb", "imdb_id"),
-        ("mal", "mal_id"),
-    ):
-        value = input.get(key)
-        if value is not None:
-            url = EXTERNAL_ID_URL_TEMPLATES[service].format(id=value)
-            conn.execute(
-                "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (show_id, service, str(value), url, now),
-            )
-
-    tmdb_id = input.get("tmdb_id")
-    if tmdb_id is not None:
-        url = TMDB_URL_TEMPLATES[input["media_shape"]].format(id=tmdb_id)
-        conn.execute(
-            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
-            " VALUES (?, 'tmdb', ?, ?, ?)",
-            (show_id, str(tmdb_id), url, now),
-        )
-
-    conn.commit()
-
-    # A.8 — the on-demand metadata fetch itself, best-effort (see
-    # metadata.py's own docstring: never raises, failures go to
-    # pending_review instead). A separate commit rather than folding
-    # into the block above: the bare show already exists and is
-    # queryable even if every branch of the fetch below fails outright.
-    metadata.fetch_and_populate(conn, show_id)
-    conn.commit()
+    try:
+        show_id = shows.create_show(conn, input)
+    except shows.ShowInputError as e:
+        raise GraphQLError(str(e)) from e
     return _get_show(conn, show_id)
 
 
@@ -1296,6 +1221,30 @@ def resolve_audit_local_files(_, info):
     docstring for the full rationale."""
     conn = db.get_connection()
     return local_audit.audit_local_files(conn)
+
+
+@query.field("previewShowBackfill")
+def resolve_preview_show_backfill(_, info):
+    """§5.1/§5.2, B.11d — dry-run, no writes. See show_backfill.py's
+    own module docstring for the full rationale."""
+    conn = db.get_connection()
+    return show_backfill.preview_backfill(conn)
+
+
+@mutation.field("backfillUntrackedShows")
+def resolve_backfill_untracked_shows(_, info):
+    """§5.1/§5.2, B.11d — the real run. No require_client(): each
+    created show's own addShow-equivalent write path
+    (shows.create_show()) already carries no changed_by-style column
+    of its own (addShow itself never required one either); the one
+    history write this does make (status_change, when an anime show's
+    initial status is seeded from AniList) uses its own distinct
+    'show_backfill' changed_by value rather than a client header this
+    call has no requester context to supply anyway. Not called by
+    Ops's own automatic loop, only by `ops backfill-shows` — see its
+    own schema.graphql docstring for the full rationale."""
+    conn = db.get_connection()
+    return show_backfill.backfill_untracked_shows(conn)
 
 
 @mutation.field("pollAnimeSchedule")

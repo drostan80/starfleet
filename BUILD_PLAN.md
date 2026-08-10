@@ -2739,13 +2739,100 @@ background scheduler.
       `episodesInRange` present on `Query`, correctly typed
       `EpisodeConnection!`. No migration needed — pure GraphQL/
       resolver addition, no schema/table change.
-  - [ ] **B.11d — show backfill**: one-time/repeatable pass (CLI
-    and/or mutation, same shape as `auditLocalFiles`'s own manual
-    trigger) that walks Sonarr's/Radarr's full catalog and calls
-    `addShow` for anything not yet tracked in LCARS. Run for real
-    against the user's live Sonarr/Radarr library once built —
-    LCARS's `show` table needs actual rows before B.11f's render-path
-    switch can show anything.
+  - [x] **B.11d — show backfill** (2026-08-10): dry-run query
+    (`previewShowBackfill`) + real mutation (`backfillUntrackedShows`),
+    same "report-only preview before you write" shape
+    `auditLocalFiles`'s own findings already establish, plus matching
+    `ops preview-show-backfill`/`ops backfill-shows` CLI commands (the
+    latter always shows the preview and requires a typed `yes` before
+    writing anything).
+    - **Corrected mid-build**: initially planned as addShow-then-
+      separate-refreshShowMetadata per item, based on an incomplete
+      read of `resolve_add_show`. Caught before building anything:
+      `addShow` already calls `metadata.fetch_and_populate()` inline
+      as its last step (`resolvers.py`, unchanged since A.8) — episode
+      population, AniList link resolution (Fribb), season
+      reconciliation, all already happen inside one `addShow` call.
+      B.11d is a single throttled loop of plain `addShow`-equivalent
+      calls, not a two-phase pipeline. Corrected with the user
+      directly before proceeding.
+    - **Extracted `addShow`'s own body into `shows.create_show()`**
+      (new module) so `show_backfill.py` can call it directly, once
+      per untracked item, without a GraphQL request context —
+      `resolve_add_show` is now a thin wrapper, same "extract the
+      shared logic" pattern `reconcileSeasonMapping`'s own
+      `season_mapping.py` already established (A.4). Deep-link URL
+      templates (`_EXTERNAL_ID_URL_TEMPLATES`/`_TMDB_URL_TEMPLATES`)
+      moved from `resolvers.py` to `shows.py` as their new canonical
+      home; `metadata.py` keeps its own separate duplicate (same
+      circular-import reasoning as always).
+    - **Reuses `local_audit.audit_local_files()`'s own
+      `untracked_shows` computation** rather than a second catalog
+      walk/dedup path — `_audit_sonarr`'s Sonarr entries gained one
+      new field (`series_type`, Sonarr's own raw `seriesType`, not
+      exposed on the GraphQL `UntrackedShow` type) so
+      `show_backfill.py`'s classification can reuse it directly, the
+      same signal `metadata.py`'s numbering-scheme derivation already
+      uses (A.22: `seriesType == "anime"`).
+    - **Classification, confirmed with the user 2026-08-10**: Sonarr
+      items use `seriesType == "anime"` for `trackingSpace`; Radarr
+      items always default to `TV` — no anime signal exists from
+      Radarr at all, and a misclassification is fixable per-show
+      after the fact, not worth a second live lookup just to classify
+      one field.
+    - **Status derivation, confirmed with the user 2026-08-10**: after
+      an anime show is created, one one-time AniList `mediaListEntry`
+      read (new `anilist_client.fetch_my_list_status()`, authenticated
+      via LCARS's own `anilist_access_token`) seeds its initial LCARS
+      status — not an ongoing sync, LCARS stays the source of truth
+      for every push/pull after this. Reverse of `_STATUS_TO_ANILIST`
+      (A.9's push-direction map); `REPEATING` (no direct LCARS target)
+      maps to `watching`. Writes `status_change` history with its own
+      distinct `changed_by = 'show_backfill'` value (§5.7's open-ended
+      enum already anticipates process-actor values like this). A
+      failed/skipped seed leaves the show at `addShow`'s own `planned`
+      default — best-effort, never blocks the rest of the run.
+    - **Watched-progress deliberately NOT backfilled, confirmed with
+      the user 2026-08-10**: AniList's `mediaListEntry.progress` is an
+      absolute episode count with no clean, general mapping onto
+      LCARS's own per-season numbering (the whole absolute-vs-
+      season_episode scheme, A.22/A.25, exists precisely because that
+      mapping isn't uniform show to show). Stated consequence, not
+      silently absorbed: a backfilled `watching` show starts with
+      every episode unwatched, so `Query.backlog` (§6.3) will over-
+      report for it until the user marks progress by hand.
+    - **Idempotent/resumable by construction** — no bespoke resume
+      state needed: re-running after a partial run (interrupted, rate-
+      limited, crashed) only ever sees still-untracked items, since
+      `local_audit`'s own known-id lookup already excludes anything a
+      previous run already added.
+    - **Throttled** between anime-classified adds only (2s,
+      `ANIME_ADD_THROTTLE_SECONDS`) — the only ones that make AniList
+      calls — to stay inside AniList's 30 req/min budget (Data's own
+      `anilist.py` docstring: the same reason its `P` is manual-only).
+      The CLI's own client uses a 1800s timeout for this one command
+      (every other `ops` command keeps the 10s default) since a real
+      run can take genuine minutes.
+    - **Verified**: 549 tests passing (was 518; 31 new across
+      `test_anilist_client.py` (+4, `fetch_my_list_status`),
+      `test_local_audit.py` (1 existing test updated for the new
+      `series_type` field, no new tests there), `test_show_backfill.py`
+      (new, 15 tests: classification, dry-run-doesn't-write, real
+      creation, idempotency, throttling, AniList status-seed including
+      error/no-token/no-link/no-entry no-op paths), `test_server.py`
+      (+2 wiring-only tests), `test_ops_lcars_client.py` (+2),
+      `test_ops_cli.py` (+8)), `ruff check .`/`ruff format --check`
+      clean, clean-install sanity check (fresh venv, real `pip install
+      -e .[dev]`) confirmed the schema
+      builds with `previewShowBackfill`/`backfillUntrackedShows`
+      present and correctly typed, and that `shows.py`/
+      `show_backfill.py`/the new `ops` CLI commands import cleanly. No
+      migration needed — no schema/table change, pure Python +
+      GraphQL-layer addition. Live run against the user's actual
+      Sonarr/Radarr library deliberately deferred — build+verify now,
+      run for real (`ops preview-show-backfill` then `ops
+      backfill-shows`) as its own explicit step before B.11f needs the
+      calendar to actually show anything.
   - [ ] **B.11e — ongoing untracked-show sweep**: extend
     `auditLocalFiles`'s existing `untracked_shows` computation (or a
     dedicated variant) onto Ops's recurring schedule, persisting

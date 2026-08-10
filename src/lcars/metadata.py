@@ -63,10 +63,12 @@ from lcars import (
 )
 from lcars.config import get_current
 
-# A.19 — mirrors resolvers.py's own EXTERNAL_ID_URL_TEMPLATES/
-# TMDB_URL_TEMPLATES exactly (migration 7196ca889757's show_external_id
-# shape), duplicated here rather than imported: resolvers.py imports
-# this module, so the reverse import would be circular.
+# A.19 — mirrors shows.py's own _EXTERNAL_ID_URL_TEMPLATES/
+# _TMDB_URL_TEMPLATES exactly (migration 7196ca889757's show_external_id
+# shape; moved there from resolvers.py at B.11d), duplicated here
+# rather than imported: shows.py imports this module (create_show()
+# calls fetch_and_populate() inline), so the reverse import would be
+# circular.
 _TMDB_TV_URL_TEMPLATE = "https://www.themoviedb.org/tv/{id}"
 
 

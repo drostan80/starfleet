@@ -5472,6 +5472,40 @@ async def test_audit_local_files_wiring_returns_empty_with_nothing_configured(cl
     }
 
 
+PREVIEW_SHOW_BACKFILL = """
+    query {
+      previewShowBackfill { service title externalId trackingSpace mediaShape }
+    }
+"""
+
+BACKFILL_UNTRACKED_SHOWS = """
+    mutation {
+      backfillUntrackedShows {
+        created { showId service title }
+        failed { service title error }
+      }
+    }
+"""
+
+
+async def test_preview_show_backfill_wiring_returns_empty_with_nothing_configured(client):
+    # Same not-configured no-op guard as auditLocalFiles — the actual
+    # classification/computation logic is test_show_backfill.py's job; this
+    # only locks in that the query is wired to show_backfill.preview_backfill()
+    # and that BackfillPreviewItem resolves through real GraphQL with correct
+    # camelCase field names/enum types.
+    data = await gql(client, PREVIEW_SHOW_BACKFILL, headers=auth_headers())
+    assert data["previewShowBackfill"] == []
+
+
+async def test_backfill_untracked_shows_wiring_returns_empty_with_nothing_configured(client):
+    # Same guard — actual creation/throttle/status-seed logic is
+    # test_show_backfill.py's job; this only locks in that the mutation is
+    # wired to show_backfill.backfill_untracked_shows() with the right shape.
+    data = await gql(client, BACKFILL_UNTRACKED_SHOWS, headers=auth_headers())
+    assert data["backfillUntrackedShows"] == {"created": [], "failed": []}
+
+
 async def test_poll_anime_schedule_returns_zero_with_no_candidate_shows(client):
     # No watching+actively-airing anime shows in this fresh DB — candidates
     # is empty, so poll_anime_schedule() returns early without ever calling

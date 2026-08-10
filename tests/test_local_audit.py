@@ -200,7 +200,15 @@ def test_sonarr_not_configured_is_a_clean_no_op(conn, monkeypatch):
 def test_sonarr_untracked_show_is_listed_without_walking_its_folder(conn, monkeypatch):
     _configure_sonarr()
     # No show in LCARS at all for this tvdb id.
-    series = [{"id": 1, "tvdbId": 999999, "title": "Unknown Show", "path": "/data/unknown"}]
+    series = [
+        {
+            "id": 1,
+            "tvdbId": 999999,
+            "title": "Unknown Show",
+            "path": "/data/unknown",
+            "seriesType": "standard",
+        }
+    ]
     fake = _FakeSonarrClient(series, episodes_by_series_id={})
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
 
@@ -211,6 +219,10 @@ def test_sonarr_untracked_show_is_listed_without_walking_its_folder(conn, monkey
             "title": "Unknown Show",
             "external_id": 999999,
             "path": "/data/unknown",
+            # B.11d — passed through raw for show_backfill.py's own
+            # trackingSpace classification, not exposed on the GraphQL
+            # UntrackedShow type.
+            "series_type": "standard",
         }
     ]
     # episodes() was never called for it — series 1 has no entry in episodes_by_series_id,

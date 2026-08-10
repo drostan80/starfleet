@@ -155,6 +155,15 @@ def _audit_sonarr(conn) -> dict:
                             "title": series["title"],
                             "external_id": series["tvdbId"],
                             "path": series.get("path"),
+                            # B.11d — Sonarr's own seriesType passed through
+                            # raw (not exposed on the GraphQL UntrackedShow
+                            # type, just an extra dict key for a Python-level
+                            # consumer): show_backfill.py's own
+                            # trackingSpace classification, same
+                            # seriesType == "anime" signal metadata.py's
+                            # numbering-scheme derivation already uses
+                            # (A.22).
+                            "series_type": series.get("seriesType"),
                         }
                     )
                     # Not this pass's job to walk a folder LCARS has nothing to match against.

@@ -813,6 +813,35 @@ type LocalFileAuditResult {
   untrackedShows: [UntrackedRemoteShow!]!
 }
 
+"previewShowBackfill's own per-item shape — B.11d. trackingSpace/mediaShape are the classification backfillUntrackedShows would actually use (Sonarr's own seriesType == \"anime\" flag, or TV by default for a Radarr-sourced item — no anime signal exists there)."
+type BackfillPreviewItem {
+  service: String!
+  title: String!
+  externalId: Int!
+  trackingSpace: TrackingSpace!
+  mediaShape: MediaShape!
+}
+
+"backfillUntrackedShows' own per-created-show record — B.11d."
+type BackfilledShow {
+  showId: ID!
+  service: String!
+  title: String!
+}
+
+"backfillUntrackedShows' own per-failed-item record — B.11d. In practice always empty: backfill's own classification (BackfillPreviewItem) never produces an addShow input ShowInputError would reject, but shows.create_show() is general-purpose, so this is here for completeness rather than assumed unreachable."
+type FailedBackfillItem {
+  service: String!
+  title: String!
+  error: String!
+}
+
+"B.11d — backfillUntrackedShows' own confirmation summary."
+type ShowBackfillResult {
+  created: [BackfilledShow!]!
+  failed: [FailedBackfillItem!]!
+}
+
 # ---------------------------------------------------------------------------
 # §6.7 animeschedule.net air-date reconciliation (B.5)
 # ---------------------------------------------------------------------------
@@ -975,6 +1004,9 @@ type Query {
 
   "§6.12 — the full JSON export, schema_version included. Read-only: exporting has no side effect, so this is a query, not a mutation."
   exportData: String!
+
+  "§5.1/§5.2, B.11d — dry-run only, no writes: exactly what backfillUntrackedShows would create right now, reusing auditLocalFiles' own untrackedShows computation. Always run this first."
+  previewShowBackfill: [BackfillPreviewItem!]!
 }
 
 # ---------------------------------------------------------------------------
@@ -1054,6 +1086,22 @@ type Mutation {
   via `ops audit-local-files` at a moment of the caller's own choosing.
   """
   auditLocalFiles: LocalFileAuditResult!
+  """
+  §5.1/§5.2, B.11d — one addShow (with its own inline A.8 metadata
+  fetch: episodes, AniList link resolution via Fribb, season
+  reconciliation) per untracked Sonarr/Radarr item, reusing
+  auditLocalFiles' own untrackedShows computation. Throttled between
+  anime-classified adds to stay inside AniList's rate budget — this
+  can take real minutes on a large library. Also does a one-time
+  AniList list-status read per anime show created, to seed its
+  initial LCARS status (not an ongoing sync — LCARS stays the source
+  of truth after this). Never auto-creates on repeat runs beyond what's
+  still genuinely untracked (idempotent/resumable). Always call
+  previewShowBackfill first. Not part of Ops's own automatic loop, same
+  reasoning as auditLocalFiles above — run via `ops backfill-shows` at
+  a moment of the caller's own choosing.
+  """
+  backfillUntrackedShows: ShowBackfillResult!
   """
   §6.7, B.5 — a global sweep of animeschedule.net's raw (native/Japan
   release) RSS feed, matched by fuzzy title against LCARS's own
