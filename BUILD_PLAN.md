@@ -3003,6 +3003,32 @@ background scheduler.
       `known_anilist_ids`/`all_sonarr_series_with_seasons`), `ruff
       check`/`format` clean, clean-install sanity check confirmed the
       new functions import cleanly.
+    - **A second, opposite-direction correction, same day, found from
+      re-running the real preview against the fix above**: the
+      multi-season dedup fix was expected to *reduce* the AniList-
+      sweep count (catching more real duplicates); instead it *rose*,
+      1133 → 1183, with zero items removed and 50 new ones added — a
+      genuine regression, not the intended effect. Diffing the two
+      real preview outputs pinpointed it immediately: `all_sonarr
+      _series_with_seasons()` excluded Sonarr's own season 0
+      ("specials") from the per-season scan, but Fribb tags a real
+      movie/OVA/compilation entry as season 0 just as often as a
+      numbered season — live-verified: "Chainsaw Man: Reze-hen"
+      (anilist id 171627) sits on the user's own real AniList list,
+      Fribb-tagged season 0 under Chainsaw Man's own tvdb id, and
+      would have surfaced as a false "untracked" duplicate. Fixed by
+      including season 0 in the scan rather than excluding it — a
+      one-line change (`all_sonarr_series_with_seasons`'s own season-
+      number list comprehension), verified against a real diff of the
+      two preview runs (0 regressions, the expected reduction where
+      Fribb's per-season data actually supports it) before being
+      committed.
+    - **Verified (season-0 fix)**: 573 tests passing (was 572; 1 new,
+      `test_anilist_sweep_excludes_a_season_zero_tagged_movie`, plus 1
+      existing test renamed/inverted —
+      `test_all_sonarr_series_with_seasons_includes_season_zero`, was
+      `..._excludes_season_zero`), `ruff check`/`format` clean, clean-
+      install sanity check confirmed the fix imports cleanly.
   - [ ] **B.11e — ongoing untracked-show sweep**: extend
     `auditLocalFiles`'s existing `untracked_shows` computation (or a
     dedicated variant) onto Ops's recurring schedule, persisting

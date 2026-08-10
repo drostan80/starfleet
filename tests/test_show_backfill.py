@@ -254,6 +254,35 @@ def test_anilist_sweep_excludes_a_second_season_fribb_only_resolves_via_season_n
     assert _sweep(conn) == []
 
 
+def test_anilist_sweep_excludes_a_season_zero_tagged_movie(conn, monkeypatch):
+    # The real Chainsaw Man-shaped case, live-verified 2026-08-10:
+    # Fribb tags "Chainsaw Man: Reze-hen" (a real movie on the user's
+    # own AniList list) as season 0 under Chainsaw Man's own tvdb id —
+    # excluding season 0 from the per-season scan (this module's own
+    # earlier version) left it undetected as "already accounted for."
+    _configure_sonarr()
+    dataset = [
+        {"tvdb_id": 397934, "anilist_id": 127230, "mal_id": None, "season": {"tvdb": 1}},
+        {"tvdb_id": 397934, "anilist_id": 171627, "mal_id": None, "season": {"tvdb": 0}},
+    ]
+    _patch_fribb(monkeypatch, dataset)
+    series = [
+        {
+            "id": 1,
+            "tvdbId": 397934,
+            "title": "Chainsaw Man",
+            "seasons": [{"seasonNumber": 0}, {"seasonNumber": 1}],
+        }
+    ]
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
+    config.get_current().anilist_access_token = "tok"
+    my_list = [
+        {"anilist_id": 171627, "format": "MOVIE", "status": "COMPLETED", "title": "Reze-hen"}
+    ]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    assert _sweep(conn) == []
+
+
 def test_anilist_sweep_excludes_music_format(conn, monkeypatch):
     config.get_current().anilist_access_token = "tok"
     my_list = [{"anilist_id": 404, "format": "MUSIC", "status": "COMPLETED", "title": "A Song"}]

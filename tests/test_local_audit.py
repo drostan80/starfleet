@@ -506,7 +506,10 @@ def test_known_anilist_ids_is_empty_with_nothing_linked(conn):
     assert local_audit.known_anilist_ids(conn) == set()
 
 
-def test_all_sonarr_series_with_seasons_excludes_season_zero(conn, monkeypatch):
+def test_all_sonarr_series_with_seasons_includes_season_zero(conn, monkeypatch):
+    # Season 0 (Sonarr's own "specials" bucket) is NOT excluded — a
+    # live check (Chainsaw Man: Reze-hen) showed Fribb tags a real
+    # movie/OVA entry as season 0 as often as a numbered season.
     _configure_sonarr()
     series = [
         {
@@ -519,7 +522,7 @@ def test_all_sonarr_series_with_seasons_excludes_season_zero(conn, monkeypatch):
     fake = _FakeSonarrClient(series)
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
     result = local_audit.all_sonarr_series_with_seasons(conn)
-    assert result == [{"tvdb_id": 424536, "season_numbers": [1, 2]}]
+    assert result == [{"tvdb_id": 424536, "season_numbers": [0, 1, 2]}]
 
 
 def test_all_sonarr_series_with_seasons_falls_back_to_season_one(conn, monkeypatch):
