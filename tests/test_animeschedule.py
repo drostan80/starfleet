@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from lcars import animeschedule, animeschedule_client
+from lcars import animeschedule, animeschedule_client, service_health
 
 
 @pytest.fixture
@@ -95,6 +95,10 @@ def test_a_clear_match_updates_the_matching_episode(conn, monkeypatch):
     reviews = _pending_reviews(conn, "e-aaaaaa", "air_date_utc")
     assert len(reviews) == 1
     assert reviews[0]["source"] == "animeschedule"
+    # §6.7, B.6 — a successful feed fetch records service_health, whether or
+    # not anything ended up matching a tracked show.
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "animeschedule")
+    assert health["status"] == "ok"
 
 
 def test_animeschedule_overrides_a_manual_date(conn, monkeypatch):
@@ -311,6 +315,9 @@ def test_a_feed_fetch_failure_is_a_clean_zero_result_not_a_raise(conn, monkeypat
 
     monkeypatch.setattr(animeschedule_client, "fetch_raw_feed", _boom)
     assert animeschedule.poll_anime_schedule(conn) == {"episodes_updated": 0, "flagged": 0}
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "animeschedule")
+    assert health["status"] == "unreachable"
+    assert "boom" in health["last_error_message"]
 
 
 def test_no_candidate_shows_at_all_skips_the_feed_fetch_entirely(conn, monkeypatch):
@@ -319,3 +326,7 @@ def test_no_candidate_shows_at_all_skips_the_feed_fetch_entirely(conn, monkeypat
     result = animeschedule.poll_anime_schedule(conn)
     assert result == {"episodes_updated": 0, "flagged": 0}
     assert calls == []
+    # No attempt was made at all — status stays the "never contacted" default,
+    # not a false "ok".
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "animeschedule")
+    assert health["status"] == "unknown"

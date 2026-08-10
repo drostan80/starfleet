@@ -2190,9 +2190,73 @@ background scheduler.
     cleanly; `lcars.server.build_schema()` confirmed
     `AnimeSchedulePollResult`/`pollAnimeSchedule` both real, bound
     schema members (104 types total).
-- [ ] **B.6 — Per-integration service-health tracking**: reachable?
-  rate-limited? — its own concept, separate from any individual show's
-  state.
+- [x] **B.6 — Per-integration service-health tracking.**
+  - **Scope resolved with the user**: reachability only, not
+    rate-limiting — checked first (a real gap, not assumed): none of
+    the four client modules (sonarr/radarr/anilist/animeschedule_client)
+    distinguish a 429 from any other error today, so "rate-limited?"
+    would need new detection logic in all four plus a decision on
+    whether LCARS acts on it or just reports it. Asked the user
+    directly rather than guess at that scope; deferred, documented as
+    a real future gap, not built here.
+  - **Architecture resolved with the user**: §6.7's own "Tracked by
+    Ops" phrasing conflicts with the already-established architecture
+    (Ops has no client code for any of these four services and no
+    database of its own, §11.2's B.1 resolution) — asked directly
+    rather than guess at an undocumented design; confirmed the reading
+    that Ops's poll cycle triggers the calls, but the state lives
+    entirely in LCARS (new `service_health` table, no id prefix, same
+    natural-key-per-service shape `availability_poll_checkpoint`, B.3,
+    already uses), exposed via a new `serviceHealth` query. No `ops/`
+    changes at all — health is a side effect of calls Ops (and humans,
+    via on-demand mutations) already trigger.
+  - **Built**: `service_health.py` (`record_success`/`record_failure`/
+    `get_all`) hooked directly at each function's own actual outbound
+    call — `metadata.py`'s `_fetch_anilist`/`_reconcile_air_dates`/
+    `_fetch_sonarr`/`_fetch_radarr`, `availability.py`'s
+    `_poll_sonarr`/`_poll_radarr`, `local_audit.py`'s `_audit_sonarr`/
+    `_audit_radarr`, `animeschedule.py`'s `poll_anime_schedule`.
+    `serviceHealth: [ServiceHealth!]!` always returns one entry per
+    `TrackedService` (sonarr/radarr/anilist/animeschedule — deliberately
+    excludes `local`, B.7's own SQL-aggregate concept, not a
+    reachability check), synthesizing an `UNKNOWN` placeholder for a
+    service never yet contacted rather than omitting it.
+  - **Real bug caught before commit, not hypothetical**: the first
+    draft hooked `metadata._guarded` — its single choke point for all
+    four AniList/Sonarr/Radarr fetch functions — on the assumption that
+    "the wrapped function returned without raising" meant "the service
+    was reachable." Wrong: every one of those functions has its own
+    legitimate no-HTTP early-return path (missing external id, service
+    not configured, no season carries an `anilist_id` yet). Caught by
+    a real, already-existing test
+    (`test_add_show_fetch_failure_logs_pending_review_and_refresh_retries`)
+    going red: a genuine `_fetch_anilist` failure got silently
+    overwritten back to `ok` by the very next `_guarded` call
+    (`_reconcile_air_dates`'s own trivially-succeeding no-mapped-season
+    no-op). Fixed by moving each hook to the function's own actual
+    client call instead of the shared wrapper — `_guarded` reverted to
+    its original `pending_review`-only job, with a docstring explaining
+    why service-health recording doesn't belong there. See
+    `service_health.py`'s own module docstring for the full "success
+    means a request completed, not that a function returned" rule this
+    established.
+  - **Verified**: 421 tests passing (was 411), `ruff check .`/`ruff
+    format --check` clean. Migration round-trip verified on an
+    isolated temp DB (not the ambient/default one — caught mid-check
+    that the default `LCARS_DATABASE_URL` pointed at an already-current
+    dev DB, giving a misleading first result): upgrade → downgrade →
+    upgrade all confirmed clean, `service_health` table present/absent
+    exactly as expected at each step. Clean-install sanity check (fresh
+    venv, real `pip install`) confirmed every new/changed module
+    imports cleanly and `lcars.server.build_schema()` resolves
+    `ServiceHealth`/`serviceHealth` as real, bound schema members (107
+    types total). A genuine, pre-existing test bug found incidentally
+    while adding a health assertion:
+    `test_sonarr_client_error_mid_walk_keeps_earlier_partial_results`
+    configured a `fail_series_id` on an *untracked* series, so the
+    loop's own untracked-show `continue` skipped the call that was
+    supposed to fail before ever reaching it — fixed by tracking that
+    series too, so the configured failure genuinely fires.
 - [ ] **B.7 — `show_service_presence` periodic refresh** — same poll
   cadence as the rest of this phase (§5.4). **Owner assigned here by the
   2026-08-09 audit**: §5.4's `local` pseudo-service ("rolling up

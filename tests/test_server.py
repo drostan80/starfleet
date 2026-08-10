@@ -1200,6 +1200,14 @@ async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(cl
     assert reviews[0]["source"] == "anilist"
     assert reviews[0]["proposedValueChain"] == ["Could not connect"]
 
+    # §6.7, B.6 — the same failure that opened the pending_review above
+    # also recorded a service_health entry, through metadata._guarded's
+    # own choke point.
+    health_data = await gql(client, SERVICE_HEALTH_QUERY, headers=auth_headers())
+    anilist_health = next(e for e in health_data["serviceHealth"] if e["service"] == "ANILIST")
+    assert anilist_health["status"] == "UNREACHABLE"
+    assert anilist_health["lastErrorMessage"] == "Could not connect"
+
     # whatever was unreachable is back — retry via refreshShowMetadata,
     # the manual-fix-by-user path (confirmed 2026-08-08)
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
@@ -1211,6 +1219,12 @@ async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(cl
         headers=auth_headers(),
     )
     assert refreshed["refreshShowMetadata"]["posterUrl"] == "https://anilist.co/img/cover.jpg"
+
+    # §6.7, B.6 — and the recovery flips it back to OK, clearing the error.
+    health_data = await gql(client, SERVICE_HEALTH_QUERY, headers=auth_headers())
+    anilist_health = next(e for e in health_data["serviceHealth"] if e["service"] == "ANILIST")
+    assert anilist_health["status"] == "OK"
+    assert anilist_health["lastErrorMessage"] is None
 
 
 # --- TMDB duration fetch (A.19, §5.1 duration_minutes gap) -------------------
@@ -4954,6 +4968,27 @@ async def test_poll_anime_schedule_returns_zero_with_no_candidate_shows(client):
 async def test_recommended_availability_poll_interval_defaults_to_baseline(client):
     data = await gql(client, RECOMMENDED_INTERVAL_QUERY, headers=auth_headers())
     assert data["recommendedAvailabilityPollIntervalSeconds"] == 3600
+
+
+# --- per-integration service-health tracking (§6.7, B.6) ---------------------
+
+SERVICE_HEALTH_QUERY = """
+    query {
+      serviceHealth {
+        service status lastCheckedAt lastSuccessAt lastErrorMessage
+      }
+    }
+"""
+
+
+async def test_service_health_returns_unknown_for_every_tracked_service_by_default(client):
+    # A fresh DB, nothing ever contacted — one entry per TrackedService,
+    # not an empty list, all UNKNOWN.
+    data = await gql(client, SERVICE_HEALTH_QUERY, headers=auth_headers())
+    entries = data["serviceHealth"]
+    assert {e["service"] for e in entries} == {"SONARR", "RADARR", "ANILIST", "ANIMESCHEDULE"}
+    assert all(e["status"] == "UNKNOWN" for e in entries)
+    assert all(e["lastCheckedAt"] is None for e in entries)
 
 
 async def test_episode_availability_fields_resolve_through_real_graphql(client, migrated_db):

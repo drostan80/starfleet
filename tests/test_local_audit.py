@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from lcars import config, local_audit, radarr_client, sonarr_client
+from lcars import config, local_audit, radarr_client, service_health, sonarr_client
 
 
 @pytest.fixture
@@ -236,6 +236,11 @@ def test_sonarr_client_error_mid_walk_keeps_earlier_partial_results(conn, monkey
     _configure_sonarr()
     _add_show(conn, "s-lau005", tvdb_id=1)
     _add_episode(conn, "e-lau005", "s-lau005", available="unavailable")
+    # Both series must be *tracked* (known_tvdb_ids) — an untracked series
+    # hits the loop's own "continue" before ever calling client.episodes(),
+    # so fail_series_id=2 would silently never fire otherwise (a real gap
+    # caught while adding B.6's own health-recording assertion below).
+    _add_show(conn, "s-lau099", tvdb_id=2)
     series = [
         {"id": 1, "tvdbId": 1, "title": "First", "path": "/data/first"},
         {"id": 2, "tvdbId": 2, "title": "Second", "path": "/data/second"},
@@ -247,10 +252,12 @@ def test_sonarr_client_error_mid_walk_keeps_earlier_partial_results(conn, monkey
     result = local_audit._audit_sonarr(conn)
     # series 1 was processed and committed before series 2's failure was hit.
     assert result["episodes_corrected"] == 1
-    row = conn.execute(
-        "SELECT available_via_sonarr FROM episode WHERE id = 'e-lau005'"
-    ).fetchone()
+    row = conn.execute("SELECT available_via_sonarr FROM episode WHERE id = 'e-lau005'").fetchone()
     assert row["available_via_sonarr"] == "available"
+    # §6.7, B.6 — the failure surfaced somewhere in the walk still records
+    # the whole pass as unreachable, even though partial results were kept.
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "sonarr")
+    assert health["status"] == "unreachable"
 
 
 # --- Sonarr orphan discovery (real filesystem, via tmp_path) ----------------
@@ -303,9 +310,7 @@ def test_sonarr_orphan_with_unparseable_filename_is_still_reported(conn, monkeyp
 def test_sonarr_inaccessible_path_is_gracefully_skipped_not_an_error(conn, monkeypatch):
     _configure_sonarr()
     _add_show(conn, "s-lau008", tvdb_id=457078)
-    series = [
-        {"id": 1, "tvdbId": 457078, "title": "Test Show", "path": "/does/not/exist/anywhere"}
-    ]
+    series = [{"id": 1, "tvdbId": 457078, "title": "Test Show", "path": "/does/not/exist/anywhere"}]
     fake = _FakeSonarrClient(series, {1: []})
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
 
@@ -330,6 +335,29 @@ def test_radarr_corrects_a_missing_available_flag(conn, monkeypatch):
     ).fetchone()
     assert row["available_via_radarr"] == "available"
     assert row["file_path_radarr"] == "/m.mkv"
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "radarr")
+    assert health["status"] == "ok"
+
+
+def test_radarr_client_error_records_unreachable_service_health(conn, monkeypatch):
+    _configure_radarr()
+
+    class _BrokenRadarrClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            pass
+
+        def all_movies(self):
+            raise radarr_client.RadarrError("boom")
+
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: _BrokenRadarrClient())
+    result = local_audit._audit_radarr(conn)
+    assert result["shows_corrected"] == 0
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "radarr")
+    assert health["status"] == "unreachable"
+    assert "boom" in health["last_error_message"]
 
 
 def test_radarr_corrects_a_stale_available_flag(conn, monkeypatch):
@@ -392,7 +420,10 @@ def test_radarr_orphan_file_is_found(conn, monkeypatch, tmp_path):
 
     movies = [
         _radarr_movie(
-            687163, "Project Hail Mary", has_file=True, path=str(movie_dir),
+            687163,
+            "Project Hail Mary",
+            has_file=True,
+            path=str(movie_dir),
             movie_file_path=str(known_file),
         )
     ]

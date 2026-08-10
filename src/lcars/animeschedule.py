@@ -77,7 +77,7 @@ project makes.
 import json
 import logging
 
-from lcars import animeschedule_client, fuzzy, pending_review, util
+from lcars import animeschedule_client, fuzzy, pending_review, service_health, util
 
 logger = logging.getLogger("lcars.animeschedule")
 
@@ -94,9 +94,12 @@ def poll_anime_schedule(conn) -> dict:
 
     try:
         items = animeschedule_client.fetch_raw_feed()
-    except animeschedule_client.AnimeScheduleError:
+    except animeschedule_client.AnimeScheduleError as e:
         logger.exception("animeschedule: feed fetch failed, will retry next sweep")
+        service_health.record_failure(conn, "animeschedule", str(e))
+        conn.commit()
         return {"episodes_updated": 0, "flagged": 0}
+    service_health.record_success(conn, "animeschedule")
 
     variant_to_show_id: dict[str, str] = {}
     for show in candidates:
@@ -117,8 +120,11 @@ def poll_anime_schedule(conn) -> dict:
             episodes_updated += 1
         elif outcome == "flagged":
             flagged += 1
-    if episodes_updated or flagged:
-        conn.commit()
+    # Unconditional — B.6 (§6.7) added a service_health write above that
+    # always happens on a successful fetch, even one that matched
+    # nothing, so this can no longer skip committing just because
+    # episodes_updated/flagged are both zero.
+    conn.commit()
     return {"episodes_updated": episodes_updated, "flagged": flagged}
 
 

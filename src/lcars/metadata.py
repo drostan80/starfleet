@@ -56,6 +56,7 @@ from lcars import (
     pending_review,
     radarr_client,
     season_mapping,
+    service_health,
     sonarr_client,
     tmdb_client,
     util,
@@ -133,7 +134,24 @@ def _guarded(conn, show: dict, service: str, fn: Callable[[object, dict], None])
     """Runs `fn(conn, show)`, catching anything at all — a malformed
     response should skip this one branch, never crash addShow or block
     the other branches. Deliberately broad (bare Exception), not just
-    each client's own *Error class — see module docstring."""
+    each client's own *Error class — see module docstring.
+
+    **Deliberately NOT B.6's service-health choke point** — tried that
+    first, reverted before commit: every one of this function's callers
+    (`_ensure_anilist_link`/`_fetch_anilist`/`_reconcile_air_dates`/
+    `_fetch_sonarr`/`_fetch_radarr`) has its own legitimate no-HTTP
+    early-return path (missing external id, service not configured, no
+    season carries an `anilist_id` yet...), so "`fn` returned without
+    raising" does not mean "a request completed" — recording success
+    here would have logged a false `ok` for a service never actually
+    contacted this call, caught by a real, reproduced test failure
+    (`test_add_show_fetch_failure_logs_pending_review_and_refresh_retries`:
+    a genuine `_fetch_anilist` failure got silently overwritten back to
+    `ok` by the very next `_guarded` call, `_reconcile_air_dates`,
+    whose own no-mapped-season early return trivially "succeeded").
+    §6.7's health tracking instead hooks each function's own actual
+    client call directly — see `_fetch_anilist`/`_reconcile_air_dates`/
+    `_fetch_sonarr`/`_fetch_radarr`'s own docstrings/comments."""
     try:
         fn(conn, show)
     except Exception as e:
@@ -217,7 +235,18 @@ def _fetch_anilist(conn, show: dict) -> None:
         # Nothing to fetch without it; this is a caller-input gap, not
         # an unreachable-service failure, so no pending_review entry.
         return
-    media = anilist_client.fetch_media(int(anilist_id_str))
+    # §6.7, B.6 — hooked right here, not in _guarded (that function's own
+    # docstring has the full "no-HTTP early-return" reasoning): this is
+    # the actual outbound call, the only point that can honestly say
+    # "AniList was/wasn't reachable" this call.
+    try:
+        media = anilist_client.fetch_media(int(anilist_id_str))
+    except anilist_client.AniListError as e:
+        service_health.record_failure(conn, "anilist", str(e))
+        conn.commit()
+        raise
+    service_health.record_success(conn, "anilist")
+    conn.commit()
     if media is None:
         return
 
@@ -337,7 +366,22 @@ def _reconcile_air_dates(conn, show: dict) -> None:
     ).fetchall()
     now = util.now_utc_iso()
     for season in seasons:
-        result = anilist_client.fetch_airing_schedule(season["anilist_id"])
+        # §6.7, B.6 — hooked at the actual call, same reasoning
+        # _fetch_anilist gives (not _guarded, which wraps this whole
+        # function and would record "ok" even for a show with zero
+        # seasons carrying an anilist_id — a real, no-HTTP-at-all
+        # case `_guarded`'s own docstring has the full story on).
+        # One call per season in this loop: the last season checked
+        # this pass is what service_health ends up showing — accepted
+        # as "is it reachable right now," not changed here.
+        try:
+            result = anilist_client.fetch_airing_schedule(season["anilist_id"])
+        except anilist_client.AniListError as e:
+            service_health.record_failure(conn, "anilist", str(e))
+            conn.commit()
+            raise
+        service_health.record_success(conn, "anilist")
+        conn.commit()
         if not result or not result["nodes"]:
             continue
 
@@ -630,11 +674,23 @@ def _fetch_sonarr(conn, show: dict) -> None:
     if not cfg.sonarr_url or not cfg.sonarr_api_key:
         return  # not configured — same as "not linked", not a failure to report
 
-    with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
-        series = client.series_by_tvdb_id(int(tvdb_id_str))
-        if series is None:
-            return  # not (yet) in Sonarr's own library — not an error, §5.1
-        episodes = client.episodes(series["id"])
+    # §6.7, B.6 — hooked at the actual outbound call, not _guarded (see
+    # that function's own docstring): the two early returns above never
+    # touch the network at all, so recording there would misreport them
+    # as a successful Sonarr contact.
+    try:
+        with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+            series = client.series_by_tvdb_id(int(tvdb_id_str))
+            if series is not None:
+                episodes = client.episodes(series["id"])
+    except sonarr_client.SonarrError as e:
+        service_health.record_failure(conn, "sonarr", str(e))
+        conn.commit()
+        raise
+    service_health.record_success(conn, "sonarr")
+    conn.commit()
+    if series is None:
+        return  # not (yet) in Sonarr's own library — not an error, §5.1
 
     # A.20 (2026-08-09 consolidation pass) — real gap found in the audit:
     # this function used to insert `episode` rows for whatever season
@@ -901,8 +957,17 @@ def _fetch_radarr(conn, show: dict) -> None:
     if not cfg.radarr_url or not cfg.radarr_api_key:
         return  # not configured — same as "not linked", not a failure to report
 
-    with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
-        movie = client.movie_by_tmdb_id(int(tmdb_id_str))
+    # §6.7, B.6 — hooked at the actual outbound call, same reasoning
+    # _fetch_sonarr's own comment gives.
+    try:
+        with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+            movie = client.movie_by_tmdb_id(int(tmdb_id_str))
+    except radarr_client.RadarrError as e:
+        service_health.record_failure(conn, "radarr", str(e))
+        conn.commit()
+        raise
+    service_health.record_success(conn, "radarr")
+    conn.commit()
     if movie is None:
         return  # not (yet) in Radarr's own library — not an error, §5.1
 

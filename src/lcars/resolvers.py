@@ -37,6 +37,7 @@ from lcars import (
     pagination,
     pending_review,
     season_mapping,
+    service_health,
     util,
 )
 
@@ -90,6 +91,13 @@ ENUMS = [
     _enum("EpisodeMovieLinkSource", "tmdb_match", "manual", "unmatched"),
     _enum("ResolvedByClient", "data", "holodeck", "captains_log"),
     _enum("AvailabilityStatus", "unavailable", "downloading", "available"),
+    _enum("TrackedService", "sonarr", "radarr", "anilist", "animeschedule"),
+    # "unknown" is never a real DB value (service_health's own CHECK
+    # constraint only allows ok/unreachable) — included here anyway
+    # since it's a real value service_health.get_all() can return
+    # (synthesized for a never-contacted service), and this mapping is
+    # purely GraphQL<->Python, independent of what the DB will store.
+    _enum("ServiceHealthStatus", "ok", "unreachable", "unknown"),
 ]
 
 BINDABLES = [
@@ -729,9 +737,11 @@ def resolve_show_seasons(obj, info, **page_args):
 
 @show_type.field("episodeNumberingMapping")
 def resolve_show_episode_numbering_mapping_field(obj, info):
-    row = db.get_connection().execute(
-        "SELECT * FROM episode_numbering_mapping WHERE show_id = ?", (obj["id"],)
-    ).fetchone()
+    row = (
+        db.get_connection()
+        .execute("SELECT * FROM episode_numbering_mapping WHERE show_id = ?", (obj["id"],))
+        .fetchone()
+    )
     return dict(row) if row else None
 
 
@@ -793,9 +803,11 @@ def resolve_show_franchise_memberships(obj, info, **page_args):
 
 @show_type.field("nextUpOverride")
 def resolve_show_next_up_override(obj, info):
-    row = db.get_connection().execute(
-        "SELECT * FROM next_up_override WHERE show_id = ?", (obj["id"],)
-    ).fetchone()
+    row = (
+        db.get_connection()
+        .execute("SELECT * FROM next_up_override WHERE show_id = ?", (obj["id"],))
+        .fetchone()
+    )
     return dict(row) if row else None
 
 
@@ -1166,6 +1178,15 @@ def resolve_poll_anime_schedule(_, info):
 def resolve_recommended_availability_poll_interval_seconds(_, info):
     conn = db.get_connection()
     return availability.recommended_poll_interval_seconds(conn)
+
+
+@query.field("serviceHealth")
+def resolve_service_health(_, info):
+    """§6.7, B.6 — service_health.py's own get_all(), already shaped as
+    one entry per TrackedService with an "unknown" placeholder
+    synthesized for a never-contacted service."""
+    conn = db.get_connection()
+    return service_health.get_all(conn)
 
 
 @mutation.field("setStatus")
@@ -1749,9 +1770,7 @@ def resolve_refresh_show_service_presence(_, info, show_id, service, candidate_t
     conn = db.get_connection()
     show = _require_show(conn, show_id)
     show_titles = [
-        show[f]
-        for f in ("title_romaji", "title_english", "title_native")
-        if show.get(f)
+        show[f] for f in ("title_romaji", "title_english", "title_native") if show.get(f)
     ]
     present = fuzzy.best_match(show_titles, candidate_titles) is not None
     now = util.now_utc_iso()
@@ -1996,9 +2015,7 @@ def resolve_create_tag(_, info, name):
         raise GraphQLError(f"a tag named {name!r} already exists")
     tag_id = ids.generate_id(conn, "t")
     now = util.now_utc_iso()
-    conn.execute(
-        "INSERT INTO tag (id, name, created_at) VALUES (?, ?, ?)", (tag_id, name, now)
-    )
+    conn.execute("INSERT INTO tag (id, name, created_at) VALUES (?, ?, ?)", (tag_id, name, now))
     conn.commit()
     return _get_tag(conn, tag_id)
 
@@ -2031,9 +2048,7 @@ def resolve_add_show_tag(_, info, show_id, tag_id):
         "SELECT 1 FROM show_tag WHERE show_id = ? AND tag_id = ?", (show_id, tag_id)
     ).fetchone()
     if existing is None:
-        conn.execute(
-            "INSERT INTO show_tag (show_id, tag_id) VALUES (?, ?)", (show_id, tag_id)
-        )
+        conn.execute("INSERT INTO show_tag (show_id, tag_id) VALUES (?, ?)", (show_id, tag_id))
         conn.commit()
     return show
 

@@ -819,6 +819,36 @@ type AnimeSchedulePollResult {
 }
 
 # ---------------------------------------------------------------------------
+# §6.7 per-integration service-health tracking (B.6)
+# ---------------------------------------------------------------------------
+
+"The exact four services §6.7 names for health tracking — deliberately excludes the `local` pseudo-service (§5.4/ShowServicePresence), a SQL aggregate over episode rows, not a reachability concept."
+enum TrackedService {
+  SONARR
+  RADARR
+  ANILIST
+  ANIMESCHEDULE
+}
+
+"UNKNOWN is never stored (service_health's own CHECK constraint only allows ok/unreachable) — it's synthesized by the serviceHealth resolver for a service with no row yet (never configured, or just not polled since this table was added), so a caller never has to treat \"missing from the list\" as an implicit fourth state."
+enum ServiceHealthStatus {
+  OK
+  UNREACHABLE
+  UNKNOWN
+}
+
+"Reachability only, not rate-limit awareness — confirmed with the user, 2026-08-09 (B.6): none of the four client modules currently distinguish a 429 from any other error, so a rateLimited field would be a lie today; deliberately deferred, not modeled here."
+type ServiceHealth {
+  service: TrackedService!
+  status: ServiceHealthStatus!
+  lastCheckedAt: DateTime
+  "Deliberately untouched by a repeat failure — keeps showing \"last known good contact\" through an ongoing outage rather than going null the moment a second failure lands."
+  lastSuccessAt: DateTime
+  "Null once status flips back to OK — a stale error message from a since-recovered outage isn't useful to keep showing."
+  lastErrorMessage: String
+}
+
+# ---------------------------------------------------------------------------
 # §6.12 data export/import
 # ---------------------------------------------------------------------------
 
@@ -892,6 +922,9 @@ type Query {
 
   "§5.2/§6.7, B.3 — Ops's own adaptive availability-poll cadence, computed server-side: 300 (5 min) while a WATCHING show has an episode that aired in the last 2 hours and isn't yet locally available; 900 (15 min) while one aired further in the past and still isn't available; 3600 (1 hour) baseline otherwise. Radarr has no equivalent urgency — a movie release has no 'just aired' moment."
   recommendedAvailabilityPollIntervalSeconds: Int!
+
+  "§6.7, B.6 — per-integration reachability, distinct from any individual show's tracking state. Always returns exactly one entry per TrackedService, even one never yet contacted (status UNKNOWN) — Data's status bar reads this as per-source indicators, not one aggregate value. No new polling: every entry reflects the outcome of whatever real Sonarr/Radarr/AniList/animeschedule.net call LCARS already made, whether triggered by Ops's automatic cadence or a human's on-demand action."
+  serviceHealth: [ServiceHealth!]!
 
   franchise(id: ID!): Franchise
   franchises(first: Int, after: String, last: Int, before: String): FranchiseConnection!

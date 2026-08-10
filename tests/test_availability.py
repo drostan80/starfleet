@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from lcars import availability, config, radarr_client, sonarr_client, util
+from lcars import availability, config, radarr_client, service_health, sonarr_client, util
 
 
 @pytest.fixture
@@ -198,9 +198,7 @@ def test_poll_sonarr_download_ignored_is_a_no_op(conn, monkeypatch):
 
     count = availability._poll_sonarr(conn, backfill=True)
     assert count == 0
-    row = conn.execute(
-        "SELECT available_via_sonarr FROM episode WHERE id = 'e-avl004'"
-    ).fetchone()
+    row = conn.execute("SELECT available_via_sonarr FROM episode WHERE id = 'e-avl004'").fetchone()
     assert row["available_via_sonarr"] == "unavailable"  # untouched, still the default
 
 
@@ -256,6 +254,42 @@ def test_poll_sonarr_client_error_is_caught(conn, monkeypatch):
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _BrokenClient())
     count = availability._poll_sonarr(conn, backfill=True)
     assert count == 0  # caught, not raised
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "sonarr")
+    assert health["status"] == "unreachable"
+    assert "boom" in health["last_error_message"]
+
+
+def test_poll_sonarr_success_records_ok_service_health_even_with_nothing_new(conn, monkeypatch):
+    """§6.7, B.6 — a poll that succeeds but finds no new events must
+    still record a health success; this used to return before any
+    commit happened at all on that path."""
+    _configure_sonarr()
+    fake = _FakeHistoryClient([])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    availability._poll_sonarr(conn, backfill=True)
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "sonarr")
+    assert health["status"] == "ok"
+
+
+def test_poll_radarr_client_error_records_unreachable_service_health(conn, monkeypatch):
+    _configure_radarr()
+
+    class _BrokenClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            pass
+
+        def history_page(self, page, page_size=250):
+            raise radarr_client.RadarrError("boom")
+
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: _BrokenClient())
+    count = availability._poll_radarr(conn, backfill=True)
+    assert count == 0
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "radarr")
+    assert health["status"] == "unreachable"
+    assert "boom" in health["last_error_message"]
 
 
 def test_poll_sonarr_checkpoint_advances_and_second_poll_only_sees_new_events(conn, monkeypatch):
@@ -327,9 +361,7 @@ def test_poll_sonarr_processes_events_chronologically_within_one_poll(conn, monk
 # docstring) ------------------------------------------------------------------
 
 
-def test_poll_sonarr_first_ever_call_seeds_checkpoint_without_processing_history(
-    conn, monkeypatch
-):
+def test_poll_sonarr_first_ever_call_seeds_checkpoint_without_processing_history(conn, monkeypatch):
     _configure_sonarr()
     _add_show(conn, "s-avl008", tvdb_id=457078)
     _add_episode(conn, "e-avl008", "s-avl008")
@@ -352,9 +384,7 @@ def test_poll_sonarr_first_ever_call_seeds_checkpoint_without_processing_history
     assert checkpoint["last_event_at"] == "2030-01-01T00:00:00Z"  # seeded to "now", not the event
 
 
-def test_poll_radarr_first_ever_call_seeds_checkpoint_without_processing_history(
-    conn, monkeypatch
-):
+def test_poll_radarr_first_ever_call_seeds_checkpoint_without_processing_history(conn, monkeypatch):
     _configure_radarr()
     _add_show(conn, "s-avl108", tmdb_id=687163, media_shape="movie")
     fake = _FakeHistoryClient(
@@ -466,9 +496,7 @@ def test_poll_radarr_skips_a_non_movie_show(conn, monkeypatch):
     _configure_radarr()
     # Same tmdb id, but an episodic show — Radarr events never touch episodic shows.
     _add_show(conn, "s-avl103", tmdb_id=687163, media_shape="episodic")
-    fake = _FakeHistoryClient(
-        [_radarr_record("downloadFolderImported", "2026-08-09T10:00:00Z")]
-    )
+    fake = _FakeHistoryClient([_radarr_record("downloadFolderImported", "2026-08-09T10:00:00Z")])
     monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
 
     count = availability._poll_radarr(conn, backfill=True)
@@ -538,9 +566,7 @@ def test_recommended_interval_cooldown_for_an_older_unavailable_episode(conn):
 def test_recommended_interval_ignores_already_available_episodes(conn):
     _add_show(conn, "s-avl203")
     _add_episode(conn, "e-avl203", "s-avl203", air_date_utc=util.utc_iso_offset_hours(-1))
-    conn.execute(
-        "UPDATE episode SET available_via_sonarr = 'available' WHERE id = 'e-avl203'"
-    )
+    conn.execute("UPDATE episode SET available_via_sonarr = 'available' WHERE id = 'e-avl203'")
     conn.commit()
     assert availability.recommended_poll_interval_seconds(conn) == 3600
 

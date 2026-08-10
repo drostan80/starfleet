@@ -1799,6 +1799,43 @@ as AniList/Sonarr/Radarr.
   individual show's tracking state. Tracked by Ops (Phase B's
   scheduler); surfaces in Data's status bar as **per-source**
   indicators, not one aggregate value.
+
+  **Resolved 2026-08-09 (B.6)**: two genuinely open questions this
+  section's own text didn't answer, both asked directly rather than
+  decided alone.
+  - **Reachability only, not rate-limiting** — checked first, not
+    assumed: none of the four client modules (sonarr_client/
+    radarr_client/anilist_client/animeschedule_client) distinguish a
+    429 from any other error today. "Rate-limited?" would need real
+    detection logic added to all four, plus a decision on whether
+    LCARS acts on it (defers a poll) or just reports it — real scope,
+    deferred, not built here.
+  - **"Tracked by Ops" doesn't mean Ops holds the state** — this
+    section's own phrasing genuinely conflicts with the architecture
+    §11.2's B.1 resolution already settled: Ops has no client code for
+    any of these four services and no database of its own, so the
+    actual HTTP calls (and every reachability signal they carry)
+    already happen entirely inside `lcars/`. Confirmed reading: Ops's
+    regular poll cycle is what *triggers* the calls this tracks, not
+    something Ops computes or stores itself. State lives in a new
+    `service_health` table (LCARS), exposed via `serviceHealth`
+    (`Query`) for Data's status bar to read — no `ops/` changes at all,
+    since health is purely a side effect of calls Ops (and humans, via
+    on-demand mutations like `refreshShowMetadata`) already make.
+  - **A real design mistake, caught before commit, not hypothetical**:
+    the first draft hooked `metadata._guarded` — the single wrapper all
+    four AniList/Sonarr/Radarr fetch functions already funnel through —
+    on the assumption that "the function returned without raising"
+    meant "the service was reachable." Wrong, caught by an existing
+    test going red: every one of those functions has its own
+    legitimate no-HTTP early-return path (missing external id, service
+    not configured, no season carries an `anilist_id` yet), so
+    `_guarded` recorded a false `ok` for a service never actually
+    contacted — a genuine fetch failure got silently overwritten back
+    to `ok` by the very next guarded call's own trivially-succeeding
+    no-op. Fixed by hooking each function's own actual outbound call
+    directly instead. The rule this established: `record_success`
+    means *a request completed*, never *a function returned*.
 - **Per-show service presence** (`show_service_presence`, §5.4):
   refreshed on the same background-poll cadence, distinct from both
   service-level health above and per-show *tracking* state — this is

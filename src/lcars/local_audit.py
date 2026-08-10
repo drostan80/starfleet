@@ -46,7 +46,7 @@ import logging
 import os
 import re
 
-from lcars import radarr_client, sonarr_client, util
+from lcars import radarr_client, service_health, sonarr_client, util
 from lcars.config import get_current
 
 logger = logging.getLogger("lcars.local_audit")
@@ -204,8 +204,11 @@ def _audit_sonarr(conn) -> dict:
                                 "parsed_episode": episode,
                             }
                         )
-    except sonarr_client.SonarrError:
+    except sonarr_client.SonarrError as e:
         logger.exception("Sonarr local audit failed partway through — partial results kept")
+        service_health.record_failure(conn, "sonarr", str(e))
+    else:
+        service_health.record_success(conn, "sonarr")
 
     conn.commit()
     return {
@@ -223,9 +226,12 @@ def _audit_radarr(conn) -> dict:
     try:
         with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
             all_movies = client.all_movies()
-    except radarr_client.RadarrError:
+    except radarr_client.RadarrError as e:
         logger.exception("Radarr local audit failed to list movies — skipped this pass")
+        service_health.record_failure(conn, "radarr", str(e))
+        conn.commit()
         return empty
+    service_health.record_success(conn, "radarr")
 
     known_tmdb_ids = _known_tmdb_movie_ids(conn)
     shows_corrected = 0
@@ -237,8 +243,12 @@ def _audit_radarr(conn) -> dict:
         tmdb_id = str(movie["tmdbId"])
         if tmdb_id not in known_tmdb_ids:
             untracked_shows.append(
-                {"service": "radarr", "title": movie["title"], "external_id": movie["tmdbId"],
-                 "path": movie.get("path")}
+                {
+                    "service": "radarr",
+                    "title": movie["title"],
+                    "external_id": movie["tmdbId"],
+                    "path": movie.get("path"),
+                }
             )
             continue
 
@@ -272,8 +282,12 @@ def _audit_radarr(conn) -> dict:
                     continue
                 season, episode = _parse_season_episode(os.path.basename(path))
                 orphan_files.append(
-                    {"show_id": show_id, "path": path, "parsed_season": season,
-                     "parsed_episode": episode}
+                    {
+                        "show_id": show_id,
+                        "path": path,
+                        "parsed_season": season,
+                        "parsed_episode": episode,
+                    }
                 )
 
     conn.commit()

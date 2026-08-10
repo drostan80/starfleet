@@ -50,7 +50,7 @@ user's own choosing, not on Ops's timer.
 
 import logging
 
-from lcars import radarr_client, sonarr_client, util
+from lcars import radarr_client, service_health, sonarr_client, util
 from lcars.config import get_current
 
 logger = logging.getLogger("lcars.availability")
@@ -191,11 +191,15 @@ def _poll_sonarr(conn, backfill: bool = False) -> int:
     try:
         with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
             records = _fetch_new_records(client.history_page, effective_checkpoint)
-    except sonarr_client.SonarrError:
+    except sonarr_client.SonarrError as e:
         logger.exception("Sonarr availability poll failed — will retry on the next poll")
+        service_health.record_failure(conn, "sonarr", str(e))
+        conn.commit()
         return 0
+    service_health.record_success(conn, "sonarr")
 
     if not records:
+        conn.commit()  # persist the health write above even with nothing else to do
         return 0
 
     touched_episode_ids: set[str] = set()
@@ -244,11 +248,15 @@ def _poll_radarr(conn, backfill: bool = False) -> int:
     try:
         with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
             records = _fetch_new_records(client.history_page, effective_checkpoint)
-    except radarr_client.RadarrError:
+    except radarr_client.RadarrError as e:
         logger.exception("Radarr availability poll failed — will retry on the next poll")
+        service_health.record_failure(conn, "radarr", str(e))
+        conn.commit()
         return 0
+    service_health.record_success(conn, "radarr")
 
     if not records:
+        conn.commit()  # persist the health write above even with nothing else to do
         return 0
 
     touched_show_ids: set[str] = set()
