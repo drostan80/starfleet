@@ -407,6 +407,26 @@ async def test_backfill_untracked_shows_sends_no_variables_and_returns_the_resul
     await client.aclose()
 
 
+async def test_poll_untracked_shows_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        assert "pollUntrackedShows" in payload["query"]
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "pollUntrackedShows": {"found": 5, "newFindings": 1, "resolvedFindings": 2}
+                }
+            },
+        )
+
+    client = _client(handler)
+    result = await client.poll_untracked_shows()
+    assert result == {"found": 5, "newFindings": 1, "resolvedFindings": 2}
+    await client.aclose()
+
+
 async def test_recommended_availability_poll_interval_seconds_returns_the_int():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

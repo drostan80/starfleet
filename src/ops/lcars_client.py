@@ -280,6 +280,23 @@ class LcarsClient:
         data = await self._query(query)
         return data["backfillUntrackedShows"]
 
+    async def poll_untracked_shows(self) -> dict:
+        """§5.2, B.11e — the ongoing untracked-show sweep
+        (pollUntrackedShows): recomputes previewShowBackfill's own
+        combined Sonarr/Radarr/AniList-sweep list and persists it to
+        untracked_show_finding, so a show added directly in Sonarr/
+        AniList after B.11d's one-time backfill doesn't silently fall
+        out of sync. Called by scheduler.py's own automatic loop, riding
+        the same hourly tick as run_daily_and_weekly_once — cheap (a
+        handful of global calls, not per-show), same reasoning
+        poll_anime_schedule/poll_local_service_presence above already
+        share that tick for."""
+        query = """
+        mutation { pollUntrackedShows { found newFindings resolvedFindings } }
+        """
+        data = await self._query(query)
+        return data["pollUntrackedShows"]
+
     async def poll_anime_schedule(self) -> dict:
         """§6.7, B.5 — the global animeschedule.net RSS sweep
         (pollAnimeSchedule): no per-item argument, one call matches the

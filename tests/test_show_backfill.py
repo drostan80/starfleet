@@ -67,8 +67,14 @@ class _FakeSonarrClient:
         return []  # metadata.py's own _fetch_sonarr — no episodes needed for these tests
 
 
-def _sonarr_series(series_id, tvdb_id, title, series_type=None):
-    return {"id": series_id, "tvdbId": tvdb_id, "title": title, "seriesType": series_type}
+def _sonarr_series(series_id, tvdb_id, title, series_type=None, path=None):
+    return {
+        "id": series_id,
+        "tvdbId": tvdb_id,
+        "title": title,
+        "seriesType": series_type,
+        "path": path,
+    }
 
 
 def _patch_fribb(monkeypatch, dataset):
@@ -336,6 +342,7 @@ def test_preview_backfill_lists_untracked_items_without_writing(conn, monkeypatc
             "service": "sonarr",
             "title": "Untracked Show",
             "external_id": 111,
+            "path": None,
             "tracking_space": "anime",
             "media_shape": "episodic",
         }
@@ -345,6 +352,20 @@ def test_preview_backfill_lists_untracked_items_without_writing(conn, monkeypatc
     # must stay side-effect free.
     assert conn.execute("SELECT COUNT(*) FROM show").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM service_health").fetchone()[0] == 0
+
+
+def test_preview_backfill_carries_the_sonarr_path_through(conn, monkeypatch):
+    """B.11e's own sweep needs `path` on every preview item to populate
+    `untracked_show_finding.path` — not exposed on `BackfillPreviewItem`
+    itself, but must be present in the underlying dict either way."""
+    _configure_sonarr()
+    dataset = [{"tvdb_id": 111, "anilist_id": 999, "mal_id": None, "season": {"tvdb": 1}}]
+    _patch_fribb(monkeypatch, dataset)
+    series = [_sonarr_series(1, 111, "Untracked Show", path="/data/anime/Untracked Show")]
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
+
+    preview = show_backfill.preview_backfill(conn)
+    assert preview[0]["path"] == "/data/anime/Untracked Show"
 
 
 def test_preview_backfill_is_empty_with_nothing_untracked(conn, monkeypatch):
@@ -367,6 +388,7 @@ def test_preview_backfill_includes_anilist_sweep_entries(conn, monkeypatch):
             "service": "anilist",
             "title": "Streamed Movie",
             "external_id": 606,
+            "path": None,
             "tracking_space": "anime",
             "media_shape": "movie",
         }

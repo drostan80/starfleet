@@ -314,7 +314,17 @@ def preview_backfill(conn) -> list[dict]:
     plus this module's own _find_untracked_anilist_entries(), neither
     of which write anything), run this first, always (the same
     report-only-before-you-act shape auditLocalFiles's own
-    untracked_shows already has)."""
+    untracked_shows already has).
+
+    `path` (B.11e) rides along on every item — Sonarr/Radarr entries
+    carry the real one (`entry.get("path")`, same field
+    `_untracked_sonarr_entries`/`_untracked_radarr_entries`,
+    local_audit.py, already populate), an AniList-sweep entry has none
+    (`None`, it was never in Sonarr/Radarr at all). Not currently
+    exposed on `BackfillPreviewItem`'s own GraphQL shape (Ariadne only
+    reads the fields a type actually declares, so this is a safe,
+    additive superset) — `untracked_sweep.py`'s own sweep is the first
+    real consumer, persisting it onto `untracked_show_finding.path`."""
     tvdb_index = _fribb_tvdb_index()
     candidates = local_audit.find_untracked_shows_readonly(conn) + _find_untracked_anilist_entries(
         conn, tvdb_index
@@ -327,6 +337,7 @@ def preview_backfill(conn) -> list[dict]:
                 "service": entry["service"],
                 "title": entry["title"],
                 "external_id": entry["external_id"],
+                "path": entry.get("path"),
                 "tracking_space": classification["tracking_space"],
                 "media_shape": classification["media_shape"],
             }

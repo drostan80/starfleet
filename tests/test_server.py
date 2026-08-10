@@ -5615,6 +5615,67 @@ async def test_backfill_untracked_shows_wiring_returns_empty_with_nothing_config
     assert data["backfillUntrackedShows"] == {"created": [], "promoted": [], "failed": []}
 
 
+POLL_UNTRACKED_SHOWS = """
+    mutation { pollUntrackedShows { found newFindings resolvedFindings } }
+"""
+
+UNTRACKED_SHOW_FINDINGS = """
+    query {
+      untrackedShowFindings(first: 10) {
+        edges {
+          node {
+            id service title externalId path trackingSpace mediaShape
+            firstSeenAt lastSeenAt
+          }
+        }
+      }
+    }
+"""
+
+
+async def test_poll_untracked_shows_wiring_is_a_clean_no_op_with_nothing_configured(client):
+    # Same guard as previewShowBackfill/backfillUntrackedShows above — the
+    # actual reconciliation logic is test_untracked_sweep.py's job; this
+    # only locks in that the mutation is wired to
+    # untracked_sweep.sweep_untracked_shows() with the right shape.
+    data = await gql(client, POLL_UNTRACKED_SHOWS, headers=auth_headers())
+    assert data["pollUntrackedShows"] == {"found": 0, "newFindings": 0, "resolvedFindings": 0}
+
+    findings = await gql(client, UNTRACKED_SHOW_FINDINGS, headers=auth_headers())
+    assert findings["untrackedShowFindings"]["edges"] == []
+
+
+async def test_untracked_show_findings_resolves_a_persisted_row_through_real_graphql(client):
+    # Inserted directly (not via pollUntrackedShows) — this is purely
+    # about UntrackedShowFindingConnection's own wiring (enum typing,
+    # camelCase, nullable path), not the sweep's reconciliation logic.
+    db.get_connection().execute(
+        "INSERT INTO untracked_show_finding"
+        " (id, service, external_id, title, path, tracking_space, media_shape,"
+        "  first_seen_at, last_seen_at, created_at, updated_at)"
+        " VALUES ('u-abc123', 'sonarr', '111', 'Found Show', '/data/anime/Found Show',"
+        "  'anime', 'episodic', '2026-08-10T00:00:00Z', '2026-08-10T00:00:00Z',"
+        "  '2026-08-10T00:00:00Z', '2026-08-10T00:00:00Z')"
+    )
+    db.get_connection().commit()
+
+    data = await gql(client, UNTRACKED_SHOW_FINDINGS, headers=auth_headers())
+    nodes = [e["node"] for e in data["untrackedShowFindings"]["edges"]]
+    assert nodes == [
+        {
+            "id": "u-abc123",
+            "service": "sonarr",
+            "title": "Found Show",
+            "externalId": "111",
+            "path": "/data/anime/Found Show",
+            "trackingSpace": "ANIME",
+            "mediaShape": "EPISODIC",
+            "firstSeenAt": "2026-08-10T00:00:00Z",
+            "lastSeenAt": "2026-08-10T00:00:00Z",
+        }
+    ]
+
+
 async def test_poll_anime_schedule_returns_zero_with_no_candidate_shows(client):
     # No watching+actively-airing anime shows in this fresh DB — candidates
     # is empty, so poll_anime_schedule() returns early without ever calling

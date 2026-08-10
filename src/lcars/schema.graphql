@@ -843,6 +843,36 @@ type ShowBackfillResult {
   failed: [FailedBackfillItem!]!
 }
 
+"B.11e — one persisted row from the ongoing untracked-show sweep (pollUntrackedShows), same underlying computation previewShowBackfill runs one-shot. Only ever removed by no longer appearing in a fresh sweep (the show got tracked some other way, or genuinely disappeared from its source) — no separate resolve/dismiss action, unlike PendingReview."
+type UntrackedShowFinding {
+  id: ID!
+  service: String!
+  title: String!
+  externalId: String!
+  path: String
+  trackingSpace: TrackingSpace!
+  mediaShape: MediaShape!
+  firstSeenAt: DateTime!
+  lastSeenAt: DateTime!
+}
+
+type UntrackedShowFindingEdge {
+  node: UntrackedShowFinding!
+  cursor: String!
+}
+
+type UntrackedShowFindingConnection {
+  edges: [UntrackedShowFindingEdge!]!
+  pageInfo: PageInfo!
+}
+
+"pollUntrackedShows' own confirmation summary — same human/Ops-facing-count spirit as every other *PollResult. found is the total current list after this sweep, not just what changed."
+type UntrackedShowPollResult {
+  found: Int!
+  newFindings: Int!
+  resolvedFindings: Int!
+}
+
 # ---------------------------------------------------------------------------
 # §6.7 animeschedule.net air-date reconciliation (B.5)
 # ---------------------------------------------------------------------------
@@ -1008,6 +1038,9 @@ type Query {
 
   "§5.1/§5.2, B.11d — dry-run only, no writes: exactly what backfillUntrackedShows would create right now. Three sources: Sonarr/Radarr's own untracked catalog items (find_untracked_shows_readonly), and an AniList-list sweep (a show tracked on AniList but never added to Sonarr/Radarr at all — the user's own live catch, same day) deduplicated against both Sonarr's full catalog and LCARS's own known AniList links (show-level and per-season). Always run this first."
   previewShowBackfill: [BackfillPreviewItem!]!
+
+  "§5.2, B.11e — the persisted result of the ongoing untracked-show sweep (pollUntrackedShows), refreshed on Ops's own recurring schedule rather than only computed on demand like previewShowBackfill above. A show added directly in Sonarr/AniList after B.11d's one-time backfill shows up here without anyone needing to remember to re-run a manual check."
+  untrackedShowFindings(first: Int, after: String, last: Int, before: String): UntrackedShowFindingConnection!
 }
 
 # ---------------------------------------------------------------------------
@@ -1111,6 +1144,18 @@ type Mutation {
   a moment of the caller's own choosing.
   """
   backfillUntrackedShows: ShowBackfillResult!
+  """
+  §5.2, B.11e — Ops-scheduled, recomputes previewShowBackfill's own
+  combined Sonarr/Radarr/AniList-sweep list and reconciles it against
+  the persisted untracked_show_finding table: a still-current finding
+  gets its title/path/classification/lastSeenAt refreshed, a new one
+  gets inserted, and anything no longer present in this sweep's own
+  result gets deleted outright (it's tracked now, or genuinely gone —
+  either way, not "untracked" anymore). Never calls addShow — that
+  decision stays exactly what it was for auditLocalFiles' own
+  untrackedShows, only how the findings surface changes.
+  """
+  pollUntrackedShows: UntrackedShowPollResult!
   """
   §6.7, B.5 — a global sweep of animeschedule.net's raw (native/Japan
   release) RSS feed, matched by fuzzy title against LCARS's own

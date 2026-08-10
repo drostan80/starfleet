@@ -24,6 +24,7 @@ from ops.scheduler import (
     run_monthly_once,
     run_once,
     run_season_reconciliation_once,
+    run_untracked_shows_once,
     run_weekly_once,
 )
 
@@ -47,6 +48,7 @@ class _FakeClient:
         catalog_presence_result: dict | None = None,
         episode_movie_link_result: dict | None = None,
         mal_token_refresh_result: dict | None = None,
+        untracked_shows_result: dict | None = None,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
@@ -71,6 +73,11 @@ class _FakeClient:
             "availabilitySynced": 0,
         }
         self._mal_token_refresh_result = mal_token_refresh_result or {"refreshed": False}
+        self._untracked_shows_result = untracked_shows_result or {
+            "found": 0,
+            "newFindings": 0,
+            "resolvedFindings": 0,
+        }
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -120,6 +127,9 @@ class _FakeClient:
 
     async def refresh_mal_token_if_due(self) -> dict:
         return self._mal_token_refresh_result
+
+    async def poll_untracked_shows(self) -> dict:
+        return self._untracked_shows_result
 
 
 # --- run_once (B.1) ---------------------------------------------------------
@@ -327,7 +337,7 @@ async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_it
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
 
 
-async def test_run_daily_and_weekly_once_sums_all_six_tiers():
+async def test_run_daily_and_weekly_once_sums_all_seven_tiers():
     client = _FakeClient(
         due_shows=[{"id": "s-a"}],
         due_seasons=[_season("z-a", "s-b")],
@@ -340,9 +350,10 @@ async def test_run_daily_and_weekly_once_sums_all_six_tiers():
             "availabilitySynced": 0,
         },
         mal_token_refresh_result={"refreshed": True},
+        untracked_shows_result={"found": 5, "newFindings": 1, "resolvedFindings": 1},
     )
     count = await run_daily_and_weekly_once(client)
-    assert count == 7
+    assert count == 9
     assert client.refreshed == ["s-a"]
     assert client.reconciled == [("s-b", 1)]
 
@@ -358,6 +369,25 @@ async def test_run_mal_token_refresh_once_returns_one_when_a_refresh_happened():
 async def test_run_mal_token_refresh_once_returns_zero_on_a_no_op():
     client = _FakeClient(mal_token_refresh_result={"refreshed": False})
     assert await run_mal_token_refresh_once(client) == 0
+
+
+# --- run_untracked_shows_once (B.11e) -----------------------------------------
+
+
+async def test_run_untracked_shows_once_sums_new_and_resolved_not_found():
+    client = _FakeClient(
+        untracked_shows_result={"found": 12, "newFindings": 2, "resolvedFindings": 3}
+    )
+    # "found" is the total current list, not a change — excluded from the
+    # count, matching every other tier's "count real changes" convention.
+    assert await run_untracked_shows_once(client) == 5
+
+
+async def test_run_untracked_shows_once_returns_zero_on_a_clean_sweep():
+    client = _FakeClient(
+        untracked_shows_result={"found": 0, "newFindings": 0, "resolvedFindings": 0}
+    )
+    assert await run_untracked_shows_once(client) == 0
 
 
 # --- run_episode_movie_link_reconciliation_once (B.8b) -----------------------
@@ -425,7 +455,8 @@ async def test_run_forever_wires_up_all_three_loops(monkeypatch):
         (
             "run_daily_and_weekly_once",
             3600,
-            "daily+weekly+animeschedule+local_presence+episode_movie_links+mal_token_refresh",
+            "daily+weekly+animeschedule+local_presence+episode_movie_links"
+            "+mal_token_refresh+untracked_shows",
         ),
         ("run_monthly_once", 2592000, "monthly+catalog_presence"),
     }

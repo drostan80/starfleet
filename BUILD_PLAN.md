@@ -3167,13 +3167,82 @@ background scheduler.
         blocking B.11d/B.11e/B.11f, but should happen before this
         project leans on `alembic downgrade` for anything real
         (Cutover-time rollback, say).
-  - [ ] **B.11e — ongoing untracked-show sweep**: extend
-    `auditLocalFiles`'s existing `untracked_shows` computation (or a
-    dedicated variant) onto Ops's recurring schedule, persisting
-    findings to a small new reviewable list/query rather than only
-    returning them from a one-shot mutation call — so a show added
-    directly in Sonarr/AniList after the B.11d backfill doesn't
-    silently fall out of sync. Never auto-creates a show.
+  - [x] **B.11e — ongoing untracked-show sweep** (2026-08-10): a new
+    `untracked_show_finding` table (migration `d5858f23ed73`, prefixed
+    id `u-`, §5.0), a new `untracked_sweep.py` module, and a new
+    `pollUntrackedShows` mutation, run on Ops's own recurring schedule
+    (`run_untracked_shows_once`, folded into the existing hourly
+    `run_daily_and_weekly_once` tier — cheap, a handful of global calls
+    not per-show, same reasoning `run_animeschedule_once`/
+    `run_local_presence_once` already share that tick for; "no new
+    interval unless a real technical constraint forces one" stays
+    intact). Reuses `show_backfill.preview_backfill()`'s own combined
+    computation (Sonarr/Radarr untracked catalog items + the AniList-
+    list sweep, already classified) directly rather than a second,
+    narrower Sonarr/Radarr-only pass — SCOPE.md's own resolution text
+    names "Sonarr/AniList" together, and `previewShowBackfill` already
+    *is* this exact computation, one-shot; this is the same thing, run
+    on a schedule and persisted.
+    - **Still never auto-`addShow`s** — that decision (§5.1) is
+      untouched, only how findings surface changes, exactly as
+      SCOPE.md's own B.11 reconnaissance note specifies.
+    - **Deliberately minimal, no resolve/dismiss mutation**, unlike
+      `pending_review`: a finding is only ever removed automatically,
+      by no longer appearing in a fresh sweep (the show got tracked
+      some other way, or genuinely disappeared from its source) —
+      upsert-by-`(service, external_id)` (natural key, same
+      prefixed-id-plus-natural-key shape `show_service_presence`
+      already established) with `first_seen_at` preserved and
+      `last_seen_at`/classification refreshed on every still-current
+      finding, anything no longer present deleted outright. Matches
+      "small new reviewable list", not a second review-and-resolve
+      workflow — easy to add a dismiss action later if it turns out to
+      be needed, not built speculatively now.
+    - **`preview_backfill()` gained a `path` field** (Sonarr/Radarr
+      entries carry the real one, an AniList-sweep entry has none) —
+      not exposed on `BackfillPreviewItem`'s own GraphQL shape (a safe,
+      additive superset; Ariadne only reads what a type declares),
+      needed so `untracked_show_finding.path` has something real to
+      persist. `UntrackedShowFinding.externalId` is `String!` (matches
+      `ShowExternalId.externalId`'s own TEXT-storage precedent), not
+      `Int!` like `BackfillPreviewItem`/`UntrackedRemoteShow` — those
+      predate persistence and never needed to match a stored column's
+      actual type.
+    - **New GraphQL surface**: `UntrackedShowFinding`/
+      `UntrackedShowFindingEdge`/`UntrackedShowFindingConnection`
+      (Relay-paginated, same shape every other real persisted entity
+      already gets — this is a genuine, growing table now, not a
+      one-shot computed list like `previewShowBackfill`'s own items),
+      `Query.untrackedShowFindings`, `UntrackedShowPollResult`
+      (`found`/`newFindings`/`resolvedFindings` — `found` is the total
+      current list, not itself a change, so `run_untracked_shows_once`
+      excludes it from the count it returns, matching every other
+      tier's "count real changes" convention), `Mutation
+      .pollUntrackedShows`.
+    - **Verified**: 589 tests passing (was 577; 12 new — 6 in the new
+      `test_untracked_sweep.py` — insert/refresh/prune/idempotent-
+      rerun/empty, all against a real migrated SQLite DB — 2 scheduler
+      tests (`run_untracked_shows_once`'s own sum, the fake client's
+      new `poll_untracked_shows`), 1 `test_ops_lcars_client.py` test,
+      1 `preview_backfill` path-propagation test in
+      `test_show_backfill.py`, 2 `test_server.py` wiring tests — a
+      clean no-op with nothing configured, and a real GraphQL-level
+      round trip confirming `UntrackedShowFindingConnection`'s own
+      enum/camelCase/nullable-path wiring resolves correctly against a
+      directly-inserted row), `ruff check .` clean (CI's own actual
+      gate — `ruff format --check` separately surfaced pre-existing
+      drift across the whole `migrations/` directory, unrelated to
+      this step, left untouched rather than reformatted out of scope),
+      clean-install sanity check (fresh venv, real `pip install
+      -e .[dev]`) confirmed the schema builds with
+      `untrackedShowFindings`/`pollUntrackedShows` present and
+      correctly typed, `untracked_sweep.sweep_untracked_shows` imports
+      cleanly, and a genuinely fresh `alembic upgrade head` run against
+      an empty DB in that clean venv creates `untracked_show_finding`
+      correctly. Migration round-trip (`upgrade head` → `downgrade -1`
+      → `upgrade head` again) verified directly — no `STORED` generated
+      column involved here, so none of the same-day `alembic downgrade`
+      bug's failure mode applies to this one.
   - [ ] **B.11f — calendar core render path**: switch from local
     Sonarr/AniList computation to LCARS reads (via B.11c's
     `episodesInRange`) for tracking/air-date/availability state, per

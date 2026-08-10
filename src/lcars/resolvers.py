@@ -43,6 +43,7 @@ from lcars import (
     service_presence,
     show_backfill,
     shows,
+    untracked_sweep,
     util,
 )
 
@@ -1231,6 +1232,15 @@ def resolve_preview_show_backfill(_, info):
     return show_backfill.preview_backfill(conn)
 
 
+@query.field("untrackedShowFindings")
+def resolve_untracked_show_findings(_, info, **page_args):
+    """§5.2, B.11e — the persisted result of pollUntrackedShows below,
+    not a recomputation (a Query stays side-effect free)."""
+    return pagination.paginate(
+        db.get_connection(), "untracked_show_finding", "1 = 1", (), **page_args
+    )
+
+
 @mutation.field("backfillUntrackedShows")
 def resolve_backfill_untracked_shows(_, info):
     """§5.1/§5.2, B.11d — the real run. No require_client(): each
@@ -1245,6 +1255,17 @@ def resolve_backfill_untracked_shows(_, info):
     own schema.graphql docstring for the full rationale."""
     conn = db.get_connection()
     return show_backfill.backfill_untracked_shows(conn)
+
+
+@mutation.field("pollUntrackedShows")
+def resolve_poll_untracked_shows(_, info):
+    """§5.2, B.11e — untracked_sweep.py's own recurring sweep. No
+    require_client() — same passive/not-a-changed_by-column reasoning
+    every other poll* mutation already established; called by Ops's own
+    automatic loop, not a human-triggered one-shot like
+    backfillUntrackedShows above."""
+    conn = db.get_connection()
+    return untracked_sweep.sweep_untracked_shows(conn)
 
 
 @mutation.field("pollAnimeSchedule")
