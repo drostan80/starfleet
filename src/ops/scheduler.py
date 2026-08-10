@@ -5,7 +5,9 @@ sweep, riding B.1's own hourly tick), B.7 (show_service_presence
 refresh, split across two cadences — the `local` rollup rides the
 hourly tick, Sonarr/Radarr catalog matching rides B.2's monthly one),
 B.8b (episode_movie_link automatic tmdb_match derivation, also riding
-the hourly tick — pure internal SQL, no external HTTP call at all).
+the hourly tick — pure internal SQL, no external HTTP call at all),
+B.10 (proactive MAL refresh-token renewal, self-gating on its own
+7-day checkpoint so it too rides the hourly tick cheaply).
 
 Each `run_*_once()` is the real, testable unit — one full sweep,
 exercised directly by a test with no infinite loop or real sleep
@@ -157,22 +159,40 @@ async def run_episode_movie_link_reconciliation_once(client: LcarsClient) -> int
     )
 
 
+async def run_mal_token_refresh_once(client: LcarsClient) -> int:
+    """§6.9, B.10 — the proactive weekly-ish MAL refresh-token renewal
+    (refreshMalTokenIfDue): self-gating on LCARS's own internal 7-day
+    checkpoint, so an outbound HTTP call to MAL only actually happens
+    on the rare tick it's due — same "cheap no-op almost every call"
+    shape run_local_presence_once/run_episode_movie_link_reconciliation_
+    once already ride the hourly tick with. Returns 1 if a refresh
+    genuinely happened this call, else 0 — same "count real changes"
+    convention as every other tier, just boolean-shaped here since
+    there's only ever one credential to refresh, not a list."""
+    result = await client.refresh_mal_token_if_due()
+    return 1 if result["refreshed"] else 0
+
+
 async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     """B.1's daily tier, B.2's weekly tier, B.5's animeschedule sweep,
-    B.7's local-presence rollup, and B.8b's episode_movie_link
-    reconciliation share one loop/interval (run_forever's own docstring
-    explains why the weekly tier doesn't need its own timer; B.5's own
-    module docstring explains why animeschedule can't wait for a daily
-    one; B.7's local rollup and B.8b's reconciliation are both
-    negligible-cost, no-external-HTTP SQL, no reason at all not to
-    share this tick) — this is the single unit that loop actually calls
-    each tick. Returns the combined count, for the caller to log."""
+    B.7's local-presence rollup, B.8b's episode_movie_link
+    reconciliation, and B.10's MAL token refresh check share one loop/
+    interval (run_forever's own docstring explains why the weekly tier
+    doesn't need its own timer; B.5's own module docstring explains why
+    animeschedule can't wait for a daily one; B.7's local rollup and
+    B.8b's reconciliation are both negligible-cost, no-external-HTTP
+    SQL; B.10's refresh check self-gates on its own 7-day checkpoint, so
+    an hourly tick just means "checked cheaply, acted rarely" — no
+    reason at all not to share this tick) — this is the single unit
+    that loop actually calls each tick. Returns the combined count, for
+    the caller to log."""
     daily = await run_once(client)
     weekly = await run_weekly_once(client)
     animeschedule = await run_animeschedule_once(client)
     local_presence = await run_local_presence_once(client)
     episode_movie_links = await run_episode_movie_link_reconciliation_once(client)
-    return daily + weekly + animeschedule + local_presence + episode_movie_links
+    mal_token_refresh = await run_mal_token_refresh_once(client)
+    return daily + weekly + animeschedule + local_presence + episode_movie_links + mal_token_refresh
 
 
 async def _loop(coro_fn, client: LcarsClient, interval_seconds: int, label: str) -> None:
@@ -231,6 +251,9 @@ async def run_forever(
     presence rollup rides it too — negligible SQL-only cost, no reason
     not to share. B.8b's episode_movie_link reconciliation shares it for
     the identical reason — no external HTTP call in that sweep either.
+    B.10's MAL token refresh check shares it too — a real outbound call
+    to MAL, but self-gated on its own 7-day checkpoint, so an hourly
+    check is cheap even though the actual refresh itself is rare.
     The monthly tier is unconditional/not self-limiting,
     so it gets its own, much-longer-period loop (SCOPE.md §5.5's B.2
     note, BUILD_PLAN.md's B.2 entry); B.7's own Sonarr/Radarr catalog
@@ -246,7 +269,7 @@ async def run_forever(
             run_daily_and_weekly_once,
             client,
             interval_seconds,
-            "daily+weekly+animeschedule+local_presence+episode_movie_links",
+            "daily+weekly+animeschedule+local_presence+episode_movie_links+mal_token_refresh",
         ),
         _loop(run_monthly_once, client, monthly_interval_seconds, "monthly+catalog_presence"),
         _availability_loop(client),

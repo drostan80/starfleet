@@ -33,7 +33,13 @@ def conn(tmp_path) -> sqlite3.Connection:
 def test_get_all_returns_unknown_placeholders_with_no_rows_at_all(conn):
     conn.commit()
     result = service_health.get_all(conn)
-    assert [r["service"] for r in result] == ["sonarr", "radarr", "anilist", "animeschedule"]
+    assert [r["service"] for r in result] == [
+        "sonarr",
+        "radarr",
+        "anilist",
+        "animeschedule",
+        "mal",
+    ]
     assert all(r["status"] == "unknown" for r in result)
     assert all(r["last_checked_at"] is None for r in result)
     assert all(r["last_success_at"] is None for r in result)

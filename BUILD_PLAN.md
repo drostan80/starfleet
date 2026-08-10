@@ -2476,7 +2476,7 @@ background scheduler.
     `pagination.py`'s own docstring already documents (a real
     silently-null `pageInfo` bug that went unnoticed pre-A.11 for
     exactly this reason). Added.
-- [ ] **B.10 — MAL integration** (§6.9 — can start any time after
+- [x] **B.10 — MAL integration** (§6.9 — can start any time after
   Phase A's push infrastructure exists; doesn't have to wait for the
   rest of Phase B specifically):
   - OAuth2 app registration (free, self-service).
@@ -2493,6 +2493,114 @@ background scheduler.
     (§6.1/§6.9) — every show pushed to AniList gets the same push to
     MAL, same tracked-show set. No discrepancy-checking logic here;
     that's the separate, later drift-detection work below.
+  - **Legacy score import is PC.2's job, not this step's** — cross-
+    checked before assuming this bullet meant B.10 had to build it:
+    `PC.2 — One-time historical imports` already explicitly names "MAL
+    legacy scores" as its own scope. Confirmed by cross-reference, not
+    built twice.
+  - **Registration/verification sequencing, asked directly**: unlike
+    AniList (reuses Data/aniq's already-registered app), MAL had never
+    been registered in this project — no existing app to reuse, and
+    registration is a browser + the user's own MAL account, not
+    something buildable unilaterally. Two options presented (build
+    unverified now vs. register first); user chose **register first,
+    then build**, so this step closes with the same real live
+    verification every prior B-step got, not fake-client-only coverage.
+  - **Real correction found live during registration, not from docs**:
+    §6.9's own assumption ("client_id + client_secret on approval",
+    mirroring AniList's shape) is wrong for the app type LCARS actually
+    needs. MAL's "Other" app type (correct for a CLI/server tool) is a
+    PKCE **public client** and issues no `client_secret` at all — "Web"
+    apps get one, but that's the wrong type here. `mal_client.py`
+    treats `client_secret` as optional end-to-end, never assumed
+    present. SCOPE.md §6.9 corrected with the full finding.
+  - **Redirect URI, a real qBittorrent-port collision caught before
+    registering**: `http://localhost:8080/`, the first pick, collides
+    with qBittorrent's own default WebUI port on the user's machine —
+    caught by the user directly, not discovered live. Settled on
+    `http://localhost:1701/` instead (thematically apt, and clear of
+    qBittorrent/Sonarr/Radarr/LCARS's own ports) — nothing needs to
+    actually listen there; the code arrives in the browser's own
+    address bar after MAL's redirect, same manual-copy shape
+    `anilist_client.py`'s PIN-redirect flow already uses.
+  - **Refresh-token rotation, confirmed live rather than left
+    ambiguous** — MAL's own written docs don't clearly state whether
+    the `refresh_token` grant resets its own 1-month clock on use, so
+    this was verified directly against the user's real tokens (see the
+    live-verification note below) rather than assumed either way: **it
+    rotates** — a genuinely new `refresh_token` came back. Confirms
+    this bullet's own "build the renewal job now" premise is
+    technically sound, not built on an untested assumption.
+    `refresh_access_token()` still falls back to the token just used if
+    a response ever omitted one (defensive, not a hedge against real
+    doubt anymore), and both values are persisted together on every
+    refresh (`config.save_mal_tokens()`).
+  - **Built**: `mal_client.py` (new) — PKCE OAuth (plain method,
+    `generate_code_verifier()`/`authorize_url()`/`exchange_code()`/
+    `refresh_access_token()`), form-encoded (not GraphQL/JSON) REST
+    push (`update_my_list_status()`), same connect/timeout/HTTP-error/
+    auth-error shape `anilist_client.py` already established.
+    `lcars mal-login` (cli.py) — same interactive/one-time bootstrap
+    shape as `anilist-login`, but only requires `mal_client_id` up
+    front (never a secret). `config.py` gains `mal_client_id`/
+    `_secret`/`mal_access_token`/`mal_refresh_token`/
+    `mal_token_refreshed_at` (all `_FILE`-secret-mount-capable per
+    A.23, `mal_token_refreshed_at` deliberately not treated as a
+    secret) and `save_mal_tokens()` (persists both tokens + a
+    timestamp together, always, correct under either rotation
+    reading). Score/status push wired into `setScore`/`setStatus`/
+    `setSeasonScore` alongside the existing AniList push, keyed on
+    `season.mal_id` (already populated by B.2's own Fribb
+    reconciliation since A.4 — no new crosswalk needed), same
+    fallback/best-effort/`pending_review`-on-failure shape
+    (`field = "mal_push"`). New `refreshMalTokenIfDue` mutation:
+    self-gated on an internal 7-day checkpoint (same "checkpoint
+    decides, not a separate due-query" shape `pollAnimeSchedule`/
+    `pollFileAvailability` already use), rides the existing hourly
+    tick (no new Ops interval) rather than the "weekly" language taken
+    literally as a new one. `service_health` extended to a 5th
+    tracked service (`mal`, new migration `2818c7efae13`) — hooked at
+    the refresh call only, matching AniList's existing scope exactly
+    (push failures aren't hooked for either service, only fetch/
+    refresh paths are) — a small consistency gap closed on the same
+    "found it, closed it" precedent B.6/B.8b/B.9 already established,
+    not something this step's own text asked for.
+  - **A real cross-cutting bug fixed before it could ever hit
+    production, not hypothetical**: `config.get_current()` is a
+    process-wide singleton set once at startup — persisting refreshed
+    tokens to `lcars.ini` alone would leave every push the same
+    running process makes afterward reading the *stale* in-memory
+    access_token until a restart. `refreshMalTokenIfDue` updates both
+    the file (`save_mal_tokens()`) and the live singleton's own
+    attributes in the same call.
+  - **Live-verified end-to-end, 2026-08-10, not just against fakes —
+    all three real code paths, not just the two originally planned**:
+    the user registered a real MAL app, pasted the client_id, and
+    walked through the actual PKCE authorize/exchange with their real
+    MAL account — a genuine `access_token`/`refresh_token` pair was
+    minted and persisted to the real `~/.config/starfleet/lcars/
+    lcars.ini`. A live `refresh_access_token()` call (prompted by
+    review, not part of the original close-out plan) confirmed the
+    rotation finding above directly, and re-persisted the rotated
+    pair. Closed with one real live push (`update_my_list_status`,
+    anime id 59985 -> `completed`), confirmed against MAL's actual API
+    with the full response object returned, not mocked.
+  - **Real gap caught in review, before commit**: `_STATUS_TO_MAL` is a
+    bare dict lookup keyed on `show.status` — checked the actual CHECK
+    constraint directly rather than trusting it matched (it does, all
+    5 values), added a comment saying so explicitly, and a regression
+    test walking every real status value through `setStatus` end-to-end
+    to lock it in (the same gap shape would silently break `setStatus`'s
+    own "push never fails the local write" invariant if a status enum
+    value were ever added without updating this dict).
+  - **Verified**: 514 tests passing (was 473), `ruff check .`/`ruff
+    format --check` clean, clean-install sanity check (fresh venv,
+    real `pip install`) confirmed the schema still builds (110 types,
+    `refreshMalTokenIfDue` present on `Mutation`, `MAL` present in
+    `TrackedService`), migration round-trip (upgrade/downgrade/
+    upgrade) confirmed clean for the new `service_health` CHECK-
+    constraint widening, and the real live OAuth/refresh-rotation/push
+    checks above.
 - [ ] **B.11 — Data's role shrinks**: calendar reads tracking/air-date/
   availability state from LCARS instead of computing it locally.
   Data's status bar gains per-source sync-health indicators sourced

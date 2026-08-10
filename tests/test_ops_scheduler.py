@@ -20,6 +20,7 @@ from ops.scheduler import (
     run_episode_movie_link_reconciliation_once,
     run_forever,
     run_local_presence_once,
+    run_mal_token_refresh_once,
     run_monthly_once,
     run_once,
     run_season_reconciliation_once,
@@ -45,6 +46,7 @@ class _FakeClient:
         local_presence_result: dict | None = None,
         catalog_presence_result: dict | None = None,
         episode_movie_link_result: dict | None = None,
+        mal_token_refresh_result: dict | None = None,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
@@ -68,6 +70,7 @@ class _FakeClient:
             "unmatched": 0,
             "availabilitySynced": 0,
         }
+        self._mal_token_refresh_result = mal_token_refresh_result or {"refreshed": False}
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -114,6 +117,9 @@ class _FakeClient:
 
     async def reconcile_episode_movie_links(self) -> dict:
         return self._episode_movie_link_result
+
+    async def refresh_mal_token_if_due(self) -> dict:
+        return self._mal_token_refresh_result
 
 
 # --- run_once (B.1) ---------------------------------------------------------
@@ -321,7 +327,7 @@ async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_it
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
 
 
-async def test_run_daily_and_weekly_once_sums_all_five_tiers():
+async def test_run_daily_and_weekly_once_sums_all_six_tiers():
     client = _FakeClient(
         due_shows=[{"id": "s-a"}],
         due_seasons=[_season("z-a", "s-b")],
@@ -333,11 +339,25 @@ async def test_run_daily_and_weekly_once_sums_all_five_tiers():
             "unmatched": 0,
             "availabilitySynced": 0,
         },
+        mal_token_refresh_result={"refreshed": True},
     )
     count = await run_daily_and_weekly_once(client)
-    assert count == 6
+    assert count == 7
     assert client.refreshed == ["s-a"]
     assert client.reconciled == [("s-b", 1)]
+
+
+# --- run_mal_token_refresh_once (B.10) ----------------------------------------
+
+
+async def test_run_mal_token_refresh_once_returns_one_when_a_refresh_happened():
+    client = _FakeClient(mal_token_refresh_result={"refreshed": True})
+    assert await run_mal_token_refresh_once(client) == 1
+
+
+async def test_run_mal_token_refresh_once_returns_zero_on_a_no_op():
+    client = _FakeClient(mal_token_refresh_result={"refreshed": False})
+    assert await run_mal_token_refresh_once(client) == 0
 
 
 # --- run_episode_movie_link_reconciliation_once (B.8b) -----------------------
@@ -405,7 +425,7 @@ async def test_run_forever_wires_up_all_three_loops(monkeypatch):
         (
             "run_daily_and_weekly_once",
             3600,
-            "daily+weekly+animeschedule+local_presence+episode_movie_links",
+            "daily+weekly+animeschedule+local_presence+episode_movie_links+mal_token_refresh",
         ),
         ("run_monthly_once", 2592000, "monthly+catalog_presence"),
     }

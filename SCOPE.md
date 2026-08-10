@@ -1859,10 +1859,21 @@ as AniList/Sonarr/Radarr.
   - No migration needed — `air_date_source`'s CHECK constraint already
     included `'animeschedule'` since the initial schema (§5.2).
 - **Service-level health**: per-integration reachability/rate-limit
-  status (Sonarr/Radarr/AniList/animeschedule.net), distinct from any
-  individual show's tracking state. Tracked by Ops (Phase B's
-  scheduler); surfaces in Data's status bar as **per-source**
-  indicators, not one aggregate value.
+  status (Sonarr/Radarr/AniList/animeschedule.net, **+ MAL, added
+  B.10** — see below), distinct from any individual show's tracking
+  state. Tracked by Ops (Phase B's scheduler); surfaces in Data's
+  status bar as **per-source** indicators, not one aggregate value.
+
+  **Extended 2026-08-10 (B.10)**: MAL's own proactive refresh-token
+  renewal (`refreshMalTokenIfDue`) is a real outbound HTTP call, the
+  same class of thing this table exists to track — not something
+  BUILD_PLAN.md's own B.10 text asked for explicitly, but the same
+  "close the small consistency gap" precedent B.6/B.8b/B.9 already
+  established. Scoped to the refresh call only, matching this table's
+  existing AniList scope exactly (fetch/refresh paths are hooked;
+  individual score/status push failures, for AniList and MAL alike,
+  are not — those go through `pending_review` instead, `field =
+  "anilist_push"`/`"mal_push"`).
 
   **Resolved 2026-08-09 (B.6)**: two genuinely open questions this
   section's own text didn't answer, both asked directly rather than
@@ -1963,6 +1974,36 @@ Push-only for now, confirmed, same as AniList (§6.8's principle) —
 treated as AniList's backup mirror (§6.1), same tracked-show set.
 Drift detection against MAL's actual state is deferred future work,
 not designed yet — see §3 principle 5 and §10.6 item 12.
+
+**Resolved 2026-08-10 (B.10), two real corrections found live during
+build, not assumed from docs**:
+- **No `client_secret` at all for the app type LCARS actually
+  registered.** This section's own "client_id + client_secret on
+  approval" assumed every app gets both, mirroring AniList's shape —
+  wrong for MAL specifically. MAL's "Other" app type (the correct
+  choice for a CLI/server tool, confirmed live registering the user's
+  own app) is a PKCE **public client** and issues no secret; "Web"
+  apps get one, but that's the wrong type here. `mal_client.py` treats
+  `client_secret` as optional end-to-end — omitted from every request
+  entirely when unset, never assumed present.
+- **Refresh-token rotation, confirmed live, not left ambiguous**: MAL's
+  own written docs don't clearly state whether the `refresh_token`
+  grant issues a genuinely new token or echoes the one just used — so
+  this was verified directly against the user's real tokens rather
+  than assumed either way: **it rotates**, a different refresh_token
+  came back from a live call. This confirms BUILD_PLAN.md's own "build
+  the renewal job now" premise is technically sound — a successful
+  proactive refresh genuinely does reset the 1-month clock, not just
+  mint a fresh access token. `refresh_access_token()` still falls back
+  to the token just used if a response ever omitted one (defensive,
+  not because the behavior is actually in doubt), and both values are
+  persisted together on every refresh.
+
+Live-verified end-to-end 2026-08-10, not just against fakes: real
+PKCE authorize/exchange against the user's own freshly-registered app,
+a real refresh call confirming rotation (above), and a real
+`update_my_list_status` push (anime id 59985 -> `completed`) confirmed
+against the live API, full response object included.
 
 ### 6.10 Movies (Phase A schema, Phase B sync)
 

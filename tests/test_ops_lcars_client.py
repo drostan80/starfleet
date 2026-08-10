@@ -286,6 +286,18 @@ async def test_reconcile_episode_movie_links_sends_no_variables_and_returns_the_
     await client.aclose()
 
 
+async def test_refresh_mal_token_if_due_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        return httpx.Response(200, json={"data": {"refreshMalTokenIfDue": {"refreshed": True}}})
+
+    client = _client(handler)
+    result = await client.refresh_mal_token_if_due()
+    assert result == {"refreshed": True}
+    await client.aclose()
+
+
 async def test_backfill_file_availability_sends_no_variables_and_returns_the_result():
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read())

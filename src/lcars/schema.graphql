@@ -836,15 +836,25 @@ type EpisodeMovieLinkReconcileResult {
 }
 
 # ---------------------------------------------------------------------------
+# §6.1/§6.9 MAL integration (B.10)
+# ---------------------------------------------------------------------------
+
+"refreshMalTokenIfDue's own confirmation summary. refreshed: true only when a genuine refresh call was actually made and succeeded — false covers every no-op case alike (not configured, not yet due, or a failed attempt this pass) since none of those need distinguishing from Ops's own side (it just retries next hourly tick regardless)."
+type MalTokenRefreshResult {
+  refreshed: Boolean!
+}
+
+# ---------------------------------------------------------------------------
 # §6.7 per-integration service-health tracking (B.6)
 # ---------------------------------------------------------------------------
 
-"The exact four services §6.7 names for health tracking — deliberately excludes the `local` pseudo-service (§5.4/ShowServicePresence), a SQL aggregate over episode rows, not a reachability concept."
+"The five services tracked for health — the original four §6.7 names plus MAL (B.10, added once refreshMalTokenIfDue gave it a real outbound call to hook) — deliberately excludes the `local` pseudo-service (§5.4/ShowServicePresence), a SQL aggregate over episode rows, not a reachability concept."
 enum TrackedService {
   SONARR
   RADARR
   ANILIST
   ANIMESCHEDULE
+  MAL
 }
 
 "UNKNOWN is never stored (service_health's own CHECK constraint only allows ok/unreachable) — it's synthesized by the serviceHealth resolver for a service with no row yet (never configured, or just not polled since this table was added), so a caller never has to treat \"missing from the list\" as an implicit fourth state."
@@ -1210,6 +1220,18 @@ type Mutation {
   interval.
   """
   reconcileEpisodeMovieLinks: EpisodeMovieLinkReconcileResult!
+
+  """
+  §6.9, B.10 — the proactive weekly-ish MAL refresh-token renewal job.
+  Self-gating (an internal 7-day checkpoint, mal_token_refreshed_at,
+  same "checkpoint decides" shape pollAnimeSchedule/pollFileAvailability
+  already use) — Ops calls this unconditionally every hourly tick, same
+  as pollLocalServicePresence/reconcileEpisodeMovieLinks; almost every
+  call is a cheap no-op. Not yet authenticated (`lcars mal-login` never
+  run) is the same "not configured" no-op every other best-effort
+  integration here gets, never a failure.
+  """
+  refreshMalTokenIfDue: MalTokenRefreshResult!
 
   # -- 5.6 pending_review ----------------------------------------------------
   """

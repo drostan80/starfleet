@@ -34,6 +34,7 @@ from lcars import (
     fuzzy,
     ids,
     local_audit,
+    mal_client,
     metadata,
     pagination,
     pending_review,
@@ -93,7 +94,7 @@ ENUMS = [
     _enum("EpisodeMovieLinkSource", "tmdb_match", "manual", "unmatched"),
     _enum("ResolvedByClient", "data", "holodeck", "captains_log"),
     _enum("AvailabilityStatus", "unavailable", "downloading", "available"),
-    _enum("TrackedService", "sonarr", "radarr", "anilist", "animeschedule"),
+    _enum("TrackedService", "sonarr", "radarr", "anilist", "animeschedule", "mal"),
     # "unknown" is never a real DB value (service_health's own CHECK
     # constraint only allows ok/unreachable) — included here anyway
     # since it's a real value service_health.get_all() can return
@@ -276,6 +277,87 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
         except anilist_client.AniListError as e:
             pending_review.open_or_extend(
                 conn, "season", season["id"], "anilist_push", "anilist", None, str(e)
+            )
+
+
+# -- MAL push (§6.1/§6.9, B.10) ----------------------------------------------
+#
+# Same best-effort/pending_review-on-failure shape as the AniList push section
+# above, kept as its own parallel set of functions rather than folded into
+# the AniList ones — the two services key on the same season.mal_id/
+# anilist_id pair and get called from the same three resolvers below, but
+# have genuinely different score scales (÷2 integer vs ×5 float) and status
+# enums, so a shared function would need to branch on service anyway.
+
+_STATUS_TO_MAL = {
+    # Exhaustive against show.status's own CHECK constraint (checked directly,
+    # not assumed) — all 5 values map, so this plain dict lookup can never
+    # KeyError and break the "push never fails the local write" invariant
+    # every push path in this file honors (same shape _STATUS_TO_ANILIST
+    # already relies on, unchanged here — just confirmed explicitly since
+    # this is the second dict leaning on that same assumption).
+    "watching": "watching",
+    "planned": "plan_to_watch",
+    "paused": "on_hold",
+    "completed": "completed",
+    "dropped": "dropped",
+    # deliberately no is_rewatching mapping here either — same §6.8/§6.9
+    # "rewatching never auto-toggles" policy _STATUS_TO_ANILIST already
+    # documents, MAL's own is_rewatching/num_times_rewatched fields are
+    # simply never sent (mal_client.update_my_list_status's own docstring).
+}
+
+
+def _push_mal_season_score(conn, season: dict, fallback_show_score) -> None:
+    """Mirrors _push_season_score above — same fallback rule (season's
+    own score, else the show's), same no-op-before-mal-login guard —
+    but MAL's score is 0-10 integer (§6.1: "÷2"), not AniList's 0-100
+    float, so the effective 0-20 quarter-point value is rounded, not
+    just scaled."""
+    if season["mal_id"] is None:
+        return
+    cfg = config.get_current()
+    if not cfg.mal_access_token:
+        return
+    effective_score = season["score"] if season["score"] is not None else fallback_show_score
+    if effective_score is None:
+        return
+    try:
+        mal_client.update_my_list_status(
+            cfg.mal_access_token, season["mal_id"], score=round(effective_score / 2)
+        )
+    except mal_client.MALError as e:
+        pending_review.open_or_extend(conn, "season", season["id"], "mal_push", "mal", None, str(e))
+
+
+def _push_mal_show_score(conn, show_id: str, show_score) -> None:
+    """Every one of the show's mal_id-linked seasons — mirrors
+    _push_show_score above."""
+    seasons = conn.execute(
+        "SELECT * FROM season WHERE show_id = ? AND mal_id IS NOT NULL", (show_id,)
+    ).fetchall()
+    for season in seasons:
+        _push_mal_season_score(conn, dict(season), show_score)
+
+
+def _push_mal_show_status(conn, show_id: str, status: str) -> None:
+    """Mirrors _push_show_status above — same show_id-wide push (no
+    per-season status concept), keyed on mal_id instead of anilist_id."""
+    cfg = config.get_current()
+    if not cfg.mal_access_token:
+        return
+    mal_status = _STATUS_TO_MAL[status]
+    seasons = conn.execute(
+        "SELECT id, mal_id FROM season WHERE show_id = ? AND mal_id IS NOT NULL", (show_id,)
+    ).fetchall()
+    for season in seasons:
+        try:
+            mal_client.update_my_list_status(
+                cfg.mal_access_token, season["mal_id"], status=mal_status
+            )
+        except mal_client.MALError as e:
+            pending_review.open_or_extend(
+                conn, "season", season["id"], "mal_push", "mal", None, str(e)
             )
 
 
@@ -1232,6 +1314,52 @@ def resolve_reconcile_episode_movie_links(_, info):
     return episode_movie_link.reconcile_episode_movie_links(conn)
 
 
+@mutation.field("refreshMalTokenIfDue")
+def resolve_refresh_mal_token_if_due(_, info):
+    """§6.9, B.10 — the proactive weekly-ish renewal job BUILD_PLAN.md's
+    own B.10 text calls for ("build the proactive refresh-token renewal
+    job now, not later"). Self-gating internally (same "a checkpoint
+    decides, not a separate due-query" shape pollAnimeSchedule/
+    pollFileAvailability already use) rather than B.1/B.2's per-item
+    due-query-list shape — this isn't a list of per-show items, it's one
+    global credential, so Ops calls it unconditionally every hourly
+    tick and almost every call is a cheap no-op. Not yet authenticated
+    (no mal_client_id or mal_refresh_token at all) is the same "not
+    configured" no-op every other best-effort integration here gets.
+
+    **A real fix specific to this mutation, not present anywhere else
+    in this codebase before now**: `config.get_current()` returns a
+    process-wide singleton set once at startup (config.py's own
+    docstring) — persisting the refreshed tokens to `lcars.ini` via
+    `save_mal_tokens()` alone would leave every push this same running
+    process makes afterward still reading the *stale* in-memory
+    access_token until a restart. Both the file and the live
+    singleton's own attributes are updated here."""
+    conn = db.get_connection()
+    cfg = config.get_current()
+    if not cfg.mal_client_id or not cfg.mal_refresh_token:
+        return {"refreshed": False}
+    cutoff = util.utc_iso_offset(-7)
+    due = cfg.mal_token_refreshed_at is None or cfg.mal_token_refreshed_at < cutoff
+    if not due:
+        return {"refreshed": False}
+    try:
+        access_token, refresh_token = mal_client.refresh_access_token(
+            cfg.mal_client_id, cfg.mal_client_secret, cfg.mal_refresh_token
+        )
+    except mal_client.MALError as e:
+        service_health.record_failure(conn, "mal", str(e))
+        conn.commit()
+        return {"refreshed": False}
+    service_health.record_success(conn, "mal")
+    config.save_mal_tokens(access_token, refresh_token)
+    cfg.mal_access_token = access_token
+    cfg.mal_refresh_token = refresh_token
+    cfg.mal_token_refreshed_at = util.now_utc_iso()
+    conn.commit()
+    return {"refreshed": True}
+
+
 @query.field("recommendedAvailabilityPollIntervalSeconds")
 def resolve_recommended_availability_poll_interval_seconds(_, info):
     conn = db.get_connection()
@@ -1263,6 +1391,7 @@ def resolve_set_status(_, info, show_id, status):
         (ids.generate_id(conn, "c"), show_id, row["status"], status, now, client),
     )
     _push_show_status(conn, show_id, status)  # §6.1/§6.8, A.9 — best-effort
+    _push_mal_show_status(conn, show_id, status)  # §6.1/§6.9, B.10 — best-effort
     conn.commit()
     return _get_show(conn, show_id)
 
@@ -1286,6 +1415,7 @@ def resolve_set_score(_, info, show_id, score):
         (ids.generate_id(conn, "o"), show_id, row["score"], rounded, now, client),
     )
     _push_show_score(conn, show_id, rounded)  # §6.1/§6.8, A.9 — best-effort
+    _push_mal_show_score(conn, show_id, rounded)  # §6.1/§6.9, B.10 — best-effort
     conn.commit()
     return _get_show(conn, show_id)
 
@@ -1307,6 +1437,7 @@ def resolve_set_season_score(_, info, season_id, score):
     )
     season["score"] = rounded
     _push_season_score(conn, season, fallback_show_score=None)  # A.9 — best-effort
+    _push_mal_season_score(conn, season, fallback_show_score=None)  # B.10 — best-effort
     conn.commit()
     return season_mapping.get_season(conn, season_id)
 

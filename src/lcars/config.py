@@ -39,12 +39,33 @@ not retrofitting a consumer that doesn't exist yet. No validation of
 the value (e.g. against `zoneinfo`) — no other value in this file is
 validated either, consistent with the pattern already established
 here.
+
+MAL OAuth credentials added here 2026-08-10 (B.10) — same shape as
+AniList's own (A.9), but `mal_client_secret` is genuinely optional
+end-to-end, not just optional in this dataclass: MAL's own app
+registration issued no secret at all for the "Other" (PKCE public
+client) app type LCARS registered as, confirmed live, not assumed
+(`mal_client.py`'s own module docstring has the correction against
+SCOPE.md §6.9's original assumption). `mal_refresh_token` is new
+relative to AniList's shape — AniList's access token doesn't expire in
+any way this codebase handles, MAL's does (1 hour) with a genuinely
+short-lived (1 month) refresh token behind it, so both halves of the
+pair are persisted (`save_mal_tokens()` below) and refreshed
+proactively (B.10's own `refreshMalTokenIfDue`, resolvers.py).
+`mal_token_refreshed_at` is the due-gate for that job — same "small
+last-checked timestamp, no new DB table" shape as everything else
+proactively refreshed on a schedule elsewhere in this codebase, kept
+in `lcars.ini` alongside the tokens themselves (not a DB row) since
+it's a single global credential's own bookkeeping, not per-show/
+per-season state.
 """
 
 import configparser
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from lcars import util
 
 # Nested under a shared "starfleet" namespace, not a bare "lcars" — same
 # collision-avoidance reasoning as Data's own runtime-state isolation
@@ -97,6 +118,16 @@ class Config:
     # Optional, same "not configured = same as not linked, no failure to
     # report" treatment metadata.py already gives Sonarr/Radarr.
     tmdb_api_key: str | None = None
+    # B.10 — mal_client_secret is genuinely optional even once configured
+    # (module docstring above); mal_access_token/mal_refresh_token are
+    # LCARS's own, minted via `lcars mal-login` (cli.py) and kept fresh by
+    # refreshMalTokenIfDue (resolvers.py). mal_token_refreshed_at gates
+    # that job — a plain ISO timestamp, not validated/parsed here.
+    mal_client_id: str | None = None
+    mal_client_secret: str | None = None
+    mal_access_token: str | None = None
+    mal_refresh_token: str | None = None
+    mal_token_refreshed_at: str | None = None
 
 
 def _resolve_secret(value: str | None, env_var: str) -> str | None:
@@ -142,12 +173,17 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.radarr_url = parser["lcars"].get("radarr_url", fallback=None)
             cfg.radarr_api_key = parser["lcars"].get("radarr_api_key", fallback=None)
             cfg.anilist_client_id = parser["lcars"].get("anilist_client_id", fallback=None)
-            cfg.anilist_client_secret = parser["lcars"].get(
-                "anilist_client_secret", fallback=None
-            )
+            cfg.anilist_client_secret = parser["lcars"].get("anilist_client_secret", fallback=None)
             cfg.anilist_access_token = parser["lcars"].get("anilist_access_token", fallback=None)
             cfg.home_timezone = parser["lcars"].get("home_timezone", fallback=cfg.home_timezone)
             cfg.tmdb_api_key = parser["lcars"].get("tmdb_api_key", fallback=None)
+            cfg.mal_client_id = parser["lcars"].get("mal_client_id", fallback=None)
+            cfg.mal_client_secret = parser["lcars"].get("mal_client_secret", fallback=None)
+            cfg.mal_access_token = parser["lcars"].get("mal_access_token", fallback=None)
+            cfg.mal_refresh_token = parser["lcars"].get("mal_refresh_token", fallback=None)
+            cfg.mal_token_refreshed_at = parser["lcars"].get(
+                "mal_token_refreshed_at", fallback=None
+            )
     cfg.bearer_token = _resolve_secret(cfg.bearer_token, "LCARS_BEARER_TOKEN")
     env_db_path = os.environ.get("LCARS_DB_PATH")
     if env_db_path is not None:
@@ -165,6 +201,15 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     )
     cfg.home_timezone = os.environ.get("LCARS_HOME_TIMEZONE", cfg.home_timezone)  # not a secret
     cfg.tmdb_api_key = _resolve_secret(cfg.tmdb_api_key, "LCARS_TMDB_API_KEY")
+    cfg.mal_client_id = _resolve_secret(cfg.mal_client_id, "LCARS_MAL_CLIENT_ID")
+    cfg.mal_client_secret = _resolve_secret(cfg.mal_client_secret, "LCARS_MAL_CLIENT_SECRET")
+    cfg.mal_access_token = _resolve_secret(cfg.mal_access_token, "LCARS_MAL_ACCESS_TOKEN")
+    cfg.mal_refresh_token = _resolve_secret(cfg.mal_refresh_token, "LCARS_MAL_REFRESH_TOKEN")
+    # mal_token_refreshed_at isn't a secret (a plain timestamp) — same
+    # non-secret treatment sonarr_url/radarr_url/home_timezone already get.
+    cfg.mal_token_refreshed_at = os.environ.get(
+        "LCARS_MAL_TOKEN_REFRESHED_AT", cfg.mal_token_refreshed_at
+    )
     return cfg
 
 
@@ -215,6 +260,44 @@ def save_anilist_token(token: str, config_path: Path = CONFIG_PATH) -> None:
     if not parser.has_section("lcars"):
         parser.add_section("lcars")
     parser["lcars"]["anilist_access_token"] = token
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with config_path.open("w") as f:
+        parser.write(f)
+    config_path.chmod(0o600)
+
+
+def save_mal_tokens(access_token: str, refresh_token: str, config_path: Path = CONFIG_PATH) -> None:
+    """B.10 — saved both by `lcars mal-login` (cli.py, the initial
+    exchange) and by `refreshMalTokenIfDue` (resolvers.py, every
+    proactive refresh) — both halves of the pair are always written
+    together, never just the access token, since MAL's own refresh-
+    rotation behavior is ambiguous (mal_client.py's own module
+    docstring) and this is correct regardless of which way it turns
+    out to behave. Also stamps `mal_token_refreshed_at` — the due-gate
+    `refreshMalTokenIfDue` reads back on its next call. Same merge-not-
+    overwrite/chmod-600 shape as save_bearer_token()/save_anilist_
+    token() above.
+
+    **A real tension flagged, not silently hit in production**:
+    `_resolve_secret`'s env/`_FILE` precedence (A.23) means an
+    env-supplied `LCARS_MAL_ACCESS_TOKEN`/`_REFRESH_TOKEN` would
+    silently outrank whatever this function just wrote to `lcars.ini`
+    on the *next* `load_config()` call — the exact tension this
+    module's own `_resolve_secret` docstring already names for
+    `anilist_access_token` ("written by LCARS itself at runtime, which
+    a read-only secret mount can't support"). Not a new problem this
+    function introduces, and not solved differently here — same
+    accepted tradeoff, just worth restating since MAL's token
+    genuinely does get rewritten on a live schedule (weekly-ish),
+    unlike AniList's essentially-static one."""
+    parser = configparser.ConfigParser()
+    if config_path.exists():
+        parser.read(config_path)
+    if not parser.has_section("lcars"):
+        parser.add_section("lcars")
+    parser["lcars"]["mal_access_token"] = access_token
+    parser["lcars"]["mal_refresh_token"] = refresh_token
+    parser["lcars"]["mal_token_refreshed_at"] = util.now_utc_iso()
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w") as f:
         parser.write(f)

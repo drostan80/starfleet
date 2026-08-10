@@ -3,7 +3,7 @@ test_config.py pattern (file < env precedence, chmod 600 on save)."""
 
 from pathlib import Path
 
-from lcars.config import Config, load_config, save_bearer_token
+from lcars.config import Config, load_config, save_bearer_token, save_mal_tokens
 
 
 def test_defaults_when_no_file_and_no_env(tmp_path, monkeypatch):
@@ -140,6 +140,61 @@ def test_tmdb_api_key_env_var_overrides_file(tmp_path, monkeypatch):
     assert cfg.tmdb_api_key == "env-key"
 
 
+# --- MAL OAuth fields (B.10, §6.9) --------------------------------------------
+
+
+def test_mal_oauth_fields_load_from_file(tmp_path):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text(
+        "[lcars]\n"
+        "mal_client_id = mcid\n"
+        "mal_access_token = matok\n"
+        "mal_refresh_token = mrtok\n"
+        "mal_token_refreshed_at = 2026-08-10T00:00:00Z\n"
+    )
+    cfg = load_config(config_path=config_path)
+    assert cfg.mal_client_id == "mcid"
+    assert cfg.mal_client_secret is None  # never required — §6.9's own PKCE public-client finding
+    assert cfg.mal_access_token == "matok"
+    assert cfg.mal_refresh_token == "mrtok"
+    assert cfg.mal_token_refreshed_at == "2026-08-10T00:00:00Z"
+
+
+def test_mal_access_token_env_var_overrides_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text("[lcars]\nmal_access_token = from-file\n")
+    monkeypatch.setenv("LCARS_MAL_ACCESS_TOKEN", "from-env")
+    cfg = load_config(config_path=config_path)
+    assert cfg.mal_access_token == "from-env"
+
+
+def test_save_mal_tokens_round_trips_both_values_and_stamps_refreshed_at(tmp_path, monkeypatch):
+    monkeypatch.delenv("LCARS_MAL_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("LCARS_MAL_REFRESH_TOKEN", raising=False)
+    config_path = tmp_path / "lcars.ini"
+    save_mal_tokens("acc-1", "ref-1", config_path=config_path)
+    cfg = load_config(config_path=config_path)
+    assert cfg.mal_access_token == "acc-1"
+    assert cfg.mal_refresh_token == "ref-1"
+    assert cfg.mal_token_refreshed_at is not None
+
+
+def test_save_mal_tokens_chmods_owner_only(tmp_path):
+    config_path = tmp_path / "lcars.ini"
+    save_mal_tokens("acc-1", "ref-1", config_path=config_path)
+    mode = config_path.stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_save_mal_tokens_merges_rather_than_overwriting_other_fields(tmp_path):
+    config_path = tmp_path / "lcars.ini"
+    save_bearer_token("some-bearer-token", config_path=config_path)
+    save_mal_tokens("acc-1", "ref-1", config_path=config_path)
+    cfg = load_config(config_path=config_path)
+    assert cfg.bearer_token == "some-bearer-token"
+    assert cfg.mal_access_token == "acc-1"
+
+
 # --- Docker secrets / mounted secret files (A.23, 2026-08-09 consolidation
 # audit) — `<VAR>_FILE` wins over everything, same convention the official
 # postgres/mysql Docker images use, resolved after the user flagged
@@ -189,6 +244,10 @@ def test_every_secret_field_supports_file_env_var(tmp_path, monkeypatch):
         "LCARS_ANILIST_CLIENT_SECRET": "anilist_client_secret",
         "LCARS_ANILIST_ACCESS_TOKEN": "anilist_access_token",
         "LCARS_TMDB_API_KEY": "tmdb_api_key",
+        "LCARS_MAL_CLIENT_ID": "mal_client_id",
+        "LCARS_MAL_CLIENT_SECRET": "mal_client_secret",
+        "LCARS_MAL_ACCESS_TOKEN": "mal_access_token",
+        "LCARS_MAL_REFRESH_TOKEN": "mal_refresh_token",
     }
     for env_var, attr in fields.items():
         monkeypatch.delenv(env_var, raising=False)

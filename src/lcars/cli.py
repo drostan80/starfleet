@@ -7,13 +7,22 @@ registered AniList app (`anilist_client_id`/`_secret`, already in
 lcars.ini per config.py's own docstring) to mint LCARS's own
 independent access token, same PIN-redirect flow Data's own login
 already uses (no local callback server needed).
+
+`mal-login` added 2026-08-10 (B.10) — LCARS's own MAL OAuth bootstrap,
+same interactive/one-time shape as anilist-login above, adapted for
+PKCE (generates its own `code_verifier`, mal_client.py) and for
+`mal_client_secret` genuinely not existing for the "Other" public-
+client app type the user registered (mal_client.py's own module
+docstring has the live-verified correction). Only `mal_client_id` is
+required up front — unlike anilist-login, which requires both id and
+secret, since AniList's app genuinely has a secret to check for.
 """
 
 import argparse
 
 import uvicorn
 
-from lcars import anilist_client, config
+from lcars import anilist_client, config, mal_client
 
 
 def _cmd_serve(args: argparse.Namespace) -> None:
@@ -35,6 +44,27 @@ def _cmd_anilist_login(args: argparse.Namespace) -> None:
     print("Saved to lcars.ini — LCARS can now push scores/status to AniList.")
 
 
+def _cmd_mal_login(args: argparse.Namespace) -> None:
+    cfg = config.load_config()
+    if not cfg.mal_client_id:
+        raise SystemExit(
+            "mal_client_id must be set first — in lcars.ini's [lcars] section, or "
+            "LCARS_MAL_CLIENT_ID (§8). mal_client_secret is NOT required — MAL's "
+            "own PKCE public-client app type ('Other') issues none at all."
+        )
+    verifier = mal_client.generate_code_verifier()
+    print(
+        "Open this URL, authorize, and paste the code from the redirected URL's ?code= parameter:"
+    )
+    print(mal_client.authorize_url(cfg.mal_client_id, verifier))
+    code = input("Paste the code here: ").strip()
+    access_token, refresh_token = mal_client.exchange_code(
+        cfg.mal_client_id, cfg.mal_client_secret, code, verifier
+    )
+    config.save_mal_tokens(access_token, refresh_token)
+    print("Saved to lcars.ini — LCARS can now push scores/status to MAL.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="lcars", description="Starfleet's GraphQL server.")
     subparsers = parser.add_subparsers(dest="command")
@@ -48,6 +78,11 @@ def main() -> None:
         "anilist-login", help="interactively authorize LCARS's own AniList push access (A.9)"
     )
     anilist_login.set_defaults(func=_cmd_anilist_login)
+
+    mal_login = subparsers.add_parser(
+        "mal-login", help="interactively authorize LCARS's own MAL push access (B.10)"
+    )
+    mal_login.set_defaults(func=_cmd_mal_login)
 
     # No subcommand at all ("lcars" alone, e.g. the Dockerfile's CMD) still
     # means "serve", with serve's own --host/--port defaults — argparse

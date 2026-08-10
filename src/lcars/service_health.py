@@ -49,11 +49,21 @@ special-cased.
 `record_success`/`record_failure` silently no-op for a service outside
 `TRACKED_SERVICES` rather than needing every call site to filter
 first.
+
+**`mal` added 2026-08-10 (B.10)** — hooked at `resolvers.py`'s
+`refreshMalTokenIfDue` (the actual `mal_client.refresh_access_token()`
+call), same "close the small consistency gap" precedent B.6/B.8b/B.9
+already established, not something BUILD_PLAN.md's own B.10 text
+asked for explicitly. Deliberately scoped to the refresh call only,
+not every individual score/status push — same scope this table
+already has for AniList, where the *push* functions
+(`_push_season_score`/`_push_show_status`) were never hooked either,
+only `_fetch_anilist`'s read path.
 """
 
 from lcars import util
 
-TRACKED_SERVICES = ("sonarr", "radarr", "anilist", "animeschedule")
+TRACKED_SERVICES = ("sonarr", "radarr", "anilist", "animeschedule", "mal")
 
 
 def record_success(conn, service: str) -> None:

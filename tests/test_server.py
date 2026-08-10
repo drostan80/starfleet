@@ -20,6 +20,7 @@ from lcars import (
     db,
     export_import,
     fribb,
+    mal_client,
     radarr_client,
     sonarr_client,
     tmdb_client,
@@ -1910,6 +1911,256 @@ async def test_anilist_push_failure_logs_pending_review_against_season(client, m
     assert reviews[0]["entityType"] == "season"
     assert reviews[0]["field"] == "anilist_push"
     assert reviews[0]["source"] == "anilist"
+
+
+# --- MAL score/status push (§6.1/§6.9, B.10) --------------------------------
+#
+# Same shape as the AniList push tests directly above — default fixture
+# config has no mal_access_token, so every push is a silent no-op there;
+# these explicitly configure one and mock mal_client.update_my_list_status
+# throughout (no real network calls).
+
+
+async def _link_season_mal(client, show_id, season_number, mal_id):
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!, $season: Int!, $malId: Int!) {
+          setSeasonMapping(showId: $id, seasonNumber: $season, malId: $malId) { id }
+        }
+        """,
+        {"id": show_id, "season": season_number, "malId": mal_id},
+        headers=auth_headers(),
+    )
+    return data["setSeasonMapping"]["id"]
+
+
+def _mal_authenticated_config():
+    return config.Config(mal_access_token="mal-tok-123")
+
+
+async def test_set_score_pushes_show_score_to_every_mal_linked_season(client, monkeypatch):
+    config.set_current(_mal_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        mal_client,
+        "update_my_list_status",
+        lambda token, mal_id, **kw: calls.append((token, mal_id, kw)),
+    )
+    show = await add_show(client)
+    await _link_season_mal(client, show["id"], 1, 111)
+    await _link_season_mal(client, show["id"], 2, 222)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 17) { score } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert len(calls) == 2
+    pushed_ids = {c[1] for c in calls}
+    assert pushed_ids == {111, 222}
+    for token, _mal_id, kw in calls:
+        assert token == "mal-tok-123"
+        # 17 ÷ 2 = 8.5 -> round() to 8 (Python's round-half-to-even — same
+        # plain round() convention setScore's own quarter-point clamp
+        # already uses, §6.1, not a new rounding rule introduced here).
+        assert kw == {"score": 8}
+
+
+async def test_set_score_no_mal_push_when_not_authenticated(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(mal_client, "update_my_list_status", lambda *a, **kw: called.append(True))
+    show = await add_show(client)
+    await _link_season_mal(client, show["id"], 1, 111)
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 17) { score } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert called == []
+
+
+async def test_set_season_score_pushes_only_that_season_to_mal(client, monkeypatch):
+    config.set_current(_mal_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        mal_client, "update_my_list_status", lambda token, mal_id, **kw: calls.append((mal_id, kw))
+    )
+    show = await add_show(client)
+    season1 = await _link_season_mal(client, show["id"], 1, 111)
+    await _link_season_mal(client, show["id"], 2, 222)
+
+    await gql(
+        client,
+        "mutation($id: ID!, $s: Float!) { setSeasonScore(seasonId: $id, score: $s) { score } }",
+        {"id": season1, "s": 18.0},
+        headers=auth_headers(),
+    )
+    assert calls == [(111, {"score": 9})]  # 18 ÷ 2 = 9 exactly, only season 1
+
+
+async def test_set_status_pushes_to_every_mal_linked_season(client, monkeypatch):
+    config.set_current(_mal_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        mal_client, "update_my_list_status", lambda token, mal_id, **kw: calls.append((mal_id, kw))
+    )
+    show = await add_show(client)
+    await _link_season_mal(client, show["id"], 1, 111)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert calls == [(111, {"status": "completed"})]
+
+
+async def test_set_status_never_pushes_is_rewatching_or_num_times_rewatched_to_mal(
+    client, monkeypatch
+):
+    # §6.8/§6.9 — rewatching never auto-toggles either MAL field; setStatus's
+    # own push call simply never has a way to send them at all.
+    config.set_current(_mal_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        mal_client, "update_my_list_status", lambda token, mal_id, **kw: calls.append(kw)
+    )
+    show = await add_show(client)
+    await _link_season_mal(client, show["id"], 1, 111)
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert "is_rewatching" not in calls[0]
+    assert "num_times_rewatched" not in calls[0]
+
+
+async def test_set_status_maps_every_real_show_status_value_to_mal_without_crashing(
+    client, monkeypatch
+):
+    # Every show.status CHECK-constraint value must have a _STATUS_TO_MAL
+    # entry — a bare dict lookup would KeyError and lose the local write
+    # otherwise (caught in review before commit, not hypothetical).
+    config.set_current(_mal_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        mal_client, "update_my_list_status", lambda token, mal_id, **kw: calls.append(kw)
+    )
+    show = await add_show(client)
+    await _link_season_mal(client, show["id"], 1, 111)
+    for status in ("WATCHING", "PLANNED", "PAUSED", "COMPLETED", "DROPPED"):
+        data = await gql(
+            client,
+            "mutation($id: ID!, $s: ShowStatus!) { setStatus(showId: $id, status: $s) { status } }",
+            {"id": show["id"], "s": status},
+            headers=auth_headers(),
+        )
+        assert data["setStatus"]["status"] == status  # the local write always succeeds
+    assert len(calls) == 5
+
+
+async def test_mal_push_failure_logs_pending_review_against_season(client, monkeypatch):
+    config.set_current(_mal_authenticated_config())
+
+    def _raise(*a, **kw):
+        raise mal_client.MALError("Timed out talking to MyAnimeList")
+
+    monkeypatch.setattr(mal_client, "update_my_list_status", _raise)
+    show = await add_show(client)
+    season_id = await _link_season_mal(client, show["id"], 1, 111)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setScore(showId: $id, score: 17) { score } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    reviews = await _pending_reviews_for(client, season_id)
+    assert len(reviews) == 1
+    assert reviews[0]["entityType"] == "season"
+    assert reviews[0]["field"] == "mal_push"
+    assert reviews[0]["source"] == "mal"
+
+
+# --- refreshMalTokenIfDue (§6.9, B.10) ----------------------------------------
+
+
+REFRESH_MAL_TOKEN_IF_DUE = "mutation { refreshMalTokenIfDue { refreshed } }"
+
+
+async def test_refresh_mal_token_if_due_no_op_when_not_configured(client):
+    data = await gql(client, REFRESH_MAL_TOKEN_IF_DUE, headers=auth_headers())
+    assert data["refreshMalTokenIfDue"] == {"refreshed": False}
+
+
+async def test_refresh_mal_token_if_due_no_op_when_not_yet_due(client, monkeypatch):
+    config.set_current(
+        config.Config(
+            mal_client_id="cid",
+            mal_refresh_token="ref-1",
+            mal_token_refreshed_at=util.now_utc_iso(),  # just refreshed
+        )
+    )
+    called = []
+    monkeypatch.setattr(mal_client, "refresh_access_token", lambda *a, **kw: called.append(True))
+    data = await gql(client, REFRESH_MAL_TOKEN_IF_DUE, headers=auth_headers())
+    assert data["refreshMalTokenIfDue"] == {"refreshed": False}
+    assert called == []
+
+
+async def test_refresh_mal_token_if_due_refreshes_and_persists_when_stale(client, monkeypatch):
+    cfg = config.Config(
+        mal_client_id="cid",
+        mal_client_secret="csecret",
+        mal_refresh_token="stale-ref",
+        mal_token_refreshed_at=util.utc_iso_offset(-8),  # 8 days ago, past the 7-day gate
+    )
+    config.set_current(cfg)
+    monkeypatch.setattr(
+        mal_client,
+        "refresh_access_token",
+        lambda client_id, client_secret, refresh_token: ("new-acc", "new-ref"),
+    )
+    saved = []
+    monkeypatch.setattr(
+        config, "save_mal_tokens", lambda access, refresh: saved.append((access, refresh))
+    )
+    data = await gql(client, REFRESH_MAL_TOKEN_IF_DUE, headers=auth_headers())
+    assert data["refreshMalTokenIfDue"] == {"refreshed": True}
+    assert saved == [("new-acc", "new-ref")]
+    # the live in-memory singleton is updated too, not just persisted via
+    # save_mal_tokens() — the exact bug this mutation's own docstring flags
+    # and fixes deliberately (config.get_current() is a process-wide
+    # singleton; a later push this same process makes must see the new
+    # token immediately, not after a restart).
+    assert cfg.mal_access_token == "new-acc"
+    assert cfg.mal_refresh_token == "new-ref"
+
+
+async def test_refresh_mal_token_if_due_failure_records_service_health(client, monkeypatch):
+    config.set_current(
+        config.Config(
+            mal_client_id="cid",
+            mal_refresh_token="ref-1",
+            mal_token_refreshed_at=util.utc_iso_offset(-8),
+        )
+    )
+
+    def _raise(*a, **kw):
+        raise mal_client.MALAuthError("refresh_token expired")
+
+    monkeypatch.setattr(mal_client, "refresh_access_token", _raise)
+    data = await gql(client, REFRESH_MAL_TOKEN_IF_DUE, headers=auth_headers())
+    assert data["refreshMalTokenIfDue"] == {"refreshed": False}
+    health = await gql(client, SERVICE_HEALTH_QUERY, headers=auth_headers())
+    mal_health = next(e for e in health["serviceHealth"] if e["service"] == "MAL")
+    assert mal_health["status"] == "UNREACHABLE"
 
 
 # --- paced/catch-up mode (§6.2, A.10) ----------------------------------------
@@ -5170,7 +5421,13 @@ async def test_service_health_returns_unknown_for_every_tracked_service_by_defau
     # not an empty list, all UNKNOWN.
     data = await gql(client, SERVICE_HEALTH_QUERY, headers=auth_headers())
     entries = data["serviceHealth"]
-    assert {e["service"] for e in entries} == {"SONARR", "RADARR", "ANILIST", "ANIMESCHEDULE"}
+    assert {e["service"] for e in entries} == {
+        "SONARR",
+        "RADARR",
+        "ANILIST",
+        "ANIMESCHEDULE",
+        "MAL",
+    }
     assert all(e["status"] == "UNKNOWN" for e in entries)
     assert all(e["lastCheckedAt"] is None for e in entries)
 

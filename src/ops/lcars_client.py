@@ -305,6 +305,18 @@ class LcarsClient:
         data = await self._query(query)
         return data["reconcileEpisodeMovieLinks"]
 
+    async def refresh_mal_token_if_due(self) -> dict:
+        """§6.9, B.10 — the proactive weekly-ish MAL refresh-token
+        renewal job: no external HTTP call unless LCARS's own internal
+        7-day checkpoint says it's due, so this rides the same hourly
+        tick as poll_local_service_presence/reconcile_episode_movie_
+        links above rather than needing its own interval."""
+        query = """
+        mutation { refreshMalTokenIfDue { refreshed } }
+        """
+        data = await self._query(query)
+        return data["refreshMalTokenIfDue"]
+
     async def recommended_availability_poll_interval_seconds(self) -> int:
         """§5.2/§6.7, B.3 — LCARS computes Ops's own adaptive cadence
         (300s/900s/3600s) server-side, from data only it holds (watching
