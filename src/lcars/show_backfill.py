@@ -86,6 +86,22 @@ establishes for relation edges); a null `format` defaults to
 `episodic` (safe default, not a strong enough signal to skip the entry
 entirely).
 
+**Third guard, added after the real live run — a write-time check, not
+another read-side dedup layer.** The two layers above are both
+snapshots taken once before this module's own loop starts; neither can
+see a stub `shows.create_show()`'s own inline metadata fetch creates
+*mid-loop* (an AniList `relations` walk, A.21) for an id a *later*
+candidate in the same fixed list also targets. Live-confirmed: 86
+`anilist_id` collision pairs from the real backfill run, each one a
+`tracked = false` relation stub and a separately-created real show
+both pointing at the same AniList id. Fixed at the actual write
+boundary instead — `shows.create_show()` now checks `show_external_id`
+live immediately before inserting (`shows.find_existing_show`) and
+promotes a matching stub in place (SCOPE.md §5.1's own documented
+promotion path) rather than creating a second row. See
+`backfill_untracked_shows()`'s own docstring below for the `promoted`
+vs `created` split this added to the result shape.
+
 Throttled between anime-classified adds (only those trigger AniList
 calls) to stay inside AniList's 30 req/min budget — the same budget
 Data's own anilist.py docstring cites as the reason its own `P`
@@ -345,26 +361,45 @@ def backfill_untracked_shows(conn) -> dict:
     not the read-only preview variant — this is a Mutation, its own
     reconciliation/orphan-walk side effects are a legitimate bonus, see
     module docstring) plus every still-untracked AniList-sweep entry.
-    Returns {"created": [...], "failed": [...]} — a failure on one item
-    (only possible via ShowInputError, which _classify() above never
-    actually produces given local_audit's own entry shape, but
-    shows.create_show() is a general-purpose function) never stops the
-    rest of the run, same best-effort philosophy every other multi-item
-    pass in this codebase already follows (metadata.py's own
-    _guarded(), local_audit's own per-service try/except)."""
+    Returns {"created": [...], "promoted": [...], "failed": [...]} — a
+    failure on one item never stops the rest of the run, same best-
+    effort philosophy every other multi-item pass in this codebase
+    already follows (metadata.py's own _guarded(), local_audit's own
+    per-service try/except).
+
+    **`promoted` split out from `created`, B.11d follow-up, real bug
+    found in the live run**: `candidates` here is one fixed list,
+    snapshotted before this loop starts. Nothing stops an *earlier*
+    entry's own `shows.create_show()` call (its inline metadata fetch
+    walks AniList `relations`, auto-creating `tracked = false` stub
+    shows for ones LCARS has never seen — A.21) from creating a stub
+    for an id a *later* entry in this same candidates list also
+    targets — dedup computed once up front (`known_anilist_ids`,
+    `_sonarr_resolvable_anilist_ids`) can't see writes this loop itself
+    makes. `shows.create_show()` now checks live at the point of
+    writing instead (`shows.find_existing_show`) and promotes the stub
+    in place rather than creating a second row for it — the real fix;
+    this split is just honest reporting of which one happened, since a
+    silent "created" for what was actually a merge is exactly the kind
+    of thing that made the original duplicate-row bug hard to see in
+    the first place (confirmed live: 86 anilist_id collision pairs,
+    "Mebius Dust" the first one traced down)."""
     tvdb_index = _fribb_tvdb_index()
     result = local_audit.audit_local_files(conn)
     candidates = result["untracked_shows"] + _find_untracked_anilist_entries(conn, tvdb_index)
     created = []
+    promoted = []
     failed = []
     for entry in candidates:
         classification = _classify(entry, tvdb_index)
+        already_existed = shows.find_existing_show(conn, classification) is not None
         try:
             show_id = shows.create_show(conn, classification)
         except shows.ShowInputError as e:
             failed.append({"service": entry["service"], "title": entry["title"], "error": str(e)})
             continue
-        created.append({"show_id": show_id, "service": entry["service"], "title": entry["title"]})
+        record = {"show_id": show_id, "service": entry["service"], "title": entry["title"]}
+        (promoted if already_existed else created).append(record)
         if classification["tracking_space"] == "anime":
             known_status = entry.get("status") if entry["service"] == "anilist" else None
             _seed_status_from_anilist(conn, show_id, known_status=known_status)
@@ -373,7 +408,7 @@ def backfill_untracked_shows(conn) -> dict:
                 time.sleep(calls * ANILIST_SECONDS_PER_CALL)
             else:
                 time.sleep((calls - 1) * ANILIST_SECONDS_PER_CALL)  # no live status read made
-    return {"created": created, "failed": failed}
+    return {"created": created, "promoted": promoted, "failed": failed}
 
 
 def _seed_status_from_anilist(conn, show_id: str, known_status: str | None = None) -> None:

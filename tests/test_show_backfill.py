@@ -439,6 +439,74 @@ def test_backfill_is_idempotent_on_rerun(conn, monkeypatch):
     assert conn.execute("SELECT COUNT(*) FROM show").fetchone()[0] == 1
 
 
+def test_backfill_promotes_a_stub_a_relation_walk_created_mid_run_instead_of_duplicating(
+    conn, monkeypatch
+):
+    """B.11d follow-up, real bug found in the live backfill run: 86
+    anilist_id collision pairs, "Mebius Dust" the traced-down example
+    (s-7zvsg2/s-e1a4yk, same anilist_id, one row each). Reproduces the
+    exact shape: `candidates` is one fixed list computed before this
+    loop starts; Show A's own inline metadata fetch (create_show's
+    fetch_and_populate) walks AniList relations and auto-creates a
+    tracked=false stub for Show B *while the loop is still running* —
+    dedup computed once up front can't see that write. Show B's own
+    turn, later in the same fixed list, must find and promote that
+    stub instead of inserting a second `show` row for the same
+    anilist_id."""
+    _configure_sonarr()
+    dataset = [
+        {"tvdb_id": 111, "anilist_id": 900, "mal_id": None, "season": {"tvdb": 1}},
+        {"tvdb_id": 222, "anilist_id": 950, "mal_id": None, "season": {"tvdb": 1}},
+    ]
+    _patch_fribb(monkeypatch, dataset)
+    series = [
+        _sonarr_series(1, 111, "Show A"),
+        _sonarr_series(2, 222, "Show B"),
+    ]
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
+    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: None)
+
+    fake_media_by_id = {
+        900: {
+            "title": {"romaji": "Show A"},
+            "idMal": None,
+            "relations": {
+                "edges": [
+                    {
+                        "node": {
+                            "id": 950,
+                            "idMal": None,
+                            "format": "TV",
+                            "title": {"romaji": "Show B", "english": None, "native": None},
+                        }
+                    }
+                ]
+            },
+        },
+        950: {"title": {"romaji": "Show B"}, "idMal": None},
+    }
+    monkeypatch.setattr(
+        anilist_client, "fetch_media", lambda anilist_id, **kw: fake_media_by_id.get(anilist_id)
+    )
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+
+    result = show_backfill.backfill_untracked_shows(conn)
+    assert result["failed"] == []
+    assert [c["service"] for c in result["created"]] == ["sonarr"]  # Show A only, a real new row
+    assert [p["service"] for p in result["promoted"]] == ["sonarr"]  # Show B — the stub, promoted
+
+    rows = conn.execute(
+        "SELECT id, title_romaji, tracked FROM show ORDER BY title_romaji"
+    ).fetchall()
+    assert [r["title_romaji"] for r in rows] == ["Show A", "Show B"]  # not three rows
+    assert rows[1]["tracked"] == 1  # promoted, not left as a bare stub
+
+    anilist_links = conn.execute(
+        "SELECT show_id, external_id FROM show_external_id WHERE service = 'anilist'"
+    ).fetchall()
+    assert {r["external_id"] for r in anilist_links} == {"900", "950"}  # no id shared by two rows
+
+
 def test_backfill_throttles_only_between_anime_adds(conn, monkeypatch):
     _configure_sonarr()
     dataset = [

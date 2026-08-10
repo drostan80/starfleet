@@ -3029,6 +3029,79 @@ background scheduler.
       `test_all_sonarr_series_with_seasons_includes_season_zero`, was
       `..._excludes_season_zero`), `ruff check`/`format` clean, clean-
       install sanity check confirmed the fix imports cleanly.
+    - **Real run against the user's live library, approved by the
+      user** (1644 items previewed, known residual gap disclosed
+      first — see above): the CLI client itself hit `httpx.ReadTimeout`
+      partway through (`ops.lcars_client.LcarsError: Timed out talking
+      to LCARS`) — a client-side timeout only. Ariadne/uvicorn's own
+      single synchronous resolver thread doesn't stop just because the
+      client gave up waiting; the mutation kept running server-side to
+      completion regardless, confirmed by watching `SELECT COUNT(*)
+      FROM show` keep climbing long after the CLI process had already
+      exited (over roughly two hours total, matching the anime-item
+      throttle math for ~1350 anime-classified items).
+    - **A third real bug found from that live run, the most serious of
+      this step — genuine duplicate `show` rows in the live database,
+      not just a preview miscount.** Final count: 1873 rows against
+      1644 previewed. Root-caused live: `candidates` in
+      `backfill_untracked_shows()` is one fixed list, snapshotted
+      *before* its loop starts (`local_audit.audit_local_files()` +
+      `_find_untracked_anilist_entries()`, both one-time reads). But
+      `shows.create_show()`'s own inline metadata fetch
+      (`fetch_and_populate`) walks AniList `relations` and
+      auto-creates `tracked = false` stub shows for ones LCARS has
+      never seen (A.21) — *while this loop is still running*. Nothing
+      stopped a later candidate in that same fixed list, independently
+      targeting the exact id a stub just got auto-created for
+      mid-loop, from inserting a second `show` row for it — the
+      snapshot-based dedup (`known_anilist_ids`/
+      `_sonarr_resolvable_anilist_ids`) can't see writes the loop
+      itself makes; a read-side cache was never going to be the real
+      correctness guarantee. Confirmed live with the actual duplicate
+      key (`show_external_id.external_id`, not `title_romaji` — a
+      title collision is sometimes legitimate, e.g. two different real
+      Radarr movies both titled "The Thing"): 86 real `anilist_id`
+      collision pairs, 3 `mal_id` pairs, each pair exactly one
+      `tracked = 0` stub plus one `tracked = 1` real show sharing the
+      same external id. First one traced by hand: "Mebius Dust"
+      (`s-7zvsg2`/`s-e1a4yk`, both `anilist_id` 108992).
+      - **Fixed at the actual write boundary, not with another
+        snapshot layer**: `shows.find_existing_show()` (new, public)
+        checks `show_external_id` live, immediately before
+        `create_show()` inserts. A match against an untracked stub
+        promotes it in place (`shows._promote_stub()`, new — SCOPE.md
+        §5.1's own already-documented "Show-row promotion paths": "a
+        bare `tracked = false` relation/franchise stub becomes a real
+        tracked show by flipping `tracked = true` on the *existing*
+        row — no re-creation" — this closes a gap in the design intent
+        rather than inventing new behavior; nothing had implemented
+        that path before this). A match against an already-tracked
+        show is a genuine duplicate-add attempt, rejected outright
+        (`ShowInputError`) instead of silently creating a second row —
+        this also hardens the plain `addShow` mutation itself, not
+        just the backfill path, since `create_show()` is its shared
+        body.
+      - `backfill_untracked_shows()`'s own result gained a `promoted`
+        field, split from `created` — reporting a merge as a plain
+        "created" is exactly the kind of silent conflation that made
+        the original bug hard to see. `ShowBackfillResult.promoted:
+        [BackfilledShow!]!` (schema.graphql), `ops backfill-shows`
+        prints both counts separately.
+      - **Verified**: 577 tests passing (was 573; 4 new —
+        `test_add_show_promotes_an_existing_untracked_stub_instead_of_duplicating`
+        and `test_add_show_rejects_a_duplicate_external_id_already_tracked`
+        in `test_server.py`,
+        `test_backfill_promotes_a_stub_a_relation_walk_created_mid_run_instead_of_duplicating`
+        in `test_show_backfill.py` reproducing the exact live collision
+        shape end to end, plus the `backfillUntrackedShows` wiring test
+        updated for the new `promoted` field), `ruff check`/`format`
+        clean, clean-install sanity check (fresh venv, real `pip
+        install -e .[dev]`) confirmed `shows.find_existing_show`/
+        `_promote_stub` import cleanly and the schema builds with
+        `ShowBackfillResult.promoted` present and correctly typed.
+      - **Live database cleanup**: the fix does not retroactively merge
+        rows the buggy code already created — see the "Live cleanup"
+        note the user was asked about directly, below.
   - [ ] **B.11e — ongoing untracked-show sweep**: extend
     `auditLocalFiles`'s existing `untracked_shows` computation (or a
     dedicated variant) onto Ops's recurring schedule, persisting

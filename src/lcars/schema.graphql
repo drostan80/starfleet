@@ -822,23 +822,24 @@ type BackfillPreviewItem {
   mediaShape: MediaShape!
 }
 
-"backfillUntrackedShows' own per-created-show record — B.11d."
+"backfillUntrackedShows' own per-created-or-promoted-show record — B.11d. Same shape for both ShowBackfillResult fields below."
 type BackfilledShow {
   showId: ID!
   service: String!
   title: String!
 }
 
-"backfillUntrackedShows' own per-failed-item record — B.11d. In practice always empty: backfill's own classification (BackfillPreviewItem) never produces an addShow input ShowInputError would reject, but shows.create_show() is general-purpose, so this is here for completeness rather than assumed unreachable."
+"backfillUntrackedShows' own per-failed-item record — B.11d. Genuinely reachable, not just for-completeness: shows.create_show() now rejects an id match against an already-tracked show outright (a real duplicate-add attempt) rather than silently creating a second row for it — B.11d follow-up, found live."
 type FailedBackfillItem {
   service: String!
   title: String!
   error: String!
 }
 
-"B.11d — backfillUntrackedShows' own confirmation summary."
+"B.11d — backfillUntrackedShows' own confirmation summary. `promoted` split from `created` in the same-day follow-up fix: a candidate whose external id an *earlier* candidate in this same run had already stub-created (via that show's own AniList relations walk, A.21) gets its stub promoted in place (tracked = true, SCOPE.md §5.1's own documented path) instead of a second row — 86 real collision pairs found live before this fix shipped. See show_backfill.py's own module docstring for the full story."
 type ShowBackfillResult {
   created: [BackfilledShow!]!
+  promoted: [BackfilledShow!]!
   failed: [FailedBackfillItem!]!
 }
 

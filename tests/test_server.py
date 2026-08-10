@@ -501,6 +501,114 @@ async def test_add_show_anilist_fetch_relation_reuses_existing_show(client, monk
     assert len(all_shows["shows"]["edges"]) == 3  # existing + the new show + the one real stub
 
 
+async def test_add_show_promotes_an_existing_untracked_stub_instead_of_duplicating(
+    client, monkeypatch
+):
+    """B.11d follow-up, real bug found in the live backfill run: a
+    relation walk (A.21, previous test) can auto-create a tracked=false
+    stub for an id a *later*, independent addShow/backfill call also
+    targets. That second call must promote the existing stub in place
+    (SCOPE.md §5.1's own documented path) — not insert a second `show`
+    row for the same AniList id (confirmed live: 86 such collision
+    pairs, one show's own show_external_id.anilist_id shared by two
+    separate show rows)."""
+    monkeypatch.setattr(
+        anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_RELATIONS
+    )
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+    await add_show(client, anilistId=111)
+
+    before = await gql(
+        client, "query { shows(first: 10) { edges { node { id } } } }", headers=auth_headers()
+    )
+    stub_data = await gql(
+        client,
+        """
+        query {
+          shows(first: 10) {
+            edges {
+              node {
+                id displayTitle tracked
+                externalIds { edges { node { service externalId } } }
+              }
+            }
+          }
+        }
+        """,
+        headers=auth_headers(),
+    )
+    stub = next(
+        e["node"]
+        for e in stub_data["shows"]["edges"]
+        if e["node"]["displayTitle"] == "Golden Kamuy 2"
+    )
+    assert stub["tracked"] is False
+
+    promoted = await add_show(
+        client, anilistId=333, tvdbId=98765, titleRomaji="Golden Kamuy 2 (direct add)"
+    )
+    assert promoted["id"] == stub["id"]  # same row, not a new one
+    assert promoted["tracked"] is True
+
+    after = await gql(
+        client, "query { shows(first: 10) { edges { node { id } } } }", headers=auth_headers()
+    )
+    assert len(after["shows"]["edges"]) == len(before["shows"]["edges"])  # no new row appeared
+
+    links_data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { externalIds { edges { node { service externalId } } } }
+        }
+        """,
+        {"id": stub["id"]},
+        headers=auth_headers(),
+    )
+    links = {
+        e["node"]["service"]: e["node"]["externalId"]
+        for e in links_data["show"]["externalIds"]["edges"]
+    }
+    assert links["anilist"] == "333"  # carried over from the stub, untouched
+    assert links["tvdb"] == "98765"  # added by the promoting call, the stub never had one
+
+
+async def test_add_show_rejects_a_duplicate_external_id_already_tracked(client):
+    """The other half of the same fix: a match against an
+    already-tracked show (not an untracked stub) is a genuine
+    duplicate-add attempt, rejected outright rather than silently
+    creating a second row for it."""
+    await add_show(client, anilistId=555, titleRomaji="Already Tracked")
+    resp = await client.post(
+        "/",
+        json={
+            "query": """
+                mutation($input: AddShowInput!) {
+                  addShow(input: $input) { id }
+                }
+            """,
+            "variables": {
+                "input": {
+                    "mediaShape": "EPISODIC",
+                    "trackingSpace": "ANIME",
+                    "titleRomaji": "Already Tracked Again",
+                    "primaryTitle": "ROMAJI",
+                    "anilistId": 555,
+                }
+            },
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "already" in body["errors"][0]["message"].lower()
+
+    data = await gql(
+        client, "query { shows(first: 10) { edges { node { id } } } }", headers=auth_headers()
+    )
+    assert len(data["shows"]["edges"]) == 1  # the rejected attempt created nothing
+
+
 async def test_add_show_anilist_fetch_no_media_found_leaves_show_bare(client, monkeypatch):
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: None)
     show = await add_show(client, anilistId=12345)
@@ -5482,6 +5590,7 @@ BACKFILL_UNTRACKED_SHOWS = """
     mutation {
       backfillUntrackedShows {
         created { showId service title }
+        promoted { showId service title }
         failed { service title error }
       }
     }
@@ -5503,7 +5612,7 @@ async def test_backfill_untracked_shows_wiring_returns_empty_with_nothing_config
     # test_show_backfill.py's job; this only locks in that the mutation is
     # wired to show_backfill.backfill_untracked_shows() with the right shape.
     data = await gql(client, BACKFILL_UNTRACKED_SHOWS, headers=auth_headers())
-    assert data["backfillUntrackedShows"] == {"created": [], "failed": []}
+    assert data["backfillUntrackedShows"] == {"created": [], "promoted": [], "failed": []}
 
 
 async def test_poll_anime_schedule_returns_zero_with_no_candidate_shows(client):

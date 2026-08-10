@@ -272,6 +272,7 @@ class LcarsClient:
         mutation {
           backfillUntrackedShows {
             created { showId service title }
+            promoted { showId service title }
             failed { service title error }
           }
         }

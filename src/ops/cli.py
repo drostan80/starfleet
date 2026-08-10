@@ -170,6 +170,14 @@ def _cmd_backfill_shows(args: argparse.Namespace) -> None:
             print(f"\nDone: {len(result['created'])} show(s) created.")
             for s in result["created"]:
                 print(f"  [{s['service']}] {s['title']} -> {s['showId']}")
+            if result["promoted"]:
+                print(
+                    f"\n{len(result['promoted'])} existing untracked stub(s) promoted "
+                    "in place (not new rows — a relation the AniList sweep or Sonarr "
+                    "catalog also independently found):"
+                )
+                for s in result["promoted"]:
+                    print(f"  [{s['service']}] {s['title']} -> {s['showId']}")
             if result["failed"]:
                 print(f"\n{len(result['failed'])} item(s) failed:")
                 for f in result["failed"]:

@@ -227,6 +227,7 @@ def test_backfill_shows_confirms_and_calls_the_client(monkeypatch, capsys):
     cfg = config.Config(lcars_bearer_token="test-token")
     result = {
         "created": [{"showId": "s-x", "service": "sonarr", "title": "New Show"}],
+        "promoted": [],
         "failed": [],
     }
     with (
@@ -251,11 +252,44 @@ def test_backfill_shows_confirms_and_calls_the_client(monkeypatch, capsys):
     assert "[sonarr] New Show -> s-x" in out
 
 
+def test_backfill_shows_prints_promoted_items(monkeypatch, capsys):
+    """B.11d follow-up — a stub promoted in place (not a new row) gets
+    reported separately from `created`, not silently folded in."""
+    monkeypatch.setattr("sys.argv", ["ops", "backfill-shows"])
+    cfg = config.Config(lcars_bearer_token="test-token")
+    result = {
+        "created": [],
+        "promoted": [{"showId": "s-z", "service": "anilist", "title": "Existing Stub"}],
+        "failed": [],
+    }
+    with (
+        patch("ops.config.load_config", return_value=cfg),
+        patch(
+            "ops.cli.LcarsClient.preview_show_backfill",
+            new_callable=AsyncMock,
+            return_value=_PREVIEW,
+        ),
+        patch(
+            "ops.cli.LcarsClient.backfill_untracked_shows",
+            new_callable=AsyncMock,
+            return_value=result,
+        ),
+        patch("ops.cli.LcarsClient.aclose", new_callable=AsyncMock),
+        patch("builtins.input", return_value="yes"),
+    ):
+        cli.main()
+    out = capsys.readouterr().out
+    assert "0 show(s) created" in out
+    assert "1 existing untracked stub(s) promoted in place" in out
+    assert "[anilist] Existing Stub -> s-z" in out
+
+
 def test_backfill_shows_prints_failed_items(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["ops", "backfill-shows"])
     cfg = config.Config(lcars_bearer_token="test-token")
     result = {
         "created": [],
+        "promoted": [],
         "failed": [{"service": "sonarr", "title": "Bad Show", "error": "boom"}],
     }
     with (

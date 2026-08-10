@@ -385,12 +385,14 @@ async def test_backfill_untracked_shows_sends_no_variables_and_returns_the_resul
         payload = json.loads(request.read())
         assert payload["variables"] == {}
         assert "backfillUntrackedShows" in payload["query"]
+        assert "promoted" in payload["query"]
         return httpx.Response(
             200,
             json={
                 "data": {
                     "backfillUntrackedShows": {
                         "created": [{"showId": "s-x", "service": "sonarr", "title": "Y"}],
+                        "promoted": [{"showId": "s-z", "service": "anilist", "title": "Z"}],
                         "failed": [],
                     }
                 }
@@ -400,6 +402,7 @@ async def test_backfill_untracked_shows_sends_no_variables_and_returns_the_resul
     client = _client(handler)
     result = await client.backfill_untracked_shows()
     assert result["created"][0]["title"] == "Y"
+    assert result["promoted"][0]["title"] == "Z"
     assert result["failed"] == []
     await client.aclose()
 
