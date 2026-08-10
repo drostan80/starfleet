@@ -1572,6 +1572,20 @@ Data's current local computation now would mean rebuilding it against
 `Query.backlog` once B.11 lands. B.11's own `BUILD_PLAN.md` entry now
 owns both deferred pieces.
 
+**Resolved 2026-08-10 (B.11 scope + sequencing)**: this section's own
+ambiguity about whether B.11 replaces the calendar's core render path
+now or Phase C does was raised directly with the user — confirmed
+**Replacing** (B.11 switches the render path itself, not Phase C).
+B.11 split into numbered sub-steps (B.11a/B.11b/B.11c) given the size
+of that rewrite; B.11a (LCARS read-query foundation + status bar
+service-health indicators, since `Query.serviceHealth` needed no
+LCARS-side change) is built and verified. During B.11 reconnaissance,
+Data's existing `B`-view predicate and LCARS's `Query.backlog`
+predicate were found to be genuinely divergent (different show-shape/
+airing/status eligibility rules) — surfaced to the user rather than
+silently reconciled; user chose to ship the counter (B.11c) against
+`Query.backlog` as-is, no reconciliation needed.
+
 ### 6.4 Cross-show "next up" query (Phase A/B)
 
 One aggregated query, across all `watching`-status shows **and**

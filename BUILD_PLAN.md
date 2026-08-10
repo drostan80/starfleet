@@ -2611,6 +2611,69 @@ background scheduler.
   `Query.backlog`, and its mark-watched-clears-exactly-one-oldest-
   episode interaction — deliberately not built during B.9 itself,
   since Data doesn't read from LCARS at all yet before this step.
+  - **Scope, confirmed with the user 2026-08-10**: SCOPE.md's own
+    Phase B/C split text is genuinely ambiguous about whether B.11
+    replaces the calendar's core render path now or Phase C does —
+    asked directly, user chose **Replacing**: B.11 itself switches
+    the render path, not just adds read-only extras alongside the
+    existing Sonarr/AniList-driven computation. Given the size/risk
+    of that rewrite, also asked and confirmed splitting into numbered
+    sub-steps (B.11a/B.11b/B.11c, same pattern B.3b/B.8b already used
+    for an oversized single step), starting with the smallest
+    self-contained slice — `Query.serviceHealth` already exists
+    (B.6), needs no LCARS-side change, and Data has never made a
+    single LCARS *read* before this (A.17 was write-only, per
+    SCOPE.md's own "LCARS-backed reads are Phase B, not A.17" note).
+  - [x] **B.11a — LCARS read-query foundation + status bar
+    service-health indicators** (`~/repos/data`, 2026-08-10). First
+    LCARS query `lcars_client.py` has ever made: `service_health()`
+    (no variables, returns all 5 `TrackedService` entries every
+    time — LCARS's own resolver synthesizes `UNKNOWN` for a
+    never-contacted service rather than omitting it, so the list is
+    never short one). Data's status bar gained a leading
+    `Son✓ Rad✓ AL✗ ASc? MAL✓`-shaped segment (module-level
+    `SERVICE_HEALTH_LABELS`, fixed order, one short label + symbol
+    per service — ✓/✗/? for OK/UNREACHABLE/UNKNOWN), polled on the
+    same interval as the existing download-status check
+    (`LCARS_HEALTH_CHECK_INTERVAL_SECONDS = DOWNLOAD_CHECK_INTERVAL_SECONDS`,
+    no new interval — reuses the existing one, same "no new interval
+    unless a real technical constraint forces one" precedent B.10
+    set). Same "not configured is a clean no-op, never an error"
+    treatment every other optional LCARS/AniList feature already
+    gets: segment is the empty string (omitted entirely, not a row
+    of "?" placeholders) whenever `lcars_client` isn't configured or
+    the first check hasn't completed yet; a transient fetch failure
+    is swallowed the same way `_check_download_status()` already
+    swallows a `SonarrError` — keep whatever was last known, the
+    next interval just tries again.
+    - **Real bug found and fixed during this slice**: the new
+      initial-mount health check fires for every `DataApp` built
+      with an `lcars_client`, including ones in pre-existing tests
+      that predate this feature — `test_app_lcars_write_wiring.py`'s
+      `test_quit_flushes_both_anilist_and_lcars_queues` broke with a
+      `KeyError: 'serviceHealth'` because its fake LCARS handler
+      didn't recognize the new query. Fixed by adding a
+      `serviceHealth` branch to that test's fake handler (returns an
+      empty list — harmless, valid, no health segment shown), not by
+      special-casing the new check to skip test contexts.
+    - **Verified**: 500 tests passing (Data's own suite, was 495),
+      `ruff check .` clean (after removing an unused `pytest` import
+      the new test file didn't end up needing), `ruff format --check`
+      confirmed all 5 actually-touched files clean (3 unrelated
+      pre-existing files elsewhere in the repo were already
+      unformatted before this change and are out of scope here).
+  - [ ] **B.11b — calendar core render path**: switch from local
+    Sonarr/AniList computation to LCARS reads for tracking/air-date/
+    availability state, per the confirmed **Replacing** scope above.
+  - [ ] **B.11c — B.9's two deferred Data-side pieces**: the
+    calendar-native counter line under a show's next-episode entry
+    (backed by `Query.backlog` as-is — asked the user directly
+    whether Data's existing B-view predicate and LCARS's
+    `Query.backlog` predicate, confirmed genuinely divergent during
+    B.11 reconnaissance, needed reconciling first; user chose to
+    ship the counter against `Query.backlog` as-is, no reconciliation
+    needed) and its mark-watched-clears-exactly-one-oldest-episode
+    interaction.
 - [ ] **B.12 — Proxy interactive flows through LCARS**: add-show,
   id-remap move from direct-from-Data to going through LCARS, so
   reconciliation logic applies consistently regardless of trigger.
