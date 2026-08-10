@@ -135,6 +135,26 @@ def build_tvdb_index(dataset: list[dict]) -> dict[int, list[dict]]:
     return index
 
 
+def build_anilist_index(dataset: list[dict]) -> dict[int, int]:
+    """B.11d — the reverse of build_tvdb_index above: anilist_id ->
+    tvdb_id. show_backfill.py's own AniList-only sweep uses this to
+    check whether a given AniList list entry's franchise already has a
+    tvdb id in Sonarr's own catalog at all (all_sonarr_tvdb_ids,
+    local_audit.py) — several AniList ids commonly reverse-resolve to
+    the *same* tvdb id (one tvdb series, several AniList-side season
+    splits, same grouping build_tvdb_index's own docstring describes),
+    so this is a plain last-write-wins dict, not one preserving every
+    candidate the way build_tvdb_index's list-per-key shape does —
+    only the tvdb id itself is ever read back out, and every dataset
+    entry sharing one AniList id would (by construction) share the
+    same tvdb id too."""
+    return {
+        entry["anilist_id"]: entry["tvdb_id"]
+        for entry in dataset
+        if entry.get("anilist_id") not in _MISSING and entry.get("tvdb_id") not in _MISSING
+    }
+
+
 def resolve_season_candidate(
     index: dict[int, list[dict]], tvdb_id: int, season_number: int
 ) -> dict | None:

@@ -227,6 +227,60 @@ def fetch_my_list_status(
     return entry["status"] if entry else None
 
 
+_VIEWER_QUERY = "query { Viewer { id } }"
+
+
+def fetch_viewer_id(token: str, client: httpx.Client | None = None) -> int:
+    """B.11d — the authenticated viewer's own numeric AniList user id.
+    `MediaListCollection` (fetch_my_anime_list() below) requires an
+    explicit `userId` argument — unlike `Media.mediaListEntry`
+    (fetch_my_list_status() above), there's no "just the token's own
+    viewer" implicit mode for a list-collection query. Live-verified
+    against the user's real AniList account before being written."""
+    data = _graphql_request(_VIEWER_QUERY, {}, token=token, client=client)
+    return data["Viewer"]["id"]
+
+
+_MY_ANIME_LIST_QUERY = """
+query ($userId: Int) {
+  MediaListCollection(userId: $userId, type: ANIME) {
+    lists {
+      entries {
+        status
+        media { id format title { romaji } }
+      }
+    }
+  }
+}
+"""
+
+
+def fetch_my_anime_list(token: str, client: httpx.Client | None = None) -> list[dict]:
+    """B.11d — the viewer's entire AniList anime list in one call
+    (`type: ANIME` — manga is never requested at all, LCARS has no
+    place for it, §5.1), grouped by status/custom-list on AniList's
+    side but flattened here into one list, deduplicated by media id
+    (an entry appearing in more than one of the viewer's own custom
+    lists would otherwise be double-counted — verified live: this
+    particular account has none, but nothing guarantees that for every
+    account). `format` can be null (verified live — a real entry on
+    this account has one); callers decide the fallback, this just
+    passes it through as-is."""
+    viewer_id = fetch_viewer_id(token, client=client)
+    data = _graphql_request(_MY_ANIME_LIST_QUERY, {"userId": viewer_id}, token=token, client=client)
+    by_id: dict[int, dict] = {}
+    for lst in data["MediaListCollection"]["lists"]:
+        for entry in lst["entries"]:
+            media = entry["media"]
+            by_id[media["id"]] = {
+                "anilist_id": media["id"],
+                "format": media["format"],
+                "status": entry["status"],
+                "title": media["title"]["romaji"],
+            }
+    return list(by_id.values())
+
+
 def exchange_code(
     client_id: str,
     client_secret: str,

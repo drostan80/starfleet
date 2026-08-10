@@ -813,7 +813,7 @@ type LocalFileAuditResult {
   untrackedShows: [UntrackedRemoteShow!]!
 }
 
-"previewShowBackfill's own per-item shape — B.11d. trackingSpace/mediaShape are the classification backfillUntrackedShows would actually use (Sonarr's own seriesType == \"anime\" flag, or TV by default for a Radarr-sourced item — no anime signal exists there)."
+"previewShowBackfill's own per-item shape — B.11d. trackingSpace/mediaShape are the classification backfillUntrackedShows would actually use. Sonarr items: a successful Fribb tvdb->anilist resolution is the anime signal (corrected live, same day, from Sonarr's own seriesType flag — verified unreliable against the user's real library). Radarr items: TV by default, no anime signal exists there. AniList-sweep items: always ANIME, mediaShape from AniList's own format field."
 type BackfillPreviewItem {
   service: String!
   title: String!
@@ -1005,7 +1005,7 @@ type Query {
   "§6.12 — the full JSON export, schema_version included. Read-only: exporting has no side effect, so this is a query, not a mutation."
   exportData: String!
 
-  "§5.1/§5.2, B.11d — dry-run only, no writes: exactly what backfillUntrackedShows would create right now, reusing auditLocalFiles' own untrackedShows computation. Always run this first."
+  "§5.1/§5.2, B.11d — dry-run only, no writes: exactly what backfillUntrackedShows would create right now. Three sources: Sonarr/Radarr's own untracked catalog items (find_untracked_shows_readonly), and an AniList-list sweep (a show tracked on AniList but never added to Sonarr/Radarr at all — the user's own live catch, same day) deduplicated against both Sonarr's full catalog and LCARS's own known AniList links (show-level and per-season). Always run this first."
   previewShowBackfill: [BackfillPreviewItem!]!
 }
 
@@ -1089,14 +1089,22 @@ type Mutation {
   """
   §5.1/§5.2, B.11d — one addShow (with its own inline A.8 metadata
   fetch: episodes, AniList link resolution via Fribb, season
-  reconciliation) per untracked Sonarr/Radarr item, reusing
-  auditLocalFiles' own untrackedShows computation. Throttled between
-  anime-classified adds to stay inside AniList's rate budget — this
-  can take real minutes on a large library. Also does a one-time
-  AniList list-status read per anime show created, to seed its
-  initial LCARS status (not an ongoing sync — LCARS stays the source
-  of truth after this). Never auto-creates on repeat runs beyond what's
-  still genuinely untracked (idempotent/resumable). Always call
+  reconciliation) per untracked item from three sources: Sonarr/Radarr
+  (reusing auditLocalFiles' own untrackedShows computation) and an
+  AniList-list sweep (a show tracked on AniList but never added to
+  Sonarr/Radarr at all — folded in the same day it was found missing,
+  live, by the user). The AniList sweep is deduplicated against both
+  Sonarr's full catalog and LCARS's own known AniList links (show-
+  level and per-season, §5.5) via Fribb, so a split-cour sequel never
+  becomes a second, duplicate show. Throttled between anime-classified
+  adds to stay inside AniList's rate budget, scaled by season count —
+  this can take real minutes on a large library. Also does a one-time
+  AniList list-status read per Sonarr/Fribb-resolved anime show
+  created (skipped for an AniList-sweep show, which already knows its
+  own status from the same call that found it), to seed its initial
+  LCARS status (not an ongoing sync — LCARS stays the source of truth
+  after this). Never auto-creates on repeat runs beyond what's still
+  genuinely untracked (idempotent/resumable). Always call
   previewShowBackfill first. Not part of Ops's own automatic loop, same
   reasoning as auditLocalFiles above — run via `ops backfill-shows` at
   a moment of the caller's own choosing.

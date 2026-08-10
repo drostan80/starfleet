@@ -20,11 +20,60 @@ it (modulo whatever changed in Sonarr/Radarr in between the two
 calls — an inherent, accepted gap in any "preview now, run later"
 workflow).
 
+**A third source, folded in the same day it was found missing**: the
+Sonarr/Radarr sweep above only ever discovers shows Sonarr/Radarr
+already know about. A show tracked on the user's own AniList list but
+never added to Sonarr at all (watched via streaming, or before this
+library existed) was invisible to it entirely — the user caught this
+live, asking directly whether AniList-only shows would also get
+picked up. Confirmed with the user: yes, every list status, folded
+into this same step rather than a separate one. `_find_untracked_anilist_entries()`
+below is that third source.
+
 Per-item, this is a single `shows.create_show()` call (which is
 already the *whole* `addShow` mutation body — insert, external-id
 links, the inline A.8 metadata fetch: episodes, AniList link
 resolution via Fribb, Fribb season reconciliation, all best-effort).
 There is no separate metadata-fetch phase to sequence.
+
+**Sonarr classification corrected the same day, live-verified against
+the user's real library**: originally classified `trackingSpace` from
+Sonarr's own `seriesType` flag (`== "anime"`), mirroring
+metadata.py's numbering-scheme heuristic (A.22). The very first real
+`previewShowBackfill` run against the user's actual Sonarr library
+showed this was wrong for most of it — Frieren, DAN DA DAN, Chainsaw
+Man, SPY x FAMILY, Kaiju No. 8, and dozens more all report
+`seriesType: standard`, not `anime`. A `tracking_space='tv'`
+misclassification isn't just cosmetic: `fetch_and_populate` only ever
+calls `_ensure_anilist_link` when `tracking_space == "anime"`, so a
+misclassified anime show would never get its mandated AniList link at
+all (§5.1). Fixed by using a **successful Fribb tvdb->anilist
+resolution** as the actual anime signal instead — the same resolution
+`_ensure_anilist_link` would perform anyway once the show exists, just
+done here first so `trackingSpace` (and the AniList link itself,
+passed straight through as `anilistId` on the `addShow`-equivalent
+input) are both correct from the very first write, and so this same
+resolution can also feed the AniList-sweep dedup below without a
+second, divergent Fribb pass.
+
+**AniList-sweep dedup, two layers**: (1) an AniList list entry already
+linked to an existing LCARS show — checked via
+`local_audit.known_anilist_ids()`, which reads *both*
+`show_external_id` (show-level) and `season.anilist_id` (per-season,
+§5.5) rather than only the former, since a split-cour sequel season's
+own AniList link lives at the season level. (2) an AniList entry whose
+Fribb-resolved tvdb id is already present in Sonarr's own catalog at
+all (`local_audit.all_sonarr_tvdb_ids()`, tracked or not) — Fribb
+groups a franchise's several AniList-side season splits under one
+tvdb id, so treating each split as its own independent "untracked
+show" here would create a real duplicate the moment its sibling season
+arrives via the Sonarr-sourced path instead; that tvdb id is Sonarr's
+own sweep's job (or LCARS's, if already tracked), never this one's.
+`format: MUSIC` entries are excluded outright (not a real "show" at
+all — same exclusion `ANIME_RELATION_FORMATS`, A.21, already
+establishes for relation edges); a null `format` defaults to
+`episodic` (safe default, not a strong enough signal to skip the entry
+entirely).
 
 Throttled between anime-classified adds (only those trigger AniList
 calls) to stay inside AniList's 30 req/min budget — the same budget
@@ -35,23 +84,22 @@ sleep — caught in review: a flat 2s sleep assumed one AniList call per
 show, but `_fetch_anilist` (1 call) plus `_reconcile_air_dates` (1
 call *per season*, its own B.4 docstring) plus this module's own
 status-seed read means even a single-season show makes 3 calls, not
-1 — a flat 2s sleep would have run at up to 90 req/min against a 30
-req/min budget, silently rate-limiting shows into a permanently
-under-populated `pending_review` state a resumed backfill would never
-revisit (already-tracked, so excluded from every later run's own
-untracked-item scan).
+1. An AniList-sweep-sourced show already knows its own status (the
+same `MediaListCollection` call that found it) and skips the status-
+seed's own live read entirely — one fewer AniList call than a
+Sonarr/Fribb-resolved anime show needs.
 
 Idempotent/resumable by construction, no bespoke resume-state needed:
 re-running this after a partial run (interrupted, rate-limited,
 crashed partway) only ever sees still-untracked items, since
-local_audit's own known-id lookup already excludes anything a
+local_audit's own known-id lookups already exclude anything a
 previous run already added.
 
 Radarr-sourced items default to `trackingSpace: TV` (documented cut,
 confirmed with the user 2026-08-10) — Radarr gives no anime signal at
-all, unlike Sonarr's own `seriesType`. Misclassification is fixable
-per-show after the fact, not worth a second live lookup just to
-classify one field.
+all, unlike Sonarr's own Fribb-resolvability. Misclassification is
+fixable per-show after the fact, not worth a second live lookup just
+to classify one field.
 
 Watched-progress is deliberately NOT backfilled (confirmed with the
 user 2026-08-10) — AniList's `mediaListEntry.progress` is an absolute
@@ -66,7 +114,7 @@ progress by hand.
 
 import time
 
-from lcars import anilist_client, ids, local_audit, shows, util
+from lcars import anilist_client, fribb, ids, local_audit, shows, util
 from lcars.config import get_current
 
 # AniList's own 30 req/min budget is exactly 2.0s/call — a small margin
@@ -88,20 +136,49 @@ _ANILIST_STATUS_TO_SHOW_STATUS = {
     "REPEATING": "watching",
 }
 
+# AniList's own `format` enum, mapped onto LCARS's two-value
+# MediaShape. Every value in ANIME_RELATION_FORMATS (A.21,
+# anilist_client.py) except MUSIC, which module docstring's own note
+# explains is excluded outright rather than mapped at all.
+_ANILIST_FORMAT_TO_MEDIA_SHAPE = {
+    "TV": "episodic",
+    "TV_SHORT": "episodic",
+    "SPECIAL": "episodic",
+    "OVA": "episodic",
+    "ONA": "episodic",
+    "MOVIE": "movie",
+}
 
-def _classify(entry: dict) -> dict:
-    """One `untracked_shows` entry (local_audit's own shape) to a
-    shows.create_show()-ready input dict."""
-    if entry["service"] == "sonarr":
-        is_anime = entry.get("series_type") == "anime"
-        return {
-            "media_shape": "episodic",
-            "tracking_space": "anime" if is_anime else "tv",
-            "title_romaji": entry["title"],
-            "primary_title": "romaji",
-            "tvdb_id": entry["external_id"],
-        }
-    # Radarr — see module docstring's own "no anime signal" note.
+
+def _fribb_tvdb_index() -> dict:
+    return fribb.build_tvdb_index(fribb.load_dataset())
+
+
+def _fribb_anilist_index() -> dict:
+    # Same underlying dataset object as _fribb_tvdb_index() above
+    # (load_dataset()'s own mtime-keyed memoization) — this doesn't
+    # re-download or re-parse anything already loaded this call.
+    return fribb.build_anilist_index(fribb.load_dataset())
+
+
+def _classify_sonarr(entry: dict, tvdb_index: dict) -> dict:
+    """See module docstring's own "Sonarr classification corrected"
+    note — a successful Fribb resolution is the anime signal, not
+    Sonarr's own seriesType."""
+    candidate = fribb.resolve_season_candidate(tvdb_index, entry["external_id"], 1)
+    anilist_id, _mal_id = fribb.extract_ids(candidate)
+    return {
+        "media_shape": "episodic",
+        "tracking_space": "anime" if anilist_id is not None else "tv",
+        "title_romaji": entry["title"],
+        "primary_title": "romaji",
+        "tvdb_id": entry["external_id"],
+        "anilist_id": anilist_id,
+    }
+
+
+def _classify_radarr(entry: dict) -> dict:
+    # See module docstring's own "no anime signal" note.
     return {
         "media_shape": "movie",
         "tracking_space": "tv",
@@ -111,15 +188,79 @@ def _classify(entry: dict) -> dict:
     }
 
 
+def _classify_anilist(entry: dict) -> dict:
+    return {
+        "media_shape": _ANILIST_FORMAT_TO_MEDIA_SHAPE.get(entry["format"], "episodic"),
+        "tracking_space": "anime",
+        "title_romaji": entry["title"],
+        "primary_title": "romaji",
+        "anilist_id": entry["external_id"],
+    }
+
+
+def _classify(entry: dict, tvdb_index: dict) -> dict:
+    """One candidate entry (local_audit's own untracked_shows shape,
+    or this module's own AniList-sweep shape) to a
+    shows.create_show()-ready input dict."""
+    if entry["service"] == "sonarr":
+        return _classify_sonarr(entry, tvdb_index)
+    if entry["service"] == "radarr":
+        return _classify_radarr(entry)
+    return _classify_anilist(entry)
+
+
+def _find_untracked_anilist_entries(conn) -> list[dict]:
+    """See module docstring's own "AniList-sweep dedup" note for the
+    full reasoning. Read-only (one MediaListCollection fetch, no
+    writes) — safe to call from both preview_backfill() and
+    backfill_untracked_shows()."""
+    cfg = get_current()
+    if not cfg.anilist_access_token:
+        return []
+    try:
+        my_list = anilist_client.fetch_my_anime_list(cfg.anilist_access_token)
+    except anilist_client.AniListError:
+        return []
+
+    known_anilist_ids = local_audit.known_anilist_ids(conn)
+    sonarr_tvdb_ids = local_audit.all_sonarr_tvdb_ids(conn)
+    anilist_to_tvdb = _fribb_anilist_index()
+
+    entries = []
+    for item in my_list:
+        if item["format"] == "MUSIC":
+            continue
+        if str(item["anilist_id"]) in known_anilist_ids:
+            continue
+        tvdb_id = anilist_to_tvdb.get(item["anilist_id"])
+        if tvdb_id is not None and tvdb_id in sonarr_tvdb_ids:
+            continue
+        entries.append(
+            {
+                "service": "anilist",
+                "title": item["title"],
+                "external_id": item["anilist_id"],
+                "format": item["format"],
+                "status": item["status"],
+            }
+        )
+    return entries
+
+
 def preview_backfill(conn) -> list[dict]:
     """Dry-run: what backfill_untracked_shows() below would create —
-    genuinely read-only (local_audit.find_untracked_shows_readonly(),
-    not audit_local_files()), run this first, always (the same
+    genuinely read-only (local_audit.find_untracked_shows_readonly()
+    plus this module's own _find_untracked_anilist_entries(), neither
+    of which write anything), run this first, always (the same
     report-only-before-you-act shape auditLocalFiles's own
     untracked_shows already has)."""
+    tvdb_index = _fribb_tvdb_index()
+    candidates = local_audit.find_untracked_shows_readonly(conn) + _find_untracked_anilist_entries(
+        conn
+    )
     preview = []
-    for entry in local_audit.find_untracked_shows_readonly(conn):
-        classification = _classify(entry)
+    for entry in candidates:
+        classification = _classify(entry, tvdb_index)
         preview.append(
             {
                 "service": entry["service"],
@@ -134,16 +275,20 @@ def preview_backfill(conn) -> list[dict]:
 
 def _anilist_call_estimate(conn, show_id: str) -> int:
     """Roughly how many AniList calls this show's own create_show()
-    (plus this module's own status-seed) likely just made: 1 for
-    _fetch_anilist, 1 per season for _reconcile_air_dates
-    (metadata.py's own B.4 docstring: "calls this once per season, not
-    once per show"), 1 for _seed_status_from_anilist's own read. Not a
-    precise instrumentation of metadata.py's internals — a cheap,
-    conservative proxy computed from what create_show() already wrote
-    (the season table), used only to scale this module's own throttle
-    sleep. At least 1 season assumed even if none were written yet
-    (a Sonarr-fetch failure, or a not-yet-aired show with no seasons
-    resolved) — never throttles less than the single-season case."""
+    (plus this module's own status-seed, when it needs a live read)
+    likely just made: 1 for _fetch_anilist, 1 per season for
+    _reconcile_air_dates (metadata.py's own B.4 docstring: "calls this
+    once per season, not once per show"), 1 for _seed_status_from_anilist's
+    own read when it needs one. Not a precise instrumentation of
+    metadata.py's internals — a cheap, conservative proxy computed from
+    what create_show() already wrote (the season table), used only to
+    scale this module's own throttle sleep. At least 1 season assumed
+    even if none were written yet (a Sonarr-fetch failure, an
+    AniList-sweep-sourced show with no seasons yet, or a not-yet-aired
+    show with no seasons resolved) — never throttles less than the
+    single-season case, which slightly over-throttles an AniList-sweep
+    show (no status-seed call needed there) rather than under-throttle
+    it."""
     row = conn.execute("SELECT COUNT(*) AS n FROM season WHERE show_id = ?", (show_id,)).fetchone()
     season_count = max(row["n"] if row else 0, 1)
     return 2 + season_count
@@ -154,19 +299,21 @@ def backfill_untracked_shows(conn) -> dict:
     Radarr item (local_audit.audit_local_files()'s own untracked_shows,
     not the read-only preview variant — this is a Mutation, its own
     reconciliation/orphan-walk side effects are a legitimate bonus, see
-    module docstring). Returns {"created": [...], "failed": [...]} — a
-    failure on one item (only possible via ShowInputError, which
-    _classify() above never actually produces given local_audit's own
-    entry shape, but shows.create_show() is a general-purpose
-    function) never stops the rest of the run, same best-effort
-    philosophy every other multi-item pass in this codebase already
-    follows (metadata.py's own _guarded(), local_audit's own per-
-    service try/except)."""
+    module docstring) plus every still-untracked AniList-sweep entry.
+    Returns {"created": [...], "failed": [...]} — a failure on one item
+    (only possible via ShowInputError, which _classify() above never
+    actually produces given local_audit's own entry shape, but
+    shows.create_show() is a general-purpose function) never stops the
+    rest of the run, same best-effort philosophy every other multi-item
+    pass in this codebase already follows (metadata.py's own
+    _guarded(), local_audit's own per-service try/except)."""
+    tvdb_index = _fribb_tvdb_index()
     result = local_audit.audit_local_files(conn)
+    candidates = result["untracked_shows"] + _find_untracked_anilist_entries(conn)
     created = []
     failed = []
-    for entry in result["untracked_shows"]:
-        classification = _classify(entry)
+    for entry in candidates:
+        classification = _classify(entry, tvdb_index)
         try:
             show_id = shows.create_show(conn, classification)
         except shows.ShowInputError as e:
@@ -174,17 +321,27 @@ def backfill_untracked_shows(conn) -> dict:
             continue
         created.append({"show_id": show_id, "service": entry["service"], "title": entry["title"]})
         if classification["tracking_space"] == "anime":
-            _seed_status_from_anilist(conn, show_id)
+            known_status = entry.get("status") if entry["service"] == "anilist" else None
+            _seed_status_from_anilist(conn, show_id, known_status=known_status)
             calls = _anilist_call_estimate(conn, show_id)
-            time.sleep(calls * ANILIST_SECONDS_PER_CALL)
+            if known_status is None:
+                time.sleep(calls * ANILIST_SECONDS_PER_CALL)
+            else:
+                time.sleep((calls - 1) * ANILIST_SECONDS_PER_CALL)  # no live status read made
     return {"created": created, "failed": failed}
 
 
-def _seed_status_from_anilist(conn, show_id: str) -> None:
+def _seed_status_from_anilist(conn, show_id: str, known_status: str | None = None) -> None:
     """Best-effort, never raises past this function — a failed/skipped
     seed leaves the show at its create_show()-default 'planned', same
     "worth retrying by hand, never blocks the rest of the run"
-    treatment every other best-effort branch in this codebase gets."""
+    treatment every other best-effort branch in this codebase gets.
+
+    `known_status` (AniList's own raw enum string, e.g. "CURRENT")
+    skips the live fetch_my_list_status() read entirely — the AniList
+    sweep already knows this from the same MediaListCollection call
+    that found the show in the first place; only a Sonarr/Fribb-
+    resolved anime show needs the live read."""
     cfg = get_current()
     if not cfg.anilist_access_token:
         return
@@ -194,14 +351,17 @@ def _seed_status_from_anilist(conn, show_id: str) -> None:
     ).fetchone()
     if row is None:
         return  # no AniList link resolved (Fribb miss, or genuinely no match) — nothing to seed
-    try:
-        anilist_status = anilist_client.fetch_my_list_status(
-            cfg.anilist_access_token, int(row["external_id"])
-        )
-    except anilist_client.AniListError:
-        return
-    if anilist_status is None:
-        return  # not on the viewer's AniList list at all — the 'planned' default stands
+    if known_status is not None:
+        anilist_status = known_status
+    else:
+        try:
+            anilist_status = anilist_client.fetch_my_list_status(
+                cfg.anilist_access_token, int(row["external_id"])
+            )
+        except anilist_client.AniListError:
+            return
+        if anilist_status is None:
+            return  # not on the viewer's AniList list at all — the 'planned' default stands
     new_status = _ANILIST_STATUS_TO_SHOW_STATUS.get(anilist_status)
     if new_status is None:
         return

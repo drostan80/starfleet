@@ -113,6 +113,52 @@ def _known_tmdb_movie_ids(conn) -> set[str]:
     return {row["external_id"] for row in rows}
 
 
+def known_anilist_ids(conn) -> set[str]:
+    """B.11d — every AniList id LCARS already has a link for, checking
+    **both** places one can live: `show_external_id` (the show-level
+    link, A.24) and `season.anilist_id` (§5.5's own per-season
+    crosswalk — a split-cour sequel season has its own AniList entry,
+    genuinely different from the show-level one, per
+    _reconcile_air_dates's own docstring). show_backfill.py's own
+    AniList-only sweep needs both checked, or a sequel season already
+    tracked only at the season level would look untracked and get
+    proposed as a brand new duplicate show."""
+    show_level = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE service = 'anilist'"
+    ).fetchall()
+    season_level = conn.execute(
+        "SELECT anilist_id FROM season WHERE anilist_id IS NOT NULL"
+    ).fetchall()
+    return {row["external_id"] for row in show_level} | {
+        str(row["anilist_id"]) for row in season_level
+    }
+
+
+def all_sonarr_tvdb_ids(conn) -> set[int]:
+    """B.11d — every tvdb id Sonarr's own catalog currently reports,
+    tracked in LCARS or not (unlike _known_tvdb_ids above, which is
+    LCARS-side only). show_backfill.py's own AniList-only sweep uses
+    this to skip any AniList entry whose Fribb-resolved tvdb id is
+    already in Sonarr's catalog at all — that's Sonarr's own sweep's
+    job to backfill (or it's already tracked), never this one's:
+    Fribb groups a franchise's several AniList-side season splits
+    under one tvdb id (build_tvdb_index's own docstring), so treating
+    each split as an independent "untracked show" here would create a
+    genuine duplicate the moment its sibling season gets created via
+    the Sonarr-sourced path instead. Read-only, no service_health
+    record, no commit — same side-effect-free contract
+    find_untracked_shows_readonly() above already establishes."""
+    cfg = get_current()
+    if not cfg.sonarr_url or not cfg.sonarr_api_key:
+        return set()
+    try:
+        with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+            all_series = client.all_series()
+    except sonarr_client.SonarrError:
+        return set()
+    return {s["tvdbId"] for s in all_series}
+
+
 def _walk_video_files(root: str) -> list[str]:
     if not os.path.isdir(root):
         return []  # the mount isn't there (yet), or the path is stale — not an error

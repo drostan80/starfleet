@@ -2874,6 +2874,90 @@ background scheduler.
       check confirmed `find_untracked_shows_readonly`/
       `ANILIST_SECONDS_PER_CALL`/`_anilist_call_estimate` import
       cleanly.
+    - **Live infrastructure stood up the same day, real credentials**:
+      the user re-pasted the Sonarr/Radarr keys (context had been
+      summarized, secrets don't survive that) plus a new AniList
+      `client_secret` for app 45425 (LCARS's own separate
+      `anilist-login` session — see the new
+      `lcars-anilist-client-secret-rotate-at-project-end` memory,
+      alongside the existing Sonarr/Radarr/MAL ones, all rotate at
+      Cutover). LCARS server started for real
+      (`lcars serve`), Ops's own `ops.ini` pointed at it, a real
+      `lcars anilist-login` OAuth exchange completed and verified live
+      (`fetch_my_list_status` against a real anime id returned
+      `COMPLETED`).
+    - **Two more real corrections, found from the first genuinely live
+      `ops preview-show-backfill` run (472 items, the user's actual
+      library) — both before any write happened**:
+      1. **The user asked directly, live**: "will the database also
+         add the shows tracked on AniList but not on Radarr/Sonarr? it
+         should" — a real gap, not previously covered anywhere in
+         BUILD_PLAN.md/SCOPE.md. Confirmed with the user: yes, every
+         AniList list status, folded into this same step. Built a
+         third candidate source (`anilist_client.fetch_viewer_id`/
+         `fetch_my_anime_list`, new `MediaListCollection` query,
+         live-verified against the user's real account: 1420 list
+         entries, 11 lists, `format` can be null, no duplicate media
+         ids across lists for this account) — `format: MUSIC` entries
+         excluded outright (not a real "show", same exclusion
+         `ANIME_RELATION_FORMATS`, A.21, already establishes for
+         relation edges).
+      2. **Caught in review before any dedup code was written**: the
+         obvious forward-dedup ("AniList entry already linked in
+         LCARS, skip it") isn't enough on its own — the *same* preview
+         run's own printed output showed most of the Sonarr-classified
+         entries were actually anime with `seriesType: standard`, not
+         `anime` (Frieren, DAN DA DAN, Chainsaw Man, SPY x FAMILY,
+         Kaiju No. 8, dozens more) — B.11d's original classification
+         (`seriesType == "anime"`) was simply wrong for most of this
+         user's real library. A misclassified `tracking_space='tv'`
+         show never gets `_ensure_anilist_link` called at all
+         (`fetch_and_populate`'s own gate), so it would never
+         cross-reference against the AniList sweep, producing a
+         duplicate the moment its AniList-sourced twin got created.
+         Fixed both problems with one change: `_classify()`'s Sonarr
+         branch now runs a real Fribb tvdb->anilist resolution as the
+         actual anime signal (the same resolution
+         `_ensure_anilist_link` would perform anyway once the show
+         exists — done here first instead), and that resolved
+         `anilist_id` is passed straight through on the `addShow`-
+         equivalent input. Dedup itself works at two layers: (a)
+         `local_audit.known_anilist_ids()` — checks **both**
+         `show_external_id` (show-level) and `season.anilist_id`
+         (per-season, §5.5 — a split-cour sequel's own AniList link
+         can live there instead), and (b) `local_audit
+         .all_sonarr_tvdb_ids()` + a new `fribb.build_anilist_index()`
+         (the reverse of `build_tvdb_index`) — any AniList entry whose
+         Fribb-resolved tvdb id is already in Sonarr's own full
+         catalog at all (tracked or not) is skipped, since Fribb
+         groups a franchise's several AniList-side season splits under
+         one tvdb id and treating each split as independently
+         "untracked" would create a real duplicate as soon as its
+         sibling season arrived via the Sonarr-sourced path.
+    - **Built**: `anilist_client.fetch_viewer_id`/`fetch_my_anime_list`
+      (new); `fribb.build_anilist_index` (new); `local_audit
+      .known_anilist_ids`/`all_sonarr_tvdb_ids` (new, both read-only —
+      no service_health record, no commit, same contract
+      `find_untracked_shows_readonly()` already has); `show_backfill
+      ._classify_sonarr`/`_classify_radarr`/`_classify_anilist`/
+      `_find_untracked_anilist_entries` (new/split out of the old
+      single `_classify()`); `_seed_status_from_anilist` gained a
+      `known_status` param so an AniList-sweep show (which already
+      knows its own status from the same `MediaListCollection` call
+      that found it) skips the redundant live status read entirely —
+      one fewer AniList call than a Sonarr/Fribb-resolved anime show
+      needs.
+    - **Verified (AniList sweep)**: 564 tests passing (was 550; 14
+      new: 5 in `test_anilist_client.py` — `fetch_viewer_id`,
+      `fetch_my_anime_list` flattening/deduplication, a new
+      `_SequencedFakeClient` for the two-call flow — 9 in
+      `test_show_backfill.py` — Fribb-based classification replacing
+      the old seriesType-based tests, both dedup layers, MUSIC
+      exclusion, null-format fallback, known-status skip), `ruff
+      check`/`format` clean, clean-install sanity check confirmed the
+      new functions import cleanly. Live-verified: real `Viewer`/
+      `MediaListCollection` calls against the user's actual AniList
+      account before any test was written for them.
   - [ ] **B.11e — ongoing untracked-show sweep**: extend
     `auditLocalFiles`'s existing `untracked_shows` computation (or a
     dedicated variant) onto Ops's recurring schedule, persisting

@@ -1,8 +1,13 @@
 """One-time/repeatable show backfill — SCOPE.md §5.1/§5.2, BUILD_PLAN.md
 B.11d. Same real-migrated-SQLite-DB + fake-client approach
 test_local_audit.py already established. preview_backfill() reuses
-local_audit.find_untracked_shows_readonly() (genuinely read-only);
+local_audit.find_untracked_shows_readonly() (genuinely read-only) plus
+this module's own _find_untracked_anilist_entries();
 backfill_untracked_shows() reuses the fuller audit_local_files().
+fribb.load_dataset is monkeypatched throughout, same pattern
+test_server.py's own reconcileSeasonMapping tests already established
+(§5.5's own automatic id-mapper reconciliation section) — no real
+network call.
 """
 
 import os
@@ -13,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from lcars import anilist_client, config, show_backfill, sonarr_client
+from lcars import anilist_client, config, fribb, show_backfill, sonarr_client
 
 
 @pytest.fixture
@@ -66,34 +71,166 @@ def _sonarr_series(series_id, tvdb_id, title, series_type=None):
     return {"id": series_id, "tvdbId": tvdb_id, "title": title, "seriesType": series_type}
 
 
-# --- classification (pure) ---------------------------------------------------
+def _patch_fribb(monkeypatch, dataset):
+    monkeypatch.setattr(fribb, "load_dataset", lambda: dataset)
 
 
-def test_classify_sonarr_anime_flag_maps_to_anime_tracking_space():
-    entry = {"service": "sonarr", "title": "Show A", "external_id": 1, "series_type": "anime"}
-    result = show_backfill._classify(entry)
+TVDB_INDEX_EMPTY = fribb.build_tvdb_index([])
+
+
+# --- classification (pure-ish — Fribb dataset is the only input) -------------
+
+
+def test_classify_sonarr_uses_fribb_resolution_not_series_type(monkeypatch):
+    # Live-verified finding, 2026-08-10: Sonarr's own seriesType is NOT
+    # a reliable anime signal for this user's real library (Frieren,
+    # DAN DA DAN, etc. all report "standard"). A Fribb match is the
+    # real signal — series_type is irrelevant to the outcome now.
+    dataset = [{"tvdb_id": 111, "anilist_id": 999, "mal_id": None, "season": {"tvdb": 1}}]
+    _patch_fribb(monkeypatch, dataset)
+    index = fribb.build_tvdb_index(dataset)
+    entry = {"service": "sonarr", "title": "Frieren", "external_id": 111, "series_type": "standard"}
+    result = show_backfill._classify(entry, index)
     assert result["tracking_space"] == "anime"
     assert result["media_shape"] == "episodic"
-    assert result["tvdb_id"] == 1
+    assert result["anilist_id"] == 999
+    assert result["tvdb_id"] == 111
 
 
-def test_classify_sonarr_non_anime_maps_to_tv_tracking_space():
-    entry = {"service": "sonarr", "title": "Show B", "external_id": 2, "series_type": "standard"}
-    assert show_backfill._classify(entry)["tracking_space"] == "tv"
-
-
-def test_classify_sonarr_missing_series_type_defaults_to_tv():
-    entry = {"service": "sonarr", "title": "Show C", "external_id": 3}
-    assert show_backfill._classify(entry)["tracking_space"] == "tv"
+def test_classify_sonarr_with_no_fribb_match_is_tv(monkeypatch):
+    entry = {"service": "sonarr", "title": "NCIS", "external_id": 222, "series_type": "standard"}
+    result = show_backfill._classify(entry, TVDB_INDEX_EMPTY)
+    assert result["tracking_space"] == "tv"
+    assert result["anilist_id"] is None
 
 
 def test_classify_radarr_always_defaults_to_tv():
     # No anime signal exists from Radarr at all — documented cut, B.11d.
     entry = {"service": "radarr", "title": "Movie A", "external_id": 10}
-    result = show_backfill._classify(entry)
+    result = show_backfill._classify(entry, TVDB_INDEX_EMPTY)
     assert result["tracking_space"] == "tv"
     assert result["media_shape"] == "movie"
     assert result["tmdb_id"] == 10
+
+
+def test_classify_anilist_maps_format_to_media_shape():
+    entry = {
+        "service": "anilist",
+        "title": "A Movie",
+        "external_id": 555,
+        "format": "MOVIE",
+        "status": "COMPLETED",
+    }
+    result = show_backfill._classify(entry, TVDB_INDEX_EMPTY)
+    assert result["tracking_space"] == "anime"
+    assert result["media_shape"] == "movie"
+    assert result["anilist_id"] == 555
+
+
+def test_classify_anilist_null_format_defaults_to_episodic():
+    entry = {
+        "service": "anilist",
+        "title": "Unknown Format",
+        "external_id": 556,
+        "format": None,
+        "status": "PLANNING",
+    }
+    assert show_backfill._classify(entry, TVDB_INDEX_EMPTY)["media_shape"] == "episodic"
+
+
+# --- _find_untracked_anilist_entries ------------------------------------------
+
+
+def test_anilist_sweep_excludes_already_tracked_show_level(conn, monkeypatch):
+    conn.execute(
+        "INSERT INTO show (id, media_shape, tracking_space, title_romaji, primary_title,"
+        " status, tracked, created_at, updated_at)"
+        " VALUES ('s-trck01', 'episodic', 'anime', 'Tracked', 'romaji', 'watching', 1, 'x', 'x')"
+    )
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES ('s-trck01', 'anilist', '101', 'https://x', 'x')"
+    )
+    conn.commit()
+    config.get_current().anilist_access_token = "tok"
+    my_list = [{"anilist_id": 101, "format": "TV", "status": "CURRENT", "title": "Tracked"}]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    assert show_backfill._find_untracked_anilist_entries(conn) == []
+
+
+def test_anilist_sweep_excludes_a_season_level_link(conn, monkeypatch):
+    # §5.5 — a split-cour sequel's own AniList link can live on the
+    # season row instead of show_external_id.
+    conn.execute(
+        "INSERT INTO show (id, media_shape, tracking_space, title_romaji, primary_title,"
+        " status, tracked, created_at, updated_at)"
+        " VALUES ('s-trck02', 'episodic', 'anime', 'Tracked S2', 'romaji', 'watching', 1, 'x', 'x')"
+    )
+    conn.execute(
+        "INSERT INTO season"
+        " (id, show_id, season_number, anilist_id, source, created_at, updated_at)"
+        " VALUES ('z-seas01', 's-trck02', 2, 202, 'fribb', 'x', 'x')"
+    )
+    conn.commit()
+    config.get_current().anilist_access_token = "tok"
+    my_list = [{"anilist_id": 202, "format": "TV", "status": "CURRENT", "title": "Tracked S2"}]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    assert show_backfill._find_untracked_anilist_entries(conn) == []
+
+
+def test_anilist_sweep_excludes_an_entry_whose_tvdb_id_is_in_sonarrs_catalog(conn, monkeypatch):
+    # Fribb resolves this AniList entry back to a tvdb id Sonarr's own
+    # catalog already has (tracked or not) — Sonarr's own sweep's job,
+    # not this one's, to avoid a duplicate show for a split-cour sequel.
+    _configure_sonarr()
+    dataset = [{"tvdb_id": 333, "anilist_id": 303, "mal_id": None, "season": {"tvdb": 1}}]
+    _patch_fribb(monkeypatch, dataset)
+    monkeypatch.setattr(
+        sonarr_client,
+        "SonarrClient",
+        lambda *a, **kw: _FakeSonarrClient([_sonarr_series(1, 333, "Some Show")]),
+    )
+    config.get_current().anilist_access_token = "tok"
+    my_list = [{"anilist_id": 303, "format": "TV", "status": "CURRENT", "title": "Some Show"}]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    assert show_backfill._find_untracked_anilist_entries(conn) == []
+
+
+def test_anilist_sweep_excludes_music_format(conn, monkeypatch):
+    config.get_current().anilist_access_token = "tok"
+    my_list = [{"anilist_id": 404, "format": "MUSIC", "status": "COMPLETED", "title": "A Song"}]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    assert show_backfill._find_untracked_anilist_entries(conn) == []
+
+
+def test_anilist_sweep_includes_a_genuinely_untracked_entry(conn, monkeypatch):
+    config.get_current().anilist_access_token = "tok"
+    my_list = [{"anilist_id": 505, "format": "TV", "status": "PLANNING", "title": "New Show"}]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    result = show_backfill._find_untracked_anilist_entries(conn)
+    assert result == [
+        {
+            "service": "anilist",
+            "title": "New Show",
+            "external_id": 505,
+            "format": "TV",
+            "status": "PLANNING",
+        }
+    ]
+
+
+def test_anilist_sweep_is_a_clean_no_op_without_a_token(conn):
+    assert show_backfill._find_untracked_anilist_entries(conn) == []
+
+
+def test_anilist_sweep_swallows_an_anilist_error(conn, monkeypatch):
+    config.get_current().anilist_access_token = "tok"
+
+    def _raise(token, **kw):
+        raise anilist_client.AniListError("boom")
+
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", _raise)
+    assert show_backfill._find_untracked_anilist_entries(conn) == []
 
 
 # --- preview_backfill (dry-run) -----------------------------------------------
@@ -101,7 +238,9 @@ def test_classify_radarr_always_defaults_to_tv():
 
 def test_preview_backfill_lists_untracked_items_without_writing(conn, monkeypatch):
     _configure_sonarr()
-    series = [_sonarr_series(1, 111, "Untracked Show", series_type="anime")]
+    dataset = [{"tvdb_id": 111, "anilist_id": 999, "mal_id": None, "season": {"tvdb": 1}}]
+    _patch_fribb(monkeypatch, dataset)
+    series = [_sonarr_series(1, 111, "Untracked Show")]
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
 
     preview = show_backfill.preview_backfill(conn)
@@ -123,8 +262,28 @@ def test_preview_backfill_lists_untracked_items_without_writing(conn, monkeypatc
 
 def test_preview_backfill_is_empty_with_nothing_untracked(conn, monkeypatch):
     _configure_sonarr()
+    _patch_fribb(monkeypatch, [])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient([]))
     assert show_backfill.preview_backfill(conn) == []
+
+
+def test_preview_backfill_includes_anilist_sweep_entries(conn, monkeypatch):
+    _patch_fribb(monkeypatch, [])
+    config.get_current().anilist_access_token = "tok"
+    my_list = [
+        {"anilist_id": 606, "format": "MOVIE", "status": "COMPLETED", "title": "Streamed Movie"}
+    ]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    preview = show_backfill.preview_backfill(conn)
+    assert preview == [
+        {
+            "service": "anilist",
+            "title": "Streamed Movie",
+            "external_id": 606,
+            "tracking_space": "anime",
+            "media_shape": "movie",
+        }
+    ]
 
 
 # --- backfill_untracked_shows (the real run) ----------------------------------
@@ -132,9 +291,11 @@ def test_preview_backfill_is_empty_with_nothing_untracked(conn, monkeypatch):
 
 def test_backfill_creates_a_show_per_untracked_item(conn, monkeypatch):
     _configure_sonarr()
+    dataset = [{"tvdb_id": 222, "anilist_id": 888, "mal_id": None, "season": {"tvdb": 1}}]
+    _patch_fribb(monkeypatch, dataset)
     series = [
-        _sonarr_series(1, 111, "Show A", series_type="standard"),
-        _sonarr_series(2, 222, "Show B", series_type="anime"),
+        _sonarr_series(1, 111, "Show A"),  # no Fribb match — tv
+        _sonarr_series(2, 222, "Show B"),  # Fribb match — anime
     ]
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
     monkeypatch.setattr(show_backfill.time, "sleep", lambda s: None)  # no real sleep in tests
@@ -153,9 +314,32 @@ def test_backfill_creates_a_show_per_untracked_item(conn, monkeypatch):
     assert by_title["Show B"]["status"] == "planned"
 
 
+def test_backfill_creates_an_anilist_sweep_show_with_known_status(conn, monkeypatch):
+    _patch_fribb(monkeypatch, [])
+    config.get_current().anilist_access_token = "tok"
+    my_list = [{"anilist_id": 707, "format": "TV", "status": "COMPLETED", "title": "AniList Only"}]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    fetch_status_calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_my_list_status",
+        lambda *a, **kw: fetch_status_calls.append(1) or "SHOULD_NOT_BE_CALLED",
+    )
+    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: None)
+
+    result = show_backfill.backfill_untracked_shows(conn)
+    assert len(result["created"]) == 1
+    row = conn.execute("SELECT status FROM show WHERE title_romaji = 'AniList Only'").fetchone()
+    assert row["status"] == "completed"
+    # The sweep already knew the status from MediaListCollection — no
+    # extra live fetch_my_list_status() read needed.
+    assert fetch_status_calls == []
+
+
 def test_backfill_is_idempotent_on_rerun(conn, monkeypatch):
     _configure_sonarr()
-    series = [_sonarr_series(1, 111, "Show A", series_type="standard")]
+    _patch_fribb(monkeypatch, [])
+    series = [_sonarr_series(1, 111, "Show A")]
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
     monkeypatch.setattr(show_backfill.time, "sleep", lambda s: None)
 
@@ -170,10 +354,15 @@ def test_backfill_is_idempotent_on_rerun(conn, monkeypatch):
 
 def test_backfill_throttles_only_between_anime_adds(conn, monkeypatch):
     _configure_sonarr()
+    dataset = [
+        {"tvdb_id": 222, "anilist_id": 888, "mal_id": None, "season": {"tvdb": 1}},
+        {"tvdb_id": 333, "anilist_id": 889, "mal_id": None, "season": {"tvdb": 1}},
+    ]
+    _patch_fribb(monkeypatch, dataset)
     series = [
-        _sonarr_series(1, 111, "TV Show", series_type="standard"),
-        _sonarr_series(2, 222, "Anime Show A", series_type="anime"),
-        _sonarr_series(3, 333, "Anime Show B", series_type="anime"),
+        _sonarr_series(1, 111, "TV Show"),  # no Fribb match
+        _sonarr_series(2, 222, "Anime Show A"),
+        _sonarr_series(3, 333, "Anime Show B"),
     ]
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
     sleeps = []
@@ -184,13 +373,18 @@ def test_backfill_throttles_only_between_anime_adds(conn, monkeypatch):
     # No episodes fetched (the fake Sonarr client returns none) — no season
     # row gets created, so _anilist_call_estimate()'s own "at least 1
     # season assumed" floor applies: 2 + 1 = 3 calls' worth of throttle.
+    # No AniList token configured, so _seed_status_from_anilist() no-ops
+    # before making any live call either way — full 3-call throttle still
+    # applies (the sleep is sized before knowing the seed will no-op).
     expected = 3 * show_backfill.ANILIST_SECONDS_PER_CALL
     assert sleeps == [expected, expected]
 
 
 def test_backfill_throttle_scales_with_season_count(conn, monkeypatch):
     _configure_sonarr()
-    series = [_sonarr_series(1, 111, "Multi-Season Anime", series_type="anime")]
+    dataset = [{"tvdb_id": 111, "anilist_id": 888, "mal_id": None, "season": {"tvdb": 1}}]
+    _patch_fribb(monkeypatch, dataset)
+    series = [_sonarr_series(1, 111, "Multi-Season Anime")]
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
     sleeps = []
     monkeypatch.setattr(show_backfill.time, "sleep", lambda s: sleeps.append(s))
@@ -200,8 +394,11 @@ def test_backfill_throttle_scales_with_season_count(conn, monkeypatch):
     real_create_show = show_backfill.shows.create_show
 
     def _create_and_add_seasons(conn, classification):
+        # Season 1 already gets created automatically by _fetch_anilist's
+        # own _upsert_season(show_id, 1, ...) once an anilist_id is
+        # resolved (metadata.py) — only seasons 2/3 need adding here.
         show_id = real_create_show(conn, classification)
-        for n in (1, 2, 3):
+        for n in (2, 3):
             conn.execute(
                 "INSERT INTO season (id, show_id, season_number, source, created_at, updated_at)"
                 " VALUES (?, ?, ?, 'manual', 'x', 'x')",
@@ -253,6 +450,19 @@ def test_seed_status_updates_status_and_writes_history(conn, monkeypatch):
     assert change["previous_status"] == "planned"
     assert change["new_status"] == "completed"
     assert change["changed_by"] == "show_backfill"
+
+
+def test_seed_status_known_status_skips_the_live_read(conn, monkeypatch):
+    config.get_current().anilist_access_token = "tok"
+    _bare_anime_show(conn, "s-seed07", anilist_id=999)
+    calls = []
+    monkeypatch.setattr(
+        anilist_client, "fetch_my_list_status", lambda *a, **kw: calls.append(1) or "COMPLETED"
+    )
+    show_backfill._seed_status_from_anilist(conn, "s-seed07", known_status="DROPPED")
+    row = conn.execute("SELECT status FROM show WHERE id = ?", ("s-seed07",)).fetchone()
+    assert row["status"] == "dropped"  # known_status honored, not the live-fetch stub's value
+    assert calls == []  # no live read made at all
 
 
 def test_seed_status_repeating_maps_to_watching(conn, monkeypatch):

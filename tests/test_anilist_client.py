@@ -44,6 +44,23 @@ class _FakeClient:
         pass
 
 
+class _SequencedFakeClient:
+    """Like _FakeClient above, but for fetch_my_anime_list() (B.11d),
+    which makes two real calls (Viewer, then MediaListCollection) —
+    a plain single-response fake can't stand in for that."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    def post(self, url, json=None, headers=None):
+        self.calls.append(json)
+        return self._responses.pop(0)
+
+    def close(self):
+        pass
+
+
 # --- fetch_media (A.8) -------------------------------------------------------
 
 
@@ -139,6 +156,72 @@ def test_fetch_my_list_status_raises_on_graphql_errors():
     fake = _FakeClient(response=_FakeResponse(payload={"errors": [{"message": "Invalid mediaId"}]}))
     with pytest.raises(anilist_client.AniListError, match="Invalid mediaId"):
         anilist_client.fetch_my_list_status("tok", 123, client=fake)
+
+
+# --- fetch_viewer_id / fetch_my_anime_list (B.11d) ------------------------------
+
+
+def test_fetch_viewer_id_returns_the_numeric_id():
+    fake = _FakeClient(response=_FakeResponse(payload={"data": {"Viewer": {"id": 24011}}}))
+    assert anilist_client.fetch_viewer_id("tok", client=fake) == 24011
+
+
+def test_fetch_my_anime_list_flattens_every_list_into_one():
+    viewer_response = _FakeResponse(payload={"data": {"Viewer": {"id": 24011}}})
+    collection_response = _FakeResponse(
+        payload={
+            "data": {
+                "MediaListCollection": {
+                    "lists": [
+                        {
+                            "entries": [
+                                {
+                                    "status": "COMPLETED",
+                                    "media": {"id": 101, "format": "TV", "title": {"romaji": "A"}},
+                                }
+                            ]
+                        },
+                        {
+                            "entries": [
+                                {
+                                    "status": "CURRENT",
+                                    "media": {
+                                        "id": 102,
+                                        "format": "MOVIE",
+                                        "title": {"romaji": "B"},
+                                    },
+                                }
+                            ]
+                        },
+                    ]
+                }
+            }
+        }
+    )
+    fake = _SequencedFakeClient([viewer_response, collection_response])
+    result = anilist_client.fetch_my_anime_list("tok", client=fake)
+    assert result == [
+        {"anilist_id": 101, "format": "TV", "status": "COMPLETED", "title": "A"},
+        {"anilist_id": 102, "format": "MOVIE", "status": "CURRENT", "title": "B"},
+    ]
+    # userId came from the Viewer call's own id, not hardcoded
+    assert fake.calls[1]["variables"] == {"userId": 24011}
+
+
+def test_fetch_my_anime_list_deduplicates_an_entry_appearing_in_two_lists():
+    viewer_response = _FakeResponse(payload={"data": {"Viewer": {"id": 24011}}})
+    entry = {
+        "status": "COMPLETED",
+        "media": {"id": 101, "format": "TV", "title": {"romaji": "A"}},
+    }
+    collection_response = _FakeResponse(
+        payload={
+            "data": {"MediaListCollection": {"lists": [{"entries": [entry]}, {"entries": [entry]}]}}
+        }
+    )
+    fake = _SequencedFakeClient([viewer_response, collection_response])
+    result = anilist_client.fetch_my_anime_list("tok", client=fake)
+    assert len(result) == 1
 
 
 # --- OAuth (A.9) --------------------------------------------------------------
