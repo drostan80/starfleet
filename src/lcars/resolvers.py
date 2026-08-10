@@ -472,6 +472,25 @@ def resolve_episodes_airing_soon(_, info, days, **page_args):
     )
 
 
+@query.field("episodesInRange")
+def resolve_episodes_in_range(_, info, start, end, **page_args):
+    """§8, B.11c — arbitrary [start, end) episode window, half-open
+    (matches Data's own calendar_nav.CalendarState.date_range()
+    convention: `start <= local.date() < end`). Unlike
+    episodesAiringSoon (future-only, relative to server "now"), the
+    caller supplies explicit bounds so a client-side calendar can page
+    arbitrarily far into the past or future — built for Data's own
+    calendar render path (B.11f), which has no floor on how far back
+    step_back() can go."""
+    return pagination.paginate(
+        db.get_connection(),
+        "episode",
+        "air_date_utc IS NOT NULL AND air_date_utc >= ? AND air_date_utc < ?",
+        (start, end),
+        **page_args,
+    )
+
+
 @query.field("backlog")
 def resolve_backlog(_, info, **page_args):
     """§6.3, B.9 — the backlog: unwatched, locally-available episodes on

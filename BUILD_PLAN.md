@@ -2717,10 +2717,28 @@ background scheduler.
       never auto-`addShow` (keeps §5.1/B.3b's existing "an untracked
       remote show is deliberately not auto-created" decision intact
       rather than reversing it) — own sub-step B.11e below.
-  - [ ] **B.11c — `episodesInRange` query**: new starfleet-side query,
-    same pagination/style as `episodesAiringSoon`/`backlog`, an
-    arbitrary `(start, end)` window rather than a future-only
-    N-day one.
+  - [x] **B.11c — `episodesInRange` query** (2026-08-10): new
+    `Query.episodesInRange(start: DateTime!, end: DateTime!, ...)`,
+    same pagination/style as `episodesAiringSoon`/`backlog` — real
+    table-backed `pagination.paginate()`, half-open `[start, end)`
+    window (`air_date_utc >= ? AND air_date_utc < ?`), matching
+    Data's own `calendar_nav.CalendarState.date_range()` convention
+    exactly (`start <= local.date() < end`). Unlike
+    `episodesAiringSoon` (future-only, relative to server "now"), the
+    caller supplies explicit bounds — built for B.11f's calendar
+    render path, which has no floor on how far back `step_back()` can
+    page. Both bounds are plain Z-suffixed UTC strings, the same
+    passthrough-validate-only convention `DateTime`/`setEpisodeAirDate`
+    already establish — no new formatting/timezone logic needed.
+    - **Verified**: 518 tests passing (was 514; 4 new —
+      window-filtering, purely-past-window, exclusive-end-bound, and
+      the empty-result `pageInfo` regression test B.9's own backlog
+      test already established the need for), `ruff check`/`format`
+      clean, clean-install sanity check (fresh venv, real `pip
+      install -e .[dev]`) confirmed the schema builds with
+      `episodesInRange` present on `Query`, correctly typed
+      `EpisodeConnection!`. No migration needed — pure GraphQL/
+      resolver addition, no schema/table change.
   - [ ] **B.11d — show backfill**: one-time/repeatable pass (CLI
     and/or mutation, same shape as `auditLocalFiles`'s own manual
     trigger) that walks Sonarr's/Radarr's full catalog and calls

@@ -5023,6 +5023,89 @@ async def test_episodes_airing_soon_filters_by_date_window(client, migrated_db):
     assert ids == {"e-soon01"}
 
 
+# --- episodesInRange (§8, B.11c) --------------------------------------------
+#
+# Unlike episodesAiringSoon (future-only, relative to server "now"),
+# built for Data's own calendar render path (B.11f) — a client-side
+# calendar with no floor on how far back it can page.
+
+
+async def test_episodes_in_range_filters_by_explicit_window(client, migrated_db):
+    show_a = await add_show(client, titleRomaji="Show A")
+    show_b = await add_show(client, titleRomaji="Show B")
+    show_c = await add_show(client, titleRomaji="Show C")
+    show_d = await add_show(client, titleRomaji="Show D")
+
+    _insert_episode_with_air_date(migrated_db, "e-before", show_a["id"], _iso(-10))  # before window
+    _insert_episode_with_air_date(migrated_db, "e-inside", show_b["id"], _iso(-1))  # inside window
+    _insert_episode_with_air_date(migrated_db, "e-after0", show_c["id"], _iso(10))  # after window
+    _insert_episode_with_air_date(migrated_db, "e-nodate", show_d["id"], None)  # unknown air date
+
+    start = _iso(-3)
+    end = _iso(3)
+    data = await gql(
+        client,
+        "query($start: DateTime!, $end: DateTime!) {"
+        " episodesInRange(start: $start, end: $end) { edges { node { id } } } }",
+        variables={"start": start, "end": end},
+        headers=auth_headers(),
+    )
+    ids = {e["node"]["id"] for e in data["episodesInRange"]["edges"]}
+    assert ids == {"e-inside"}
+
+
+async def test_episodes_in_range_can_query_purely_in_the_past_windows(client, migrated_db):
+    # No "now" floor at all — episodesAiringSoon can't do this, exactly
+    # the gap episodesInRange exists to close (Data's calendar_nav
+    # step_back() has no floor either).
+    show = await add_show(client, titleRomaji="Old Show")
+    _insert_episode_with_air_date(migrated_db, "e-oldold", show["id"], _iso(-100))
+
+    data = await gql(
+        client,
+        "query($start: DateTime!, $end: DateTime!) {"
+        " episodesInRange(start: $start, end: $end) { edges { node { id } } } }",
+        variables={"start": _iso(-101), "end": _iso(-99)},
+        headers=auth_headers(),
+    )
+    ids = {e["node"]["id"] for e in data["episodesInRange"]["edges"]}
+    assert ids == {"e-oldold"}
+
+
+async def test_episodes_in_range_end_bound_is_exclusive(client, migrated_db):
+    # Half-open [start, end) — matches Data's own calendar_nav
+    # CalendarState.date_range() convention (start <= local.date() < end).
+    show = await add_show(client, titleRomaji="Edge Show")
+    boundary = _iso(3)
+    _insert_episode_with_air_date(migrated_db, "e-bound1", show["id"], boundary)
+
+    data = await gql(
+        client,
+        "query($start: DateTime!, $end: DateTime!) {"
+        " episodesInRange(start: $start, end: $end) { edges { node { id } } } }",
+        variables={"start": _iso(0), "end": boundary},
+        headers=auth_headers(),
+    )
+    assert data["episodesInRange"]["edges"] == []
+
+
+async def test_episodes_in_range_is_empty_with_no_matching_episodes(client, migrated_db):
+    # pageInfo too, not just edges — same regression class B.9's own
+    # backlog test locked in (pagination.py's own docstring documents a
+    # real bug where pageInfo went silently null with no end-to-end test
+    # ever having queried a pageInfo sub-field).
+    data = await gql(
+        client,
+        "query($start: DateTime!, $end: DateTime!) {"
+        " episodesInRange(start: $start, end: $end) {"
+        " edges { node { id } } pageInfo { hasNextPage startCursor } } }",
+        variables={"start": _iso(0), "end": _iso(1)},
+        headers=auth_headers(),
+    )
+    assert data["episodesInRange"]["edges"] == []
+    assert data["episodesInRange"]["pageInfo"]["hasNextPage"] is False
+
+
 # --- backlog (§6.3, B.9) -----------------------------------------------------
 #
 # LCARS-side scope only, confirmed with the user 2026-08-09: Query.backlog
