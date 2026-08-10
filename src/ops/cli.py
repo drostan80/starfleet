@@ -124,20 +124,29 @@ def _cmd_backfill_shows(args: argparse.Namespace) -> None:
     """§5.1/§5.2, B.11d — the real run: one addShow-equivalent per
     untracked Sonarr/Radarr item, throttled between anime-classified
     adds (real AniList calls) to stay inside AniList's rate budget —
-    can take real minutes on a large library, hence the long client
-    timeout below rather than the default 10s every other command
-    here uses. Always shows the same preview `ops
+    a genuinely large real library (verified live: 1644 items, ~1350
+    anime-classified) can take multiple *hours*, not minutes, hence
+    the long client timeout below rather than the default 10s every
+    other command here uses. Always shows the same preview `ops
     preview-show-backfill` would, and requires an explicit typed
     confirmation before writing anything — the same "dry run first,
     show it, then write" shape auditLocalFiles' own report-only
     findings already establish, just with the write itself, so a human
-    reads the list before it becomes real rows."""
+    reads the list before it becomes real rows.
+
+    Idempotent/resumable by design (show_backfill.py's own module
+    docstring) — if this single HTTP call itself times out or the
+    connection drops before the server finishes (a real risk at this
+    scale even with a generous timeout), re-running this same command
+    picks up exactly where it left off; every show already created is
+    excluded from the next run's own candidate list. Not a bug to work
+    around, the intended recovery path."""
     logging.basicConfig(level=logging.INFO)
     cfg = config.load_config()
     _require_bearer_token(cfg)
 
     async def _main() -> None:
-        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token, timeout=1800.0) as client:
+        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token, timeout=3600.0) as client:
             preview = await client.preview_show_backfill()
             if not preview:
                 print("Nothing to backfill — every Sonarr/Radarr item is already tracked.")
