@@ -432,8 +432,9 @@ for a show, `e-x82j1q` for an episode.
 | `m-` | `episode_movie_link` |
 | `v-` | `next_up_override` |
 | `z-` | `season` — added 2026-08-08 (A.4), see §5.5 |
+| `u-` | `untracked_show_finding` — added 2026-08-10 (B.11e), see §5.2's own "Resolved 2026-08-10 (B.11 reconnaissance)" note |
 
-18 of 26 letters used (`x-` retired, not counted), leaving headroom
+19 of 26 letters used (`x-` retired, not counted), leaving headroom
 for future entities.
 
 ### 5.1 `show`

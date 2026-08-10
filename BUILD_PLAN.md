@@ -3243,6 +3243,47 @@ background scheduler.
       → `upgrade head` again) verified directly — no `STORED` generated
       column involved here, so none of the same-day `alembic downgrade`
       bug's failure mode applies to this one.
+    - **NOT fully correct yet — a real bug found in review, deliberately
+      not fixed the same night (flagged, not started, per the user's
+      own "stop for the day" instruction)**: `sweep_untracked_shows()`
+      treats *anything absent from the current sweep's combined list*
+      as resolved and deletes it — but both of that list's own sources
+      already swallow a genuine unreachable-source failure into an
+      empty result rather than raising (`local_audit
+      .find_untracked_shows_readonly()`'s own docstring: a Sonarr/Radarr
+      connection failure is "swallowed the same 'nothing new to
+      report' way"; `_find_untracked_anilist_entries()`'s own `except
+      AniListError: return []`). A transient Sonarr outage during one
+      sweep would therefore delete every real Sonarr finding as
+      falsely "resolved" — destroying their `first_seen_at`,
+      misreporting `resolvedFindings` to Ops's own log as if shows got
+      tracked when nothing happened, and showing a human a falsely-
+      empty `untrackedShowFindings` list during the outage window —
+      exactly the "silently falls out of sync" failure this whole step
+      exists to prevent. Not caught by this step's own tests:
+      `test_untracked_sweep.py` monkeypatches `preview_backfill`
+      directly, so the unreachable-source path is never exercised, and
+      `test_sweep_prunes_a_finding_no_longer_present` currently encodes
+      the buggy behavior as correct. **Must be fixed before this sweep
+      ever runs against the real deployed host** (tomorrow's plan) —
+      the fix shape is "don't prune what you couldn't see": the sweep
+      needs a per-source success signal from the computation, pruning
+      only within sources that actually reported this pass, not
+      everything absent from the combined list.
+    - **Also flagged, not yet verified**: the hourly-tick placement
+      above was reasoned about ("a handful of global calls, not
+      per-show") but never actually timed. One sweep runs Sonarr
+      `all_series()` + Radarr `all_movies()` + `fetch_my_anime_list`
+      (2 real AniList calls against the user's own real ~1420-entry/
+      11-list account) + `fribb.load_dataset()` + a Fribb resolution
+      per season across the *entire* Sonarr catalog. Whether
+      `fribb.load_dataset()` hits the network or reads a local/cached
+      file matters a lot here — if it's a real download, that's now
+      happening hourly and blocks LCARS's single request-handling
+      thread each time, the exact class of cost B.7's own catalog-
+      presence sweep was deliberately placed on the *monthly* tier to
+      avoid. Needs a real timed run before this cadence is trusted, not
+      just the reasoning above.
   - [ ] **B.11f — calendar core render path**: switch from local
     Sonarr/AniList computation to LCARS reads (via B.11c's
     `episodesInRange`) for tracking/air-date/availability state, per
