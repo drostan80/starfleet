@@ -5,11 +5,20 @@ B.11d, grown out of B.11's own reconnaissance (2026-08-10): LCARS's
 to LCARS-tracked shows as-is would blank the calendar entirely on day
 one.
 
-Reuses `local_audit.audit_local_files()`'s own `untracked_shows`
-computation (Sonarr `seriesType`/tvdbId, Radarr tmdbId — same
-known-id-lookup, no second catalog walk or dedup path written here)
-rather than a fresh implementation, so this is always in sync with
-whatever `auditLocalFiles` itself would already report.
+`preview_backfill()` (the dry-run Query) calls
+`local_audit.find_untracked_shows_readonly()` — genuinely read-only,
+no writes at all, matching every other Query's own side-effect-free
+contract (same reasoning `exportData`'s own docstring gives).
+`backfill_untracked_shows()` (the real Mutation) calls the fuller
+`local_audit.audit_local_files()` instead, getting its own
+reconciliation/orphan-walk side effects as a bonus — both share the
+exact same untracked-id-comparison logic underneath
+(`_untracked_sonarr_entries`/`_untracked_radarr_entries`,
+local_audit.py), not two divergent implementations, so the candidate
+list itself matches between a preview and the real run that follows
+it (modulo whatever changed in Sonarr/Radarr in between the two
+calls — an inherent, accepted gap in any "preview now, run later"
+workflow).
 
 Per-item, this is a single `shows.create_show()` call (which is
 already the *whole* `addShow` mutation body — insert, external-id
@@ -20,7 +29,17 @@ There is no separate metadata-fetch phase to sequence.
 Throttled between anime-classified adds (only those trigger AniList
 calls) to stay inside AniList's 30 req/min budget — the same budget
 Data's own anilist.py docstring cites as the reason its own `P`
-(manual AniList sync) is deliberately not automatic.
+(manual AniList sync) is deliberately not automatic. Scaled by season
+count (see `_anilist_call_estimate()`) rather than a flat per-show
+sleep — caught in review: a flat 2s sleep assumed one AniList call per
+show, but `_fetch_anilist` (1 call) plus `_reconcile_air_dates` (1
+call *per season*, its own B.4 docstring) plus this module's own
+status-seed read means even a single-season show makes 3 calls, not
+1 — a flat 2s sleep would have run at up to 90 req/min against a 30
+req/min budget, silently rate-limiting shows into a permanently
+under-populated `pending_review` state a resumed backfill would never
+revisit (already-tracked, so excluded from every later run's own
+untracked-item scan).
 
 Idempotent/resumable by construction, no bespoke resume-state needed:
 re-running this after a partial run (interrupted, rate-limited,
@@ -50,11 +69,10 @@ import time
 from lcars import anilist_client, ids, local_audit, shows, util
 from lcars.config import get_current
 
-# See module docstring — comfortably inside AniList's 30 req/min budget
-# even for a show whose Fribb-resolved AniList link spans several
-# seasons (each one guarded call inside fetch_and_populate, not a
-# per-season sleep of its own).
-ANIME_ADD_THROTTLE_SECONDS = 2.0
+# AniList's own 30 req/min budget is exactly 2.0s/call — a small margin
+# above that rather than the bare minimum, so a genuinely-timed call
+# right at the boundary doesn't tip over it.
+ANILIST_SECONDS_PER_CALL = 2.1
 
 # The reverse of resolvers.py's own _STATUS_TO_ANILIST (A.9's push-
 # direction map) — REPEATING has no direct target there either (LCARS
@@ -94,13 +112,13 @@ def _classify(entry: dict) -> dict:
 
 
 def preview_backfill(conn) -> list[dict]:
-    """Dry-run: exactly what backfill_untracked_shows() below would
-    create, with no writes at all — run this first, always (the same
+    """Dry-run: what backfill_untracked_shows() below would create —
+    genuinely read-only (local_audit.find_untracked_shows_readonly(),
+    not audit_local_files()), run this first, always (the same
     report-only-before-you-act shape auditLocalFiles's own
     untracked_shows already has)."""
-    result = local_audit.audit_local_files(conn)
     preview = []
-    for entry in result["untracked_shows"]:
+    for entry in local_audit.find_untracked_shows_readonly(conn):
         classification = _classify(entry)
         preview.append(
             {
@@ -114,9 +132,29 @@ def preview_backfill(conn) -> list[dict]:
     return preview
 
 
+def _anilist_call_estimate(conn, show_id: str) -> int:
+    """Roughly how many AniList calls this show's own create_show()
+    (plus this module's own status-seed) likely just made: 1 for
+    _fetch_anilist, 1 per season for _reconcile_air_dates
+    (metadata.py's own B.4 docstring: "calls this once per season, not
+    once per show"), 1 for _seed_status_from_anilist's own read. Not a
+    precise instrumentation of metadata.py's internals — a cheap,
+    conservative proxy computed from what create_show() already wrote
+    (the season table), used only to scale this module's own throttle
+    sleep. At least 1 season assumed even if none were written yet
+    (a Sonarr-fetch failure, or a not-yet-aired show with no seasons
+    resolved) — never throttles less than the single-season case."""
+    row = conn.execute("SELECT COUNT(*) AS n FROM season WHERE show_id = ?", (show_id,)).fetchone()
+    season_count = max(row["n"] if row else 0, 1)
+    return 2 + season_count
+
+
 def backfill_untracked_shows(conn) -> dict:
     """The real run — one shows.create_show() per untracked Sonarr/
-    Radarr item. Returns {"created": [...], "failed": [...]} — a
+    Radarr item (local_audit.audit_local_files()'s own untracked_shows,
+    not the read-only preview variant — this is a Mutation, its own
+    reconciliation/orphan-walk side effects are a legitimate bonus, see
+    module docstring). Returns {"created": [...], "failed": [...]} — a
     failure on one item (only possible via ShowInputError, which
     _classify() above never actually produces given local_audit's own
     entry shape, but shows.create_show() is a general-purpose
@@ -137,7 +175,8 @@ def backfill_untracked_shows(conn) -> dict:
         created.append({"show_id": show_id, "service": entry["service"], "title": entry["title"]})
         if classification["tracking_space"] == "anime":
             _seed_status_from_anilist(conn, show_id)
-            time.sleep(ANIME_ADD_THROTTLE_SECONDS)
+            calls = _anilist_call_estimate(conn, show_id)
+            time.sleep(calls * ANILIST_SECONDS_PER_CALL)
     return {"created": created, "failed": failed}
 
 

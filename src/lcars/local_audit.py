@@ -131,6 +131,84 @@ def _parse_season_episode(filename: str) -> tuple[int | None, int | None]:
     return int(match.group(1)), int(match.group(2))
 
 
+def _untracked_sonarr_entries(all_series: list[dict], known_tvdb_ids: set[str]) -> list[dict]:
+    """The actual untracked-detection logic, pure — shared by
+    _audit_sonarr's own combined pass and find_untracked_shows_readonly()
+    below (B.11d), so there's exactly one implementation of "is this
+    Sonarr series untracked" rather than two that could drift."""
+    return [
+        {
+            "service": "sonarr",
+            "title": series["title"],
+            "external_id": series["tvdbId"],
+            "path": series.get("path"),
+            # B.11d — Sonarr's own seriesType passed through raw (not
+            # exposed on the GraphQL UntrackedShow type, just an extra
+            # dict key for a Python-level consumer): show_backfill.py's
+            # own trackingSpace classification, same seriesType ==
+            # "anime" signal metadata.py's numbering-scheme derivation
+            # already uses (A.22).
+            "series_type": series.get("seriesType"),
+        }
+        for series in all_series
+        if str(series["tvdbId"]) not in known_tvdb_ids
+    ]
+
+
+def _untracked_radarr_entries(all_movies: list[dict], known_tmdb_ids: set[str]) -> list[dict]:
+    """Same as _untracked_sonarr_entries above, for Radarr."""
+    return [
+        {
+            "service": "radarr",
+            "title": movie["title"],
+            "external_id": movie["tmdbId"],
+            "path": movie.get("path"),
+        }
+        for movie in all_movies
+        if str(movie["tmdbId"]) not in known_tmdb_ids
+    ]
+
+
+def find_untracked_shows_readonly(conn) -> list[dict]:
+    """B.11d — show_backfill.py's own previewShowBackfill Query needs
+    exactly the untracked-detection half of audit_local_files(), and
+    nothing else: no availability reconciliation writes, no
+    filesystem-reading orphan-file walk, no service_health record, no
+    commit. A Query must stay side-effect free (same reasoning
+    exportData's own docstring already gives for why it's a Query, not
+    a Mutation) — audit_local_files() itself is correctly a Mutation
+    precisely because it does write. Shares its actual matching logic
+    with _audit_sonarr/_audit_radarr via _untracked_sonarr_entries/
+    _untracked_radarr_entries above, not a second, divergent
+    implementation — just a separate, lighter-weight caller. A
+    Sonarr/Radarr connection failure here is swallowed the same
+    "nothing new to report" way _audit_sonarr's own except-branch
+    would otherwise still commit a service_health failure record for —
+    this function makes no commit at all, so it can't record one
+    either; the next real auditLocalFiles/backfillUntrackedShows call
+    records it properly."""
+    cfg = get_current()
+    found: list[dict] = []
+
+    if cfg.sonarr_url and cfg.sonarr_api_key:
+        try:
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                all_series = client.all_series()
+        except sonarr_client.SonarrError:
+            all_series = []
+        found += _untracked_sonarr_entries(all_series, _known_tvdb_ids(conn))
+
+    if cfg.radarr_url and cfg.radarr_api_key:
+        try:
+            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                all_movies = client.all_movies()
+        except radarr_client.RadarrError:
+            all_movies = []
+        found += _untracked_radarr_entries(all_movies, _known_tmdb_movie_ids(conn))
+
+    return found
+
+
 def _audit_sonarr(conn) -> dict:
     cfg = get_current()
     empty = {"episodes_corrected": 0, "orphan_files": [], "untracked_shows": []}
@@ -145,28 +223,14 @@ def _audit_sonarr(conn) -> dict:
     try:
         with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
             all_series = client.all_series()
+            untracked_shows = _untracked_sonarr_entries(all_series, known_tvdb_ids)
 
             for series in all_series:
                 tvdb_id = str(series["tvdbId"])
                 if tvdb_id not in known_tvdb_ids:
-                    untracked_shows.append(
-                        {
-                            "service": "sonarr",
-                            "title": series["title"],
-                            "external_id": series["tvdbId"],
-                            "path": series.get("path"),
-                            # B.11d — Sonarr's own seriesType passed through
-                            # raw (not exposed on the GraphQL UntrackedShow
-                            # type, just an extra dict key for a Python-level
-                            # consumer): show_backfill.py's own
-                            # trackingSpace classification, same
-                            # seriesType == "anime" signal metadata.py's
-                            # numbering-scheme derivation already uses
-                            # (A.22).
-                            "series_type": series.get("seriesType"),
-                        }
-                    )
-                    # Not this pass's job to walk a folder LCARS has nothing to match against.
+                    # Already captured in untracked_shows above — not this
+                    # pass's job to walk a folder LCARS has nothing to
+                    # match against.
                     continue
 
                 show_id = _show_id_for_tvdb(conn, series["tvdbId"])
@@ -243,22 +307,15 @@ def _audit_radarr(conn) -> dict:
     service_health.record_success(conn, "radarr")
 
     known_tmdb_ids = _known_tmdb_movie_ids(conn)
+    untracked_shows = _untracked_radarr_entries(all_movies, known_tmdb_ids)
     shows_corrected = 0
     orphan_files: list[dict] = []
-    untracked_shows: list[dict] = []
     now = util.now_utc_iso()
 
     for movie in all_movies:
         tmdb_id = str(movie["tmdbId"])
         if tmdb_id not in known_tmdb_ids:
-            untracked_shows.append(
-                {
-                    "service": "radarr",
-                    "title": movie["title"],
-                    "external_id": movie["tmdbId"],
-                    "path": movie.get("path"),
-                }
-            )
+            # Already captured in untracked_shows above.
             continue
 
         show_id = _show_id_for_tmdb_movie(conn, movie["tmdbId"])

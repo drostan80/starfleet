@@ -2833,6 +2833,47 @@ background scheduler.
       run for real (`ops preview-show-backfill` then `ops
       backfill-shows`) as its own explicit step before B.11f needs the
       calendar to actually show anything.
+    - **Two real bugs caught in review before the live run, same day**:
+      1. `previewShowBackfill` wasn't actually a dry run.
+         `preview_backfill()` called `local_audit.audit_local_files()`
+         directly, which writes real `available_via_sonarr`/
+         `available_via_radarr` corrections, records `service_health`,
+         and walks the filesystem for orphan files — contradicting the
+         mutation's own "no writes at all" docstring and breaking the
+         "a Query stays side-effect free" convention `exportData`'s own
+         docstring establishes. Fixed by extracting the untracked-
+         detection logic (`_untracked_sonarr_entries`/
+         `_untracked_radarr_entries`, pure functions) out of
+         `_audit_sonarr`/`_audit_radarr`'s own inline loops in
+         `local_audit.py`, and adding a genuinely read-only
+         `find_untracked_shows_readonly()` that shares them —
+         `preview_backfill()` now calls that instead;
+         `backfill_untracked_shows()` (a real Mutation, where the bonus
+         reconciliation is legitimate) still calls the fuller
+         `audit_local_files()`. One implementation of the actual
+         matching logic either way, not two.
+      2. The flat 2s per-anime-show throttle was under-provisioned by
+         roughly 2-3×. `_fetch_anilist` (1 call) plus
+         `_reconcile_air_dates` (1 call *per season*, its own B.4
+         docstring) plus this step's own status-seed read means even a
+         single-season show makes 3 AniList calls, not the 1 the
+         throttle assumed — a flat 2s sleep could run at up to
+         ~90 req/min against AniList's 30 req/min budget. The failure
+         mode was the quiet kind: a rate-limited fetch is swallowed by
+         `_guarded()` into a `pending_review` entry, but the show is
+         still created (tracked), so a resumed backfill would never
+         revisit it — a permanently under-populated show with no
+         visible error. Fixed with `_anilist_call_estimate()` (reads
+         the season count `create_show()` just wrote, floors at 1) and
+         `ANILIST_SECONDS_PER_CALL = 2.1`, so the sleep scales with how
+         many AniList calls that specific show actually needed.
+    - **Verified (follow-up)**: 550 tests passing (was 549; 1 new,
+      `test_backfill_throttle_scales_with_season_count`, plus 2
+      existing tests updated for the new read-only preview and scaled
+      throttle), `ruff check`/`format` clean, clean-install sanity
+      check confirmed `find_untracked_shows_readonly`/
+      `ANILIST_SECONDS_PER_CALL`/`_anilist_call_estimate` import
+      cleanly.
   - [ ] **B.11e — ongoing untracked-show sweep**: extend
     `auditLocalFiles`'s existing `untracked_shows` computation (or a
     dedicated variant) onto Ops's recurring schedule, persisting

@@ -1,8 +1,8 @@
 """One-time/repeatable show backfill — SCOPE.md §5.1/§5.2, BUILD_PLAN.md
 B.11d. Same real-migrated-SQLite-DB + fake-client approach
-test_local_audit.py already established (show_backfill.py reuses
-local_audit.audit_local_files() directly for its own untracked-show
-computation).
+test_local_audit.py already established. preview_backfill() reuses
+local_audit.find_untracked_shows_readonly() (genuinely read-only);
+backfill_untracked_shows() reuses the fuller audit_local_files().
 """
 
 import os
@@ -114,7 +114,11 @@ def test_preview_backfill_lists_untracked_items_without_writing(conn, monkeypatc
             "media_shape": "episodic",
         }
     ]
+    # Genuinely read-only: no show created, and no service_health record
+    # either (unlike audit_local_files()'s own equivalent pass) — a Query
+    # must stay side-effect free.
     assert conn.execute("SELECT COUNT(*) FROM show").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM service_health").fetchone()[0] == 0
 
 
 def test_preview_backfill_is_empty_with_nothing_untracked(conn, monkeypatch):
@@ -133,7 +137,7 @@ def test_backfill_creates_a_show_per_untracked_item(conn, monkeypatch):
         _sonarr_series(2, 222, "Show B", series_type="anime"),
     ]
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
-    monkeypatch.setattr(show_backfill, "ANIME_ADD_THROTTLE_SECONDS", 0)  # no real sleep in tests
+    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: None)  # no real sleep in tests
 
     result = show_backfill.backfill_untracked_shows(conn)
     assert len(result["created"]) == 2
@@ -153,7 +157,7 @@ def test_backfill_is_idempotent_on_rerun(conn, monkeypatch):
     _configure_sonarr()
     series = [_sonarr_series(1, 111, "Show A", series_type="standard")]
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
-    monkeypatch.setattr(show_backfill, "ANIME_ADD_THROTTLE_SECONDS", 0)
+    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: None)
 
     first = show_backfill.backfill_untracked_shows(conn)
     assert len(first["created"]) == 1
@@ -177,7 +181,39 @@ def test_backfill_throttles_only_between_anime_adds(conn, monkeypatch):
 
     show_backfill.backfill_untracked_shows(conn)
     assert len(sleeps) == 2  # once per anime show, not the tv one
-    assert sleeps == [show_backfill.ANIME_ADD_THROTTLE_SECONDS] * 2
+    # No episodes fetched (the fake Sonarr client returns none) — no season
+    # row gets created, so _anilist_call_estimate()'s own "at least 1
+    # season assumed" floor applies: 2 + 1 = 3 calls' worth of throttle.
+    expected = 3 * show_backfill.ANILIST_SECONDS_PER_CALL
+    assert sleeps == [expected, expected]
+
+
+def test_backfill_throttle_scales_with_season_count(conn, monkeypatch):
+    _configure_sonarr()
+    series = [_sonarr_series(1, 111, "Multi-Season Anime", series_type="anime")]
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
+    sleeps = []
+    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: sleeps.append(s))
+    # _anilist_call_estimate() reads directly from the season table — a
+    # season row inserted straight into the DB is enough to exercise the
+    # scaling without needing a real multi-season Sonarr fetch.
+    real_create_show = show_backfill.shows.create_show
+
+    def _create_and_add_seasons(conn, classification):
+        show_id = real_create_show(conn, classification)
+        for n in (1, 2, 3):
+            conn.execute(
+                "INSERT INTO season (id, show_id, season_number, source, created_at, updated_at)"
+                " VALUES (?, ?, ?, 'manual', 'x', 'x')",
+                (f"z-seas{n:02d}", show_id, n),
+            )
+        conn.commit()
+        return show_id
+
+    monkeypatch.setattr(show_backfill.shows, "create_show", _create_and_add_seasons)
+
+    show_backfill.backfill_untracked_shows(conn)
+    assert sleeps == [5 * show_backfill.ANILIST_SECONDS_PER_CALL]  # 2 + 3 seasons
 
 
 # --- _seed_status_from_anilist -------------------------------------------------
