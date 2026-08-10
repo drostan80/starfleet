@@ -2958,6 +2958,51 @@ background scheduler.
       new functions import cleanly. Live-verified: real `Viewer`/
       `MediaListCollection` calls against the user's actual AniList
       account before any test was written for them.
+    - **One more real correction, same day, found from the second
+      live preview run** (472 → 1605 items once the AniList sweep was
+      wired in): the dedup's own "season 1 only" Fribb resolution
+      (inherited from `_classify_sonarr`'s own season-1 convention)
+      wasn't enough — a direct live check
+      (`fribb.resolve_season_candidate` against Frieren's real tvdb
+      id, 424536) showed season 1 and season 2 resolve to two
+      genuinely *different* AniList ids. A season-1-only dedup check
+      would have missed season 2 as "already accounted for" and let it
+      through as an independent duplicate show. Fixed: `local_audit
+      .all_sonarr_series_with_seasons()` (new) reports every real
+      season number Sonarr itself lists per series (verified live:
+      Sonarr's own `seasons` array is present on every real series
+      response, `seasonNumber` 0 excluded); `show_backfill
+      ._sonarr_resolvable_anilist_ids()` (new) Fribb-resolves every
+      one of those seasons, not just season 1, building the dedup set
+      from the full result. `_classify_sonarr()`'s own `trackingSpace`
+      decision was widened the same way (a show whose season 1 doesn't
+      resolve but a later season does is still genuinely anime) — the
+      show-level `anilistId` passed to `create_show()` stays
+      season-1-only regardless, matching `_ensure_anilist_link`'s own
+      established convention exactly, not diverging from it.
+      `fribb.build_anilist_index()`/`show_backfill._fribb_anilist_index()`
+      (the earlier tvdb-reverse-lookup approach this replaced) removed
+      as dead code rather than left unused.
+    - **Explicitly documented as a known, accepted residual gap, not
+      silently promised away**: even this per-season check isn't a
+      perfect dedup. The very same live preview run showed three of
+      the user's own real AniList list entries — alternate-cour
+      "Frieren"-titled splits — that Fribb's own dataset simply has no
+      mapping for under that tvdb id at all (verified live:
+      `fetch_media` confirmed these are real, valid AniList entries,
+      just ones Fribb doesn't carry). These still surface as
+      "untracked" and would create a small number of genuinely
+      duplicate-ish shows alongside the Sonarr-tracked original.
+      Closing that fully would require fuzzy title matching across
+      sources — B.7's own `service_presence.py` scope, a materially
+      larger undertaking than this step, not attempted here.
+    - **Verified (multi-season dedup)**: 572 tests passing (was 564; 8
+      new: `test_classify_sonarr_checks_every_season_not_just_season_one`,
+      `test_anilist_sweep_excludes_a_second_season_fribb_only_resolves_via_season_number`
+      in `test_show_backfill.py`, plus 6 in `test_local_audit.py` for
+      `known_anilist_ids`/`all_sonarr_series_with_seasons`), `ruff
+      check`/`format` clean, clean-install sanity check confirmed the
+      new functions import cleanly.
   - [ ] **B.11e — ongoing untracked-show sweep**: extend
     `auditLocalFiles`'s existing `untracked_shows` computation (or a
     dedicated variant) onto Ops's recurring schedule, persisting

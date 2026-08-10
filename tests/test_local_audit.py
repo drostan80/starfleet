@@ -219,6 +219,10 @@ def test_sonarr_untracked_show_is_listed_without_walking_its_folder(conn, monkey
             "title": "Unknown Show",
             "external_id": 999999,
             "path": "/data/unknown",
+            # B.11d — no "seasons" array on this fake series at all, so
+            # the [1] fallback applies (all_sonarr_series_with_seasons's
+            # own docstring).
+            "season_numbers": [1],
             # B.11d — passed through raw for show_backfill.py's own
             # trackingSpace classification, not exposed on the GraphQL
             # UntrackedShow type.
@@ -472,3 +476,60 @@ def test_audit_local_files_combines_both_services(conn, monkeypatch):
     assert result["shows_corrected"] == 1
     assert result["orphan_files"] == []
     assert result["untracked_shows"] == []
+
+
+# --- known_anilist_ids / all_sonarr_series_with_seasons (B.11d) --------------
+
+
+def test_known_anilist_ids_includes_show_level_links(conn):
+    _add_show(conn, "s-lau301")
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES ('s-lau301', 'anilist', '111', 'https://x', 'x')"
+    )
+    conn.commit()
+    assert local_audit.known_anilist_ids(conn) == {"111"}
+
+
+def test_known_anilist_ids_includes_season_level_links(conn):
+    _add_show(conn, "s-lau302")
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, anilist_id, source,"
+        " created_at, updated_at)"
+        " VALUES ('z-lau3s2', 's-lau302', 2, 222, 'fribb', 'x', 'x')"
+    )
+    conn.commit()
+    assert local_audit.known_anilist_ids(conn) == {"222"}
+
+
+def test_known_anilist_ids_is_empty_with_nothing_linked(conn):
+    assert local_audit.known_anilist_ids(conn) == set()
+
+
+def test_all_sonarr_series_with_seasons_excludes_season_zero(conn, monkeypatch):
+    _configure_sonarr()
+    series = [
+        {
+            "id": 1,
+            "tvdbId": 424536,
+            "title": "Frieren",
+            "seasons": [{"seasonNumber": 0}, {"seasonNumber": 1}, {"seasonNumber": 2}],
+        }
+    ]
+    fake = _FakeSonarrClient(series)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    result = local_audit.all_sonarr_series_with_seasons(conn)
+    assert result == [{"tvdb_id": 424536, "season_numbers": [1, 2]}]
+
+
+def test_all_sonarr_series_with_seasons_falls_back_to_season_one(conn, monkeypatch):
+    _configure_sonarr()
+    series = [{"id": 1, "tvdbId": 111, "title": "No Seasons Array"}]
+    fake = _FakeSonarrClient(series)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    result = local_audit.all_sonarr_series_with_seasons(conn)
+    assert result == [{"tvdb_id": 111, "season_numbers": [1]}]
+
+
+def test_all_sonarr_series_with_seasons_not_configured_is_a_clean_no_op(conn):
+    assert local_audit.all_sonarr_series_with_seasons(conn) == []

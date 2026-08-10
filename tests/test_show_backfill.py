@@ -78,6 +78,10 @@ def _patch_fribb(monkeypatch, dataset):
 TVDB_INDEX_EMPTY = fribb.build_tvdb_index([])
 
 
+def _sweep(conn):
+    return show_backfill._find_untracked_anilist_entries(conn, show_backfill._fribb_tvdb_index())
+
+
 # --- classification (pure-ish — Fribb dataset is the only input) -------------
 
 
@@ -102,6 +106,31 @@ def test_classify_sonarr_with_no_fribb_match_is_tv(monkeypatch):
     result = show_backfill._classify(entry, TVDB_INDEX_EMPTY)
     assert result["tracking_space"] == "tv"
     assert result["anilist_id"] is None
+
+
+def test_classify_sonarr_checks_every_season_not_just_season_one(monkeypatch):
+    # Live-verified finding, 2026-08-10 (real Frieren data: Fribb
+    # resolves tvdb 424536's season 1 and season 2 to two genuinely
+    # different AniList ids). The show-level anilistId still comes
+    # from season 1 only (matching _ensure_anilist_link's own
+    # established convention) — this test's real point is that
+    # trackingSpace still correctly lands on 'anime' by checking every
+    # season, not just the one used for the show-level link.
+    dataset = [
+        {"tvdb_id": 424536, "anilist_id": 154587, "mal_id": None, "season": {"tvdb": 1}},
+        {"tvdb_id": 424536, "anilist_id": 182255, "mal_id": None, "season": {"tvdb": 2}},
+    ]
+    _patch_fribb(monkeypatch, dataset)
+    index = fribb.build_tvdb_index(dataset)
+    entry = {
+        "service": "sonarr",
+        "title": "Frieren",
+        "external_id": 424536,
+        "season_numbers": [1, 2],
+    }
+    result = show_backfill._classify(entry, index)
+    assert result["tracking_space"] == "anime"
+    assert result["anilist_id"] == 154587  # season 1's own resolution, not season 2's
 
 
 def test_classify_radarr_always_defaults_to_tv():
@@ -155,7 +184,7 @@ def test_anilist_sweep_excludes_already_tracked_show_level(conn, monkeypatch):
     config.get_current().anilist_access_token = "tok"
     my_list = [{"anilist_id": 101, "format": "TV", "status": "CURRENT", "title": "Tracked"}]
     monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
-    assert show_backfill._find_untracked_anilist_entries(conn) == []
+    assert _sweep(conn) == []
 
 
 def test_anilist_sweep_excludes_a_season_level_link(conn, monkeypatch):
@@ -175,7 +204,7 @@ def test_anilist_sweep_excludes_a_season_level_link(conn, monkeypatch):
     config.get_current().anilist_access_token = "tok"
     my_list = [{"anilist_id": 202, "format": "TV", "status": "CURRENT", "title": "Tracked S2"}]
     monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
-    assert show_backfill._find_untracked_anilist_entries(conn) == []
+    assert _sweep(conn) == []
 
 
 def test_anilist_sweep_excludes_an_entry_whose_tvdb_id_is_in_sonarrs_catalog(conn, monkeypatch):
@@ -193,21 +222,50 @@ def test_anilist_sweep_excludes_an_entry_whose_tvdb_id_is_in_sonarrs_catalog(con
     config.get_current().anilist_access_token = "tok"
     my_list = [{"anilist_id": 303, "format": "TV", "status": "CURRENT", "title": "Some Show"}]
     monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
-    assert show_backfill._find_untracked_anilist_entries(conn) == []
+    assert _sweep(conn) == []
+
+
+def test_anilist_sweep_excludes_a_second_season_fribb_only_resolves_via_season_number(
+    conn, monkeypatch
+):
+    # The real Frieren-shaped case, live-verified 2026-08-10: season 1
+    # and season 2 resolve to two *different* AniList ids. A season-1-
+    # only dedup check would have missed season 2 entirely and let it
+    # through as a false "untracked" duplicate.
+    _configure_sonarr()
+    dataset = [
+        {"tvdb_id": 424536, "anilist_id": 154587, "mal_id": None, "season": {"tvdb": 1}},
+        {"tvdb_id": 424536, "anilist_id": 182255, "mal_id": None, "season": {"tvdb": 2}},
+    ]
+    _patch_fribb(monkeypatch, dataset)
+    series = [
+        {
+            "id": 1,
+            "tvdbId": 424536,
+            "title": "Frieren",
+            "seriesType": "standard",
+            "seasons": [{"seasonNumber": 0}, {"seasonNumber": 1}, {"seasonNumber": 2}],
+        }
+    ]
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
+    config.get_current().anilist_access_token = "tok"
+    my_list = [{"anilist_id": 182255, "format": "TV", "status": "CURRENT", "title": "Frieren S2"}]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    assert _sweep(conn) == []
 
 
 def test_anilist_sweep_excludes_music_format(conn, monkeypatch):
     config.get_current().anilist_access_token = "tok"
     my_list = [{"anilist_id": 404, "format": "MUSIC", "status": "COMPLETED", "title": "A Song"}]
     monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
-    assert show_backfill._find_untracked_anilist_entries(conn) == []
+    assert _sweep(conn) == []
 
 
 def test_anilist_sweep_includes_a_genuinely_untracked_entry(conn, monkeypatch):
     config.get_current().anilist_access_token = "tok"
     my_list = [{"anilist_id": 505, "format": "TV", "status": "PLANNING", "title": "New Show"}]
     monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
-    result = show_backfill._find_untracked_anilist_entries(conn)
+    result = _sweep(conn)
     assert result == [
         {
             "service": "anilist",
@@ -220,7 +278,7 @@ def test_anilist_sweep_includes_a_genuinely_untracked_entry(conn, monkeypatch):
 
 
 def test_anilist_sweep_is_a_clean_no_op_without_a_token(conn):
-    assert show_backfill._find_untracked_anilist_entries(conn) == []
+    assert _sweep(conn) == []
 
 
 def test_anilist_sweep_swallows_an_anilist_error(conn, monkeypatch):
@@ -230,7 +288,7 @@ def test_anilist_sweep_swallows_an_anilist_error(conn, monkeypatch):
         raise anilist_client.AniListError("boom")
 
     monkeypatch.setattr(anilist_client, "fetch_my_anime_list", _raise)
-    assert show_backfill._find_untracked_anilist_entries(conn) == []
+    assert _sweep(conn) == []
 
 
 # --- preview_backfill (dry-run) -----------------------------------------------

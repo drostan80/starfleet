@@ -134,29 +134,42 @@ def known_anilist_ids(conn) -> set[str]:
     }
 
 
-def all_sonarr_tvdb_ids(conn) -> set[int]:
-    """B.11d — every tvdb id Sonarr's own catalog currently reports,
+def all_sonarr_series_with_seasons(conn) -> list[dict]:
+    """B.11d — every series Sonarr's own catalog currently reports,
     tracked in LCARS or not (unlike _known_tvdb_ids above, which is
-    LCARS-side only). show_backfill.py's own AniList-only sweep uses
-    this to skip any AniList entry whose Fribb-resolved tvdb id is
-    already in Sonarr's catalog at all — that's Sonarr's own sweep's
-    job to backfill (or it's already tracked), never this one's:
-    Fribb groups a franchise's several AniList-side season splits
-    under one tvdb id (build_tvdb_index's own docstring), so treating
-    each split as an independent "untracked show" here would create a
-    genuine duplicate the moment its sibling season gets created via
-    the Sonarr-sourced path instead. Read-only, no service_health
-    record, no commit — same side-effect-free contract
+    LCARS-side only), each with the real season numbers Sonarr itself
+    lists (season 0 — specials — excluded; verified live: Sonarr's own
+    `seasons` array is present on every real series response).
+    show_backfill.py's own AniList-only sweep uses this to build the
+    full set of AniList ids Fribb can resolve across *every* season of
+    *every* Sonarr-known show — not just season 1, which a live run
+    against the user's real library showed is genuinely necessary:
+    Fribb resolves Frieren's own season 1 and season 2 to two
+    different AniList ids (verified live), so a season-1-only check
+    would have missed season 2 as "already accounted for" and let it
+    through as an independent, duplicate untracked show. Read-only, no
+    service_health record, no commit — same side-effect-free contract
     find_untracked_shows_readonly() above already establishes."""
     cfg = get_current()
     if not cfg.sonarr_url or not cfg.sonarr_api_key:
-        return set()
+        return []
     try:
         with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
             all_series = client.all_series()
     except sonarr_client.SonarrError:
-        return set()
-    return {s["tvdbId"] for s in all_series}
+        return []
+    return [
+        {
+            "tvdb_id": s["tvdbId"],
+            "season_numbers": [
+                season["seasonNumber"]
+                for season in s.get("seasons", [])
+                if season["seasonNumber"] > 0
+            ]
+            or [1],  # Sonarr reports no seasons array at all — fall back to the season-1 convention
+        }
+        for s in all_series
+    ]
 
 
 def _walk_video_files(root: str) -> list[str]:
@@ -188,13 +201,23 @@ def _untracked_sonarr_entries(all_series: list[dict], known_tvdb_ids: set[str]) 
             "title": series["title"],
             "external_id": series["tvdbId"],
             "path": series.get("path"),
-            # B.11d — Sonarr's own seriesType passed through raw (not
-            # exposed on the GraphQL UntrackedShow type, just an extra
-            # dict key for a Python-level consumer): show_backfill.py's
-            # own trackingSpace classification, same seriesType ==
-            # "anime" signal metadata.py's numbering-scheme derivation
-            # already uses (A.22).
+            # B.11d — Sonarr's own seriesType, kept for reference (not
+            # currently the anime signal show_backfill.py's own
+            # classification uses — see fribb-resolution note there —
+            # but the same seriesType == "anime" signal metadata.py's
+            # numbering-scheme derivation, A.22, still reads).
             "series_type": series.get("seriesType"),
+            # B.11d — every real season number Sonarr itself lists
+            # (season 0 excluded), so show_backfill.py's own
+            # classification can Fribb-resolve every season, not just
+            # season 1 — see all_sonarr_series_with_seasons's own
+            # docstring for why season 1 alone isn't enough.
+            "season_numbers": [
+                season["seasonNumber"]
+                for season in series.get("seasons", [])
+                if season["seasonNumber"] > 0
+            ]
+            or [1],
         }
         for series in all_series
         if str(series["tvdbId"]) not in known_tvdb_ids

@@ -62,13 +62,24 @@ linked to an existing LCARS show — checked via
 `show_external_id` (show-level) and `season.anilist_id` (per-season,
 §5.5) rather than only the former, since a split-cour sequel season's
 own AniList link lives at the season level. (2) an AniList entry whose
-Fribb-resolved tvdb id is already present in Sonarr's own catalog at
-all (`local_audit.all_sonarr_tvdb_ids()`, tracked or not) — Fribb
-groups a franchise's several AniList-side season splits under one
-tvdb id, so treating each split as its own independent "untracked
-show" here would create a real duplicate the moment its sibling season
-arrives via the Sonarr-sourced path instead; that tvdb id is Sonarr's
-own sweep's job (or LCARS's, if already tracked), never this one's.
+own id Fribb resolves for *any real season* of *any* show in Sonarr's
+own catalog at all (`_sonarr_resolvable_anilist_ids()`, checking every
+season `local_audit.all_sonarr_series_with_seasons()` reports, tracked
+or not — corrected the same day from an earlier season-1-only version
+after a live check showed Fribb resolves Frieren's own season 1 and
+season 2 to two different AniList ids) — Fribb groups a franchise's
+several AniList-side season splits under one tvdb id, so treating each
+split as its own independent "untracked show" here would create a
+real duplicate the moment its sibling season arrives via the Sonarr-
+sourced path instead; that tvdb id is Sonarr's own sweep's job (or
+LCARS's, if already tracked), never this one's. This dedup is **not
+perfect** — a real, accepted residual gap found live: an AniList
+entry whose id Fribb's own dataset has no mapping for at all (three of
+the user's own real Frieren-titled entries, alternate-cour splits
+Fribb doesn't carry under that tvdb id) still surfaces as "untracked."
+Closing that fully would need fuzzy title matching across sources
+(B.7's own service_presence.py scope, not this one's) — a known,
+documented limitation, not silently promised away.
 `format: MUSIC` entries are excluded outright (not a real "show" at
 all — same exclusion `ANIME_RELATION_FORMATS`, A.21, already
 establishes for relation edges); a null `format` defaults to
@@ -154,26 +165,34 @@ def _fribb_tvdb_index() -> dict:
     return fribb.build_tvdb_index(fribb.load_dataset())
 
 
-def _fribb_anilist_index() -> dict:
-    # Same underlying dataset object as _fribb_tvdb_index() above
-    # (load_dataset()'s own mtime-keyed memoization) — this doesn't
-    # re-download or re-parse anything already loaded this call.
-    return fribb.build_anilist_index(fribb.load_dataset())
-
-
 def _classify_sonarr(entry: dict, tvdb_index: dict) -> dict:
     """See module docstring's own "Sonarr classification corrected"
     note — a successful Fribb resolution is the anime signal, not
-    Sonarr's own seriesType."""
-    candidate = fribb.resolve_season_candidate(tvdb_index, entry["external_id"], 1)
-    anilist_id, _mal_id = fribb.extract_ids(candidate)
+    Sonarr's own seriesType. Checks *every* real season Sonarr reports
+    for `trackingSpace` (a show whose season 1 doesn't resolve but a
+    later season does is still anime — live-verified: this genuinely
+    happens), but the show-level `anilistId` passed to create_show()
+    stays season-1-only, matching `_ensure_anilist_link`'s own
+    established convention exactly (a season-1 miss there just leaves
+    the show unlinked at creation, same as a normal addShow without
+    one — not this function's job to diverge from that)."""
+    season_numbers = entry.get("season_numbers") or [1]
+    season_one_anilist_id, _mal_id = fribb.extract_ids(
+        fribb.resolve_season_candidate(tvdb_index, entry["external_id"], 1)
+    )
+    is_anime = season_one_anilist_id is not None or any(
+        fribb.extract_ids(fribb.resolve_season_candidate(tvdb_index, entry["external_id"], n))[0]
+        is not None
+        for n in season_numbers
+        if n != 1
+    )
     return {
         "media_shape": "episodic",
-        "tracking_space": "anime" if anilist_id is not None else "tv",
+        "tracking_space": "anime" if is_anime else "tv",
         "title_romaji": entry["title"],
         "primary_title": "romaji",
         "tvdb_id": entry["external_id"],
-        "anilist_id": anilist_id,
+        "anilist_id": season_one_anilist_id,
     }
 
 
@@ -209,11 +228,39 @@ def _classify(entry: dict, tvdb_index: dict) -> dict:
     return _classify_anilist(entry)
 
 
-def _find_untracked_anilist_entries(conn) -> list[dict]:
+def _sonarr_resolvable_anilist_ids(conn, tvdb_index: dict) -> set[int]:
+    """Every AniList id Fribb can resolve for *any* real season of
+    *any* show in Sonarr's own catalog (tracked or not) — see
+    all_sonarr_series_with_seasons's own docstring (local_audit.py)
+    for why every season needs checking, not just season 1 (Frieren's
+    own season 1 and season 2 resolve to two different AniList ids,
+    verified live)."""
+    ids: set[int] = set()
+    for series in local_audit.all_sonarr_series_with_seasons(conn):
+        for season_number in series["season_numbers"]:
+            anilist_id, _mal_id = fribb.extract_ids(
+                fribb.resolve_season_candidate(tvdb_index, series["tvdb_id"], season_number)
+            )
+            if anilist_id is not None:
+                ids.add(anilist_id)
+    return ids
+
+
+def _find_untracked_anilist_entries(conn, tvdb_index: dict) -> list[dict]:
     """See module docstring's own "AniList-sweep dedup" note for the
-    full reasoning. Read-only (one MediaListCollection fetch, no
-    writes) — safe to call from both preview_backfill() and
-    backfill_untracked_shows()."""
+    full reasoning. Read-only (one MediaListCollection fetch, plus
+    Sonarr catalog reads for the dedup set below, no writes) — safe to
+    call from both preview_backfill() and backfill_untracked_shows().
+
+    Not a perfect dedup — a real, accepted residual gap found live: an
+    AniList list entry whose title/id Fribb's own dataset simply has
+    no mapping for at all (verified live: three of the user's own real
+    Frieren-titled entries, alternate-cour splits Fribb doesn't carry
+    under that tvdb id) will still surface here as "untracked" even
+    though a same-franchise show already exists via the Sonarr path.
+    Closing that fully would need fuzzy title matching across sources
+    (B.7's own service_presence.py scope, not this one's) — documented
+    as a known limitation rather than silently promised away."""
     cfg = get_current()
     if not cfg.anilist_access_token:
         return []
@@ -223,8 +270,7 @@ def _find_untracked_anilist_entries(conn) -> list[dict]:
         return []
 
     known_anilist_ids = local_audit.known_anilist_ids(conn)
-    sonarr_tvdb_ids = local_audit.all_sonarr_tvdb_ids(conn)
-    anilist_to_tvdb = _fribb_anilist_index()
+    sonarr_resolvable_ids = _sonarr_resolvable_anilist_ids(conn, tvdb_index)
 
     entries = []
     for item in my_list:
@@ -232,8 +278,7 @@ def _find_untracked_anilist_entries(conn) -> list[dict]:
             continue
         if str(item["anilist_id"]) in known_anilist_ids:
             continue
-        tvdb_id = anilist_to_tvdb.get(item["anilist_id"])
-        if tvdb_id is not None and tvdb_id in sonarr_tvdb_ids:
+        if item["anilist_id"] in sonarr_resolvable_ids:
             continue
         entries.append(
             {
@@ -256,7 +301,7 @@ def preview_backfill(conn) -> list[dict]:
     untracked_shows already has)."""
     tvdb_index = _fribb_tvdb_index()
     candidates = local_audit.find_untracked_shows_readonly(conn) + _find_untracked_anilist_entries(
-        conn
+        conn, tvdb_index
     )
     preview = []
     for entry in candidates:
@@ -309,7 +354,7 @@ def backfill_untracked_shows(conn) -> dict:
     _guarded(), local_audit's own per-service try/except)."""
     tvdb_index = _fribb_tvdb_index()
     result = local_audit.audit_local_files(conn)
-    candidates = result["untracked_shows"] + _find_untracked_anilist_entries(conn)
+    candidates = result["untracked_shows"] + _find_untracked_anilist_entries(conn, tvdb_index)
     created = []
     failed = []
     for entry in candidates:
