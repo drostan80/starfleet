@@ -3100,8 +3100,73 @@ background scheduler.
         `_promote_stub` import cleanly and the schema builds with
         `ShowBackfillResult.promoted` present and correctly typed.
       - **Live database cleanup**: the fix does not retroactively merge
-        rows the buggy code already created — see the "Live cleanup"
-        note the user was asked about directly, below.
+        rows the buggy code already created. Confirmed with the user:
+        the dev `lcars.db` (this machine — SCOPE.md §11.3's own
+        Docker-on-the-Sonarr/Radarr-host is the real Cutover target,
+        not this laptop) is disposable — Cutover gets a fresh DB and a
+        real re-run there, not a copy of this one — so the dev DB just
+        needs to stay clean/trustworthy for the rest of Phase B's own
+        live testing (B.11f needs real data to verify against). Wipe
+        chosen over a surgical per-pair merge script: ~2 hours
+        background wait (matching the original run's own measured
+        time — the fix doesn't change how many candidates exist or how
+        much AniList throttling they need) with zero engineering risk,
+        versus a one-off script touching ~12 live FK-referencing
+        tables (episode/season/show_external_id/show_relation's own
+        `related_show_id`/cast_credit/studio_credit/watch_event/
+        pending_review/status_change/score_change/franchise_member/
+        show_service_presence) for no lasting benefit on a DB that
+        gets discarded anyway.
+      - **A second real bug found executing that wipe, same day —
+        `alembic downgrade base` is broken against any DB with actual
+        rows in it, not an edge case.** `f7a2c4e91b6d`'s own
+        `downgrade()` (B.3's availability-3-state migration) re-adds
+        `show.available_locally`/`episode.available_locally` via
+        `ALTER TABLE ... ADD COLUMN ... GENERATED ALWAYS AS (...)
+        STORED` — works fine forward (every test's own `conn` fixture
+        exercises this exact statement on a brand-new, zero-row table
+        every run, 577 passes) but SQLite hard-rejects adding a STORED
+        generated column via `ALTER TABLE` on a table that already has
+        rows (`sqlite3.OperationalError: cannot add a STORED column`,
+        confirmed directly: succeeds on an empty table, fails the
+        moment the table holds even one row). This is the first time
+        `alembic downgrade` has ever been run against a DB with real
+        data in this project's history — the failure mode was never
+        reachable from any test (fixtures always create-then-migrate a
+        fresh empty file) or from the forward-only live builds so far.
+        Live-confirmed 2026-08-10: `alembic downgrade base` against the
+        post-backfill `lcars.db` (2863 show rows) got through
+        `service_health`'s own two downgrades cleanly, then died
+        partway into `f7a2c4e91b6d`'s own downgrade — `episode`
+        untouched, `show` left mid-transition (old-style
+        `available_via_radarr` INTEGER back, but missing
+        `available_locally`/`file_path_radarr` entirely) — alembic's
+        own non-transactional-DDL mode (SQLite) commits each
+        `op.execute()` independently, so this partial state persisted
+        rather than rolling back.
+      - **Not fixed tonight, deliberately** — out of scope for what was
+        asked (wipe the dev DB now); flagged here so it isn't lost.
+        Worked around instead: since every row was going to be
+        discarded anyway, the broken partially-downgraded file was
+        moved aside (not deleted — kept at
+        `scratchpad/lcars-broken-downgrade-backup.db` for this session)
+        and a genuinely fresh `lcars.db` created via `alembic upgrade
+        head` from nothing — sidesteps the bug entirely (every table
+        stays at zero rows through the whole forward chain), same
+        practical result as a working downgrade would have given.
+        Confirmed clean afterward: `alembic current` reports head
+        (`2818c7efae13`), `show` has 0 rows and the correct 3-state
+        schema. **Real follow-up need**: `downgrade()` in
+        `f7a2c4e91b6d` (and worth auditing every other migration for
+        the same `ALTER TABLE ADD COLUMN ... STORED` pattern on
+        downgrade) needs an actual fix before `alembic downgrade` can
+        be trusted against any database holding real rows — likely a
+        full table rebuild (new table, copy data, drop, rename) rather
+        than in-place `ALTER TABLE`, the same technique SQLite itself
+        recommends for schema changes it can't do in-place. Not
+        blocking B.11d/B.11e/B.11f, but should happen before this
+        project leans on `alembic downgrade` for anything real
+        (Cutover-time rollback, say).
   - [ ] **B.11e — ongoing untracked-show sweep**: extend
     `auditLocalFiles`'s existing `untracked_shows` computation (or a
     dedicated variant) onto Ops's recurring schedule, persisting
