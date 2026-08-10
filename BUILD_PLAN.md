@@ -2431,9 +2431,51 @@ background scheduler.
     existing migration still applies cleanly head-to-head — no new
     migration needed, `episode_movie_link`'s table already had
     everything this step needed since A.2.
-- [ ] **B.9 — Backlog visualization** (§6.3): calendar-native counter
+- [x] **B.9 — Backlog visualization** (§6.3): calendar-native counter
   line under a show's next-episode entry; mark-watched from it clears
   exactly one oldest episode per action.
+  - **Scope, asked directly rather than assumed**: this entry names
+    three things — binding LCARS's own `Query.backlog` (unbound since
+    A.3's own consolidation audit correctly deferred it here, not a
+    new gap), and two Data-side UI pieces (the counter line, mark-
+    watched-clears-oldest) living in `~/repos/data`. `Query.backlog`
+    is a real, buildable LCARS gap; the Data-side pieces are genuinely
+    buildable today too, so this wasn't a technical-impossibility call
+    like B.8b's `bonus_movie` question — it's a real sequencing
+    tradeoff, surfaced rather than decided unilaterally. Confirmed:
+    bind `Query.backlog` now; defer the Data-side UI to **B.11**
+    ("Data's role shrinks... calendar reads state from LCARS instead
+    of computing it locally") — Data's own `CLAUDE.md` confirms it
+    still computes calendar state locally today, not LCARS-backed yet,
+    so building the counter widget against that now would mean
+    rebuilding it against LCARS once B.11 lands. B.11's own entry now
+    owns the two deferred pieces.
+  - **Built**: `Query.backlog` (`resolve_backlog`, resolvers.py) —
+    unwatched, locally-available episodes on watching-status, actively-
+    airing shows (§6.3's own header: "airing shows"). "Locally-
+    available" (not merely aired) matches `nextUp`'s own precedent
+    (§6.4, A.11); a `downloading` episode isn't backlog yet either.
+    Real table-backed pagination (`pagination.paginate()`, same shape
+    `episodesAiringSoon`/§8 already established), not a computed list
+    like `nextUp` — `backlog` is every qualifying episode, not one per
+    show. The airing check reuses `_show_is_airing` (A.10) verbatim
+    rather than a third re-derivation of the same predicate (already
+    duplicated once, for a documented circular-import reason, in
+    `animeschedule.py`) — same "not a single-column SQL comparison, so
+    compute eligible show_ids in Python first" shape
+    `dueForMetadataRefresh`/`dueForSeasonReconciliation` (B.1/B.2)
+    already use, then handed to the real table scan. No migration
+    needed — `episode`'s existing columns already cover the predicate.
+  - **Verified**: 473 tests passing (was 467), `ruff check .`/`ruff
+    format --check` clean, clean-install sanity check (fresh venv,
+    real `pip install`) confirmed the schema still builds (109 types,
+    `backlog` present on `Query`). One gap caught in review before
+    commit: the empty-candidate short-circuit branch (no watching+
+    airing shows at all — a normal between-cours state, not an edge
+    case) had no test querying `pageInfo`, the exact class of bug
+    `pagination.py`'s own docstring already documents (a real
+    silently-null `pageInfo` bug that went unnoticed pre-A.11 for
+    exactly this reason). Added.
 - [ ] **B.10 — MAL integration** (§6.9 — can start any time after
   Phase A's push infrastructure exists; doesn't have to wait for the
   rest of Phase B specifically):
@@ -2454,7 +2496,13 @@ background scheduler.
 - [ ] **B.11 — Data's role shrinks**: calendar reads tracking/air-date/
   availability state from LCARS instead of computing it locally.
   Data's status bar gains per-source sync-health indicators sourced
-  from Ops's service-health state (B.6).
+  from Ops's service-health state (B.6). **Also owns B.9's two
+  deferred Data-side pieces** (confirmed with the user 2026-08-10,
+  B.9's own entry has the full reasoning): the calendar-native counter
+  line under a show's next-episode entry, backed by LCARS's now-built
+  `Query.backlog`, and its mark-watched-clears-exactly-one-oldest-
+  episode interaction — deliberately not built during B.9 itself,
+  since Data doesn't read from LCARS at all yet before this step.
 - [ ] **B.12 — Proxy interactive flows through LCARS**: add-show,
   id-remap move from direct-from-Data to going through LCARS, so
   reconciliation logic applies consistently regardless of trigger.

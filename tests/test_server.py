@@ -4772,6 +4772,149 @@ async def test_episodes_airing_soon_filters_by_date_window(client, migrated_db):
     assert ids == {"e-soon01"}
 
 
+# --- backlog (§6.3, B.9) -----------------------------------------------------
+#
+# LCARS-side scope only, confirmed with the user 2026-08-09: Query.backlog
+# (this section) binds now; the Data-side calendar-native counter line and
+# mark-watched-clears-oldest interaction are deferred to B.11, when Data's
+# calendar switches to LCARS-backed reads generally, rather than building
+# them against Data's current local computation (its own CLAUDE.md) and
+# redoing them then.
+
+
+def _insert_backlog_episode(
+    migrated_db: Path,
+    episode_id: str,
+    show_id: str,
+    air_date_utc: str | None,
+    episode: int = 1,
+    state: str = "unwatched",
+    available_via_sonarr: str = "unavailable",
+) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        """
+        INSERT INTO episode
+            (id, show_id, season, episode, kind, air_date_utc, state,
+             available_via_sonarr, created_at, updated_at)
+        VALUES (
+            ?, ?, 1, ?, 'regular', ?, ?, ?,
+            '2026-08-08T00:00:00Z', '2026-08-08T00:00:00Z'
+        )
+        """,
+        (episode_id, show_id, episode, air_date_utc, state, available_via_sonarr),
+    )
+    conn.commit()
+
+
+async def _watching_show(client, **overrides) -> dict:
+    show = await add_show(client, **overrides)
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    return show
+
+
+BACKLOG_QUERY = "{ backlog { edges { node { id } } } }"
+
+
+async def test_backlog_includes_an_unwatched_available_episode_of_a_watching_airing_show(
+    client, migrated_db
+):
+    show = await _watching_show(client, titleRomaji="Airing Show")
+    # airing: one aired episode (backlog candidate) plus one still in the future
+    _insert_backlog_episode(
+        migrated_db, "e-bl0001", show["id"], _iso(-1), episode=1, available_via_sonarr="available"
+    )
+    _insert_backlog_episode(migrated_db, "e-bl0002", show["id"], _iso(3), episode=2)
+
+    data = await gql(client, BACKLOG_QUERY, headers=auth_headers())
+    ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
+    assert ids == {"e-bl0001"}
+
+
+async def test_backlog_excludes_a_watched_episode(client, migrated_db):
+    show = await _watching_show(client, titleRomaji="Airing Show")
+    _insert_backlog_episode(
+        migrated_db,
+        "e-bl0003",
+        show["id"],
+        _iso(-1),
+        episode=1,
+        state="watched",
+        available_via_sonarr="available",
+    )
+    _insert_backlog_episode(
+        migrated_db, "e-bl0004", show["id"], _iso(3), episode=2
+    )  # keeps it airing
+
+    data = await gql(client, BACKLOG_QUERY, headers=auth_headers())
+    ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
+    assert "e-bl0003" not in ids
+
+
+async def test_backlog_excludes_a_downloading_not_yet_available_episode(client, migrated_db):
+    show = await _watching_show(client, titleRomaji="Airing Show")
+    _insert_backlog_episode(
+        migrated_db,
+        "e-bl0005",
+        show["id"],
+        _iso(-1),
+        episode=1,
+        available_via_sonarr="downloading",
+    )
+    _insert_backlog_episode(migrated_db, "e-bl0006", show["id"], _iso(3), episode=2)
+
+    data = await gql(client, BACKLOG_QUERY, headers=auth_headers())
+    ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
+    assert "e-bl0005" not in ids
+
+
+async def test_backlog_excludes_episodes_of_a_non_watching_show(client, migrated_db):
+    show = await add_show(client, titleRomaji="Planned Show")  # default status: planned
+    _insert_backlog_episode(
+        migrated_db, "e-bl0007", show["id"], _iso(-1), episode=1, available_via_sonarr="available"
+    )
+    _insert_backlog_episode(migrated_db, "e-bl0008", show["id"], _iso(3), episode=2)
+
+    data = await gql(client, BACKLOG_QUERY, headers=auth_headers())
+    ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
+    assert "e-bl0007" not in ids
+
+
+async def test_backlog_excludes_a_fully_released_non_airing_watching_show(client, migrated_db):
+    # A completed-but-still-bingeing (paced-mode-style) show: watching, but
+    # every episode already aired — §6.2's own _show_is_airing predicate,
+    # reused verbatim here, says this show is not airing.
+    show = await _watching_show(client, titleRomaji="Fully Released Show")
+    _insert_backlog_episode(
+        migrated_db, "e-bl0009", show["id"], _iso(-10), episode=1, available_via_sonarr="available"
+    )
+
+    data = await gql(client, BACKLOG_QUERY, headers=auth_headers())
+    ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
+    assert "e-bl0009" not in ids
+
+
+async def test_backlog_is_empty_with_no_watching_airing_shows(client, migrated_db):
+    # No watching+airing shows at all — the resolver's own short-circuit
+    # branch (pagination.paginate over a "1 = 0" where clause). Queries
+    # pageInfo too, not just edges — pagination.py's own docstring documents
+    # a real bug (pageInfo silently null) that went unnoticed for exactly
+    # this reason: no end-to-end test had ever queried a pageInfo sub-field.
+    await add_show(client, titleRomaji="Planned Show")  # planned, no episodes at all
+    data = await gql(
+        client,
+        "{ backlog { edges { node { id } } pageInfo { hasNextPage startCursor } } }",
+        headers=auth_headers(),
+    )
+    assert data["backlog"]["edges"] == []
+    assert data["backlog"]["pageInfo"]["hasNextPage"] is False
+
+
 # --- absolute_number synthesis (§5.2, A.25) ---------------------------------
 
 

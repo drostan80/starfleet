@@ -1560,6 +1560,18 @@ from aniq at the fork) and a new calendar-native counter line under a
 show's next-episode entry. Mark-watched from the counter clears
 exactly one oldest episode per action, no bulk-clear.
 
+**Resolved 2026-08-10 (B.9), split by repo rather than assumed as one
+unit**: LCARS's own `Query.backlog` (unwatched, locally-available
+episodes on watching-status, actively-airing shows — matches
+`nextUp`'s §6.4 "locally-available" precedent, not merely aired) is
+now built. The two Data-side pieces above (the counter line, mark-
+watched-clears-oldest) are deliberately **not** built yet — confirmed
+directly with the user: Data doesn't read any state from LCARS at all
+before B.11 ("Data's role shrinks"), so building this widget against
+Data's current local computation now would mean rebuilding it against
+`Query.backlog` once B.11 lands. B.11's own `BUILD_PLAN.md` entry now
+owns both deferred pieces.
+
 ### 6.4 Cross-show "next up" query (Phase A/B)
 
 One aggregated query, across all `watching`-status shows **and**
