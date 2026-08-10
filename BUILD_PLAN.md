@@ -2661,7 +2661,25 @@ background scheduler.
       the new test file didn't end up needing), `ruff format --check`
       confirmed all 5 actually-touched files clean (3 unrelated
       pre-existing files elsewhere in the repo were already
-      unformatted before this change and are out of scope here).
+      unformatted before this change and are out of scope here),
+      clean-install sanity check (fresh venv, real `pip install
+      -e .[dev]`) confirmed the new client method and status-bar
+      method import cleanly.
+    - **Follow-up fix, same day**: caught in review right after this
+      slice shipped — `_check_lcars_service_health()` called
+      `_refresh_calendar_view()` unconditionally on every successful
+      poll. Unlike `_check_download_status()` (gated by
+      `_has_outstanding_downloads()`, so it only refreshes when
+      there's real work outstanding), the health poll has no such
+      gate — it runs every interval for as long as `lcars_client` is
+      configured — so it was rebuilding the whole calendar table on
+      every tick regardless of whether health actually changed. Fixed
+      by diffing the fetched result against current state before
+      refreshing. Also closed a coverage gap the same review raised:
+      no test previously confirmed the health segment (which now
+      leads `_status_bar_text()`) still renders correctly alongside
+      an active status-bar note. 502 tests passing after the fix,
+      `ruff check`/`format` clean.
   - [ ] **B.11b — calendar core render path**: switch from local
     Sonarr/AniList computation to LCARS reads for tracking/air-date/
     availability state, per the confirmed **Replacing** scope above.
