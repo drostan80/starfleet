@@ -536,3 +536,86 @@ def test_all_sonarr_series_with_seasons_falls_back_to_season_one(conn, monkeypat
 
 def test_all_sonarr_series_with_seasons_not_configured_is_a_clean_no_op(conn):
     assert local_audit.all_sonarr_series_with_seasons(conn) == []
+
+
+# --- find_untracked_shows_readonly_by_source (B.11e follow-up) ---------------
+#
+# The `reported` set untracked_sweep.py's own pruning gate depends on —
+# a real bug found in review: the original sweep couldn't tell "genuinely
+# nothing untracked" apart from "couldn't reach this source this time,"
+# since both surfaced as the same empty contribution to the combined
+# list.
+
+
+class _FailingSonarrClient:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        pass
+
+    def all_series(self):
+        raise sonarr_client.SonarrError("boom")
+
+
+class _FailingRadarrClient:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        pass
+
+    def all_movies(self):
+        raise radarr_client.RadarrError("boom")
+
+
+def test_by_source_reports_sonarr_success(conn, monkeypatch):
+    _configure_sonarr()
+    fake = _FakeSonarrClient(
+        [{"id": 1, "tvdbId": 111, "title": "Untracked", "path": "/data/untracked"}]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    result = local_audit.find_untracked_shows_readonly_by_source(conn)
+    assert "sonarr" in result["reported"]
+    assert len(result["entries"]) == 1
+
+
+def test_by_source_reports_sonarr_not_configured_as_reported(conn):
+    # Deliberate, stable "nothing to report from here" — safe to prune
+    # findings against, not the same as a real failure.
+    result = local_audit.find_untracked_shows_readonly_by_source(conn)
+    assert "sonarr" in result["reported"]
+    assert result["entries"] == []
+
+
+def test_by_source_does_not_report_sonarr_on_a_real_failure(conn, monkeypatch):
+    _configure_sonarr()
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FailingSonarrClient())
+    result = local_audit.find_untracked_shows_readonly_by_source(conn)
+    assert "sonarr" not in result["reported"]
+    assert result["entries"] == []  # still swallowed into an empty contribution
+
+
+def test_by_source_reports_radarr_not_configured_as_reported(conn):
+    result = local_audit.find_untracked_shows_readonly_by_source(conn)
+    assert "radarr" in result["reported"]
+
+
+def test_by_source_does_not_report_radarr_on_a_real_failure(conn, monkeypatch):
+    _configure_radarr()
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: _FailingRadarrClient())
+    result = local_audit.find_untracked_shows_readonly_by_source(conn)
+    assert "radarr" not in result["reported"]
+    assert result["entries"] == []
+
+
+def test_find_untracked_shows_readonly_is_still_just_the_flat_list(conn, monkeypatch):
+    # The pre-existing, unchanged contract every other caller relies on.
+    _configure_sonarr()
+    fake = _FakeSonarrClient(
+        [{"id": 1, "tvdbId": 111, "title": "Untracked", "path": "/data/untracked"}]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    assert local_audit.find_untracked_shows_readonly(conn) == (
+        local_audit.find_untracked_shows_readonly_by_source(conn)["entries"]
+    )

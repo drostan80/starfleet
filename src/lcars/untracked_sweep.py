@@ -29,6 +29,26 @@ set once, `last_seen_at`/`title`/`path`/`tracking_space`/`media_shape`
 refreshed every sweep a finding is still current. Anything no longer in
 the fresh sweep's own result is deleted outright, not soft-marked —
 there is no "resolved" state to preserve here, unlike `pending_review`.
+
+**Pruning is gated per-source, added same day as a follow-up fix — a
+real bug found in review, not from a failing test.** The first version
+deleted *anything* absent from the current sweep's combined list,
+including findings from a source that was simply unreachable this
+pass: `local_audit.find_untracked_shows_readonly()` and
+`show_backfill._find_untracked_anilist_entries()` both swallow a real
+connection failure into an empty result rather than raising, so a
+transient Sonarr/Radarr/AniList outage would have deleted every real
+finding from that source as falsely "resolved" — destroying
+`first_seen_at`, misreporting `resolvedFindings`, and showing a human a
+falsely-empty list during the outage, exactly the failure this whole
+module exists to prevent. Fixed by using
+`show_backfill.preview_backfill_with_status()` instead of
+`preview_backfill()` — it also reports which sources actually
+succeeded this pass, and a finding is only ever eligible for deletion
+if its own service is in that set. A source with no credentials
+configured at all still counts as "reported" (deliberate, stable zero,
+safe to prune against) — only a genuine failure against a *configured*
+source blocks pruning for that source's findings, this pass.
 """
 
 from lcars import ids, show_backfill, util
@@ -36,12 +56,14 @@ from lcars import ids, show_backfill, util
 
 def sweep_untracked_shows(conn) -> dict:
     """The real run (`pollUntrackedShows`) — recomputes
-    `show_backfill.preview_backfill()` and reconciles it against
-    `untracked_show_finding`. Returns `{"found", "new_findings",
+    `show_backfill.preview_backfill_with_status()` and reconciles it
+    against `untracked_show_finding`. Returns `{"found", "new_findings",
     "resolved_findings"}`, the same "count real changes, for the caller
     to log" convention every other `ops` sweep already returns."""
     now = util.now_utc_iso()
-    current = show_backfill.preview_backfill(conn)
+    result = show_backfill.preview_backfill_with_status(conn)
+    current = result["items"]
+    reported_services = result["reported_services"]
     current_keys = {(item["service"], str(item["external_id"])) for item in current}
 
     existing_keys = {
@@ -93,7 +115,9 @@ def sweep_untracked_shows(conn) -> dict:
             )
             new_findings += 1
 
-    resolved_keys = existing_keys - current_keys
+    resolved_keys = {
+        key for key in (existing_keys - current_keys) if key[0] in reported_services
+    }
     resolved_findings = 0
     for service, external_id in resolved_keys:
         conn.execute(

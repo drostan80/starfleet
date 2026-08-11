@@ -238,6 +238,52 @@ def _untracked_radarr_entries(all_movies: list[dict], known_tmdb_ids: set[str]) 
     ]
 
 
+def find_untracked_shows_readonly_by_source(conn) -> dict:
+    """Same computation as find_untracked_shows_readonly() below, but
+    also reports which sources actually succeeded this pass — B.11e
+    follow-up, a real bug found in review (not from a failing test):
+    untracked_sweep.py's own pruning needs to tell "genuinely nothing
+    untracked here" apart from "couldn't reach this source this time,"
+    which a flat list alone can't express — the original version
+    conflated the two, so a transient Sonarr/Radarr outage during one
+    sweep would have deleted every real finding from that source as
+    falsely "resolved." find_untracked_shows_readonly() itself stays a
+    thin wrapper around this, unchanged for every existing caller that
+    only ever needed the flat list.
+
+    A source with no credentials configured at all reports success
+    (`True`) — that's a deliberate, stable "there is nothing to report
+    from here," safe to prune findings against. Only a real connection
+    failure against a *configured* source reports `False`."""
+    cfg = get_current()
+    found: list[dict] = []
+    reported: set[str] = set()
+
+    if cfg.sonarr_url and cfg.sonarr_api_key:
+        try:
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                all_series = client.all_series()
+            reported.add("sonarr")
+        except sonarr_client.SonarrError:
+            all_series = []
+        found += _untracked_sonarr_entries(all_series, _known_tvdb_ids(conn))
+    else:
+        reported.add("sonarr")
+
+    if cfg.radarr_url and cfg.radarr_api_key:
+        try:
+            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                all_movies = client.all_movies()
+            reported.add("radarr")
+        except radarr_client.RadarrError:
+            all_movies = []
+        found += _untracked_radarr_entries(all_movies, _known_tmdb_movie_ids(conn))
+    else:
+        reported.add("radarr")
+
+    return {"entries": found, "reported": reported}
+
+
 def find_untracked_shows_readonly(conn) -> list[dict]:
     """B.11d — show_backfill.py's own previewShowBackfill Query needs
     exactly the untracked-detection half of audit_local_files(), and
@@ -255,27 +301,10 @@ def find_untracked_shows_readonly(conn) -> list[dict]:
     would otherwise still commit a service_health failure record for —
     this function makes no commit at all, so it can't record one
     either; the next real auditLocalFiles/backfillUntrackedShows call
-    records it properly."""
-    cfg = get_current()
-    found: list[dict] = []
-
-    if cfg.sonarr_url and cfg.sonarr_api_key:
-        try:
-            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
-                all_series = client.all_series()
-        except sonarr_client.SonarrError:
-            all_series = []
-        found += _untracked_sonarr_entries(all_series, _known_tvdb_ids(conn))
-
-    if cfg.radarr_url and cfg.radarr_api_key:
-        try:
-            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
-                all_movies = client.all_movies()
-        except radarr_client.RadarrError:
-            all_movies = []
-        found += _untracked_radarr_entries(all_movies, _known_tmdb_movie_ids(conn))
-
-    return found
+    records it properly. Thin wrapper around
+    find_untracked_shows_readonly_by_source() above (B.11e follow-up) —
+    every existing caller here only ever needed the flat list."""
+    return find_untracked_shows_readonly_by_source(conn)["entries"]
 
 
 def _audit_sonarr(conn) -> dict:

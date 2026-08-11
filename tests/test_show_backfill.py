@@ -67,6 +67,23 @@ class _FakeSonarrClient:
         return []  # metadata.py's own _fetch_sonarr — no episodes needed for these tests
 
 
+class _FailingFakeSonarrClient:
+    """B.11e follow-up — a real, configured Sonarr connection that
+    fails outright, for preview_backfill_with_status()'s own
+    reported_services test. Distinct from "not configured" (config.py
+    has no sonarr_url/sonarr_api_key at all), which is a deliberate,
+    stable zero, not a failure."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        pass
+
+    def all_series(self):
+        raise sonarr_client.SonarrError("boom")
+
+
 def _sonarr_series(series_id, tvdb_id, title, series_type=None, path=None):
     return {
         "id": series_id,
@@ -326,6 +343,58 @@ def test_anilist_sweep_swallows_an_anilist_error(conn, monkeypatch):
     assert _sweep(conn) == []
 
 
+# --- _find_untracked_anilist_entries_by_source (B.11e follow-up) -------------
+#
+# Same "reported" signal local_audit.find_untracked_shows_readonly_by_source
+# gained, for the AniList sweep's own real bug found in review: a bare
+# `except AniListError: return []` was indistinguishable from "genuinely
+# nothing untracked" — untracked_sweep.py's own pruning needs the two
+# told apart.
+
+
+def _sweep_by_source(conn):
+    return show_backfill._find_untracked_anilist_entries_by_source(
+        conn, show_backfill._fribb_tvdb_index()
+    )
+
+
+def test_anilist_sweep_by_source_reports_success(conn, monkeypatch):
+    config.get_current().anilist_access_token = "tok"
+    my_list = [{"anilist_id": 505, "format": "TV", "status": "PLANNING", "title": "New Show"}]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    result = _sweep_by_source(conn)
+    assert result["reported"] is True
+    assert len(result["entries"]) == 1
+
+
+def test_anilist_sweep_by_source_reports_no_token_as_reported(conn):
+    # Deliberate, stable "nothing to report from here" — safe to prune
+    # findings against, not the same as a real failure.
+    result = _sweep_by_source(conn)
+    assert result["reported"] is True
+    assert result["entries"] == []
+
+
+def test_anilist_sweep_by_source_does_not_report_on_a_real_failure(conn, monkeypatch):
+    config.get_current().anilist_access_token = "tok"
+
+    def _raise(token, **kw):
+        raise anilist_client.AniListError("boom")
+
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", _raise)
+    result = _sweep_by_source(conn)
+    assert result["reported"] is False
+    assert result["entries"] == []  # still swallowed into an empty contribution
+
+
+def test_find_untracked_anilist_entries_is_still_just_the_flat_list(conn, monkeypatch):
+    # The pre-existing, unchanged contract every other caller relies on.
+    config.get_current().anilist_access_token = "tok"
+    my_list = [{"anilist_id": 505, "format": "TV", "status": "PLANNING", "title": "New Show"}]
+    monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token, **kw: my_list)
+    assert _sweep(conn) == _sweep_by_source(conn)["entries"]
+
+
 # --- preview_backfill (dry-run) -----------------------------------------------
 
 
@@ -373,6 +442,29 @@ def test_preview_backfill_is_empty_with_nothing_untracked(conn, monkeypatch):
     _patch_fribb(monkeypatch, [])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient([]))
     assert show_backfill.preview_backfill(conn) == []
+
+
+def test_preview_backfill_with_status_reports_every_source_by_default(conn, monkeypatch):
+    # Nothing configured at all — still "reported" for all three
+    # (deliberate, stable zero from each source, not a failure), the
+    # shape untracked_sweep.py's own pruning gate depends on.
+    _patch_fribb(monkeypatch, [])
+    result = show_backfill.preview_backfill_with_status(conn)
+    assert result["items"] == []
+    assert result["reported_services"] == {"sonarr", "radarr", "anilist"}
+
+
+def test_preview_backfill_with_status_excludes_a_source_that_failed(conn, monkeypatch):
+    _configure_sonarr()
+    _patch_fribb(monkeypatch, [])
+    monkeypatch.setattr(
+        sonarr_client,
+        "SonarrClient",
+        lambda *a, **kw: _FailingFakeSonarrClient(),
+    )
+    result = show_backfill.preview_backfill_with_status(conn)
+    assert "sonarr" not in result["reported_services"]
+    assert "radarr" in result["reported_services"]
 
 
 def test_preview_backfill_includes_anilist_sweep_entries(conn, monkeypatch):

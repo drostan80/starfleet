@@ -3243,33 +3243,46 @@ background scheduler.
       → `upgrade head` again) verified directly — no `STORED` generated
       column involved here, so none of the same-day `alembic downgrade`
       bug's failure mode applies to this one.
-    - **NOT fully correct yet — a real bug found in review, deliberately
-      not fixed the same night (flagged, not started, per the user's
-      own "stop for the day" instruction)**: `sweep_untracked_shows()`
-      treats *anything absent from the current sweep's combined list*
-      as resolved and deletes it — but both of that list's own sources
-      already swallow a genuine unreachable-source failure into an
-      empty result rather than raising (`local_audit
-      .find_untracked_shows_readonly()`'s own docstring: a Sonarr/Radarr
-      connection failure is "swallowed the same 'nothing new to
-      report' way"; `_find_untracked_anilist_entries()`'s own `except
-      AniListError: return []`). A transient Sonarr outage during one
-      sweep would therefore delete every real Sonarr finding as
-      falsely "resolved" — destroying their `first_seen_at`,
-      misreporting `resolvedFindings` to Ops's own log as if shows got
-      tracked when nothing happened, and showing a human a falsely-
-      empty `untrackedShowFindings` list during the outage window —
-      exactly the "silently falls out of sync" failure this whole step
-      exists to prevent. Not caught by this step's own tests:
-      `test_untracked_sweep.py` monkeypatches `preview_backfill`
-      directly, so the unreachable-source path is never exercised, and
-      `test_sweep_prunes_a_finding_no_longer_present` currently encodes
-      the buggy behavior as correct. **Must be fixed before this sweep
-      ever runs against the real deployed host** (tomorrow's plan) —
-      the fix shape is "don't prune what you couldn't see": the sweep
-      needs a per-source success signal from the computation, pruning
-      only within sources that actually reported this pass, not
-      everything absent from the combined list.
+    - **Fixed the next day (2026-08-11), before anything got deployed —
+      the pruning bug flagged above, in full.** `sweep_untracked_shows()`
+      used to treat *anything absent from the current sweep's combined
+      list* as resolved and delete it, even though both underlying
+      sources swallow a genuine unreachable-source failure into an
+      empty result rather than raising — a transient Sonarr/Radarr/
+      AniList outage during one sweep would have deleted every real
+      finding from that source as falsely "resolved." Fixed exactly
+      the shape flagged: "don't prune what you couldn't see." New
+      `local_audit.find_untracked_shows_readonly_by_source()` and
+      `show_backfill._find_untracked_anilist_entries_by_source()` each
+      report a `reported: bool` per source alongside their existing
+      entries (a source with no credentials configured at all still
+      counts as "reported" — a deliberate, stable zero, safe to prune
+      against; only a real failure against a *configured* source
+      reports `False`) — `find_untracked_shows_readonly()`/
+      `_find_untracked_anilist_entries()` themselves are now thin
+      wrappers around these, unchanged for every existing caller. New
+      `show_backfill.preview_backfill_with_status()` combines both
+      sources' `reported` signals into one `reported_services` set;
+      `preview_backfill()` is now a thin wrapper around it too.
+      `sweep_untracked_shows()` calls the `_with_status` variant and
+      only deletes a finding whose own `service` is in
+      `reported_services` this pass.
+      - **Verified**: 604 tests passing (was 589; 15 new — 6 in
+        `test_local_audit.py` for the new by-source signal (success/
+        not-configured/failure, for both Sonarr and Radarr, plus the
+        "still just the flat list" contract test), 4 equivalent ones
+        in `test_show_backfill.py` for the AniList side, 2 for
+        `preview_backfill_with_status()`'s own aggregation, 3 new
+        regression tests in `test_untracked_sweep.py` reproducing the
+        exact bug shape end to end — a source failing to report
+        leaves its findings untouched, pruning resumes once it
+        reports again, and nothing prunes when no source reported at
+        all — plus the pre-existing pruning test updated to patch
+        `preview_backfill_with_status` instead of the now-wrapped
+        `preview_backfill`), `ruff check .` clean, clean-install
+        sanity check (fresh venv) confirmed all three new `_by_source`/
+        `_with_status` functions import cleanly and the schema still
+        builds correctly.
     - **Also flagged, not yet verified**: the hourly-tick placement
       above was reasoned about ("a handful of global calls, not
       per-show") but never actually timed. One sweep runs Sonarr

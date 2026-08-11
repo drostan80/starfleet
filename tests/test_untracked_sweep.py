@@ -1,9 +1,11 @@
 """untracked_sweep.py — SCOPE.md §5.2's "Resolved 2026-08-10 (B.11
-reconnaissance)" note, BUILD_PLAN.md B.11e. `show_backfill.preview_backfill`
-is monkeypatched directly throughout — its own classification/dedup
-logic is already covered by test_show_backfill.py; these tests are
-about this module's own reconciliation against untracked_show_finding
-(insert/refresh/prune), not re-deriving what "untracked" means. Same
+reconnaissance)" note, BUILD_PLAN.md B.11e.
+`show_backfill.preview_backfill_with_status` is monkeypatched directly
+throughout — its own classification/dedup logic is already covered by
+test_show_backfill.py; these tests are about this module's own
+reconciliation against untracked_show_finding (insert/refresh/prune,
+and the per-source pruning gate itself — B.11e follow-up, a real bug
+found in review), not re-deriving what "untracked" means. Same
 real-migrated-SQLite-DB fixture test_show_backfill.py already
 established.
 """
@@ -52,6 +54,16 @@ _ITEM_B = {
     "media_shape": "movie",
 }
 
+_ALL_REPORTED = {"sonarr", "radarr", "anilist"}
+
+
+def _stub_preview(monkeypatch, items, reported_services=_ALL_REPORTED):
+    monkeypatch.setattr(
+        show_backfill,
+        "preview_backfill_with_status",
+        lambda c: {"items": items, "reported_services": set(reported_services)},
+    )
+
 
 def _findings(conn):
     return conn.execute(
@@ -60,7 +72,7 @@ def _findings(conn):
 
 
 def test_sweep_inserts_new_findings(conn, monkeypatch):
-    monkeypatch.setattr(show_backfill, "preview_backfill", lambda c: [_ITEM_A, _ITEM_B])
+    _stub_preview(monkeypatch, [_ITEM_A, _ITEM_B])
     result = untracked_sweep.sweep_untracked_shows(conn)
     assert result == {"found": 2, "new_findings": 2, "resolved_findings": 0}
 
@@ -80,13 +92,13 @@ def test_sweep_inserts_new_findings(conn, monkeypatch):
 
 
 def test_sweep_never_creates_a_show(conn, monkeypatch):
-    monkeypatch.setattr(show_backfill, "preview_backfill", lambda c: [_ITEM_A])
+    _stub_preview(monkeypatch, [_ITEM_A])
     untracked_sweep.sweep_untracked_shows(conn)
     assert conn.execute("SELECT COUNT(*) FROM show").fetchone()[0] == 0
 
 
 def test_sweep_is_a_clean_no_op_on_an_unchanged_rerun(conn, monkeypatch):
-    monkeypatch.setattr(show_backfill, "preview_backfill", lambda c: [_ITEM_A])
+    _stub_preview(monkeypatch, [_ITEM_A])
     untracked_sweep.sweep_untracked_shows(conn)
     first_seen = _findings(conn)[0]["first_seen_at"]
 
@@ -98,11 +110,11 @@ def test_sweep_is_a_clean_no_op_on_an_unchanged_rerun(conn, monkeypatch):
 
 
 def test_sweep_refreshes_a_changed_field_on_a_still_current_finding(conn, monkeypatch):
-    monkeypatch.setattr(show_backfill, "preview_backfill", lambda c: [_ITEM_A])
+    _stub_preview(monkeypatch, [_ITEM_A])
     untracked_sweep.sweep_untracked_shows(conn)
 
     renamed = {**_ITEM_A, "title": "Show A (renamed in Sonarr)"}
-    monkeypatch.setattr(show_backfill, "preview_backfill", lambda c: [renamed])
+    _stub_preview(monkeypatch, [renamed])
     result = untracked_sweep.sweep_untracked_shows(conn)
     assert result == {"found": 1, "new_findings": 0, "resolved_findings": 0}
 
@@ -112,12 +124,13 @@ def test_sweep_refreshes_a_changed_field_on_a_still_current_finding(conn, monkey
 
 
 def test_sweep_prunes_a_finding_no_longer_present(conn, monkeypatch):
-    monkeypatch.setattr(show_backfill, "preview_backfill", lambda c: [_ITEM_A, _ITEM_B])
+    _stub_preview(monkeypatch, [_ITEM_A, _ITEM_B])
     untracked_sweep.sweep_untracked_shows(conn)
 
-    # Show A got tracked some other way (or genuinely disappeared) — only
-    # B is still untracked next sweep.
-    monkeypatch.setattr(show_backfill, "preview_backfill", lambda c: [_ITEM_B])
+    # Show A got tracked some other way (or genuinely disappeared) — its
+    # own source (sonarr) still reported successfully this pass, so its
+    # absence is trustworthy; only B is still untracked next sweep.
+    _stub_preview(monkeypatch, [_ITEM_B])
     result = untracked_sweep.sweep_untracked_shows(conn)
     assert result == {"found": 1, "new_findings": 0, "resolved_findings": 1}
 
@@ -127,7 +140,59 @@ def test_sweep_prunes_a_finding_no_longer_present(conn, monkeypatch):
 
 
 def test_sweep_is_empty_with_nothing_untracked(conn, monkeypatch):
-    monkeypatch.setattr(show_backfill, "preview_backfill", lambda c: [])
+    _stub_preview(monkeypatch, [])
     result = untracked_sweep.sweep_untracked_shows(conn)
     assert result == {"found": 0, "new_findings": 0, "resolved_findings": 0}
     assert _findings(conn) == []
+
+
+# --- per-source pruning gate (B.11e follow-up, real bug found in review) -----
+
+
+def test_sweep_does_not_prune_a_finding_from_a_source_that_failed_to_report(conn, monkeypatch):
+    """The actual bug: a transient Sonarr outage during one sweep used to
+    delete every real Sonarr finding as falsely "resolved" — because a
+    connection failure and "genuinely nothing untracked" both surfaced
+    as the same empty contribution to the combined list. Show A's own
+    source (sonarr) failing to report this pass must leave it alone,
+    even though it's absent from `current`."""
+    _stub_preview(monkeypatch, [_ITEM_A, _ITEM_B])
+    untracked_sweep.sweep_untracked_shows(conn)
+    first_seen = next(r for r in _findings(conn) if r["service"] == "sonarr")["first_seen_at"]
+
+    # Sonarr is down this pass: absent from `items`, and NOT in
+    # reported_services. AniList still reported fine and found nothing
+    # new beyond B.
+    _stub_preview(monkeypatch, [_ITEM_B], reported_services={"anilist", "radarr"})
+    result = untracked_sweep.sweep_untracked_shows(conn)
+    assert result == {"found": 1, "new_findings": 0, "resolved_findings": 0}
+
+    rows = _findings(conn)
+    assert {r["service"] for r in rows} == {"sonarr", "anilist"}  # A survives
+    sonarr_row = next(r for r in rows if r["service"] == "sonarr")
+    assert sonarr_row["first_seen_at"] == first_seen  # untouched, not refreshed either
+
+
+def test_sweep_prunes_once_the_failed_source_reports_again(conn, monkeypatch):
+    """The other half: once Sonarr genuinely reports (successfully) that
+    Show A is no longer untracked, pruning resumes for that source."""
+    _stub_preview(monkeypatch, [_ITEM_A, _ITEM_B])
+    untracked_sweep.sweep_untracked_shows(conn)
+
+    _stub_preview(monkeypatch, [_ITEM_B], reported_services={"anilist", "radarr"})
+    untracked_sweep.sweep_untracked_shows(conn)  # Sonarr down — A survives
+
+    _stub_preview(monkeypatch, [_ITEM_B])  # Sonarr back, genuinely nothing there now
+    result = untracked_sweep.sweep_untracked_shows(conn)
+    assert result == {"found": 1, "new_findings": 0, "resolved_findings": 1}
+    assert {r["service"] for r in _findings(conn)} == {"anilist"}
+
+
+def test_sweep_does_not_prune_anything_when_no_source_reported(conn, monkeypatch):
+    _stub_preview(monkeypatch, [_ITEM_A, _ITEM_B])
+    untracked_sweep.sweep_untracked_shows(conn)
+
+    _stub_preview(monkeypatch, [], reported_services=set())
+    result = untracked_sweep.sweep_untracked_shows(conn)
+    assert result == {"found": 0, "new_findings": 0, "resolved_findings": 0}
+    assert len(_findings(conn)) == 2  # both survive — nothing genuinely confirmed absent

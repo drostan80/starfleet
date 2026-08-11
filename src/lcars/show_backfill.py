@@ -262,28 +262,26 @@ def _sonarr_resolvable_anilist_ids(conn, tvdb_index: dict) -> set[int]:
     return ids
 
 
-def _find_untracked_anilist_entries(conn, tvdb_index: dict) -> list[dict]:
-    """See module docstring's own "AniList-sweep dedup" note for the
-    full reasoning. Read-only (one MediaListCollection fetch, plus
-    Sonarr catalog reads for the dedup set below, no writes) — safe to
-    call from both preview_backfill() and backfill_untracked_shows().
-
-    Not a perfect dedup — a real, accepted residual gap found live: an
-    AniList list entry whose title/id Fribb's own dataset simply has
-    no mapping for at all (verified live: three of the user's own real
-    Frieren-titled entries, alternate-cour splits Fribb doesn't carry
-    under that tvdb id) will still surface here as "untracked" even
-    though a same-franchise show already exists via the Sonarr path.
-    Closing that fully would need fuzzy title matching across sources
-    (B.7's own service_presence.py scope, not this one's) — documented
-    as a known limitation rather than silently promised away."""
+def _find_untracked_anilist_entries_by_source(conn, tvdb_index: dict) -> dict:
+    """Same computation as _find_untracked_anilist_entries() below, but
+    also reports whether AniList actually succeeded this pass — B.11e
+    follow-up, same reasoning
+    local_audit.find_untracked_shows_readonly_by_source()'s own
+    docstring gives: a bare `except AniListError: return []` is
+    indistinguishable from "genuinely nothing untracked" to a caller
+    that needs to decide whether an *absence* means "resolved" or
+    "couldn't check." No access token configured reports success
+    (`True`) — deliberate, stable, safe to prune against; a real
+    AniListError against a configured token reports `False`.
+    _find_untracked_anilist_entries() itself stays a thin wrapper
+    around this, unchanged for every existing caller."""
     cfg = get_current()
     if not cfg.anilist_access_token:
-        return []
+        return {"entries": [], "reported": True}
     try:
         my_list = anilist_client.fetch_my_anime_list(cfg.anilist_access_token)
     except anilist_client.AniListError:
-        return []
+        return {"entries": [], "reported": False}
 
     known_anilist_ids = local_audit.known_anilist_ids(conn)
     sonarr_resolvable_ids = _sonarr_resolvable_anilist_ids(conn, tvdb_index)
@@ -305,7 +303,63 @@ def _find_untracked_anilist_entries(conn, tvdb_index: dict) -> list[dict]:
                 "status": item["status"],
             }
         )
-    return entries
+    return {"entries": entries, "reported": True}
+
+
+def _find_untracked_anilist_entries(conn, tvdb_index: dict) -> list[dict]:
+    """See module docstring's own "AniList-sweep dedup" note for the
+    full reasoning. Read-only (one MediaListCollection fetch, plus
+    Sonarr catalog reads for the dedup set below, no writes) — safe to
+    call from both preview_backfill() and backfill_untracked_shows().
+
+    Not a perfect dedup — a real, accepted residual gap found live: an
+    AniList list entry whose title/id Fribb's own dataset simply has
+    no mapping for at all (verified live: three of the user's own real
+    Frieren-titled entries, alternate-cour splits Fribb doesn't carry
+    under that tvdb id) will still surface here as "untracked" even
+    though a same-franchise show already exists via the Sonarr path.
+    Closing that fully would need fuzzy title matching across sources
+    (B.7's own service_presence.py scope, not this one's) — documented
+    as a known limitation rather than silently promised away. Thin
+    wrapper around _find_untracked_anilist_entries_by_source() above
+    (B.11e follow-up) — every existing caller here only ever needed
+    the flat list."""
+    return _find_untracked_anilist_entries_by_source(conn, tvdb_index)["entries"]
+
+
+def preview_backfill_with_status(conn) -> dict:
+    """Same computation as preview_backfill() below, but also reports
+    which sources (sonarr/radarr/anilist) actually succeeded this
+    pass — B.11e follow-up, a real bug found in review:
+    untracked_sweep.py's own pruning needs this to tell "genuinely
+    nothing untracked from this source" apart from "couldn't reach it
+    this time" (see local_audit.find_untracked_shows_readonly_by_source's
+    own docstring and _find_untracked_anilist_entries_by_source's own,
+    above, for the full reasoning). preview_backfill() itself stays a
+    thin wrapper around this — every existing caller there only ever
+    needed the flat list."""
+    tvdb_index = _fribb_tvdb_index()
+    sonarr_radarr = local_audit.find_untracked_shows_readonly_by_source(conn)
+    anilist = _find_untracked_anilist_entries_by_source(conn, tvdb_index)
+    candidates = sonarr_radarr["entries"] + anilist["entries"]
+    reported_services = set(sonarr_radarr["reported"])
+    if anilist["reported"]:
+        reported_services.add("anilist")
+
+    preview = []
+    for entry in candidates:
+        classification = _classify(entry, tvdb_index)
+        preview.append(
+            {
+                "service": entry["service"],
+                "title": entry["title"],
+                "external_id": entry["external_id"],
+                "path": entry.get("path"),
+                "tracking_space": classification["tracking_space"],
+                "media_shape": classification["media_shape"],
+            }
+        )
+    return {"items": preview, "reported_services": reported_services}
 
 
 def preview_backfill(conn) -> list[dict]:
@@ -324,25 +378,12 @@ def preview_backfill(conn) -> list[dict]:
     exposed on `BackfillPreviewItem`'s own GraphQL shape (Ariadne only
     reads the fields a type actually declares, so this is a safe,
     additive superset) — `untracked_sweep.py`'s own sweep is the first
-    real consumer, persisting it onto `untracked_show_finding.path`."""
-    tvdb_index = _fribb_tvdb_index()
-    candidates = local_audit.find_untracked_shows_readonly(conn) + _find_untracked_anilist_entries(
-        conn, tvdb_index
-    )
-    preview = []
-    for entry in candidates:
-        classification = _classify(entry, tvdb_index)
-        preview.append(
-            {
-                "service": entry["service"],
-                "title": entry["title"],
-                "external_id": entry["external_id"],
-                "path": entry.get("path"),
-                "tracking_space": classification["tracking_space"],
-                "media_shape": classification["media_shape"],
-            }
-        )
-    return preview
+    real consumer, persisting it onto `untracked_show_finding.path`.
+
+    Thin wrapper around preview_backfill_with_status() above (B.11e
+    follow-up) — every existing caller here only ever needed the flat
+    list, never the per-source status."""
+    return preview_backfill_with_status(conn)["items"]
 
 
 def _anilist_call_estimate(conn, show_id: str) -> int:
