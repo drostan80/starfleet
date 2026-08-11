@@ -502,9 +502,25 @@ def sweep_show_merges(conn) -> dict:
     this pass)."""
     pairs = find_candidate_pairs(conn)
     merged = 0
+    # A real bug caught before this ever ran live: two losers can both
+    # fuzzy-match the same winner in one pass (plausible with sequels —
+    # "Black Lagoon" and "Black Lagoon: Roberta's Blood Trail" both
+    # matching a single AniList-linked "Black Lagoon" row). Without this
+    # guard, the second merge_shows() call would skip the already-taken
+    # tvdb link as a per-table conflict (logged, not an error) but still
+    # demote its own loser — an orphaned, untracked show still holding
+    # its own tvdb external_id, which find_existing_show would then
+    # silently resolve future addShow/backfill calls for that tvdb id
+    # onto. Only the first pair to claim a given winner in a pass gets
+    # merged; any later one targeting the same winner is left for the
+    # next sweep once it's no longer a candidate (or for manual review).
+    claimed_winner_ids: set[str] = set()
     for loser_id, winner_id, matched_on in pairs:
+        if winner_id in claimed_winner_ids:
+            continue
         try:
             merge_shows(conn, winner_id, loser_id, matched_on)
+            claimed_winner_ids.add(winner_id)
             merged += 1
         except Exception:
             # Broad, deliberately — same "an unattended sweep logs and

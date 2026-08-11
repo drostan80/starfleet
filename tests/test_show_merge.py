@@ -297,6 +297,52 @@ def test_sweep_show_merges_merges_every_real_candidate(conn):
     assert conn.execute("SELECT tracked FROM show WHERE id = 's-swpl01'").fetchone()["tracked"] == 0
 
 
+def test_sweep_show_merges_only_lets_one_loser_claim_a_given_winner(conn):
+    """Real bug caught by advisor review before this ever ran live: two
+    losers can both fuzzy-match the same winner in one pass (plausible
+    with sequels — a show and its own sequel both matching one
+    AniList-linked entry). Without the claimed-winner guard, the second
+    merge_shows() call would demote its own loser while silently
+    failing to move its tvdb link (already taken), leaving an orphaned
+    untracked show still holding that external id."""
+    _show(conn, "s-swpw02", "Shared Winner", tracking_space="anime")
+    _external_id(conn, "s-swpw02", "anilist", "999")
+    _show(conn, "s-swpl02", "Shared Winner", tracking_space="tv")
+    _external_id(conn, "s-swpl02", "tvdb", "111")
+    _show(conn, "s-swpl03", "Shared Winner", tracking_space="tv")
+    _external_id(conn, "s-swpl03", "tvdb", "222")
+    conn.commit()
+
+    result = show_merge.sweep_show_merges(conn)
+    assert result == {"candidates_found": 2, "merged": 1}
+
+    winner_services = {
+        r["service"]
+        for r in conn.execute(
+            "SELECT service FROM show_external_id WHERE show_id = 's-swpw02'"
+        ).fetchall()
+    }
+    assert winner_services == {"anilist", "tvdb"}  # only one tvdb link, not two
+
+    losers_tracked = {
+        r["id"]: r["tracked"]
+        for r in conn.execute(
+            "SELECT id, tracked FROM show WHERE id IN ('s-swpl02', 's-swpl03')"
+        ).fetchall()
+    }
+    # exactly one loser merged (demoted); the other was left alone entirely —
+    # still tracked, still holding its own tvdb link, not silently orphaned
+    assert sorted(losers_tracked.values()) == [0, 1]
+    untouched_loser_id = next(sid for sid, tracked in losers_tracked.items() if tracked == 1)
+    untouched_loser_services = {
+        r["service"]
+        for r in conn.execute(
+            "SELECT service FROM show_external_id WHERE show_id = ?", (untouched_loser_id,)
+        ).fetchall()
+    }
+    assert untouched_loser_services == {"tvdb"}
+
+
 def test_sweep_show_merges_isolates_one_pairs_failure(conn, monkeypatch):
     _show(conn, "s-swpl02", "Sweep Show Two", tracking_space="tv")
     _external_id(conn, "s-swpl02", "tvdb", "111")
