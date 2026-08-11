@@ -3401,11 +3401,110 @@ background scheduler.
         the backfill re-run clean against the fixed image — same
         "wipe and re-run rather than surgically merge" reasoning as
         last night, now applied to the real deployment.
-  - [ ] **B.11f — calendar core render path**: switch from local
-    Sonarr/AniList computation to LCARS reads (via B.11c's
-    `episodesInRange`) for tracking/air-date/availability state, per
-    the confirmed **Replacing** scope above. Depends on B.11c and a
-    completed B.11d backfill run.
+  - [x] **B.11f — calendar core render path** (`~/repos/data`,
+    2026-08-11): switched from local Sonarr/AniList computation to
+    LCARS reads (`episodesInRange`) for tracking/air-date/availability
+    state, per the confirmed **Replacing** scope above.
+    - **Reconnaissance before writing any code**: enumerated exactly
+      what `_refresh_visible_rows` (and the ~40 other call sites
+      sharing `self._series_by_id`/`_is_anime`/`_resolve_lcars_show_id`/
+      `_resolve_anilist_id`/`_track_cell`) actually need, against
+      `schema.graphql`'s real `Episode`/`Show` types, and verified
+      three things live against the deployed instance rather than
+      assuming: `episodesInRange` performance (66 episodes/45ms for
+      the current week, 2041 episodes/67ms for a full year — no
+      concern), `Show.externalIds` can return the `tvdb` id nested in
+      the same query, and tvdb-link coverage for Sonarr-managed shows
+      specifically (1369/1644 tracked shows have no tvdb link overall,
+      but confirmed via `servicePresence` that 100% of those are
+      AniList-sweep-only entries with zero Sonarr presence — the
+      correlation this step actually needs, Sonarr series → LCARS
+      show, has ~0 real gaps).
+    - **Episode titles**: `episode` has no title column at all
+      (confirmed deliberate, SCOPE.md's B.8b note) — asked the user
+      directly rather than guessing between dropping the Title column,
+      keeping a local Sonarr-sourced lookup, or adding the column now.
+      User chose keeping the local Sonarr lookup for now, and asked
+      whether a DB column is a possible future add-on — confirmed yes
+      (a nullable `title` on `episode`, populated during Sonarr
+      reconciliation, is straightforward later work), **flagged here
+      as a real deferred follow-up, not yet built**.
+    - **Design, confirmed against real code before writing the
+      rewrite**: `self._series_by_id`/`self._episodes` stay
+      genuinely Sonarr-sourced and keep their real identity
+      (`seriesId`, `episodeFileId`) — confirmed via
+      `_resolve_episode_path` (playback file resolution) that ~40
+      other call sites need that real Sonarr identity, which LCARS has
+      no equivalent of. Only the *values* `_refresh_visible_rows`
+      reads (air date, availability, tracking status) now come from
+      LCARS, patched onto the existing dicts in place — same
+      established pattern `_patch_air_dates` (B.11's own AniList
+      air-date correction) already uses, so `_availability_style` and
+      the marquee cell methods pick this up for free with no changes
+      of their own.
+    - **Built**: `LcarsClient.episodes_in_range()` — a real
+      cursor-paginated loop (not one huge `first`), requesting
+      `show.externalIds` nested in the same query. `DataApp.
+      _patch_from_lcars(start, end)` — correlates each LCARS episode
+      back to a Sonarr one via `(tvdb_id, season, episode_number)`
+      (confirmed `Episode.season` is documented as "the raw
+      Sonarr-numbered season" — no numbering translation needed),
+      patches `hasFile`/`airDateUtc` in place, unions (not replaces)
+      `self._downloading_ids` from `availableViaSonarr`'s
+      `DOWNLOADING` state (replacing it outright would race against
+      `_check_download_status`'s own library-wide Sonarr-queue-based
+      rebuild — see its own docstring), and patches
+      `series["lcarsStatus"]` for `_is_hidden_from_calendar`'s use.
+      `DataApp._trigger_lcars_window_refresh()` — backgrounds the
+      fetch (Textual's `run_worker`, `exclusive=True`) from every
+      window-changing action (step_back/forward, set_mode,
+      jump_to_today, the initial load, and `_check_download_status`'s
+      own periodic tick, since its Sonarr refetch hands back brand new
+      dict objects that need re-patching too) — `_refresh_visible_rows`
+      itself stays synchronous throughout, reading only from whatever
+      was already patched.
+    - **`_is_hidden_from_calendar` rewritten** to read a single source
+      for both anime and non-anime rows (`series["lcarsStatus"]`,
+      correlated via tvdb id) instead of the old anime-only
+      AniList-cache branch — confirmed via `_move_episode_to`'s own
+      docstring that LCARS already receives every status push
+      regardless of anime-ness (§6.8), so there's no reason left to
+      ask AniList directly for this. Pending-queue overlay
+      (`_pending_lcars_change`) still checked first, for both
+      branches, since that's the same queue every status push already
+      goes through. Absent `lcarsStatus` (not yet correlated, or a
+      genuinely unlinked show) fails open — never hidden — so nothing
+      flickers hidden before the first real answer lands.
+      `_track_cell`/`_anilist_cell`/`_lcars_cell` were read and left
+      **unchanged** — `_anilist_cell` renders AniList's own per-episode
+      watched-progress numbers, which `show.status` alone can't
+      reproduce; not this step's scope.
+    - **Verified**: 513 tests passing (was 502; 11 new — `episodes_in_
+      range`'s own pagination/empty-window/window-variables coverage in
+      `test_lcars_client.py`, plus `test_app_lcars_calendar_patch.py`'s
+      8 new tests for the hasFile/airDate patch, the DOWNLOADING state,
+      the no-tvdb-match fallback, the union-not-replace downloading-ids
+      behavior, the window-refetch trigger, and the local-calendar-day
+      to real-UTC-instant conversion specifically — this last one
+      matters because `calendar_nav.CalendarState.date_range()` returns
+      plain local-calendar dates, and local midnight is only UTC
+      midnight for a user actually sitting in UTC), plus 5 existing
+      tests updated (they asserted the old AniList-direct hide
+      behavior, now need a real LCARS fixture reporting the status).
+      `ruff check`/`format --check` clean on every file this step
+      touched (one pre-existing, unrelated formatting gap in
+      `test_app_list_status.py` left alone — not this diff's to fix).
+      Clean-install sanity check (fresh venv, real `pip install -e .`)
+      confirmed the module imports cleanly and the new methods exist.
+    - **Not yet done**: a real end-to-end run of Data itself against
+      the deployed LCARS instance + the user's real Sonarr library —
+      Data runs on the user's own local machine by design (never on
+      the server), so this is the user's own first live test to run,
+      not something simulated from here. LCARS's own side of this was
+      verified for real multiple times above (schema, performance,
+      tvdb coverage, backlog scope); the actual Data/LCARS wiring
+      itself is unit-tested against realistic fixtures but not yet
+      exercised end-to-end.
   - [ ] **B.11g — B.9's two deferred Data-side pieces**: the
     calendar-native counter line under a show's next-episode entry
     (backed by `Query.backlog` as-is — asked the user directly
