@@ -3550,6 +3550,23 @@ background scheduler.
       already exists LCARS-side and is the eventual fix (patch the
       resolved path directly from LCARS instead of re-deriving it from
       Sonarr's own `episodeFileId`), not built this step.
+    - **Second same-day follow-up — the other three
+      `self._episodes`-replacing/re-patching sites**: the write-ordering
+      fix above only covered the initial Sonarr load and
+      `_check_download_status`'s own periodic tick. Two more sites
+      needed the same `_trigger_lcars_window_refresh()` call and didn't
+      have it: `_bring_worker` (the manual `b` refresh — hands back
+      brand new dict objects, same shape as `_check_download_status`'s
+      own refetch) and `action_reauth_anilist` (`R` — mutates the
+      existing dicts in place via `_load_anilist_data()`'s own
+      `_patch_air_dates()`, same ordering concern as the initial-load
+      fix). A third, different shape: `_trigger_lcars_window_refresh()`
+      itself no-ops while backlog view is showing, so a periodic tick
+      firing during that time left the calendar's own window stale for
+      whenever the user came back to it — `action_set_backlog_view`
+      (`B`) now re-triggers on every toggle. Two new regression tests
+      reproduce both shapes directly. 516 tests passing (was 514),
+      `ruff check`/`format --check` clean.
   - [ ] **B.11g — B.9's two deferred Data-side pieces**: the
     calendar-native counter line under a show's next-episode entry
     (backed by `Query.backlog` as-is — asked the user directly
