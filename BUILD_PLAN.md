@@ -3496,15 +3496,60 @@ background scheduler.
       `test_app_list_status.py` left alone — not this diff's to fix).
       Clean-install sanity check (fresh venv, real `pip install -e .`)
       confirmed the module imports cleanly and the new methods exist.
+    - **Follow-up caught before calling this done (2026-08-11, same
+      day)**: `_patch_from_lcars` and the pre-existing `_patch_air_dates`
+      (AniList's own airingSchedule correction, built 2026-07-09) both
+      write `self._episodes["airDateUtc"]`. Checked live rather than
+      assumed which should win: queried the deployed instance's real
+      `airDateSource`/`airDateRawSonarr` fields and confirmed LCARS is
+      *already* doing this same correction server-side (31/131 real
+      episodes that week carried `airDateSource: ANILIST`, genuinely
+      different from `airDateRawSonarr`) — so LCARS winning
+      deterministically is correct, per B.11's own "Replacing" scope,
+      not a coincidence to leave to whichever async call happens to
+      finish first. The original ordering raced on the initial Sonarr
+      load (`_trigger_lcars_window_refresh()` dispatched *before*
+      `_load_anilist_data()`'s own `await`, so the date could visibly
+      flip moments after launch depending on which round-trip won) —
+      `_check_download_status`'s own periodic-tick ordering was already
+      correct by accident. **Fixed**: reordered so `_load_anilist_data()`
+      is awaited before the LCARS fetch is triggered, everywhere,
+      matching the tick path. New regression test
+      (`test_lcars_air_date_wins_over_anilists_own_correction`) uses
+      three genuinely distinct dates (Sonarr raw, AniList's correction,
+      LCARS's correction) so a wrong winner is unambiguous. 514 tests
+      passing (was 513), `ruff check`/`format --check` clean.
+    - **Correlation verified against real paired data, not just
+      fixtures (2026-08-11)**: `Episode.season`/`.episode` being
+      "raw Sonarr-numbered" was confirmed by the schema comment but
+      never checked against a live show with `absoluteNumber`/
+      `EpisodeNumberingMapping` in play, where anime numbering can
+      genuinely diverge — a silent zero-match would fall back to
+      Sonarr's own values with no error anywhere, the failure mode most
+      likely to make the user's first live test look like nothing
+      happened. Checked directly: pulled 9 real (series, episode) pairs
+      with upcoming air dates from the real Sonarr library and
+      cross-referenced them against the same window's real
+      `episodesInRange` result by `(tvdb_id, season, episode_number)` —
+      9/9 matched.
     - **Not yet done**: a real end-to-end run of Data itself against
       the deployed LCARS instance + the user's real Sonarr library —
       Data runs on the user's own local machine by design (never on
       the server), so this is the user's own first live test to run,
       not something simulated from here. LCARS's own side of this was
       verified for real multiple times above (schema, performance,
-      tvdb coverage, backlog scope); the actual Data/LCARS wiring
-      itself is unit-tested against realistic fixtures but not yet
-      exercised end-to-end.
+      tvdb coverage, backlog scope, real correlation, air-date
+      ordering); the actual Data/LCARS wiring itself is unit-tested
+      against realistic fixtures but not yet exercised end-to-end.
+      Also flagged, not yet built: `hasFile` now comes from LCARS's own
+      availability poll while `episodeFileId` (used by
+      `_resolve_episode_path` for playback) still comes from Data's own
+      Sonarr fetch — if LCARS polled more recently than Data's own last
+      Sonarr refresh, a row could render "Available" while playback
+      still fails to resolve a file path. `Episode.filePathSonarr`
+      already exists LCARS-side and is the eventual fix (patch the
+      resolved path directly from LCARS instead of re-deriving it from
+      Sonarr's own `episodeFileId`), not built this step.
   - [ ] **B.11g — B.9's two deferred Data-side pieces**: the
     calendar-native counter line under a show's next-episode entry
     (backed by `Query.backlog` as-is — asked the user directly
