@@ -3598,6 +3598,57 @@ background scheduler.
       still showing `availableCheckedAt: null` afterward are ones
       genuinely not downloaded on either side, correctly agreeing, not
       a residual bug).
+    - **User's next report, same day: "dropped shows still appear"**
+      (Tomb Raider King, Chainsmoker Cat). Traced end to end rather
+      than guessed. Not a B.11f regression — confirmed `_is_anime()`
+      already returned False for these pre-B.11f too (Sonarr tags them
+      `Animation`, not `Anime`), so the old non-anime branch of
+      `_is_hidden_from_calendar` only ever checked the local pending
+      queue, nothing else; they were never reliably hidden before
+      today either. Real root cause, traced live: LCARS's own anime
+      classification (via a real Fribb tvdb->anilist resolution,
+      deliberately not Sonarr's genre tags — `show_backfill.py`'s own
+      2026-08-10 note explains why genre tags are unreliable) had no
+      Fribb mapping for these specific shows, so they were never
+      linked to AniList in LCARS at all. **Two further real bugs found
+      investigating the fix path** (`~/repos/data` commit `00ac85c`):
+      (1) `_resolve_lcars_show_id()` only ever knew a show's LCARS id
+      for a show Data itself had added — silently None for all ~1644
+      backfilled shows, breaking every row-scoped LCARS write for
+      them, not just this hide-filter; fixed by populating that lookup
+      from `_patch_from_lcars`'s own existing correlation loop. (2)
+      pressing `M` (link to AniList) to manually fix a show like this
+      wrote the AniList side but never told LCARS —
+      `link_external_id()` had been sitting unused in `lcars_client.py`
+      since A.17; fixed, wired into `_link_to_anilist_interactive`.
+      522 tests passing (was 516; 6 new), `ruff check`/`format --check`
+      clean.
+    - **A third show, "Mebius Dust," is a different problem —
+      measured, not fixed.** Two separate LCARS rows for the same real
+      show: one Sonarr-sourced (`trackingSpace: TV`, tvdb-linked only),
+      one AniList-sweep-sourced (`trackingSpace: ANIME`, anilist+mal-
+      linked, `status: DROPPED`). This is the same show B.11d's own
+      "Mebius Dust anomaly" duplicate-creation bug produced originally
+      — the fix at the time (`find_existing_show`/`_promote_stub`, the
+      wipe-and-clean-backfill re-run) closed the bug that *creates*
+      same-service duplicates, but this pair shares no external id at
+      all (one has tvdb, the other has anilist+mal), so it was never
+      reachable by that fix or by the `GROUP BY service, external_id`
+      query that confirmed "zero duplicates" after the re-run —
+      `show_backfill.py`'s own docstring already predicted exactly
+      this residual gap needs fuzzy title matching (B.7 scope,
+      unbuilt) to close for real. Measured the actual scale live before
+      proposing anything: 102 tracked shows with a `tvdb` link and no
+      `anilist` link, 1172 tracked ANIME-space shows with `anilist` and
+      no `tvdb` link — cross-referenced by exact normalized title,
+      **2 real cross-service duplicate pairs** ("Black Lagoon" and
+      "Mebius Dust"; fuzzy/near-title matching would likely surface a
+      few more, but this is a real floor, not a "hundreds" scale
+      problem). Small enough that a real fuzzy-matching mechanism is
+      probably overbuilt for now — **asked the user how they want to
+      handle it** (manual merge/link vs. build B.7's fuzzy-match tool
+      now vs. something else); not started, no existing decision in
+      the docs to apply.
   - [ ] **B.11g — B.9's two deferred Data-side pieces**: the
     calendar-native counter line under a show's next-episode entry
     (backed by `Query.backlog` as-is — asked the user directly
