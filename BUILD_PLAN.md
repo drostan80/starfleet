@@ -3567,6 +3567,37 @@ background scheduler.
       (`B`) now re-triggers on every toggle. Two new regression tests
       reproduce both shapes directly. 516 tests passing (was 514),
       `ruff check`/`format --check` clean.
+    - **User's own first live test surfaced a real bug the same day**:
+      "files that I know are available (yesterday shows for example)
+      are shown as missing." Checked live rather than guessed: pulled
+      the last 3 days of episodes from both real Sonarr and real LCARS
+      and found 20/36 with `hasFile: true` in Sonarr but
+      `availableViaSonarr: UNAVAILABLE` in LCARS, every one with
+      `availableCheckedAt: null` — never checked at all, not checked
+      and wrong. Root cause: `availability.py`'s own poll (B.3) only
+      walks Sonarr/Radarr history *forward* from each service's
+      first-ever checkpoint (seeded to "now" on the very first poll,
+      deliberately, so it never blocks LCARS's one request thread on
+      an unscheduled full-history walk) — everything downloaded before
+      the deployed instance's first poll, i.e. everything from B.11d's
+      backfill, was simply never in scope. `ops backfill-availability`
+      is the documented, correct one-time fix for exactly this — but
+      running it against the real ~275-series library timed out after
+      exactly 10 seconds. **Second real bug, same investigation**: the
+      command's own docstring/print statement already promised
+      "seconds to minutes on a large library," but it constructed
+      `LcarsClient` with no timeout override, defaulting to the
+      client's own 10s — `_cmd_backfill_shows` had already learned
+      this exact lesson (`timeout=3600.0`) but the fix was never
+      carried over; this command had simply never been run against a
+      real, sizeable library before this first live test. Fixed
+      (`~/repos/starfleet` commit `3bc2e0c`, 606 tests passing, 1 new),
+      released as `v0.1.2`, redeployed, `ops backfill-availability`
+      re-run for real: `5301 episode(s), 168 show(s) updated`. Verified
+      the original 20 mismatches directly — 0 remaining (the episodes
+      still showing `availableCheckedAt: null` afterward are ones
+      genuinely not downloaded on either side, correctly agreeing, not
+      a residual bug).
   - [ ] **B.11g — B.9's two deferred Data-side pieces**: the
     calendar-native counter line under a show's next-episode entry
     (backed by `Query.backlog` as-is — asked the user directly
