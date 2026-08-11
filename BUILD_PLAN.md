@@ -3674,7 +3674,7 @@ background scheduler.
     needed) and its mark-watched-clears-exactly-one-oldest-episode
     interaction.
 - [x] **B.14 — Cross-service show-duplicate merge** (2026-08-11,
-  commit `32838c1`): the
+  commit `25000de`): the
   real, scoped mechanism B.11f's own investigation surfaced and
   deferred (see that entry's own "Mebius Dust" note above for the full
   discovery/decision narrative — trigger model and merge direction
