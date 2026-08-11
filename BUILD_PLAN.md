@@ -3906,3 +3906,26 @@ changes first:
   once Phase B's push-only sync (B.4–B.10) is proven stable in real
   use — add a numbered phase to this document when that design work
   actually happens, don't build it opportunistically before then.
+  - **Scope clarified 2026-08-11, still explicitly not designed or
+    scheduled yet — noted for whenever this phase actually gets
+    picked up**: this needs to be genuinely bidirectional, not just a
+    read-back of status/score. The concrete case that surfaced it: a
+    show marked watched directly on AniList while away from local
+    access (no LCARS/Data reachable) must still end up watched in
+    LCARS once reconnected — today nothing does this; LCARS only ever
+    reads AniList once, at show creation (`show_backfill.py`'s
+    `_seed_status_from_anilist`), never again on any recurring cadence.
+    Before this can be designed for real: (1) a review of the current
+    DB schema as it stands once Phase B actually finishes, not the
+    schema as it was when this bullet was first written; (2) a rethink
+    of what data is captured, when, and what actually needs syncing
+    and how — this was under-addressed so far, since the build-out so
+    far mostly optimized for one-time population, not the ongoing
+    day-to-day case. Only once both of those are done should LCARS
+    mutations/schema changes and Ops wiring for this be discussed —
+    not before. One data point for that future design, not a decision
+    made now: AniList's per-entry `progress` count has no per-episode
+    timestamp attached, so if nothing better turns up when this is
+    actually designed, the simplest fallback is to timestamp a
+    reconciled watch as of when LCARS received/detected it, not a
+    fabricated real watch time.
