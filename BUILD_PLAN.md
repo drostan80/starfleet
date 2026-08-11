@@ -3283,20 +3283,29 @@ background scheduler.
         sanity check (fresh venv) confirmed all three new `_by_source`/
         `_with_status` functions import cleanly and the schema still
         builds correctly.
-    - **Also flagged, not yet verified**: the hourly-tick placement
-      above was reasoned about ("a handful of global calls, not
-      per-show") but never actually timed. One sweep runs Sonarr
-      `all_series()` + Radarr `all_movies()` + `fetch_my_anime_list`
-      (2 real AniList calls against the user's own real ~1420-entry/
-      11-list account) + `fribb.load_dataset()` + a Fribb resolution
-      per season across the *entire* Sonarr catalog. Whether
-      `fribb.load_dataset()` hits the network or reads a local/cached
-      file matters a lot here — if it's a real download, that's now
-      happening hourly and blocks LCARS's single request-handling
-      thread each time, the exact class of cost B.7's own catalog-
-      presence sweep was deliberately placed on the *monthly* tier to
-      avoid. Needs a real timed run before this cadence is trusted, not
-      just the reasoning above.
+    - **Hourly-tick placement checked the next day (2026-08-11),
+      before deployment**: confirmed cheap for real, not just reasoned
+      about. `fribb.load_dataset()` (checked directly): a 7-day
+      on-disk cache (`DATASET_MAX_AGE_SECONDS`), a real download only
+      happens roughly weekly, not every hourly tick — most sweeps are
+      a local disk read. The other previously-unverified cost, a
+      Fribb resolution per season across the *entire* Sonarr catalog
+      (`_sonarr_resolvable_anilist_ids`), timed synthetically at
+      realistic scale (1600 shows, up to 3 seasons each, matching the
+      real backfilled library's rough shape): **3.4ms** for the index
+      build plus 4,800 season lookups combined — negligible, nowhere
+      near B.7's own real N×M catalog-service-presence cost (the
+      reason *that* sweep was placed on the monthly tier instead).
+      `local_audit.all_sonarr_series_with_seasons()` and
+      `known_anilist_ids()` both checked directly too — pure in-memory
+      transforms of the single already-fetched `all_series()` response
+      and two plain `SELECT`s respectively, no hidden per-show DB
+      query anywhere in the chain. The real, irreducible cost per
+      sweep is exactly the 4 lightweight global HTTP calls the
+      original reasoning named (Sonarr, Radarr, 2× AniList) — hourly
+      confirmed appropriate, same tier every other cheap global sweep
+      (`run_animeschedule_once`/`run_local_presence_once`) already
+      shares.
   - [ ] **B.11f — calendar core render path**: switch from local
     Sonarr/AniList computation to LCARS reads (via B.11c's
     `episodesInRange`) for tracking/air-date/availability state, per
