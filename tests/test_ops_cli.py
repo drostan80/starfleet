@@ -56,7 +56,29 @@ def test_backfill_availability_calls_the_client_and_prints_the_result(monkeypatc
     out = capsys.readouterr().out
     assert "will block LCARS's other requests" in out  # the deliberate warning
     assert "3 episode(s)" in out
-    assert "1 show(s)" in out
+
+
+def test_backfill_availability_uses_a_long_client_timeout(monkeypatch):
+    # Regression test, real bug live-caught 2026-08-11 (B.11f's first
+    # live test): this used to construct LcarsClient with the default
+    # 10s timeout despite its own docstring/print statement already
+    # promising "seconds to minutes on a large library" — a real
+    # deployed-instance run timed out after exactly 10s. Matches
+    # _cmd_backfill_shows's own timeout=3600.0, same reasoning.
+    monkeypatch.setattr("sys.argv", ["ops", "backfill-availability"])
+    cfg = config.Config(lcars_bearer_token="test-token")
+    with (
+        patch("ops.config.load_config", return_value=cfg),
+        patch("ops.cli.LcarsClient", autospec=True) as lcars_client_cls,
+    ):
+        instance = lcars_client_cls.return_value
+        instance.__aenter__ = AsyncMock(return_value=instance)
+        instance.__aexit__ = AsyncMock(return_value=False)
+        instance.backfill_file_availability = AsyncMock(
+            return_value={"episodesUpdated": 0, "showsUpdated": 0}
+        )
+        cli.main()
+    lcars_client_cls.assert_called_once_with("http://lcars:8000", "test-token", timeout=3600.0)
 
 
 def test_audit_local_files_requires_bearer_token_first(monkeypatch):

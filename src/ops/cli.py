@@ -36,7 +36,20 @@ def _cmd_backfill_availability(args: argparse.Namespace) -> None:
     only by hand, at a moment of the operator's own choosing, because
     it blocks LCARS's single request-handling thread for real
     seconds-to-minutes while it walks each configured service's entire
-    history (SCOPE.md §5.2's "Resolved 2026-08-09 (B.3)" note)."""
+    history (SCOPE.md §5.2's "Resolved 2026-08-09 (B.3)" note).
+
+    Real bug, live-caught 2026-08-11 (B.11f's first live test surfaced
+    it — every episode downloaded before the deployed instance's first
+    ever poll had never been checked at all, `availableCheckedAt: null`
+    for 20/36 real episodes): this used the client's default 10s
+    timeout despite the docstring/print statement right above both
+    already promising "seconds to minutes on a large library" — this
+    command had never actually been run against a real, sizeable
+    library before that first live run, so the mismatch went
+    unnoticed. `_cmd_backfill_shows` above already learned this same
+    lesson (`timeout=3600.0`, "the long client timeout below rather
+    than the default 10s every other command here uses") — this
+    matches it rather than being a new decision."""
     logging.basicConfig(level=logging.INFO)
     cfg = config.load_config()
     _require_bearer_token(cfg)
@@ -47,7 +60,7 @@ def _cmd_backfill_availability(args: argparse.Namespace) -> None:
     )
 
     async def _main() -> None:
-        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token) as client:
+        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token, timeout=3600.0) as client:
             result = await client.backfill_file_availability()
             print(
                 f"Done: {result['episodesUpdated']} episode(s), "
