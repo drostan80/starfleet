@@ -3664,6 +3664,25 @@ background scheduler.
       lists), and asked whether to hand-fix the 2 known pairs or build
       the real mechanism as a numbered step. **User's decision: "Make
       this a real new step now (e.g. B.14)"** — see B.14 below.
+    - **Tomb Raider King again, next day (2026-08-11): a real bug in
+      the `00ac85c` fix itself** (`~/repos/data` commit `744c6ff`).
+      User re-tried `M` on the same show and it looked identically
+      successful both times — but the LCARS side genuinely never
+      updated either time, confirmed live (`search("Tomb Raider
+      King")` still showed only a `tvdb` link, no `anilist`, after
+      both attempts). Root cause: `_bridge_anilist_link_to_lcars`'s
+      no-op branch (`show_id is None`) had zero user-facing feedback —
+      pressing `M` wrote a real second `SaveMediaListEntry` to AniList
+      itself, believing the first had failed outright, when in fact
+      only the LCARS half had silently no-op'd both times. Fixed two
+      ways: a new `LcarsClient.search(title)` (wrapping LCARS's own
+      `Query.search`) as a fallback show-id resolution when
+      `_lcars_show_id_by_tvdb` doesn't have the tvdb id yet — matched
+      against the returned show's own tvdb external id before
+      trusting it, backfilling the cache so future calls skip the
+      fallback — and every remaining failure path now prints
+      something instead of staying silent. 5 tests
+      updated/added, 525 passing, `ruff check`/`format --check` clean.
   - [ ] **B.11g — B.9's two deferred Data-side pieces**: the
     calendar-native counter line under a show's next-episode entry
     (backed by `Query.backlog` as-is — asked the user directly
