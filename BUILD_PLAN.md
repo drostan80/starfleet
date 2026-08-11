@@ -3683,6 +3683,32 @@ background scheduler.
       fallback — and every remaining failure path now prints
       something instead of staying silent. 5 tests
       updated/added, 525 passing, `ruff check`/`format --check` clean.
+    - **Same day, same root cause, a second real report: "cannot mark
+      as watch on data"** (`~/repos/data` commit `8b9abab`). Checked
+      the other half first, live, before touching anything: the
+      automatic mark-watched-after-full-episode-playback path (a
+      separate, already-working code path) really did reach LCARS for
+      real — Ghost in the Shell S01E06 showed `state: WATCHED` with a
+      real `watch_event` row, confirmed via a direct GraphQL query.
+      Isolated the bug to the manual `w` binding specifically.
+      `_queue_lcars_watched` was the identical silent-no-op shape as
+      `_bridge_anilist_link_to_lcars`'s own bug above — for a non-anime
+      show (LCARS is the *only* push there, no AniList note to fall
+      back on), a show not yet in `_lcars_show_id_by_tvdb` made
+      pressing `w` do, visibly, nothing at all. Fixed by extracting the
+      AniList-bridge fix's live-search fallback into a shared
+      `_resolve_lcars_show_id_live()` and wiring it in here too,
+      converting `action_mark_watched` to `async def`. **A real
+      regression this fix's own first draft introduced, caught
+      immediately by this repo's own pre-existing tests**: an early
+      `self._lcars_client is None` guard broke queueing from a purely
+      disk-cached id with no client configured this session at all — a
+      legitimate, previously-working offline case (SCOPE.md §4's own
+      "queue locally, retry on flush" reliability note) — 3 tests
+      failed the instant it was added; removed. New regression test
+      pins the actual fix (a non-precached show still queues via the
+      live fallback). 526 tests passing (net +1, several rewritten),
+      `ruff check`/`format --check` clean.
   - [ ] **B.11g — B.9's two deferred Data-side pieces**: the
     calendar-native counter line under a show's next-episode entry
     (backed by `Query.backlog` as-is — asked the user directly
