@@ -1,13 +1,13 @@
 # Bugs
 
-- [x] trying to mark a show from yesterday that I watch today as watched and...nothing happen
-  — fixed: the non-anime path only pushes to LCARS, and `_queue_lcars_watched` silently
-  returned nothing whenever the show wasn't already in Data's tvdb->LCARS-id cache — same
-  root cause as the Tomb Raider King AniList-duplicate bug below, same day. Now falls back to
-  a live LCARS search (shared with that fix). Verified live: Ghost in the Shell S01E06's
-  automatic mark-watched (a separate, already-working path) really did reach LCARS
-  (`state: WATCHED`, real `watch_event` row), confirming the bug was specific to the manual
-  `w` binding. `~/repos/data` commit `8b9abab`.
+- [ ] trying to mark a show from yesterday that I watch today as watched and...nothing happen
+  — NOT actually confirmed fixed, wrongly marked done below. A real bug was found and fixed
+  (`_queue_lcars_watched` silently no-op'd for a non-cached show, `~/repos/data` commit
+  `8b9abab`) but that only fixes what gets queued, not what the calendar row *displays* — the
+  row reads `_pending_lcars_change` (a local queue), not LCARS's own state, so it still won't
+  show anything the user recognizes as "marked watched." Only verified via unit tests + one
+  unrelated DB query (Ghost in the Shell), never in the running app. Re-open until confirmed
+  live.
 
 - [x] somehow tomb raider king was added to anilist again — traced live: LCARS's own row for it
   still had zero anilist link either time, so `M`'s LCARS bridge silently no-op'd both times
