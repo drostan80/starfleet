@@ -436,6 +436,49 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             )
 
 
+def _existing_related_show(conn, anilist_id: str, mal_id) -> str | None:
+    """Checks `show_external_id` for either id — B.11d/B.11e follow-up,
+    a real bug found live in the second deployed backfill run: AniList
+    sometimes splits what MAL keeps as *one* entry into several
+    separate Media entries (real cases found: "Ao Haru Ride PAGE.13"/
+    "Ao Haru Ride: unwritten", Saint Seiya's own two-part split, a
+    SYNDUALITY short, all four Summer Pockets chapter entries — each a
+    genuinely distinct `anilist_id`, all sharing one `idMal`). Each one
+    independently passed the old anilist_id-only check below as "no
+    existing show", so each got its own stub — 4 real collision groups,
+    6 excess rows, confirmed live: `SELECT service, external_id,
+    COUNT(DISTINCT show_id) ... HAVING c > 1` came back non-empty for
+    `mal` even after the B.11e promotion fix, which only ever guarded
+    `shows.create_show()`'s own top-level entry point, not this
+    module's separate `_link_relation`/`_create_relation_stub` path.
+
+    Mirrors `shows.find_existing_show()`'s own multi-id check, not
+    imported directly — `shows.py` already imports this module, so the
+    reverse would be circular; kept as its own small local check
+    instead, same "metadata.py keeps its own copy" precedent this
+    module's `_EXTERNAL_ID_URL_TEMPLATES` already established (see
+    `shows.py`'s own module docstring). A live SELECT on the same
+    connection sees an uncommitted INSERT from earlier in the same
+    request (SQLite's own read-your-own-writes), so this self-heals
+    within one relation walk too — two edges on the same parent
+    show's own relations list resolve to one stub, not two, the same
+    write-time-not-snapshot shape the B.11e fix already established."""
+    row = conn.execute(
+        "SELECT show_id FROM show_external_id WHERE service = 'anilist' AND external_id = ?",
+        (anilist_id,),
+    ).fetchone()
+    if row is not None:
+        return row["show_id"]
+    if mal_id is not None:
+        row = conn.execute(
+            "SELECT show_id FROM show_external_id WHERE service = 'mal' AND external_id = ?",
+            (str(mal_id),),
+        ).fetchone()
+        if row is not None:
+            return row["show_id"]
+    return None
+
+
 def _link_relation(conn, show_id: str, related_media: dict) -> None:
     """§5.9 — `show_relation` is directed, written whenever a show's
     AniList data reports a relation, one row for this direction only;
@@ -452,13 +495,8 @@ def _link_relation(conn, show_id: str, related_media: dict) -> None:
     franchise membership, `franchise_member` stays a deliberate,
     separate action)."""
     related_anilist_id = str(related_media["id"])
-    existing_show = conn.execute(
-        "SELECT show_id FROM show_external_id WHERE service = 'anilist' AND external_id = ?",
-        (related_anilist_id,),
-    ).fetchone()
-    if existing_show is not None:
-        related_show_id = existing_show["show_id"]
-    else:
+    related_show_id = _existing_related_show(conn, related_anilist_id, related_media.get("idMal"))
+    if related_show_id is None:
         related_show_id = _create_relation_stub(conn, related_media, related_anilist_id)
 
     now = util.now_utc_iso()

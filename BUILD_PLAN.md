@@ -3306,6 +3306,101 @@ background scheduler.
       confirmed appropriate, same tier every other cheap global sweep
       (`run_animeschedule_once`/`run_local_presence_once`) already
       shares.
+    - **First real deployment (2026-08-11)**: `lcars`/`ops` stood up
+      for real, for the first time ever, as two services in a new
+      `starfleet.yml` compose file (`/home/tiny/stacks`, its own
+      explicit `name:` to avoid colliding with the existing Sonarr
+      stack's own default project namespace) joining `arr_net` — the
+      real host's own network, not a copy of anything from this dev
+      machine. `v0.1.0` tagged and pushed first, confirming the
+      previously-unexercised CI publish-on-tag path actually works
+      end to end (image built, pushed to `ghcr.io/drostan80/starfleet`,
+      pulled and run for real on the host) before touching the live
+      stack at all. Persistent state lives at `/opt/appdata/lcars`
+      (matches every other container's own convention here, rides the
+      existing daily `appdata-backup.timer` automatically — measured
+      the real DB size first, ~13MB at 1650-show/41k-episode scale,
+      trivial either way) — `db/` (the sqlite file), `config/`
+      (`lcars.ini`, including the fields `lcars anilist-login`/
+      `lcars mal-login`/the periodic MAL refresh write at runtime,
+      redone fresh against this deployment rather than copied), and
+      `cache/` (the Fribb dataset). `lcars.ini` used for most static
+      config too, not just Docker `secrets:` — a deliberate divergence
+      from the Dockerfile's own "prefer secrets:" comment, since the
+      config volume is required regardless (`anilist_access_token`/MAL
+      tokens have no secret-mount equivalent) and one less moving part
+      for a single-user homelab; `lcars_bearer_token` is a real
+      `secrets:` entry instead, the one value both containers need to
+      agree on. Brought `lcars` up alone first and verified it for
+      real (DB persisted correctly, auth working, Sonarr/Radarr
+      reachable via `arr_net` container names) before adding `ops` —
+      confirmed connected and running its first real hourly tick
+      immediately.
+      - **A real bug found bringing `lcars` up, fixed before `ops`
+        joined**: `LCARS_DATABASE_URL` only ever controls Alembic's own
+        migration step (`migrations/env.py`); the *running* `lcars
+        serve` process reads a completely separate env var,
+        `LCARS_DB_PATH` (a plain path, not a sqlalchemy URL,
+        `lcars/config.py`) — undocumented anywhere as needing both set
+        together. Missing it meant migrations ran correctly against
+        the mounted volume while the actual app fell back to its own
+        unmounted default (`sqlite3.OperationalError: unable to open
+        database file`). Fixed by setting both.
+      - **Real backfill run against the deployed instance**:
+        `previewShowBackfill` came back at exactly 1644 — matching
+        last night's dev-machine count precisely (Sonarr 275, Radarr
+        197, AniList 1172) — confirming the whole deployment (Sonarr/
+        Radarr/AniList connectivity, credentials, Fribb dataset) is
+        wired correctly before writing anything. User approved the
+        real run; same client-side `httpx.ReadTimeout` as last night
+        (server keeps processing regardless), finished at 2670 total
+        rows. `tracked = 1644` — an *exact* match to the preview, zero
+        duplicate `anilist_id`/`tvdb_id`/`tmdb_id`/`imdb_id` pairs
+        anywhere — this morning's promotion fix genuinely closed last
+        night's bug, verified for real against the first full run it
+        was ever exercised on.
+      - **A second, different real bug found in that same run's own
+        verification**: 4 `mal_id` collision groups, 6 excess rows, all
+        among the 1026 `tracked = 0` relation stubs (zero impact on any
+        tracked show). Root cause: AniList sometimes splits what MAL
+        keeps as one entry into several separate Media entries (real
+        cases found live: "Ao Haru Ride PAGE.13"/"Ao Haru Ride:
+        unwritten", a Saint Seiya two-part split, a SYNDUALITY short,
+        all four Summer Pockets chapter entries) — each one is a
+        genuinely distinct `anilist_id`, so each independently passed
+        `metadata._link_relation`'s own existing-show check, which
+        only ever looked at `anilist_id`, never `mal_id`. This morning's
+        promotion fix never touched this path at all — it only guards
+        `shows.create_show()`'s own top-level entry point;
+        `_link_relation`/`_create_relation_stub` is a separate route
+        into the same table, walked during every anime show's own
+        metadata fetch (A.21), not just during backfill. Fixed:
+        `metadata._existing_related_show()` (new) checks *both*
+        `anilist_id` and `mal_id` before deciding to create a new stub
+        — mirrors `shows.find_existing_show()`'s own multi-id shape,
+        kept as its own local copy rather than imported directly
+        (`shows.py` already imports `metadata`, so the reverse would be
+        circular — same "keep a separate copy" precedent
+        `_EXTERNAL_ID_URL_TEMPLATES` already established between these
+        two modules). Self-heals within a single relation walk too,
+        not just across runs — a live `SELECT` on the same connection
+        sees an uncommitted `INSERT` from earlier in the same request
+        (SQLite's own read-your-own-writes), so two edges on one
+        parent show's own relations list resolve to one stub now, not
+        two.
+      - **Verified**: 605 tests passing (was 604; 1 new,
+        `test_add_show_anilist_fetch_relations_sharing_one_mal_id_reuse_one_stub`,
+        reproducing the exact live collision shape — two relation
+        edges, distinct `anilist_id`, same `idMal`, asserts exactly one
+        stub row and one `show_relation` edge, not two), `ruff check .`
+        clean, clean-install sanity check confirmed
+        `metadata._existing_related_show` imports cleanly and the
+        schema still builds correctly.
+      - **Not yet done**: the deployed database (2670 rows, including
+        those 6 excess stub rows from before the fix) gets wiped and
+        the backfill re-run clean against the fixed image — same
+        "wipe and re-run rather than surgically merge" reasoning as
+        last night, now applied to the real deployment.
   - [ ] **B.11f — calendar core render path**: switch from local
     Sonarr/AniList computation to LCARS reads (via B.11c's
     `episodesInRange`) for tracking/air-date/availability state, per

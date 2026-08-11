@@ -609,6 +609,81 @@ async def test_add_show_rejects_a_duplicate_external_id_already_tracked(client):
     assert len(data["shows"]["edges"]) == 1  # the rejected attempt created nothing
 
 
+FAKE_ANILIST_MEDIA_WITH_MAL_COLLIDING_RELATIONS = {
+    **FAKE_ANILIST_MEDIA,
+    "relations": {
+        "edges": [
+            {
+                "node": {
+                    "id": 501,
+                    "idMal": 601,  # same MAL id as the edge below — real AniList shape,
+                    "format": "TV",  # e.g. Ao Haru Ride PAGE.13 / unwritten, both mal 24151
+                    "title": {"romaji": "Split Part A", "english": None, "native": None},
+                }
+            },
+            {
+                "node": {
+                    "id": 502,
+                    "idMal": 601,
+                    "format": "TV",
+                    "title": {"romaji": "Split Part B", "english": None, "native": None},
+                }
+            },
+        ]
+    },
+}
+
+
+async def test_add_show_anilist_fetch_relations_sharing_one_mal_id_reuse_one_stub(
+    client, monkeypatch
+):
+    """B.11d/B.11e follow-up, real bug found in the second deployed
+    backfill run: two AniList relation entries can be genuinely
+    distinct Media (different anilist_id) while AniList reports the
+    *same* idMal for both — the old anilist_id-only existing-show check
+    let each one create its own stub, producing two show rows sharing
+    one mal_id. The second edge must reuse the first edge's own stub
+    instead of creating a duplicate."""
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_media",
+        lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_MAL_COLLIDING_RELATIONS,
+    )
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+    show = await add_show(client, anilistId=111)
+
+    stub_data = await gql(
+        client,
+        """
+        query {
+          shows(first: 10) {
+            edges { node { displayTitle externalIds { edges { node { service externalId } } } } }
+          }
+        }
+        """,
+        headers=auth_headers(),
+    )
+    stubs = [
+        e["node"]
+        for e in stub_data["shows"]["edges"]
+        if e["node"]["displayTitle"] in ("Split Part A", "Split Part B")
+    ]
+    assert len(stubs) == 1  # not two — the second edge reused the first's own stub
+    links = {
+        e["node"]["service"]: e["node"]["externalId"] for e in stubs[0]["externalIds"]["edges"]
+    }
+    assert links["anilist"] == "501"  # the first edge's own id, created first
+    assert links["mal"] == "601"
+
+    related = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { relatedShows { edges { node { id } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert len(related["show"]["relatedShows"]["edges"]) == 1  # both edges point at one show
+
+
 async def test_add_show_anilist_fetch_no_media_found_leaves_show_bare(client, monkeypatch):
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: None)
     show = await add_show(client, anilistId=12345)
