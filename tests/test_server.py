@@ -5828,6 +5828,141 @@ async def test_episode_availability_fields_resolve_through_real_graphql(client, 
     assert data["episode"]["availableLocally"] is True
 
 
+# --- B.14 cross-service show-merge --------------------------------------
+
+POLL_SHOW_MERGES = """
+    mutation { pollShowMerges { candidatesFound merged } }
+"""
+
+SHOW_MERGES = """
+    query {
+      showMerges(first: 10) {
+        edges {
+          node {
+            id matchedOn manifest mergedAt reversedAt reversedByClient
+            winnerShow { id primaryTitle tracked }
+            loserShow { id primaryTitle tracked }
+          }
+        }
+      }
+    }
+"""
+
+
+async def test_poll_show_merges_wiring_is_a_clean_no_op_with_nothing_to_merge(client):
+    # Actual detection/merge logic is test_show_merge.py's job — this only
+    # locks in that the mutation is wired to show_merge.sweep_show_merges()
+    # with the right shape.
+    data = await gql(client, POLL_SHOW_MERGES, headers=auth_headers())
+    assert data["pollShowMerges"] == {"candidatesFound": 0, "merged": 0}
+
+    merges = await gql(client, SHOW_MERGES, headers=auth_headers())
+    assert merges["showMerges"]["edges"] == []
+
+
+async def test_poll_show_merges_and_show_merges_query_resolve_through_real_graphql(
+    client, migrated_db
+):
+    winner = await add_show(client, titleRomaji="Mebius Dust", trackingSpace="ANIME")
+    loser = await add_show(
+        client, titleRomaji="Mebius Dust", trackingSpace="TV", mediaShape="EPISODIC"
+    )
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'anilist', '108992', 'https://x', 'x')",
+        (winner["id"],),
+    )
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'tvdb', '111', 'https://x', 'x')",
+        (loser["id"],),
+    )
+    conn.commit()
+
+    poll_data = await gql(client, POLL_SHOW_MERGES, headers=auth_headers())
+    assert poll_data["pollShowMerges"] == {"candidatesFound": 1, "merged": 1}
+
+    merges = await gql(client, SHOW_MERGES, headers=auth_headers())
+    nodes = [e["node"] for e in merges["showMerges"]["edges"]]
+    assert len(nodes) == 1
+    node = nodes[0]
+    assert node["winnerShow"]["id"] == winner["id"]
+    assert node["winnerShow"]["tracked"] is True
+    assert node["loserShow"]["id"] == loser["id"]
+    assert node["loserShow"]["tracked"] is False
+    assert "Mebius Dust" in node["matchedOn"]
+    assert any("show_external_id" in line for line in node["manifest"])
+    assert node["mergedAt"] is not None
+    assert node["reversedAt"] is None
+    assert node["reversedByClient"] is None
+
+
+async def test_reverse_show_merge_requires_a_client_header(client, migrated_db):
+    winner = await add_show(client, titleRomaji="Reverse Me", trackingSpace="ANIME")
+    loser = await add_show(
+        client, titleRomaji="Reverse Me", trackingSpace="TV", mediaShape="EPISODIC"
+    )
+    from lcars import show_merge
+
+    merge_id = show_merge.merge_shows(db.get_connection(), winner["id"], loser["id"], "test")
+    resp = await client.post(
+        "/",
+        json={
+            "query": "mutation($id: ID!) { reverseShowMerge(id: $id) { id } }",
+            "variables": {"id": merge_id},
+        },
+        headers=auth_headers(client_name=None),
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert "errors" in body
+    assert "X-LCARS-Client" in body["errors"][0]["message"]
+
+
+async def test_reverse_show_merge_rejects_an_unknown_id(client):
+    resp = await client.post(
+        "/",
+        json={
+            "query": "mutation($id: ID!) { reverseShowMerge(id: $id) { id } }",
+            "variables": {"id": "y-ghost1"},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "no such show_merge" in body["errors"][0]["message"]
+
+
+async def test_reverse_show_merge_restores_the_loser_through_real_graphql(client, migrated_db):
+    winner = await add_show(client, titleRomaji="Restore Me", trackingSpace="ANIME")
+    loser = await add_show(
+        client, titleRomaji="Restore Me", trackingSpace="TV", mediaShape="EPISODIC"
+    )
+    from lcars import show_merge
+
+    merge_id = show_merge.merge_shows(db.get_connection(), winner["id"], loser["id"], "test")
+
+    data = await gql(
+        client,
+        "mutation($id: ID!) { reverseShowMerge(id: $id) { id reversedAt reversedByClient } }",
+        {"id": merge_id},
+        headers=auth_headers("data"),
+    )
+    result = data["reverseShowMerge"]
+    assert result["id"] == merge_id
+    assert result["reversedAt"] is not None
+    assert result["reversedByClient"] == "data"
+
+    show_data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { tracked } }",
+        {"id": loser["id"]},
+        headers=auth_headers(),
+    )
+    assert show_data["show"]["tracked"] is True
+
+
 async def test_show_availability_fields_resolve_through_real_graphql(client, migrated_db):
     show = await add_show(
         client, mediaShape="MOVIE", trackingSpace="TV", titleRomaji="Availability Movie"

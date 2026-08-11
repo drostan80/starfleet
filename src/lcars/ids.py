@@ -44,6 +44,7 @@ PREFIX_TABLES = {
     "v": "next_up_override",  # §5.9 addendum, 2026-08-08
     "z": "season",  # §5.5, A.4, 2026-08-08 — replaces show_id_mapping ("x")
     "u": "untracked_show_finding",  # B.11e, 2026-08-10
+    "y": "show_merge",  # B.14, 2026-08-11
 }
 
 MAX_ATTEMPTS = 10

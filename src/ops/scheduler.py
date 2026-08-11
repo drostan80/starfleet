@@ -9,7 +9,9 @@ the hourly tick — pure internal SQL, no external HTTP call at all),
 B.10 (proactive MAL refresh-token renewal, self-gating on its own
 7-day checkpoint so it too rides the hourly tick cheaply), B.11e
 (ongoing untracked-show sweep, also riding the hourly tick — a handful
-of global calls, not per-show).
+of global calls, not per-show), B.14 (cross-service show-duplicate
+merge sweep, riding the monthly tier alongside B.7's own catalog
+matching — same real N×M cost).
 
 Each `run_*_once()` is the real, testable unit — one full sweep,
 exercised directly by a test with no infinite loop or real sleep
@@ -105,16 +107,33 @@ async def run_catalog_presence_once(client: LcarsClient) -> int:
     return result["showsUpdated"]
 
 
+async def run_show_merge_once(client: LcarsClient) -> int:
+    """§5.0, B.14 — the cross-service show-duplicate merge sweep
+    (pollShowMerges): no per-item loop, the mutation itself covers the
+    whole candidate pool in one call, same shape run_catalog_presence_
+    once above already uses. Real N×M cost (fuzzy title match every
+    tvdb-only show against every anilist-only anime show), confirmed
+    with the user — rides this same monthly tier rather than the hourly
+    one, not a fourth interval. Returns the merged count (not
+    candidatesFound — a fresh recomputation every pass isn't a
+    *change*, same "count real changes" convention every other tier
+    already follows)."""
+    result = await client.poll_show_merges()
+    return result["merged"]
+
+
 async def run_monthly_once(client: LcarsClient) -> int:
-    """B.2's season-reconciliation tier and B.7's catalog
-    service-presence sweep share one loop/interval — same "no new
-    interval unless a real technical constraint forces one" precedent
-    B.1/B.4/B.5's own cadence decisions already established, applied
-    here to the monthly tier instead of the hourly one. Returns the
-    combined count, for the caller to log."""
+    """B.2's season-reconciliation tier, B.7's catalog
+    service-presence sweep, and B.14's cross-service show-merge sweep
+    share one loop/interval — same "no new interval unless a real
+    technical constraint forces one" precedent B.1/B.4/B.5's own
+    cadence decisions already established, applied here to the monthly
+    tier instead of the hourly one. Returns the combined count, for the
+    caller to log."""
     reconciled = await run_season_reconciliation_once(client)
     presence = await run_catalog_presence_once(client)
-    return reconciled + presence
+    merged = await run_show_merge_once(client)
+    return reconciled + presence + merged
 
 
 async def run_availability_once(client: LcarsClient) -> int:
@@ -291,10 +310,12 @@ async def run_forever(
     matching shares *that* tier instead — real N×M cost, confirmed with
     the user, the same "unconditional sweep, the tier itself is the
     correctness boundary" shape B.2's own reconciliation already uses,
-    reused rather than adding a fourth interval. B.3's availability
-    loop is its own third, dynamic-interval loop — it can't share
-    either of the other two: faster than the hourly one when urgent,
-    but not on a fixed cadence at all."""
+    reused rather than adding a fourth interval. B.14's cross-service
+    show-merge sweep shares that same tier for the identical reason —
+    also real N×M cost, confirmed with the user, no fifth interval
+    added. B.3's availability loop is its own third, dynamic-interval
+    loop — it can't share either of the other two: faster than the
+    hourly one when urgent, but not on a fixed cadence at all."""
     await asyncio.gather(
         _loop(
             run_daily_and_weekly_once,
@@ -303,6 +324,11 @@ async def run_forever(
             "daily+weekly+animeschedule+local_presence+episode_movie_links"
             "+mal_token_refresh+untracked_shows",
         ),
-        _loop(run_monthly_once, client, monthly_interval_seconds, "monthly+catalog_presence"),
+        _loop(
+            run_monthly_once,
+            client,
+            monthly_interval_seconds,
+            "monthly+catalog_presence+show_merge",
+        ),
         _availability_loop(client),
     )

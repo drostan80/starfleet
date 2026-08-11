@@ -3624,31 +3624,46 @@ background scheduler.
       522 tests passing (was 516; 6 new), `ruff check`/`format --check`
       clean.
     - **A third show, "Mebius Dust," is a different problem —
-      measured, not fixed.** Two separate LCARS rows for the same real
-      show: one Sonarr-sourced (`trackingSpace: TV`, tvdb-linked only),
-      one AniList-sweep-sourced (`trackingSpace: ANIME`, anilist+mal-
-      linked, `status: DROPPED`). This is the same show B.11d's own
-      "Mebius Dust anomaly" duplicate-creation bug produced originally
-      — the fix at the time (`find_existing_show`/`_promote_stub`, the
-      wipe-and-clean-backfill re-run) closed the bug that *creates*
-      same-service duplicates, but this pair shares no external id at
-      all (one has tvdb, the other has anilist+mal), so it was never
-      reachable by that fix or by the `GROUP BY service, external_id`
-      query that confirmed "zero duplicates" after the re-run —
-      `show_backfill.py`'s own docstring already predicted exactly
-      this residual gap needs fuzzy title matching (B.7 scope,
-      unbuilt) to close for real. Measured the actual scale live before
-      proposing anything: 102 tracked shows with a `tvdb` link and no
-      `anilist` link, 1172 tracked ANIME-space shows with `anilist` and
-      no `tvdb` link — cross-referenced by exact normalized title,
-      **2 real cross-service duplicate pairs** ("Black Lagoon" and
-      "Mebius Dust"; fuzzy/near-title matching would likely surface a
-      few more, but this is a real floor, not a "hundreds" scale
-      problem). Small enough that a real fuzzy-matching mechanism is
-      probably overbuilt for now — **asked the user how they want to
-      handle it** (manual merge/link vs. build B.7's fuzzy-match tool
-      now vs. something else); not started, no existing decision in
-      the docs to apply.
+      measured, not fixed here.** Two separate LCARS rows for the same
+      real show: one Sonarr-sourced (`trackingSpace: TV`, tvdb-linked
+      only), one AniList-sweep-sourced (`trackingSpace: ANIME`,
+      anilist+mal-linked, `status: DROPPED`). This is the same show
+      B.11d's own "Mebius Dust anomaly" duplicate-creation bug produced
+      originally — the fix at the time (`find_existing_show`/
+      `_promote_stub`, the wipe-and-clean-backfill re-run) closed the
+      bug that *creates* same-service duplicates, but this pair shares
+      no external id at all (one has tvdb, the other has anilist+mal),
+      so it was never reachable by that fix or by the `GROUP BY
+      service, external_id` query that confirmed "zero duplicates"
+      after the re-run — `show_backfill.py`'s own docstring already
+      predicted exactly this residual gap needs fuzzy title matching to
+      close for real. Measured the actual scale live before proposing
+      anything: 102 tracked shows with a `tvdb` link and no `anilist`
+      link, 1172 tracked ANIME-space shows with `anilist` and no
+      `tvdb` link — cross-referenced by exact normalized title, **2
+      real cross-service duplicate pairs** ("Black Lagoon" and "Mebius
+      Dust"; fuzzy/near-title matching would likely surface a few more,
+      but this is a real floor, not a "hundreds" scale problem). First
+      floated to the user as **"B.7 scope, unbuilt"** — wrong, caught
+      and corrected before the user committed effort to it: B.7
+      (`show_service_presence`'s periodic refresh) is already complete
+      and its own entry explicitly scoped itself to "local + Sonarr +
+      Radarr," naming AniList's missing search/catalog-listing endpoint
+      as the reason — there was no existing "B.7 scope" design for this
+      to resume. Asked the user two scoping questions once that was
+      corrected (trigger model: automatic sweep, reversible, logged as
+      reviewable; merge direction: the AniList-linked show wins), then
+      ran one more live check before building anything — Mebius Dust's
+      Sonarr-sourced row holds 8 real episodes, its AniList-sourced row
+      holds 0, so "AniList wins" needed to mean "wins on status/score/
+      tracking fields," not "the AniList row's own episode data is
+      correct" (it has none). Surfaced that conflict plainly, along
+      with the real scope ("automatic + reversible + reviewable" is a
+      new migration, a new audit table, and FK reassignment across
+      every show-scoped table `export_import.EXPORT_IMPORT_TABLES`
+      lists), and asked whether to hand-fix the 2 known pairs or build
+      the real mechanism as a numbered step. **User's decision: "Make
+      this a real new step now (e.g. B.14)"** — see B.14 below.
   - [ ] **B.11g — B.9's two deferred Data-side pieces**: the
     calendar-native counter line under a show's next-episode entry
     (backed by `Query.backlog` as-is — asked the user directly
@@ -3658,6 +3673,83 @@ background scheduler.
     ship the counter against `Query.backlog` as-is, no reconciliation
     needed) and its mark-watched-clears-exactly-one-oldest-episode
     interaction.
+- [x] **B.14 — Cross-service show-duplicate merge** (2026-08-11,
+  commit `32838c1`): the
+  real, scoped mechanism B.11f's own investigation surfaced and
+  deferred (see that entry's own "Mebius Dust" note above for the full
+  discovery/decision narrative — trigger model and merge direction
+  both confirmed with the user there, before this step existed).
+  SCOPE.md §5.11 has the full design writeup; `lcars/show_merge.py`'s
+  own module docstring has the implementation-level detail. Summary:
+  - New `show_merge` table (`y-`, §5.0) — winner/loser show ids,
+    `matched_on`, a JSON `manifest` of exactly what moved and what was
+    left behind on a conflict, `merged_at`/`reversed_at`/
+    `reversed_by_client`.
+  - `find_candidate_pairs()`: tracked tvdb-only shows vs. tracked
+    anilist-only `tracking_space = 'anime'` shows, matched via
+    `fuzzy.best_match()` (§5.4, A.7) unchanged — an exact-title match
+    against more than one candidate is ambiguous, not a match, same
+    "return None rather than guess" philosophy.
+  - `merge_shows()`: walks every table `export_import.py`'s own
+    `EXPORT_IMPORT_TABLES` lists as show-scoped (external ids,
+    presence, seasons, episodes, watch events, movie links, relations,
+    numbering mapping, next-up override, the three history tables,
+    person/studio credits, franchise membership, tags). A genuine
+    per-slot conflict (both rows already have their own season 1, say)
+    leaves the loser's copy in place, recorded in
+    `manifest["skipped"]`, rather than dropping it. The loser is
+    demoted (`tracked = 0`), never deleted — reversible by
+    construction.
+  - **Real bug caught by a failing test before this ever ran live**:
+    `episode.show_id` and `watch_event.show_id` reference the same
+    (season, episode) pair via two different tables (`watch_event`'s
+    own composite FK), so moving one without the other in the same
+    statement left a dangling FK target for the instant between the
+    two UPDATEs. `PRAGMA defer_foreign_keys = ON` is documented to fix
+    exactly this — except a first attempt set it via a bare
+    `conn.execute()` with no transaction explicitly open yet, and
+    Python's `sqlite3` module's default autocommit-between-statements
+    behavior means the *very next* statement (even a plain `SELECT`
+    building a lookup dict) silently reset it before the real UPDATEs
+    ran, reproducing the identical `FOREIGN KEY constraint failed` the
+    PRAGMA exists to prevent — confirmed with an isolated repro, not
+    guessed. Fixed with an explicit `BEGIN IMMEDIATE` before the
+    PRAGMA, so one real transaction stays open around every statement
+    in `merge_shows()`/`reverse_show_merge()` until the final commit.
+    This is the check advisor's own review of this step's design had
+    flagged as the one to verify for real before trusting the
+    mechanism — a real merge/reversal round-trip test now exercises it
+    and passes.
+  - `reverse_show_merge()`: replays `manifest["moved"]` backwards per
+    table, flips the loser back to `tracked = 1`. Errors (unknown id,
+    already reversed) are plain `ValueError`s, wrapped as
+    `GraphQLError` at the resolver boundary, same layering
+    `export_import.py`/`show_backfill.py` already use.
+  - `sweep_show_merges()`: the automatic entry point
+    (`pollShowMerges`) — one candidate pass, one merge attempt per
+    pair, broad `except Exception`/log/`rollback`/continue per pair,
+    same "an unattended sweep never lets one bad item abort the rest"
+    philosophy every other Phase B poller already applies.
+  - Rides B.2's existing monthly tier (`ops/scheduler.py`'s
+    `run_monthly_once`, alongside B.7's own catalog-matching sweep) —
+    real N×M cost, confirmed with the user, no fifth Ops interval.
+  - New GraphQL: `Query.showMerges`, `Mutation.pollShowMerges`,
+    `Mutation.reverseShowMerge(id)`, the `ShowMerge` type (`manifest`
+    exposed as a flattened human-readable string list, same convention
+    `pendingReviews.proposedValueChain` already uses for an audit blob
+    — the underlying JSON `reverseShowMerge` actually replays is not
+    something a client needs to parse itself).
+  - **Scale, stated plainly**: this only fixes the 2 pairs measured
+    live during B.11f's investigation (Black Lagoon, Mebius Dust) —
+    built to catch the *next* ones automatically, not to work through
+    a backlog that doesn't otherwise exist.
+  - 20 new tests (`tests/test_show_merge.py`) plus 5 real-GraphQL
+    resolver tests (`tests/test_server.py`) and scheduler/ops-client
+    coverage; 4 pre-existing tests updated for the new table/prefix/
+    scheduler-tier wiring (`test_export_import.py`'s table count,
+    `test_ids.py`'s "unknown prefix" example — `y` stopped being
+    unclaimed — and two `test_ops_scheduler.py` assertions for the
+    monthly tier's new third member).
 - [ ] **B.12 — Proxy interactive flows through LCARS**: add-show,
   id-remap move from direct-from-Data to going through LCARS, so
   reconciliation logic applies consistently regardless of trigger.

@@ -433,8 +433,9 @@ for a show, `e-x82j1q` for an episode.
 | `v-` | `next_up_override` |
 | `z-` | `season` — added 2026-08-08 (A.4), see §5.5 |
 | `u-` | `untracked_show_finding` — added 2026-08-10 (B.11e), see §5.2's own "Resolved 2026-08-10 (B.11 reconnaissance)" note |
+| `y-` | `show_merge` — added 2026-08-11 (B.14), see §5.11 |
 
-19 of 26 letters used (`x-` retired, not counted), leaving headroom
+20 of 26 letters used (`x-` retired, not counted), leaving headroom
 for future entities.
 
 ### 5.1 `show`
@@ -1476,6 +1477,76 @@ next_up_override
 
 Server-side entity, freely editable from any client — not read-only,
 not fixed.
+
+### 5.11 `show_merge` — cross-service duplicate merging (B.14)
+
+```
+show_merge
+  id                     y- (§5.0)
+  winner_show_id         the surviving, canonical show
+  loser_show_id          demoted (tracked = false), never deleted
+  matched_on             how the pair was found (fuzzy title match, method + score)
+  manifest               JSON: {"moved": {...per-table detail...}, "skipped": [...]}
+  merged_at
+  reversed_at            nullable
+  reversed_by_client     nullable
+```
+
+**The gap**: B.11d's own `find_existing_show`/`_promote_stub` dedup
+(§5.1) only ever catches two rows sharing the *same* external id — a
+Sonarr-sourced show (tvdb-linked) and an AniList-list-sourced show
+(anilist-linked) for the same real-world anime, sharing **no** id at
+all, are invisible to it. Discovered live during B.11f's "dropped
+shows still appear" investigation (BUILD_PLAN.md): 102 tracked shows
+with a tvdb link and no anilist link, 1172 tracked anime-space shows
+with an anilist link and no tvdb link, cross-referenced by normalized
+title — 2 real pairs ("Black Lagoon", "Mebius Dust"). Confirmed with
+the user this is genuinely new work, not a resumption of B.7
+(`show_service_presence`'s periodic refresh, §5.4) — B.7's own
+BUILD_PLAN.md entry explicitly scoped itself to "local + Sonarr +
+Radarr" and named AniList's missing search/catalog-listing endpoint as
+the reason it stopped there.
+
+**Detection**: automatic sweep (confirmed with the user), reusing
+`fuzzy.best_match()` (§5.4, A.7) unchanged against the two candidate
+sets above. Real N×M cost, confirmed with the user — rides B.2's
+existing monthly tier (`ops/scheduler.py`'s `run_monthly_once`), same
+"no new interval" precedent B.7's own catalog-matching sweep already
+established, not a fifth Ops interval.
+
+**Merge direction**: the AniList-linked show wins (confirmed with the
+user) — the winner keeps its own title/status/score/tracking-state
+fields untouched, same "don't overwrite what's already trustworthy"
+reasoning `_promote_stub` applies to a stub. What "wins" does *not*
+mean: episode/watch/availability data migrates onto whichever row
+survives regardless of which side originally held it — checked live
+before assuming otherwise (Mebius Dust's Sonarr-sourced row held 8 real
+episodes, its AniList-sourced row held 0). Every show-scoped table
+`export_import.py`'s own `EXPORT_IMPORT_TABLES` lists gets walked; a
+genuine per-slot conflict (both rows already have their own season 1,
+say) leaves the loser's copy in place rather than dropping it,
+recorded in `manifest["skipped"]`.
+
+**Reversible without resurrecting anything**: the loser is demoted
+(`tracked = 0`), never deleted — same vocabulary `_promote_stub`
+already established for "exists, not really a real show right now."
+`manifest["moved"]` records exactly what to restore per table (ids for
+tables with their own prefixed id, natural-key tuples for pure join
+tables with none) so `reverseShowMerge` replays it verbatim rather than
+attempting a generic "undo the last N statements" mechanism.
+
+**Reviewable, not via `pending_review`**: `pending_review` (§5.6) is
+single-field/value-chain shaped — a fit for "this field changed," not
+for "these two rows became one, here is the full child-row manifest."
+A dedicated table is the same "structurally different event, dedicated
+table" call `untracked_show_finding` (§5.2, B.11e) already made rather
+than overloading `pending_review`.
+
+**Scale, stated plainly**: this table's first real sweep only ever
+touches the 2 pairs measured above — it exists to catch the *next*
+ones, not to work through a backlog. See `lcars/show_merge.py`'s own
+module docstring and BUILD_PLAN.md's B.14 entry for the full
+implementation narrative.
 
 ---
 

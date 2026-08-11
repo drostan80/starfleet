@@ -873,6 +873,34 @@ type UntrackedShowPollResult {
   resolvedFindings: Int!
 }
 
+"B.14 — one persisted row from the cross-service show-merge sweep (pollShowMerges): winnerShow is the surviving, canonical show (the AniList-linked one — confirmed with the user, see the B.14 migration's own docstring for why); loserShow is demoted (tracked = false), never deleted, so a merge is always reversible via reverseShowMerge. manifest is a human-readable rendering of exactly what moved and what was left behind on a genuine per-slot conflict — the mechanism reverseShowMerge itself replays is the underlying JSON this flattens, not something a client needs to parse."
+type ShowMerge {
+  id: ID!
+  winnerShow: Show!
+  loserShow: Show!
+  matchedOn: String!
+  manifest: [String!]!
+  mergedAt: DateTime!
+  reversedAt: DateTime
+  reversedByClient: String
+}
+
+type ShowMergeEdge {
+  node: ShowMerge!
+  cursor: String!
+}
+
+type ShowMergeConnection {
+  edges: [ShowMergeEdge!]!
+  pageInfo: PageInfo!
+}
+
+"pollShowMerges' own confirmation summary — same human/Ops-facing-count spirit as every other *PollResult. candidatesFound is this pass's fresh recomputation (not cumulative); merged is real successes this pass."
+type ShowMergePollResult {
+  candidatesFound: Int!
+  merged: Int!
+}
+
 # ---------------------------------------------------------------------------
 # §6.7 animeschedule.net air-date reconciliation (B.5)
 # ---------------------------------------------------------------------------
@@ -1041,6 +1069,9 @@ type Query {
 
   "§5.2, B.11e — the persisted result of the ongoing untracked-show sweep (pollUntrackedShows), refreshed on Ops's own recurring schedule rather than only computed on demand like previewShowBackfill above. A show added directly in Sonarr/AniList after B.11d's one-time backfill shows up here without anyone needing to remember to re-run a manual check."
   untrackedShowFindings(first: Int, after: String, last: Int, before: String): UntrackedShowFindingConnection!
+
+  "B.14 — the reviewable merge log: every cross-service show-duplicate merge pollShowMerges has performed, reversed or not. A Query, so listing it has no side effect — reverseShowMerge is the mutation that acts on an entry."
+  showMerges(first: Int, after: String, last: Int, before: String): ShowMergeConnection!
 }
 
 # ---------------------------------------------------------------------------
@@ -1156,6 +1187,28 @@ type Mutation {
   untrackedShows, only how the findings surface changes.
   """
   pollUntrackedShows: UntrackedShowPollResult!
+  """
+  §5.0, B.14 — Ops-scheduled (monthly tier, real N×M cost, same
+  reasoning pollCatalogServicePresence's own docstring below gives):
+  fuzzy-matches every tracked tvdb-only show against every tracked
+  anilist-only anime show, merges each confident pair (the
+  AniList-linked show wins — see ShowMerge's own docstring for why,
+  and for what "wins" actually means for episode/watch data), and
+  records one ShowMerge row per merge performed. Never deletes a show
+  — the losing side is demoted (tracked = false) and always
+  recoverable via reverseShowMerge.
+  """
+  pollShowMerges: ShowMergePollResult!
+  """
+  §5.0, B.14 — undoes a specific ShowMerge in place: every row the
+  original merge reassigned moves back onto the loser, which is then
+  re-flipped to tracked = true. Errors (unknown id, already reversed)
+  surface as a plain GraphQL error. A human-triggered corrective
+  action, so — unlike pollShowMerges above — this requires the
+  client header (any client may call it; see resolvers.py's own note
+  on why no RESOLVING_CLIENTS-style restriction applies here).
+  """
+  reverseShowMerge(id: ID!): ShowMerge!
   """
   §6.7, B.5 — a global sweep of animeschedule.net's raw (native/Japan
   release) RSS feed, matched by fuzzy title against LCARS's own

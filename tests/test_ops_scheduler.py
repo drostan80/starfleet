@@ -1,6 +1,7 @@
 """ops.scheduler — B.1 (daily metadata refresh), B.2 (Fribb
 reconciliation, weekly + monthly tiers), B.3 (file availability, one
-dynamic-interval loop). Each run_*_once() is the real unit under test;
+dynamic-interval loop), B.14 (cross-service show-merge sweep, rides
+the monthly tier). Each run_*_once() is the real unit under test;
 a fake LcarsClient stand-in (not the real httpx-backed one) keeps
 these tests focused on the scheduler's own looping/error-isolation
 logic, already separately covered by test_ops_lcars_client.py for the
@@ -24,6 +25,7 @@ from ops.scheduler import (
     run_monthly_once,
     run_once,
     run_season_reconciliation_once,
+    run_show_merge_once,
     run_untracked_shows_once,
     run_weekly_once,
 )
@@ -49,6 +51,7 @@ class _FakeClient:
         episode_movie_link_result: dict | None = None,
         mal_token_refresh_result: dict | None = None,
         untracked_shows_result: dict | None = None,
+        show_merge_result: dict | None = None,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
@@ -78,6 +81,7 @@ class _FakeClient:
             "newFindings": 0,
             "resolvedFindings": 0,
         }
+        self._show_merge_result = show_merge_result or {"candidatesFound": 0, "merged": 0}
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -130,6 +134,9 @@ class _FakeClient:
 
     async def poll_untracked_shows(self) -> dict:
         return self._untracked_shows_result
+
+    async def poll_show_merges(self) -> dict:
+        return self._show_merge_result
 
 
 # --- run_once (B.1) ---------------------------------------------------------
@@ -227,15 +234,30 @@ async def test_run_catalog_presence_once_is_zero_with_nothing_updated():
     assert await run_catalog_presence_once(client) == 0
 
 
+# --- run_show_merge_once (B.14, rides the monthly tier) ---------------------
+
+
+async def test_run_show_merge_once_returns_merged_count():
+    client = _FakeClient(show_merge_result={"candidatesFound": 3, "merged": 2})
+    assert await run_show_merge_once(client) == 2
+
+
+async def test_run_show_merge_once_is_zero_with_nothing_to_merge():
+    client = _FakeClient()
+    assert await run_show_merge_once(client) == 0
+
+
 # --- run_monthly_once (the unit run_forever's monthly loop calls) -----------
 
 
-async def test_run_monthly_once_sums_reconciliation_and_catalog_presence():
+async def test_run_monthly_once_sums_reconciliation_catalog_presence_and_show_merge():
     client = _FakeClient(
-        all_seasons_=[_season("z-a", "s-a")], catalog_presence_result={"showsUpdated": 2}
+        all_seasons_=[_season("z-a", "s-a")],
+        catalog_presence_result={"showsUpdated": 2},
+        show_merge_result={"candidatesFound": 5, "merged": 1},
     )
     count = await run_monthly_once(client)
-    assert count == 3
+    assert count == 4
     assert client.reconciled == [("s-a", 1)]
 
 
@@ -458,6 +480,6 @@ async def test_run_forever_wires_up_all_three_loops(monkeypatch):
             "daily+weekly+animeschedule+local_presence+episode_movie_links"
             "+mal_token_refresh+untracked_shows",
         ),
-        ("run_monthly_once", 2592000, "monthly+catalog_presence"),
+        ("run_monthly_once", 2592000, "monthly+catalog_presence+show_merge"),
     }
     assert availability_calls == [client]

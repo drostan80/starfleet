@@ -50,5 +50,7 @@ def test_regenerates_on_collision(conn, monkeypatch):
 
 
 def test_unknown_prefix_raises(conn):
+    # "y" used to be this test's example of an unclaimed prefix — now a
+    # real one (show_merge, B.14) — "b" is still free (§5.0's own table).
     with pytest.raises(ValueError, match="unknown id prefix"):
-        generate_id(conn, "y")
+        generate_id(conn, "b")

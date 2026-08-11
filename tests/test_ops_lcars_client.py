@@ -262,6 +262,20 @@ async def test_poll_catalog_service_presence_sends_no_variables_and_returns_the_
     await client.aclose()
 
 
+async def test_poll_show_merges_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        return httpx.Response(
+            200, json={"data": {"pollShowMerges": {"candidatesFound": 2, "merged": 1}}}
+        )
+
+    client = _client(handler)
+    result = await client.poll_show_merges()
+    assert result == {"candidatesFound": 2, "merged": 1}
+    await client.aclose()
+
+
 async def test_reconcile_episode_movie_links_sends_no_variables_and_returns_the_result():
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read())

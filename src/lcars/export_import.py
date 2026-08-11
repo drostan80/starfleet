@@ -18,9 +18,11 @@ import json
 SCHEMA_VERSION = 1
 
 # Every real table in the schema (confirmed against a live sqlite_master
-# query — 25 tables as of B.3's own availability_poll_checkpoint
-# addition (was 24 through A.15/B.2); alembic_version is migration
-# bookkeeping, not application data, deliberately excluded), ordered
+# query — 26 tables as of B.14's own show_merge addition (was 25
+# through B.3); alembic_version is migration bookkeeping, not
+# application data, deliberately excluded. Note: untracked_show_finding
+# (B.11e) is also absent from this list — pre-existing, not a B.14
+# decision, not investigated here), ordered
 # parents-before-children so import's row-by-row INSERTs never hit a
 # foreign_keys=ON violation (no ON DELETE/INSERT CASCADE anywhere in
 # this schema, §11.2 — same reasoning every other manual cascade this
@@ -50,6 +52,7 @@ EXPORT_IMPORT_TABLES = [
     "score_change",
     "air_date_change",
     "tracked_change",
+    "show_merge",  # B.14 — two show FKs (winner/loser), both already listed above
     # depend on show + one other parent
     "show_person",
     "show_studio",

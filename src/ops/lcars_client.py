@@ -334,6 +334,18 @@ class LcarsClient:
         data = await self._query(query)
         return data["pollCatalogServicePresence"]
 
+    async def poll_show_merges(self) -> dict:
+        """§5.0, B.14 — the cross-service show-duplicate merge sweep
+        (pollShowMerges): fuzzy title match every tracked tvdb-only show
+        against every tracked anilist-only anime show. Same real N×M
+        cost as poll_catalog_service_presence above (confirmed with the
+        user) — rides the same monthly cadence, not the hourly tick."""
+        query = """
+        mutation { pollShowMerges { candidatesFound merged } }
+        """
+        data = await self._query(query)
+        return data["pollShowMerges"]
+
     async def reconcile_episode_movie_links(self) -> dict:
         """§5.1/§6.7, B.8b — episode_movie_link.py's own automatic
         tmdb_match derivation: no external HTTP call anywhere in the

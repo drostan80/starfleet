@@ -42,6 +42,7 @@ from lcars import (
     service_health,
     service_presence,
     show_backfill,
+    show_merge,
     shows,
     untracked_sweep,
     util,
@@ -71,6 +72,7 @@ franchise_entry_type = ObjectType("FranchiseEntry")
 next_up_override_type = ObjectType("NextUpOverride")
 next_up_entry_type = ObjectType("NextUpEntry")
 tag_type = ObjectType("Tag")
+show_merge_type = ObjectType("ShowMerge")
 
 
 def _enum(name: str, *values: str) -> EnumType:
@@ -131,6 +133,7 @@ BINDABLES = [
     next_up_override_type,
     next_up_entry_type,
     tag_type,
+    show_merge_type,
     *ENUMS,
     util.datetime_scalar,
 ]
@@ -356,6 +359,11 @@ def _get_episode_movie_link(conn, link_id: str) -> dict | None:
 
 def _get_pending_review(conn, review_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM pending_review WHERE id = ?", (review_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _get_show_merge(conn, merge_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM show_merge WHERE id = ?", (merge_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -1266,6 +1274,76 @@ def resolve_poll_untracked_shows(_, info):
     backfillUntrackedShows above."""
     conn = db.get_connection()
     return untracked_sweep.sweep_untracked_shows(conn)
+
+
+# -- B.14 cross-service show-merge --------------------------------------
+
+
+@query.field("showMerges")
+def resolve_show_merges(_, info, **page_args):
+    """§5.0/B.14 — the persisted, reviewable merge log. A Query, so it
+    stays side-effect free — same "not a recomputation" split
+    untrackedShowFindings above already establishes against its own
+    poll* mutation."""
+    return pagination.paginate(db.get_connection(), "show_merge", "1 = 1", (), **page_args)
+
+
+@mutation.field("pollShowMerges")
+def resolve_poll_show_merges(_, info):
+    """§5.0, B.14 — show_merge.py's own automatic cross-service
+    duplicate sweep. No require_client() — same passive/not-a-
+    changed_by-column reasoning every other poll* mutation already
+    established; called by Ops's own automatic loop (monthly tier,
+    real N×M cost — see ops/scheduler.py's own run_monthly_once)."""
+    conn = db.get_connection()
+    result = show_merge.sweep_show_merges(conn)
+    return {"candidates_found": result["candidates_found"], "merged": result["merged"]}
+
+
+@mutation.field("reverseShowMerge")
+def resolve_reverse_show_merge(_, info, id):
+    """§5.0, B.14 — a human-triggered corrective action (unlike
+    pollShowMerges above), so require_client() applies, same as
+    resolvePendingReview. Any client may reverse a merge — no
+    RESOLVING_CLIENTS-style restriction: this isn't reviewing a value
+    discrepancy, it's undoing a specific automatic action, and nothing
+    in the B.14 design discussion restricted who can do that."""
+    conn = db.get_connection()
+    client = require_client(info)
+    try:
+        show_merge.reverse_show_merge(conn, id, client)
+    except ValueError as e:
+        raise GraphQLError(str(e)) from e
+    return _get_show_merge(conn, id)
+
+
+@show_merge_type.field("winnerShow")
+def resolve_show_merge_winner_show(obj, info):
+    return _get_show(db.get_connection(), obj["winner_show_id"])
+
+
+@show_merge_type.field("loserShow")
+def resolve_show_merge_loser_show(obj, info):
+    return _get_show(db.get_connection(), obj["loser_show_id"])
+
+
+@show_merge_type.field("manifest")
+def resolve_show_merge_manifest(obj, info):
+    """Flattened to a human-readable string list for GraphQL — same
+    "keep it plainly inspectable, don't invent nested types for an
+    audit blob" convention proposedValueChain (§5.6) already uses for
+    pending_review. moved's own per-table detail (exact ids/keys) is
+    what reverseShowMerge actually replays; this rendering is for a
+    human reviewing the log, not a machine consumer."""
+    parsed = json.loads(obj["manifest"])
+    lines = []
+    for table, entries in parsed["moved"].items():
+        if not entries:
+            continue
+        count = entries if isinstance(entries, bool) else len(entries)
+        lines.append(f"moved {table}: {count}")
+    lines.extend(f"skipped: {s}" for s in parsed["skipped"])
+    return lines
 
 
 @mutation.field("pollAnimeSchedule")
