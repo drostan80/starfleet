@@ -4183,6 +4183,49 @@ background scheduler.
   2 new/rewritten tests confirm both directions (opens when new,
   stays quiet once resolved with an identical mismatch). 659 passing.
 
+- [x] **B.20 — Actually reviewed the 23**, the real point of B.18
+  (2026-08-12, same day, against production). 2 resolved as moot
+  (Black Lagoon, SPY x FAMILY — both demoted via `applyShowMerge`
+  earlier the same day, same reasoning as their already-resolved
+  show-level reviews). 9 given a real AniList id via `setSeasonMapping`
+  after checking AniList's actual catalog per title: 8 confirmed
+  cour-splits (Ascendance of a Bookworm S1, Dr. STONE S3+S4, Fire
+  Force S3, Mushoku Tensei S1+S2, Re:ZERO S2, Slime S2 — local episode
+  counts match the *sum* of two-to-three real AniList entries exactly
+  or near-exactly, e.g. Dr. STONE S4's 37 = 12+12+13), linked to each
+  one's first part/cour per the same convention already used for the
+  show-level Bookworm/Haruhi/Mushoku Tensei links; 1 a clean single
+  match Fribb simply hadn't indexed yet, not a cour-split at all (The
+  100 Girlfriends... S3 — still airing, exact title match, automated
+  script had skipped it only because its strict exact-episode-count
+  rule doesn't hold for a season that hasn't finished airing). 2
+  already-correctly-linked entries (Chitose, Tonbo!) accepted as-is
+  with an explanatory note — small/permanent discrepancies against the
+  best available single AniList entry, nothing better to point at. 10
+  left genuinely open: AniList has no confirmed data yet for that
+  season (DAN DA DAN S3, Kaiju No. 8 S3, Shangri-La Frontier S3, The
+  Dangers in My Heart S3, The Rising of the Shield Hero S5, Undead
+  Unluck S2 — normal for a season that hasn't started/been announced
+  yet), plus one already-documented blocked case (Frieren S3, SCOPE.md)
+  and three genuinely ambiguous ones flagged for a human rather than
+  guessed at (Lycoris Recoil S2 — a real candidate exists but its
+  airdate doesn't reconcile with local data, worth checking Sonarr
+  directly; Monogatari S7 — the franchise's own arc-based, non-linear
+  AniList structure doesn't map onto a simple season number at all;
+  Haruhi S2 — the real 2009 broadcast's "chronological order + reruns"
+  oddity has no clean single-entry answer). **Backlog: 23 → 10, live
+  production**, all 10 confirmed correct (via `check_tracking_space`-
+  style direct SQL, not just clicking through) rather than resolved
+  just to make the number smaller.
+  - Applying the 8 cour-split Part-1 links immediately re-triggered
+    B.19's own guard (a real, expected consequence — the season now
+    has an `anilist_id` that's still smaller than the local episode
+    count) — each one manually walked through `refreshShowMetadata`
+    twice to confirm B.19 actually holds live: first pass opens the
+    real guard-formatted review, resolved with a matching note; second
+    pass (plus a third after retrying 5 shows that hit AniList's rate
+    limit from the back-to-back refreshes) confirmed zero reopens.
+
 ---
 
 ## Phase C — Data as thin front-end + mpv/aninote bridge

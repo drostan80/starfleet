@@ -53,12 +53,16 @@
 - [ ] make sure to design the ui for html client well
 - [ ] have html client a login /password thing keep safe
 - [ ] does the html client use a html/browser player or local one? my thought is local first then browser base but is it feasible?
-- [ ] `pending_review` surface built in Data 2026-08-12 (B.17/B.18, BUILD_PLAN.md:
+- [x] `pending_review` surface built in Data 2026-08-12 (B.17/B.18, BUILD_PLAN.md:
   `~/repos/starfleet` v0.1.6 `season(id:)` query + `~/repos/data` `a6cb001`'s status-bar badge
-  and `V` review screen) — tested (562 passing) but **not yet used live** against the real
-  23-item backlog. Please try it: `V` opens the screen, `enter` resolves, `s` sets an AniList
-  id for a season/anilist_id review. Still not built: Holodeck's dashboard / Captain's Log's
-  inline prompt, the other two SCOPE.md §5.6 surfaces.
+  and `V` review screen), then actually used against production the same day (B.19/B.20:
+  fixed a real reopening bug the review work itself exposed, then reviewed all 23 remaining
+  entries — 23 → 10, all 10 confirmed genuinely open, not just closed for the number's sake).
+  The `V` screen itself is tested (562 passing) but the user hasn't personally pressed `V` and
+  used it yet — the 23 were reviewed directly against production via the same GraphQL calls
+  the screen itself makes, not through the TUI. Worth trying `V` live at least once to confirm
+  the actual UI feels right, next time the backlog has something in it again. Still not built:
+  Holodeck's dashboard / Captain's Log's inline prompt, the other two SCOPE.md §5.6 surfaces.
 - [x] `anilist_id_review.csv` sent earlier 2026-08-12 for manual review is now obsolete/mostly
   wrong — it was generated before the tv-show contamination bug (B.16) was found, so ~318 of
   its ~340 rows were tv shows that should never have been on it. Don't use it; the real
