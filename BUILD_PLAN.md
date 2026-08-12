@@ -4225,6 +4225,17 @@ background scheduler.
     real guard-formatted review, resolved with a matching note; second
     pass (plus a third after retrying 5 shows that hit AniList's rate
     limit from the back-to-back refreshes) confirmed zero reopens.
+  - **User reviewed the remaining 10 personally through the live `V`
+    screen the same day** — confirmed it works well. Monogatari and
+    Haruhi S2 resolved with a note, no id (both genuinely need real
+    per-case work later — Monogatari's arc structure, Haruhi
+    specifically at episode level once it's known whether S2 is the
+    Endless Eight rebroadcast or something else); the other 8 (all
+    not-yet-aired seasons) also reviewed and closed — user's own
+    diagnosis: AniList indexes a season under its romaji title only
+    until it actually airs, which is why fuzzy/English-title matching
+    missed them (saved as a project memory for whenever more automated
+    reconciliation is worth building). **Backlog: 0.**
 
 ---
 
