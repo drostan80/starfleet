@@ -3899,9 +3899,14 @@ background scheduler.
 - [ ] **B.12 — Proxy interactive flows through LCARS**: add-show,
   id-remap move from direct-from-Data to going through LCARS, so
   reconciliation logic applies consistently regardless of trigger.
-- [ ] **B.13 — Confirm**: the real aniq is still completely untouched,
+- [x] **B.13 — Confirm**: the real aniq is still completely untouched,
   standalone, on Trakt, the whole time — this phase changes nothing
   about it.
+  - **Verified for real, 2026-08-12**: `~/repos/aniq` — `git status
+    --short` empty (no uncommitted changes), `HEAD` still
+    `998e7fff1465194672004df02315a96a62046927` (2026-08-08, the last
+    commit before the Phase 0 fork), matching `origin/main` exactly.
+    No drift, exactly as the hard constraint requires.
 
 ---
 
