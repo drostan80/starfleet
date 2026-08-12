@@ -1548,6 +1548,37 @@ ones, not to work through a backlog. See `lcars/show_merge.py`'s own
 module docstring and BUILD_PLAN.md's B.14 entry for the full
 implementation narrative.
 
+**Correction, 2026-08-12 — auto-merge retired, review-gated instead.**
+The automatic sweep above was never actually run against production
+until this date. A dry run first (the user's own explicit "check
+before running" instinct, not skipped) surfaced real false positives
+at the 0.72 fuzzy threshold — completely unrelated shows matched
+together on nothing more than short, coincidentally-similar titles
+("The Rookie" / "THE UROTSUKI", "Inspector Gadget" / "In/Spectre",
+"Alien: Earth" / "Captain Earth"). Confirmed directly with the user
+rather than picking a fix alone (a stricter threshold only narrows the
+false-positive rate, doesn't eliminate the risk class; auto-merge-
+with-review-only-on-ambiguity, the pattern most other sweeps in this
+codebase use, is wrong here specifically because a *confident* wrong
+match is what broke): the sweep (`pollShowMerges`) now only opens a
+`pending_review` entry per candidate — the "not via pending_review"
+reasoning above still holds for the `show_merge` *log* table itself
+(the completed-merge record stays its own dedicated table, still
+too rich for pending_review's single-field shape), but the *decision
+to merge at all* now goes through pending_review first, same as every
+other reconciliation mechanism's uncertain-automatic-decision path.
+A new `applyShowMerge(winnerId, loserId, matchedOn)` mutation is the
+human-triggered action that actually performs a merge once a specific
+pair has been reviewed and confirmed correct — requires
+`RESOLVING_CLIENTS` (§5.6), resolves the matching review entry as part
+of the same call, and refuses outright (rather than silently
+orphaning data) if the winner has already absorbed a different loser
+sharing the same external service.
+Known, deliberately-unsolved gap: a *rejected* candidate isn't
+remembered anywhere — the next sweep proposes the exact same pair
+again, since nothing currently records "a human already said no to
+this."
+
 ---
 
 ## 6. Functional areas

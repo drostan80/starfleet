@@ -282,10 +282,10 @@ def test_merge_shows_never_deletes_the_loser_show_row(conn):
     assert conn.execute("SELECT id FROM show WHERE id = 's-losa12'").fetchone() is not None
 
 
-# --- sweep_show_merges ---------------------------------------------------------
+# --- sweep_show_merges (discovery only since 2026-08-12) -----------------------
 
 
-def test_sweep_show_merges_merges_every_real_candidate(conn):
+def test_sweep_show_merges_opens_a_review_for_every_real_candidate(conn):
     _show(conn, "s-swpl01", "Sweep Show", tracking_space="tv")
     _external_id(conn, "s-swpl01", "tvdb", "111")
     _show(conn, "s-swpw01", "Sweep Show", tracking_space="anime")
@@ -293,18 +293,23 @@ def test_sweep_show_merges_merges_every_real_candidate(conn):
     conn.commit()
 
     result = show_merge.sweep_show_merges(conn)
-    assert result == {"candidates_found": 1, "merged": 1}
-    assert conn.execute("SELECT tracked FROM show WHERE id = 's-swpl01'").fetchone()["tracked"] == 0
+    assert result == {"candidates_found": 1, "reviews_opened": 1}
+    # Never merges — the loser is untouched, still tracked, nothing moved.
+    assert conn.execute("SELECT tracked FROM show WHERE id = 's-swpl01'").fetchone()["tracked"] == 1
+    review = conn.execute(
+        "SELECT entity_type, entity_id, field, proposed_value_chain FROM pending_review"
+        " WHERE entity_id = 's-swpl01'"
+    ).fetchone()
+    assert review["entity_type"] == "show"
+    assert review["field"] == "cross_service_merge"
+    assert "s-swpw01" in review["proposed_value_chain"]
 
 
-def test_sweep_show_merges_only_lets_one_loser_claim_a_given_winner(conn):
-    """Real bug caught by advisor review before this ever ran live: two
-    losers can both fuzzy-match the same winner in one pass (plausible
-    with sequels — a show and its own sequel both matching one
-    AniList-linked entry). Without the claimed-winner guard, the second
-    merge_shows() call would demote its own loser while silently
-    failing to move its tvdb link (already taken), leaving an orphaned
-    untracked show still holding that external id."""
+def test_sweep_show_merges_opens_a_review_for_each_loser_sharing_a_winner(conn):
+    """Two losers can both fuzzy-match the same winner (plausible with
+    sequels) — before 2026-08-12 this risked orphaning data if both got
+    auto-merged; now it's harmless, since nothing is applied
+    automatically — both simply get their own review entry."""
     _show(conn, "s-swpw02", "Shared Winner", tracking_space="anime")
     _external_id(conn, "s-swpw02", "anilist", "999")
     _show(conn, "s-swpl02", "Shared Winner", tracking_space="tv")
@@ -314,33 +319,11 @@ def test_sweep_show_merges_only_lets_one_loser_claim_a_given_winner(conn):
     conn.commit()
 
     result = show_merge.sweep_show_merges(conn)
-    assert result == {"candidates_found": 2, "merged": 1}
-
-    winner_services = {
-        r["service"]
-        for r in conn.execute(
-            "SELECT service FROM show_external_id WHERE show_id = 's-swpw02'"
-        ).fetchall()
-    }
-    assert winner_services == {"anilist", "tvdb"}  # only one tvdb link, not two
-
-    losers_tracked = {
-        r["id"]: r["tracked"]
-        for r in conn.execute(
-            "SELECT id, tracked FROM show WHERE id IN ('s-swpl02', 's-swpl03')"
-        ).fetchall()
-    }
-    # exactly one loser merged (demoted); the other was left alone entirely —
-    # still tracked, still holding its own tvdb link, not silently orphaned
-    assert sorted(losers_tracked.values()) == [0, 1]
-    untouched_loser_id = next(sid for sid, tracked in losers_tracked.items() if tracked == 1)
-    untouched_loser_services = {
-        r["service"]
-        for r in conn.execute(
-            "SELECT service FROM show_external_id WHERE show_id = ?", (untouched_loser_id,)
-        ).fetchall()
-    }
-    assert untouched_loser_services == {"tvdb"}
+    assert result == {"candidates_found": 2, "reviews_opened": 2}
+    reviews = conn.execute(
+        "SELECT entity_id FROM pending_review WHERE field = 'cross_service_merge'"
+    ).fetchall()
+    assert {r["entity_id"] for r in reviews} == {"s-swpl02", "s-swpl03"}
 
 
 def test_sweep_show_merges_isolates_one_pairs_failure(conn, monkeypatch):
@@ -350,14 +333,62 @@ def test_sweep_show_merges_isolates_one_pairs_failure(conn, monkeypatch):
     _external_id(conn, "s-swpw02", "anilist", "222")
     conn.commit()
 
-    def _boom(conn, winner_id, loser_id, matched_on):
+    def _boom(*a, **kw):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(show_merge, "merge_shows", _boom)
+    monkeypatch.setattr(show_merge.pending_review, "open_or_extend", _boom)
     result = show_merge.sweep_show_merges(conn)
-    assert result == {"candidates_found": 1, "merged": 0}
-    # untouched — the failed attempt rolled back
-    assert conn.execute("SELECT tracked FROM show WHERE id = 's-swpl02'").fetchone()["tracked"] == 1
+    assert result == {"candidates_found": 1, "reviews_opened": 0}
+    assert (
+        conn.execute("SELECT * FROM pending_review WHERE entity_id = 's-swpl02'").fetchone() is None
+    )
+
+
+# --- apply_show_merge (2026-08-12) ----------------------------------------------
+
+
+def test_apply_show_merge_performs_the_merge_and_resolves_the_review(conn):
+    _show(conn, "s-appl01", "Apply Me", tracking_space="tv")
+    _external_id(conn, "s-appl01", "tvdb", "111")
+    _show(conn, "s-appw01", "Apply Me", tracking_space="anime")
+    _external_id(conn, "s-appw01", "anilist", "222")
+    conn.commit()
+    show_merge.sweep_show_merges(conn)  # opens the review this call should resolve
+
+    merge_id = show_merge.apply_show_merge(conn, "s-appw01", "s-appl01", "manual review", "data")
+
+    assert conn.execute("SELECT tracked FROM show WHERE id = 's-appl01'").fetchone()["tracked"] == 0
+    assert (
+        conn.execute("SELECT id FROM show_merge WHERE id = ?", (merge_id,)).fetchone() is not None
+    )
+    review = conn.execute(
+        "SELECT resolved_at, resolved_by_client, resolution_note FROM pending_review"
+        " WHERE entity_id = 's-appl01' AND field = 'cross_service_merge'"
+    ).fetchone()
+    assert review["resolved_at"] is not None
+    assert review["resolved_by_client"] == "data"
+    assert "s-appw01" in review["resolution_note"]
+
+
+def test_apply_show_merge_refuses_a_winner_that_already_absorbed_a_different_loser(conn):
+    """The real orphaning bug the old sweep's claimed_winner_ids guard
+    existed for — now guarded here instead, since this is the only
+    place a merge actually happens anymore."""
+    _show(conn, "s-appw02", "Twice Claimed", tracking_space="anime")
+    _external_id(conn, "s-appw02", "anilist", "999")
+    _show(conn, "s-appl02", "Twice Claimed", tracking_space="tv")
+    _external_id(conn, "s-appl02", "tvdb", "111")
+    _show(conn, "s-appl03", "Twice Claimed", tracking_space="tv")
+    _external_id(conn, "s-appl03", "tvdb", "222")
+    conn.commit()
+    show_merge.apply_show_merge(conn, "s-appw02", "s-appl02", "manual review", "data")
+
+    with pytest.raises(ValueError, match="already has a linked"):
+        show_merge.apply_show_merge(conn, "s-appw02", "s-appl03", "manual review", "data")
+
+    # The second loser is untouched — still tracked, still holding its own link.
+    row = conn.execute("SELECT tracked FROM show WHERE id = 's-appl03'").fetchone()
+    assert row["tracked"] == 1
 
 
 # --- reverse_show_merge ---------------------------------------------------------

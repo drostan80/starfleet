@@ -267,12 +267,12 @@ async def test_poll_show_merges_sends_no_variables_and_returns_the_result():
         payload = json.loads(request.read())
         assert payload["variables"] == {}
         return httpx.Response(
-            200, json={"data": {"pollShowMerges": {"candidatesFound": 2, "merged": 1}}}
+            200, json={"data": {"pollShowMerges": {"candidatesFound": 2, "reviewsOpened": 1}}}
         )
 
     client = _client(handler)
     result = await client.poll_show_merges()
-    assert result == {"candidatesFound": 2, "merged": 1}
+    assert result == {"candidatesFound": 2, "reviewsOpened": 1}
     await client.aclose()
 
 

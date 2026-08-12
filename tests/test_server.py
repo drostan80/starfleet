@@ -5828,10 +5828,10 @@ async def test_episode_availability_fields_resolve_through_real_graphql(client, 
     assert data["episode"]["availableLocally"] is True
 
 
-# --- B.14 cross-service show-merge --------------------------------------
+# --- B.14 cross-service show-merge (pollShowMerges: discovery only, 2026-08-12) --
 
 POLL_SHOW_MERGES = """
-    mutation { pollShowMerges { candidatesFound merged } }
+    mutation { pollShowMerges { candidatesFound reviewsOpened } }
 """
 
 SHOW_MERGES = """
@@ -5848,21 +5848,33 @@ SHOW_MERGES = """
     }
 """
 
+APPLY_SHOW_MERGE = """
+    mutation($winnerId: ID!, $loserId: ID!, $matchedOn: String!) {
+      applyShowMerge(winnerId: $winnerId, loserId: $loserId, matchedOn: $matchedOn) {
+        id matchedOn mergedAt
+        winnerShow { id tracked }
+        loserShow { id tracked }
+      }
+    }
+"""
 
-async def test_poll_show_merges_wiring_is_a_clean_no_op_with_nothing_to_merge(client):
-    # Actual detection/merge logic is test_show_merge.py's job — this only
-    # locks in that the mutation is wired to show_merge.sweep_show_merges()
-    # with the right shape.
+
+async def test_poll_show_merges_wiring_is_a_clean_no_op_with_nothing_to_review(client):
+    # Actual detection logic is test_show_merge.py's job — this only locks
+    # in that the mutation is wired to show_merge.sweep_show_merges() with
+    # the right shape.
     data = await gql(client, POLL_SHOW_MERGES, headers=auth_headers())
-    assert data["pollShowMerges"] == {"candidatesFound": 0, "merged": 0}
+    assert data["pollShowMerges"] == {"candidatesFound": 0, "reviewsOpened": 0}
 
     merges = await gql(client, SHOW_MERGES, headers=auth_headers())
     assert merges["showMerges"]["edges"] == []
 
 
-async def test_poll_show_merges_and_show_merges_query_resolve_through_real_graphql(
-    client, migrated_db
-):
+async def test_poll_show_merges_opens_a_review_rather_than_merging(client, migrated_db):
+    # 2026-08-12 — real false positives found live before this mutation
+    # ever ran against production (see show_merge.py's own module
+    # docstring): pollShowMerges no longer merges anything itself, only
+    # opens a pending_review entry for a human to act on separately.
     winner = await add_show(client, titleRomaji="Mebius Dust", trackingSpace="ANIME")
     loser = await add_show(
         client, titleRomaji="Mebius Dust", trackingSpace="TV", mediaShape="EPISODIC"
@@ -5881,21 +5893,162 @@ async def test_poll_show_merges_and_show_merges_query_resolve_through_real_graph
     conn.commit()
 
     poll_data = await gql(client, POLL_SHOW_MERGES, headers=auth_headers())
-    assert poll_data["pollShowMerges"] == {"candidatesFound": 1, "merged": 1}
+    assert poll_data["pollShowMerges"] == {"candidatesFound": 1, "reviewsOpened": 1}
 
+    # Nothing merged — both shows untouched, showMerges log still empty.
     merges = await gql(client, SHOW_MERGES, headers=auth_headers())
-    nodes = [e["node"] for e in merges["showMerges"]["edges"]]
-    assert len(nodes) == 1
-    node = nodes[0]
+    assert merges["showMerges"]["edges"] == []
+    loser_data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { tracked } }",
+        {"id": loser["id"]},
+        headers=auth_headers(),
+    )
+    assert loser_data["show"]["tracked"] is True
+
+    reviews = await _pending_reviews_for(client, loser["id"])
+    assert len(reviews) == 1
+    assert reviews[0]["field"] == "cross_service_merge"
+    assert winner["id"] in reviews[0]["proposedValueChain"]
+
+
+async def test_apply_show_merge_requires_a_resolving_client(client, migrated_db):
+    winner = await add_show(client, titleRomaji="Apply Auth", trackingSpace="ANIME")
+    loser = await add_show(
+        client, titleRomaji="Apply Auth", trackingSpace="TV", mediaShape="EPISODIC"
+    )
+    resp = await client.post(
+        "/",
+        json={
+            "query": APPLY_SHOW_MERGE,
+            "variables": {"winnerId": winner["id"], "loserId": loser["id"], "matchedOn": "test"},
+        },
+        headers=auth_headers(client_name="sonarr_sync"),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "cannot apply a show merge" in body["errors"][0]["message"]
+    show_data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { tracked } }",
+        {"id": loser["id"]},
+        headers=auth_headers(),
+    )
+    assert show_data["show"]["tracked"] is True  # untouched
+
+
+async def test_apply_show_merge_performs_the_merge_and_resolves_the_review_through_real_graphql(
+    client, migrated_db
+):
+    winner = await add_show(client, titleRomaji="Mebius Dust", trackingSpace="ANIME")
+    loser = await add_show(
+        client, titleRomaji="Mebius Dust", trackingSpace="TV", mediaShape="EPISODIC"
+    )
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'anilist', '108992', 'https://x', 'x')",
+        (winner["id"],),
+    )
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'tvdb', '111', 'https://x', 'x')",
+        (loser["id"],),
+    )
+    conn.commit()
+    await gql(client, POLL_SHOW_MERGES, headers=auth_headers())  # opens the review
+
+    data = await gql(
+        client,
+        APPLY_SHOW_MERGE,
+        {"winnerId": winner["id"], "loserId": loser["id"], "matchedOn": "Mebius Dust"},
+        headers=auth_headers("data"),
+    )
+    node = data["applyShowMerge"]
     assert node["winnerShow"]["id"] == winner["id"]
     assert node["winnerShow"]["tracked"] is True
     assert node["loserShow"]["id"] == loser["id"]
     assert node["loserShow"]["tracked"] is False
-    assert "Mebius Dust" in node["matchedOn"]
-    assert any("show_external_id" in line for line in node["manifest"])
     assert node["mergedAt"] is not None
-    assert node["reversedAt"] is None
-    assert node["reversedByClient"] is None
+
+    merges = await gql(client, SHOW_MERGES, headers=auth_headers())
+    assert len(merges["showMerges"]["edges"]) == 1
+
+    # Resolved, so the default (unresolved-only) query no longer lists it —
+    # the includeResolved:true query below is the one that still can.
+    reviews = await _pending_reviews_for(client, loser["id"])
+    assert reviews == []
+    resolved = await gql(
+        client,
+        "query { pendingReviews(includeResolved: true) {"
+        " edges { node { entityId resolvedAt resolvedByClient } } } }",
+        headers=auth_headers(),
+    )
+    row = next(
+        e["node"]
+        for e in resolved["pendingReviews"]["edges"]
+        if e["node"]["entityId"] == loser["id"]
+    )
+    assert row["resolvedAt"] is not None
+    assert row["resolvedByClient"] == "DATA"
+
+
+async def test_apply_show_merge_refuses_a_winner_that_already_absorbed_a_different_loser(
+    client, migrated_db
+):
+    winner = await add_show(client, titleRomaji="Twice Claimed", trackingSpace="ANIME")
+    loser_a = await add_show(
+        client, titleRomaji="Twice Claimed", trackingSpace="TV", mediaShape="EPISODIC"
+    )
+    loser_b = await add_show(
+        client, titleRomaji="Twice Claimed Too", trackingSpace="TV", mediaShape="EPISODIC"
+    )
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'anilist', '108992', 'https://x', 'x')",
+        (winner["id"],),
+    )
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'tvdb', '111', 'https://x', 'x')",
+        (loser_a["id"],),
+    )
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'tvdb', '222', 'https://x', 'x')",
+        (loser_b["id"],),
+    )
+    conn.commit()
+    await gql(
+        client,
+        APPLY_SHOW_MERGE,
+        {"winnerId": winner["id"], "loserId": loser_a["id"], "matchedOn": "test"},
+        headers=auth_headers("data"),
+    )
+
+    resp = await client.post(
+        "/",
+        json={
+            "query": APPLY_SHOW_MERGE,
+            "variables": {
+                "winnerId": winner["id"],
+                "loserId": loser_b["id"],
+                "matchedOn": "test",
+            },
+        },
+        headers=auth_headers("data"),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "already has a linked" in body["errors"][0]["message"]
+    show_data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { tracked } }",
+        {"id": loser_b["id"]},
+        headers=auth_headers(),
+    )
+    assert show_data["show"]["tracked"] is True  # untouched, not orphaned
 
 
 async def test_reverse_show_merge_requires_a_client_header(client, migrated_db):

@@ -1291,14 +1291,45 @@ def resolve_show_merges(_, info, **page_args):
 
 @mutation.field("pollShowMerges")
 def resolve_poll_show_merges(_, info):
-    """§5.0, B.14 — show_merge.py's own automatic cross-service
-    duplicate sweep. No require_client() — same passive/not-a-
+    """§5.0, B.14 — show_merge.py's own cross-service duplicate
+    *discovery* sweep. No require_client() — same passive/not-a-
     changed_by-column reasoning every other poll* mutation already
     established; called by Ops's own automatic loop (monthly tier,
-    real N×M cost — see ops/scheduler.py's own run_monthly_once)."""
+    real N×M cost — see ops/scheduler.py's own run_monthly_once).
+
+    2026-08-12: no longer merges anything itself — see show_merge.py's
+    own "Auto-merge retired" module-docstring note for why. Only opens
+    pending_review entries; applyShowMerge below is what actually acts
+    on one."""
     conn = db.get_connection()
     result = show_merge.sweep_show_merges(conn)
-    return {"candidates_found": result["candidates_found"], "merged": result["merged"]}
+    return {
+        "candidates_found": result["candidates_found"],
+        "reviews_opened": result["reviews_opened"],
+    }
+
+
+@mutation.field("applyShowMerge")
+def resolve_apply_show_merge(_, info, winner_id, loser_id, matched_on):
+    """2026-08-12 — the human-triggered action pollShowMerges used to
+    take automatically before real false positives were found live
+    (show_merge.py's own module docstring has the full story). Requires
+    RESOLVING_CLIENTS, same restriction resolvePendingReview already
+    has — this genuinely is resolving a reviewed value discrepancy
+    (which show, if any, this loser should merge into), unlike
+    reverseShowMerge's own deliberately-unrestricted "undo a specific
+    action" shape."""
+    conn = db.get_connection()
+    client = require_client(info)
+    if client not in RESOLVING_CLIENTS:
+        raise GraphQLError(
+            f"{client!r} cannot apply a show merge — only {sorted(RESOLVING_CLIENTS)} can (§5.6)"
+        )
+    try:
+        merge_id = show_merge.apply_show_merge(conn, winner_id, loser_id, matched_on, client)
+    except ValueError as e:
+        raise GraphQLError(str(e)) from e
+    return _get_show_merge(conn, merge_id)
 
 
 @mutation.field("reverseShowMerge")

@@ -335,13 +335,18 @@ class LcarsClient:
         return data["pollCatalogServicePresence"]
 
     async def poll_show_merges(self) -> dict:
-        """§5.0, B.14 — the cross-service show-duplicate merge sweep
-        (pollShowMerges): fuzzy title match every tracked tvdb-only show
-        against every tracked anilist-only anime show. Same real N×M
-        cost as poll_catalog_service_presence above (confirmed with the
-        user) — rides the same monthly cadence, not the hourly tick."""
+        """§5.0, B.14 — the cross-service show-duplicate *discovery*
+        sweep (pollShowMerges): fuzzy title match every tracked
+        tvdb-only show against every tracked anilist-only anime show.
+        Same real N×M cost as poll_catalog_service_presence above
+        (confirmed with the user) — rides the same monthly cadence, not
+        the hourly tick. 2026-08-12: no longer merges anything itself —
+        real false positives found live before this ever ran against
+        production (show_merge.py's own module docstring has the full
+        story) — only opens pending_review entries now; a human applies
+        a specific reviewed pair via applyShowMerge separately."""
         query = """
-        mutation { pollShowMerges { candidatesFound merged } }
+        mutation { pollShowMerges { candidatesFound reviewsOpened } }
         """
         data = await self._query(query)
         return data["pollShowMerges"]

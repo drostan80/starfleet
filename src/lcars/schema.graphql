@@ -895,10 +895,10 @@ type ShowMergeConnection {
   pageInfo: PageInfo!
 }
 
-"pollShowMerges' own confirmation summary — same human/Ops-facing-count spirit as every other *PollResult. candidatesFound is this pass's fresh recomputation (not cumulative); merged is real successes this pass."
+"pollShowMerges' own confirmation summary — same human/Ops-facing-count spirit as every other *PollResult. candidatesFound is this pass's fresh recomputation (not cumulative); reviewsOpened is real open-or-extend calls this pass (2026-08-12: this mutation no longer merges anything itself — see show_merge.py's own module docstring for why; applyShowMerge is the human-triggered action that actually merges a reviewed pair)."
 type ShowMergePollResult {
   candidatesFound: Int!
-  merged: Int!
+  reviewsOpened: Int!
 }
 
 # ---------------------------------------------------------------------------
@@ -1203,14 +1203,29 @@ type Mutation {
   §5.0, B.14 — Ops-scheduled (monthly tier, real N×M cost, same
   reasoning pollCatalogServicePresence's own docstring below gives):
   fuzzy-matches every tracked tvdb-only show against every tracked
-  anilist-only anime show, merges each confident pair (the
-  AniList-linked show wins — see ShowMerge's own docstring for why,
-  and for what "wins" actually means for episode/watch data), and
-  records one ShowMerge row per merge performed. Never deletes a show
-  — the losing side is demoted (tracked = false) and always
-  recoverable via reverseShowMerge.
+  anilist-only anime show and opens a pending_review entry per
+  candidate pair. Never merges anything itself, never deletes a show —
+  see show_merge.py's own module docstring ("Auto-merge retired") for
+  why: real false positives (completely unrelated shows fuzzy-matched
+  together) were found live before this ever ran against production.
+  applyShowMerge below is the human-triggered action that actually
+  merges a specific, reviewed-and-confirmed pair.
   """
   pollShowMerges: ShowMergePollResult!
+  """
+  2026-08-12 — the actual merge, performed only once a human has
+  looked at a specific candidate pair (surfaced via a pending_review
+  entry pollShowMerges opened) and confirmed it's genuinely the same
+  show. AniList-linked show wins — see ShowMerge's own docstring for
+  why, and for what "wins" actually means for episode/watch data.
+  Resolves the matching pending_review entry as part of the same call.
+  Requires RESOLVING_CLIENTS (§5.6) — this is resolving a reviewed
+  value discrepancy, same restriction resolvePendingReview has.
+  Refuses (GraphQLError) rather than silently orphaning data if the
+  winner has already absorbed a different show sharing the same
+  external service.
+  """
+  applyShowMerge(winnerId: ID!, loserId: ID!, matchedOn: String!): ShowMerge!
   """
   §5.0, B.14 — undoes a specific ShowMerge in place: every row the
   original merge reassigned moves back onto the loser, which is then

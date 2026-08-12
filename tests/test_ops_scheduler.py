@@ -81,7 +81,7 @@ class _FakeClient:
             "newFindings": 0,
             "resolvedFindings": 0,
         }
-        self._show_merge_result = show_merge_result or {"candidatesFound": 0, "merged": 0}
+        self._show_merge_result = show_merge_result or {"candidatesFound": 0, "reviewsOpened": 0}
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -237,12 +237,12 @@ async def test_run_catalog_presence_once_is_zero_with_nothing_updated():
 # --- run_show_merge_once (B.14, rides the monthly tier) ---------------------
 
 
-async def test_run_show_merge_once_returns_merged_count():
-    client = _FakeClient(show_merge_result={"candidatesFound": 3, "merged": 2})
+async def test_run_show_merge_once_returns_reviews_opened_count():
+    client = _FakeClient(show_merge_result={"candidatesFound": 3, "reviewsOpened": 2})
     assert await run_show_merge_once(client) == 2
 
 
-async def test_run_show_merge_once_is_zero_with_nothing_to_merge():
+async def test_run_show_merge_once_is_zero_with_nothing_to_review():
     client = _FakeClient()
     assert await run_show_merge_once(client) == 0
 
@@ -254,7 +254,7 @@ async def test_run_monthly_once_sums_reconciliation_catalog_presence_and_show_me
     client = _FakeClient(
         all_seasons_=[_season("z-a", "s-a")],
         catalog_presence_result={"showsUpdated": 2},
-        show_merge_result={"candidatesFound": 5, "merged": 1},
+        show_merge_result={"candidatesFound": 5, "reviewsOpened": 1},
     )
     count = await run_monthly_once(client)
     assert count == 4

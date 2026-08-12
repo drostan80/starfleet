@@ -108,32 +108,39 @@ async def run_catalog_presence_once(client: LcarsClient) -> int:
 
 
 async def run_show_merge_once(client: LcarsClient) -> int:
-    """§5.0, B.14 — the cross-service show-duplicate merge sweep
+    """§5.0, B.14 — the cross-service show-duplicate *discovery* sweep
     (pollShowMerges): no per-item loop, the mutation itself covers the
     whole candidate pool in one call, same shape run_catalog_presence_
     once above already uses. Real N×M cost (fuzzy title match every
     tvdb-only show against every anilist-only anime show), confirmed
     with the user — rides this same monthly tier rather than the hourly
-    one, not a fourth interval. Returns the merged count (not
-    candidatesFound — a fresh recomputation every pass isn't a
-    *change*, same "count real changes" convention every other tier
-    already follows)."""
+    one, not a fourth interval.
+
+    2026-08-12: no longer merges anything itself (real false positives
+    found live before this ever ran against production — show_merge.py's
+    own module docstring has the full story) — returns reviewsOpened
+    now, real pending_review entries opened this pass, not a merge
+    count. A human applies a specific reviewed pair separately via
+    applyShowMerge; this tier's own job is just keeping the review
+    queue current."""
     result = await client.poll_show_merges()
-    return result["merged"]
+    return result["reviewsOpened"]
 
 
 async def run_monthly_once(client: LcarsClient) -> int:
     """B.2's season-reconciliation tier, B.7's catalog
-    service-presence sweep, and B.14's cross-service show-merge sweep
-    share one loop/interval — same "no new interval unless a real
-    technical constraint forces one" precedent B.1/B.4/B.5's own
-    cadence decisions already established, applied here to the monthly
-    tier instead of the hourly one. Returns the combined count, for the
-    caller to log."""
+    service-presence sweep, and B.14's cross-service show-merge
+    *discovery* sweep share one loop/interval — same "no new interval
+    unless a real technical constraint forces one" precedent
+    B.1/B.4/B.5's own cadence decisions already established, applied
+    here to the monthly tier instead of the hourly one. Returns the
+    combined count, for the caller to log — the show-merge component
+    is reviews opened (2026-08-12), not merges performed, since this
+    sweep no longer merges anything itself."""
     reconciled = await run_season_reconciliation_once(client)
     presence = await run_catalog_presence_once(client)
-    merged = await run_show_merge_once(client)
-    return reconciled + presence + merged
+    merge_reviews_opened = await run_show_merge_once(client)
+    return reconciled + presence + merge_reviews_opened
 
 
 async def run_availability_once(client: LcarsClient) -> int:

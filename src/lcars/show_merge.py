@@ -49,12 +49,43 @@ tables with none), not a generic "undo the last N statements" replay.
 Flips the loser back to `tracked = 1`. Does not attempt to reconstruct
 anything from `manifest["skipped"]` — those rows never moved, there is
 nothing to undo for them.
+
+**Auto-merge retired, review-gated instead — real false positives
+found live, 2026-08-12.** `sweep_show_merges` (`pollShowMerges`) used
+to call `merge_shows` directly on every candidate the moment it was
+found. Before this was ever run against production for real, a dry
+run against the live database surfaced genuine false positives at the
+existing 0.72 threshold — "The Rookie" merged into "THE UROTSUKI",
+"Inspector Gadget" into "In/Spectre", "Alien: Earth" into "Captain
+Earth" — completely unrelated shows, matched on nothing more than
+short, coincidentally-similar titles. Confirmed with the user directly
+rather than picking a design alone: this needs a human to confirm each
+one, every time, not a stricter threshold (which only narrows the
+false-positive rate, doesn't eliminate the risk class) and not
+auto-merge-with-review-only-on-ambiguity (the pattern most other
+sweeps in this codebase use, but wrong here since a *confident* wrong
+match is exactly what broke). `sweep_show_merges` now only opens a
+`pending_review` entry per candidate (§5.6, same shared mechanism
+every other reconciliation already uses) — never calls `merge_shows`
+itself. `apply_show_merge` is the new explicit, human-triggered action
+that actually performs a merge, once a human has looked at the
+specific pair and decided it's genuinely correct — same shape
+`reverse_show_merge` already has (a deliberate corrective action, not
+an automatic sweep), and resolves the matching review entry as part of
+the same call so the queue doesn't keep listing something already
+acted on.
+
+A rejected (never applied) candidate is not remembered anywhere as
+"already reviewed, don't re-suggest" — a future sweep will propose the
+exact same pair again, since both shows still independently satisfy
+the loser/winner criteria until one of them changes. Not solved here;
+noted as a real, known gap in the current design, not an oversight.
 """
 
 import json
 import logging
 
-from lcars import fuzzy, ids, util
+from lcars import fuzzy, ids, pending_review, util
 
 logger = logging.getLogger("lcars.show_merge")
 
@@ -490,54 +521,90 @@ def merge_shows(conn, winner_id: str, loser_id: str, matched_on: str) -> str:
 
 
 def sweep_show_merges(conn) -> dict:
-    """The automatic sweep (`pollShowMerges`) — one candidate-finding pass
-    plus a merge attempt per pair, same per-item error isolation as every
-    other Ops-driven sweep (`service_presence.refresh_catalog_presence`'s
-    own per-service isolation, `scheduler.run_once`'s own per-show
-    isolation): one pair's genuine failure (a concurrent write, an
-    unexpected conflict this module didn't anticipate) is logged-and-
-    skipped, not allowed to abort the rest of the pass. Returns the
-    Ops/human-facing counts: `candidatesFound` (before any merge attempt
-    — a fresh recomputation, not cumulative) and `merged` (real successes
-    this pass)."""
+    """The automatic sweep (`pollShowMerges`) — discovery only, never
+    merges (see module docstring's "Auto-merge retired" note, 2026-08-12).
+    Opens/extends a `pending_review` entry per candidate pair; a human
+    decides per pair via `apply_show_merge` below. Returns the
+    Ops/human-facing counts: `candidatesFound` (a fresh recomputation
+    each sweep, not cumulative) and `reviewsOpened` (real
+    open-or-extend calls this pass — `open_or_extend`'s own
+    "unchanged re-check writes nothing" behavior means a repeat sweep
+    proposing the exact same still-unreviewed pair doesn't churn the
+    review log)."""
     pairs = find_candidate_pairs(conn)
-    merged = 0
-    # A real bug caught before this ever ran live: two losers can both
-    # fuzzy-match the same winner in one pass (plausible with sequels —
-    # "Black Lagoon" and "Black Lagoon: Roberta's Blood Trail" both
-    # matching a single AniList-linked "Black Lagoon" row). Without this
-    # guard, the second merge_shows() call would skip the already-taken
-    # tvdb link as a per-table conflict (logged, not an error) but still
-    # demote its own loser — an orphaned, untracked show still holding
-    # its own tvdb external_id, which find_existing_show would then
-    # silently resolve future addShow/backfill calls for that tvdb id
-    # onto. Only the first pair to claim a given winner in a pass gets
-    # merged; any later one targeting the same winner is left for the
-    # next sweep once it's no longer a candidate (or for manual review).
-    claimed_winner_ids: set[str] = set()
+    reviews_opened = 0
     for loser_id, winner_id, matched_on in pairs:
-        if winner_id in claimed_winner_ids:
-            continue
         try:
-            merge_shows(conn, winner_id, loser_id, matched_on)
-            claimed_winner_ids.add(winner_id)
-            merged += 1
+            pending_review.open_or_extend(
+                conn, "show", loser_id, "cross_service_merge", "show_merge", None, winner_id
+            )
+            reviews_opened += 1
         except Exception:
-            # Broad, deliberately — same "an unattended sweep logs and
-            # moves on, never crashes the rest of the pass" philosophy
-            # scheduler._loop()/refresh_catalog_presence already apply.
-            # Rolls back any partial writes this one pair's attempt made
-            # before it failed — merge_shows() only commits on a clean
-            # full success, so a prior pair's already-committed merge is
-            # untouched by this rollback.
+            # Same "an unattended sweep logs and moves on" philosophy
+            # every other Ops-driven sweep in this codebase already
+            # applies — one pair's genuine failure shouldn't abort the
+            # rest of the pass, even though open_or_extend() is a much
+            # simpler, lower-risk write than the multi-table merge_shows()
+            # this loop used to call directly before 2026-08-12.
             logger.exception(
-                "show merge failed for loser=%s winner=%s (%s), skipped this sweep",
+                "opening a show-merge review failed for loser=%s winner=%s (%s), skipped",
                 loser_id,
                 winner_id,
                 matched_on,
             )
             conn.rollback()
-    return {"candidates_found": len(pairs), "merged": merged}
+    conn.commit()
+    return {"candidates_found": len(pairs), "reviews_opened": reviews_opened}
+
+
+def apply_show_merge(conn, winner_id: str, loser_id: str, matched_on: str, changed_by: str) -> str:
+    """The human-triggered action `sweep_show_merges` above used to do
+    automatically — a deliberate corrective action, same shape
+    `reverse_show_merge` already has, not an unattended sweep. Resolves
+    any open `cross_service_merge` review for this loser as part of the
+    same call, so the review queue reflects that this one's been acted
+    on rather than sitting there stale.
+
+    Guards a real orphaning bug that predates this function (the old
+    sweep's own `claimed_winner_ids` set existed for exactly this): if
+    the winner already carries a service the loser also has (most
+    commonly `tvdb`, since a winner only starts out on this path
+    *without* one), it's already absorbed a different loser earlier —
+    merging a second one in would hit that table's own per-slot
+    conflict handling, which leaves the loser's copy in place but still
+    demotes it, silently orphaning a still-linked, now-untracked show.
+    Refused outright here rather than silently corrupting.
+    """
+    winner_services = {
+        row["service"]
+        for row in conn.execute(
+            "SELECT service FROM show_external_id WHERE show_id = ?", (winner_id,)
+        ).fetchall()
+    }
+    loser_services = {
+        row["service"]
+        for row in conn.execute(
+            "SELECT service FROM show_external_id WHERE show_id = ?", (loser_id,)
+        ).fetchall()
+    }
+    overlap = winner_services & loser_services
+    if overlap:
+        raise ValueError(
+            f"winner {winner_id} already has a linked {sorted(overlap)[0]} id — "
+            "it's likely already absorbed a different show; merging this loser in "
+            "would silently orphan it rather than actually combining the data"
+        )
+
+    merge_id = merge_shows(conn, winner_id, loser_id, matched_on)
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE pending_review SET resolved_at = ?, resolved_by_client = ?, resolution_note = ?"
+        " WHERE entity_type = 'show' AND entity_id = ? AND field = 'cross_service_merge'"
+        " AND resolved_at IS NULL",
+        (now, changed_by, f"merged into {winner_id}", loser_id),
+    )
+    conn.commit()
+    return merge_id
 
 
 def reverse_show_merge(conn, merge_id: str, changed_by: str) -> dict:
