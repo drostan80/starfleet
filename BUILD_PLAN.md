@@ -4161,6 +4161,28 @@ background scheduler.
     against the real 23-item backlog and confirm it works as intended
     before this counts as proven, not just tested.
 
+- [x] **B.19 — Fix: the season-split guard reopened a resolved review
+  on every single pass** (2026-08-12, same day, caught by the advisor
+  before B.18 shipped as "done" — the 23-item review work hadn't
+  actually happened yet). `metadata.py`'s `_reconcile_air_dates` (B.4's
+  own "season-split guard," `season.anilist_id` covering fewer episodes
+  than LCARS has locally) called `open_or_extend` unconditionally on
+  every pass with no memory of a prior resolution — `open_or_extend`
+  only re-extends an *unresolved* entry, so resolving one of these
+  through Data's new `V` screen would have regenerated a fresh entry
+  within a day, live-confirmed against two real shows (Tonbo!, Chitose
+  Is in the Ramune Bottle). First attempt (gate on
+  `season.manual_override`) was wrong and reverted — broke the
+  pre-existing Attack-on-Titan-shaped test, since `manual_override`
+  there only means "confirmed AniList entry," not "human accepted this
+  specific episode-count gap," and a manually-linked season legitimately
+  still needs flagging. Real fix: new `pending_review.
+  already_resolved_with()` — skips opening a *new* review only when
+  the most recently resolved entry for this (entity, field) proposed
+  the exact same message; a genuinely different mismatch still opens.
+  2 new/rewritten tests confirm both directions (opens when new,
+  stays quiet once resolved with an identical mismatch). 659 passing.
+
 ---
 
 ## Phase C — Data as thin front-end + mpv/aninote bridge

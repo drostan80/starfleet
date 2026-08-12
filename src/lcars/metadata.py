@@ -360,6 +360,34 @@ def _reconcile_air_dates(conn, show: dict) -> None:
     structured way to store that mapping that doesn't exist yet
     (`pending_review`'s own resolution is free-text only); flagged as
     a genuine follow-up, deliberately not built as part of B.4.
+
+    **Real bug found and fixed 2026-08-12**, driving the pending_review
+    backlog toward zero: open_or_extend (SS5.6) only re-extends an
+    *unresolved* entry -- once a human resolves one of these, the very
+    next daily pass (this function rides dueForMetadataRefresh's own
+    cadence, see above) finds the exact same episode-count mismatch
+    again and opens a brand new entry, since nothing here remembered a
+    resolved decision. Confirmed live for two real shows (Tonbo!,
+    Chitose Is in the Ramune Bottle) whose season.anilist_id happens to
+    carry manual_override = 1 (set via ordinary addShow/link-time
+    linking, not a deliberate "yes, I accept this exact mismatch"
+    review action) -- manual_override alone is NOT a safe gate here
+    (tried first, reverted: it broke this file's own
+    test_anilist_air_date_reconciliation_skips_a_season_that_spans_
+    multiple_anilist_entries, whose Attack-on-Titan-shaped season is
+    ALSO manual_override = 1 via the exact same addShow(anilistId=...)
+    path, and legitimately must still get flagged -- manual_override
+    there only ever means "this is confirmed to be the right AniList
+    entry," never "the human has seen and accepted this specific
+    episode-count gap"). The real fix instead: skip opening a *new*
+    review only when a review carrying this exact message was already
+    resolved (pending_review.already_resolved_with) -- the same
+    "unchanged re-check stays silent" principle reconcile_season()'s
+    own existing["anilist_id"] != anilist_id comparison already gives
+    Fribb matches, just expressed against a resolved chain instead of
+    a stored column, since this branch's "value" is a computed message,
+    not a single field. A genuinely new mismatch (the counts on either
+    side actually changed) produces different text and opens for real.
     """
     seasons = conn.execute(
         "SELECT id, season_number, anilist_id FROM season"
@@ -393,18 +421,18 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             (show["id"], season["season_number"]),
         ).fetchone()["n"]
         if anilist_episode_count is not None and lcars_episode_count > anilist_episode_count:
-            pending_review.open_or_extend(
-                conn,
-                "season",
-                season["id"],
-                "anilist_id",
-                "anilist",
-                None,
+            reason = (
                 f"season {season['season_number']} has {lcars_episode_count} episode(s) in "
                 f"LCARS but AniList media {season['anilist_id']} only covers "
                 f"{anilist_episode_count} — likely spans multiple AniList entries; "
-                "air-date reconciliation skipped for this season",
+                "air-date reconciliation skipped for this season"
             )
+            if not pending_review.already_resolved_with(
+                conn, "season", season["id"], "anilist_id", reason
+            ):
+                pending_review.open_or_extend(
+                    conn, "season", season["id"], "anilist_id", "anilist", None, reason
+                )
             continue
 
         for node in result["nodes"]:

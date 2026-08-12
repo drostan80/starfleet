@@ -1614,6 +1614,144 @@ async def test_anilist_air_date_reconciliation_never_overwrites_a_manual_date(cl
     assert after == before  # refreshShowMetadata added nothing new
 
 
+async def test_season_split_guard_opens_a_review_when_lcars_has_more_episodes(client, monkeypatch):
+    """§5.2/§6.7, B.4's own "season-split guard" — a season's anilist_id
+    covers fewer episodes than LCARS actually has locally (a cour-split
+    the season model can't represent), so per-episode sync is skipped
+    and a season-level pending_review is opened instead.
+
+    Season 2, not 1 — deliberately: season 1's own anilist_id, if any,
+    always gets seeded via `_upsert_season` (either from addShow's own
+    `anilistId` input or `_ensure_anilist_link`'s Fribb resolution),
+    which unconditionally sets `manual_override = 1` (see its own
+    docstring — a caller/Fribb-resolved show-level link is treated as
+    already-human-confirmed). Season 2+ is the only way to reach this
+    guard's *non*-manual path in a test, since it's only ever reconciled
+    via `season_mapping.reconcile_season()` (real Fribb match, which
+    leaves `manual_override = 0`, A.4's own INSERT shape)."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    _patch_fribb_dataset(
+        monkeypatch, [{"tvdb_id": 67890, "anilist_id": 999, "mal_id": None, "season": {"tvdb": 2}}]
+    )
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {"episodes": 1, "nodes": [{"episode": 1, "airingAt": 1}]},
+    )
+
+    def _ep(number):
+        return {
+            "seasonNumber": 2,
+            "episodeNumber": number,
+            "airDateUtc": "2020-01-01T00:00:00Z",
+            "runtime": 24,
+        }
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1), _ep(2)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, tvdbId=67890)  # no anilistId — see docstring
+
+    season_id = (
+        await gql(
+            client,
+            "query($id: ID!) { show(id: $id) { seasons { edges { node { id } } } } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    )["show"]["seasons"]["edges"][0]["node"]["id"]
+    reviews = [
+        r for r in await _pending_reviews_for(client, season_id) if r["field"] == "anilist_id"
+    ]
+    assert len(reviews) == 1
+    assert reviews[0]["source"] == "anilist"
+    assert "likely spans multiple AniList entries" in reviews[0]["proposedValueChain"][-1]
+
+
+async def test_season_split_guard_stays_quiet_once_the_same_mismatch_is_resolved(
+    client, monkeypatch
+):
+    """Real bug found and fixed 2026-08-12: `open_or_extend` only
+    re-extends an *unresolved* entry, so this guard reopened a brand
+    new review on every single pass — even right after a human
+    resolved one — since nothing remembered the resolved decision.
+    `manual_override` alone is NOT the right gate here (tried first,
+    reverted: it broke the Attack-on-Titan-shaped test above, whose
+    season is legitimately `manual_override = 1` via ordinary
+    addShow(anilistId=...) linking and must still get flagged — that
+    flag only ever means "confirmed AniList entry," never "human
+    accepted this exact episode-count gap"). The real fix:
+    `pending_review.already_resolved_with()` — a genuinely-identical
+    mismatch (same counts, same message) that was already resolved
+    stays resolved; only a *changed* mismatch opens fresh. Same
+    season-2 setup as the test above (Fribb, not addShow's own
+    anilistId, so this exercises a manual_override-free season too —
+    the fix works regardless of that flag either way, confirmed by
+    also setting it via setSeasonMapping partway through)."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    _patch_fribb_dataset(
+        monkeypatch, [{"tvdb_id": 67890, "anilist_id": 999, "mal_id": None, "season": {"tvdb": 2}}]
+    )
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {"episodes": 1, "nodes": [{"episode": 1, "airingAt": 1}]},
+    )
+
+    def _ep(number):
+        return {
+            "seasonNumber": 2,
+            "episodeNumber": number,
+            "airDateUtc": "2020-01-01T00:00:00Z",
+            "runtime": 24,
+        }
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1), _ep(2)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, tvdbId=67890)
+
+    # add_show's own inline fetch already hit the mismatch once, before
+    # manual_override existed — opening the review this test is really
+    # about not-reopening. Setting manual_override afterward (real
+    # sequence: Tonbo!/Chitose were both fixed this exact way, live,
+    # the same day) doesn't retroactively touch that already-open
+    # entry; a human still resolves it explicitly, same as any other
+    # pending_review.
+    manual = await gql(
+        client,
+        "mutation($id: ID!) {"
+        " setSeasonMapping(showId: $id, seasonNumber: 2, anilistId: 999) { id manualOverride } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    season_id = manual["setSeasonMapping"]["id"]
+    assert manual["setSeasonMapping"]["manualOverride"] is True
+
+    pre_existing = [
+        r for r in await _pending_reviews_for(client, season_id) if r["field"] == "anilist_id"
+    ]
+    assert len(pre_existing) == 1  # confirms the guard did fire once, pre-manual_override
+    await gql(
+        client,
+        "mutation($id: ID!) { resolvePendingReview(id: $id) { id } }",
+        {"id": pre_existing[0]["id"]},
+        headers=auth_headers("data"),
+    )
+
+    # Two more refreshes — same "doesn't reopen" shape as the manual/
+    # animeschedule air-date tests above, not just a single check.
+    for _ in range(2):
+        await gql(
+            client,
+            "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    reviews = [
+        r for r in await _pending_reviews_for(client, season_id) if r["field"] == "anilist_id"
+    ]
+    assert reviews == []
+
+
 async def test_anilist_air_date_reconciliation_never_overwrites_an_animeschedule_date(
     client, monkeypatch
 ):
@@ -4305,7 +4443,9 @@ async def _pending_reviews_for(client, entity_id):
         """
         query {
           pendingReviews {
-            edges { node { entityType entityId field source previousValue proposedValueChain } }
+            edges {
+              node { id entityType entityId field source previousValue proposedValueChain }
+            }
           }
         }
         """,
