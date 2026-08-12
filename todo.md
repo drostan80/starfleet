@@ -37,16 +37,29 @@
 
 - [ ] in list view enter does nothing, info shos but the image show only half somehow this seems to not be an issue in calendar view info
 
-- [ ] File availability takes too long to show up (Sonarr import -> visible in Data). Real
-  latency stack, not yet measured end-to-end: Ops's own `pollFileAvailability` sweep runs on
+- [ ] File availability takes too long to show up (Sonarr import -> visible in Data). Current
+  latency stack (not yet measured end-to-end): Ops's own `pollFileAvailability` sweep runs on
   an *adaptive* server-computed interval (`recommendedAvailabilityPollIntervalSeconds` —
   300s/900s/3600s tiers depending on how close to airing, `src/ops/lcars_client.py`), and
   Data's own status/download check runs on its own separate `DOWNLOAD_CHECK_INTERVAL_SECONDS`
   (5 min, `src/data/app.py`) on top of that — worst case these stack rather than overlap.
-  Needs: (1) actually measure the real gap live (grab a file, time when it imports in Sonarr
-  vs. when it shows available in Data), (2) decide whether the fix is tightening one of these
-  cadences, adding a push/webhook path instead of polling, or something else — don't just
-  guess-tighten a number without checking what's actually slow first.
+  **User's proposed fix, 2026-08-12**: Sonarr/Radarr webhooks instead of polling for this —
+  a `Grab` webhook flips the episode to DOWNLOADING immediately, an import-complete webhook
+  (`Download`, `on_import`) flips it to AVAILABLE, both the moment they actually happen rather
+  than waiting out a poll interval. Real design work before building, not a quick patch:
+  - LCARS's `server.py` currently mounts exactly one thing — `GraphQL(schema, ...)` wrapped in
+    one bearer-token `BearerTokenMiddleware` covering the whole app. A webhook receiver needs
+    its own route(s) (e.g. `/webhooks/sonarr`, `/webhooks/radarr`) alongside the GraphQL mount,
+    which this app doesn't have a router for yet.
+  - Sonarr/Radarr's own webhook client doesn't send a bearer token — their usual pattern is a
+    secret embedded in the callback URL path itself, needs its own auth story distinct from
+    §8's existing bearer-token design.
+  - Once built, `pollFileAvailability`'s polling sweep becomes a slower safety-net catching
+    anything a missed/failed webhook didn't (never remove it outright) — matches this
+    project's existing "apply immediately, reconcile in the background" pattern (§3
+    principle 1) rather than a hard cutover.
+  - Worth still doing step (1) from before first regardless (measure the real current gap
+    live) — helps confirm how much this actually buys before investing the design work.
 
 # Ideas / design
 
