@@ -177,6 +177,7 @@ def test_fetch_my_anime_list_flattens_every_list_into_one():
                             "entries": [
                                 {
                                     "status": "COMPLETED",
+                                    "progress": 12,
                                     "media": {"id": 101, "format": "TV", "title": {"romaji": "A"}},
                                 }
                             ]
@@ -185,6 +186,7 @@ def test_fetch_my_anime_list_flattens_every_list_into_one():
                             "entries": [
                                 {
                                     "status": "CURRENT",
+                                    "progress": 0,
                                     "media": {
                                         "id": 102,
                                         "format": "MOVIE",
@@ -201,11 +203,37 @@ def test_fetch_my_anime_list_flattens_every_list_into_one():
     fake = _SequencedFakeClient([viewer_response, collection_response])
     result = anilist_client.fetch_my_anime_list("tok", client=fake)
     assert result == [
-        {"anilist_id": 101, "format": "TV", "status": "COMPLETED", "title": "A"},
-        {"anilist_id": 102, "format": "MOVIE", "status": "CURRENT", "title": "B"},
+        {"anilist_id": 101, "format": "TV", "status": "COMPLETED", "progress": 12, "title": "A"},
+        {"anilist_id": 102, "format": "MOVIE", "status": "CURRENT", "progress": 0, "title": "B"},
     ]
     # userId came from the Viewer call's own id, not hardcoded
     assert fake.calls[1]["variables"] == {"userId": 24011}
+
+
+def test_fetch_my_anime_list_treats_a_null_progress_as_zero():
+    viewer_response = _FakeResponse(payload={"data": {"Viewer": {"id": 24011}}})
+    collection_response = _FakeResponse(
+        payload={
+            "data": {
+                "MediaListCollection": {
+                    "lists": [
+                        {
+                            "entries": [
+                                {
+                                    "status": "PLANNING",
+                                    "progress": None,
+                                    "media": {"id": 101, "format": "TV", "title": {"romaji": "A"}},
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    fake = _SequencedFakeClient([viewer_response, collection_response])
+    result = anilist_client.fetch_my_anime_list("tok", client=fake)
+    assert result[0]["progress"] == 0
 
 
 def test_fetch_my_anime_list_deduplicates_an_entry_appearing_in_two_lists():

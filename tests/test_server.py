@@ -5983,3 +5983,95 @@ async def test_show_availability_fields_resolve_through_real_graphql(client, mig
     assert data["show"]["availableViaRadarr"] == "DOWNLOADING"
     assert data["show"]["filePathRadarr"] is None
     assert data["show"]["availableLocally"] is False
+
+
+# --- reconcileWatchProgress (B.15, live-caught 2026-08-12) --------------------
+
+RECONCILE_WATCH_PROGRESS = """
+mutation {
+  reconcileWatchProgress {
+    seasonsChecked
+    notMatchedOnAnilist
+    showsStatusUpdated
+    episodesBackfilled
+  }
+}
+"""
+
+
+async def test_reconcile_watch_progress_no_op_when_anilist_not_configured(client):
+    data = await gql(client, RECONCILE_WATCH_PROGRESS, headers=auth_headers())
+    assert data["reconcileWatchProgress"] == {
+        "seasonsChecked": 0,
+        "notMatchedOnAnilist": 0,
+        "showsStatusUpdated": 0,
+        "episodesBackfilled": 0,
+    }
+
+
+async def test_reconcile_watch_progress_backfills_and_corrects_status_through_real_graphql(
+    client, monkeypatch
+):
+    # The actual live-caught scenario: a show LCARS thinks is COMPLETED with
+    # every episode UNWATCHED, while AniList's own real list says CURRENT
+    # with real progress — reconciling should fix both, end to end, through
+    # the real mutation and resolvers, not called as a bare Python function.
+    show = await add_show(
+        client, mediaShape="EPISODIC", trackingSpace="ANIME", titleRomaji="Reconcile Me"
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await _link_season_anilist(client, show["id"], 1, 555)
+
+    conn = db.get_connection()
+    for ep in (1, 2, 3):
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, kind, created_at, updated_at)"
+            " VALUES (?, ?, 1, ?, 'regular', 'x', 'x')",
+            (f"e-recon{ep}", show["id"], ep),
+        )
+    conn.commit()
+
+    config.set_current(_authenticated_config())
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_my_anime_list",
+        lambda token: [
+            {"anilist_id": 555, "status": "CURRENT", "progress": 2, "format": "TV", "title": "x"}
+        ],
+    )
+
+    data = await gql(client, RECONCILE_WATCH_PROGRESS, headers=auth_headers())
+    assert data["reconcileWatchProgress"] == {
+        "seasonsChecked": 1,
+        "notMatchedOnAnilist": 0,
+        "showsStatusUpdated": 1,
+        "episodesBackfilled": 2,
+    }
+
+    show_data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert show_data["show"]["status"] == "WATCHING"
+
+    ep_data = await gql(
+        client,
+        "query($id: ID!) { episode(id: $id) { state } }",
+        {"id": "e-recon1"},
+        headers=auth_headers(),
+    )
+    assert ep_data["episode"]["state"] == "WATCHED"
+    ep3_data = await gql(
+        client,
+        "query($id: ID!) { episode(id: $id) { state } }",
+        {"id": "e-recon3"},
+        headers=auth_headers(),
+    )
+    assert ep3_data["episode"]["state"] == "UNWATCHED"  # beyond progress=2, untouched

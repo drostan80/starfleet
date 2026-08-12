@@ -46,6 +46,7 @@ from lcars import (
     shows,
     untracked_sweep,
     util,
+    watch_reconcile,
 )
 
 query = QueryType()
@@ -1425,6 +1426,20 @@ def resolve_refresh_mal_token_if_due(_, info):
     cfg.mal_token_refreshed_at = util.now_utc_iso()
     conn.commit()
     return {"refreshed": True}
+
+
+@mutation.field("reconcileWatchProgress")
+def resolve_reconcile_watch_progress(_, info):
+    """B.15, live-caught 2026-08-12 — see watch_reconcile.py's own
+    module docstring for the full scope/reasoning. No require_client()
+    here, same "bulk sweep, not a targeted human decision" reasoning
+    pollFileAvailability/auditLocalFiles already use — changed_by on
+    every status_change row this writes is the fixed literal
+    "anilist_reconcile" (changed_by is open-ended TEXT by design,
+    §5.7, already documented as covering process names like
+    "sonarr_sync"/"anilist_sync", not just client identities)."""
+    conn = db.get_connection()
+    return watch_reconcile.reconcile_watch_progress(conn)
 
 
 @query.field("recommendedAvailabilityPollIntervalSeconds")

@@ -247,6 +247,7 @@ query ($userId: Int) {
     lists {
       entries {
         status
+        progress
         media { id format title { romaji } }
       }
     }
@@ -265,7 +266,15 @@ def fetch_my_anime_list(token: str, client: httpx.Client | None = None) -> list[
     particular account has none, but nothing guarantees that for every
     account). `format` can be null (verified live — a real entry on
     this account has one); callers decide the fallback, this just
-    passes it through as-is."""
+    passes it through as-is.
+
+    `progress` added 2026-08-12 (B.15) — the reconciliation gap found
+    live the same day (§6.9/reverse-sync note, `BUILD_PLAN.md`'s
+    parked drift-detection bullet): a show's episode-watched state in
+    LCARS can silently diverge from what AniList actually shows,
+    entirely independent of `status` above. Purely additive — every
+    existing caller (`show_backfill.py`) reads this dict by key and
+    ignores keys it doesn't ask for, confirmed before adding this."""
     viewer_id = fetch_viewer_id(token, client=client)
     data = _graphql_request(_MY_ANIME_LIST_QUERY, {"userId": viewer_id}, token=token, client=client)
     by_id: dict[int, dict] = {}
@@ -276,6 +285,7 @@ def fetch_my_anime_list(token: str, client: httpx.Client | None = None) -> list[
                 "anilist_id": media["id"],
                 "format": media["format"],
                 "status": entry["status"],
+                "progress": entry.get("progress") or 0,
                 "title": media["title"]["romaji"],
             }
     return list(by_id.values())

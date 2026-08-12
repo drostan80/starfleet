@@ -933,6 +933,18 @@ type MalTokenRefreshResult {
 }
 
 # ---------------------------------------------------------------------------
+# B.15 — AniList -> LCARS watch reconciliation (live-caught 2026-08-12)
+# ---------------------------------------------------------------------------
+
+"reconcileWatchProgress's own confirmation summary. seasonsChecked: LCARS seasons matched to a real AniList list entry this run. notMatchedOnAnilist: a season with an anilist_id LCARS knows about, but no corresponding entry on the real list (removed from AniList, or a stale/wrong id) — a real, if rare, self-healing-not-yet outcome, not an error. showsStatusUpdated / episodesBackfilled: real corrections actually applied — see watch_reconcile.py's own module docstring for exactly what wins on a divergence and why."
+type WatchProgressReconcileResult {
+  seasonsChecked: Int!
+  notMatchedOnAnilist: Int!
+  showsStatusUpdated: Int!
+  episodesBackfilled: Int!
+}
+
+# ---------------------------------------------------------------------------
 # §6.7 per-integration service-health tracking (B.6)
 # ---------------------------------------------------------------------------
 
@@ -1389,6 +1401,19 @@ type Mutation {
   integration here gets, never a failure.
   """
   refreshMalTokenIfDue: MalTokenRefreshResult!
+
+  """
+  B.15, live-caught 2026-08-12 — one-time-triggered (not part of Ops's
+  automatic loop, same "on-demand, deliberately run" precedent as
+  backfillFileAvailability/auditLocalFiles/backfillUntrackedShows):
+  fetches the real AniList list once, then corrects show.status and
+  backfills missing watch_event/episode.state wherever LCARS had
+  silently diverged from it. AniList wins outright, no pending_review
+  gate — see watch_reconcile.py's own module docstring for the full
+  scope and reasoning, including why this is deliberately narrower
+  than the still-unscheduled general reverse-sync design.
+  """
+  reconcileWatchProgress: WatchProgressReconcileResult!
 
   # -- 5.6 pending_review ----------------------------------------------------
   """
