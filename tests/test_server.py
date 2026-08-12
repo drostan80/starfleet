@@ -740,7 +740,9 @@ async def test_add_show_sonarr_fetch_creates_season_rows_and_sets_episode_season
 
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1, 1), _ep(2, 1)])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
-    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+    # trackingSpace ANIME (add_show's own default) — Fribb only ever maps
+    # anime (2026-08-12 fix), so a tv show would never match here.
+    show = await add_show(client, tvdbId=555)
 
     data = await gql(
         client,
@@ -827,7 +829,8 @@ async def test_add_show_sonarr_fetch_backfills_season_id_on_preexisting_episode(
     monkeypatch.setattr(fribb, "load_dataset", lambda: _raise())
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
-    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+    # trackingSpace ANIME (add_show's own default) — see note above.
+    show = await add_show(client, tvdbId=555)
 
     data = await gql(
         client,
@@ -877,7 +880,10 @@ async def test_add_show_sonarr_fetch_fribb_failure_still_creates_season_and_open
 
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
-    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+    # trackingSpace ANIME (add_show's own default) — this test is about a
+    # Fribb outage (transient failure -> review), which only applies to
+    # anime shows at all after the 2026-08-12 fix.
+    show = await add_show(client, tvdbId=555)
 
     data = await gql(
         client,
@@ -2939,6 +2945,23 @@ async def test_due_for_season_reconciliation_includes_a_never_reconciled_season(
     assert "z-dsr004" in season_ids
 
 
+async def test_due_for_season_reconciliation_excludes_a_tv_shows_season(client, migrated_db):
+    """Found live 2026-08-12: without this filter, every watching+airing tv
+    show's never-reconciled season was fed into the weekly sweep too, which
+    (via season_mapping.reconcile_season's own Fribb lookup) can never
+    produce a candidate for a non-anime show — pure noise. tracking_space
+    is filtered server-side here, matching show_merge.py's/animeschedule.py's
+    own anime-only filters, alongside the real fix in reconcile_season()."""
+    show = await _add_watching_show(
+        client, titleRomaji="Watching TV Show", mediaShape="EPISODIC", trackingSpace="TV"
+    )
+    _insert_episode_with_air_date(migrated_db, "e-dsrxtv", show["id"], None)  # airing
+    _insert_season(migrated_db, "z-dsrxtv", show["id"], 1, last_reconciled_at=None)
+    data = await gql(client, DUE_FOR_SEASON_RECONCILIATION_QUERY, headers=auth_headers())
+    season_ids = {e["node"]["id"] for e in data["dueForSeasonReconciliation"]["edges"]}
+    assert "z-dsrxtv" not in season_ids
+
+
 async def test_due_for_season_reconciliation_includes_a_season_reconciled_eight_days_ago(
     client, migrated_db
 ):
@@ -4393,6 +4416,31 @@ async def test_reconcile_season_mapping_discrepancy_applies_immediately_and_logs
     assert len(reviews) == 1  # still one entry, not two
     assert reviews[0]["previousValue"] == "111"  # unchanged — value before the FIRST change
     assert reviews[0]["proposedValueChain"] == ["999", "777"]
+
+
+async def test_reconcile_season_mapping_skips_tv_shows_without_opening_a_review(
+    client, monkeypatch
+):
+    """Found live 2026-08-12: 318 of 344 open season.anilist_id reviews
+    belonged to tracking_space='tv' shows — every new season of every tv
+    show was silently generating a permanently-unresolvable review, since
+    Fribb only ever maps anime. A tv show's season must stay unmatched
+    (matched=False, no anilist/mal id) but WITHOUT the review noise, same
+    spirit as the pre-existing season-0 skip."""
+    _patch_fribb_dataset(monkeypatch)
+    show = await add_show(client, mediaShape="EPISODIC", trackingSpace="TV")
+    await _link_tvdb(client, show["id"], 555)  # even with a real tvdb link + a real dataset hit
+
+    season = await _reconcile(client, show["id"], 1)
+    assert season["matched"] is False
+    assert season["source"] == "UNMATCHED"
+    assert season["anilistId"] is None
+    assert season["malId"] is None
+    assert await _pending_reviews_for(client, season["id"]) == []
+
+    # re-running (the Sonarr-fetch-triggered re-check path) stays silent too
+    await _reconcile(client, show["id"], 1)
+    assert await _pending_reviews_for(client, season["id"]) == []
 
 
 async def test_reconcile_season_mapping_never_overwrites_manual_override(client, monkeypatch):

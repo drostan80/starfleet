@@ -37,8 +37,20 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
     Caller's responsibility: `show_id` must already be a real show
     (both call sites — the mutation and A.20's Sonarr-fetch path —
     already hold a real `show` row before calling this).
+
+    `tracking_space != 'anime'` (a plain tv show) is skipped the same
+    way season 0 already was (A.20, `_ensure_seasons`' own comment):
+    the Fribb dataset only maps anime, so a tv show's season can never
+    produce a candidate — every single one was silently opening a
+    permanently-unresolvable `anilist_id` pending_review the first time
+    Sonarr reported it. Found 2026-08-12: 318 of 344 open season-level
+    `anilist_id` reviews belonged to `tracking_space = 'tv'` shows
+    (confirmed via a direct query, not a sample) — this is the fix.
     """
     now = util.now_utc_iso()
+
+    show_row = conn.execute("SELECT tracking_space FROM show WHERE id = ?", (show_id,)).fetchone()
+    is_anime = show_row is not None and show_row["tracking_space"] == "anime"
 
     existing_row = conn.execute(
         "SELECT * FROM season WHERE show_id = ? AND season_number = ?",
@@ -53,6 +65,25 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
         )
         conn.commit()
         return get_season(conn, existing["id"])
+
+    if not is_anime:
+        if existing is not None:
+            conn.execute(
+                "UPDATE season SET last_reconciled_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, existing["id"]),
+            )
+            conn.commit()
+            return get_season(conn, existing["id"])
+        season_id = ids.generate_id(conn, "z")
+        conn.execute(
+            "INSERT INTO season"
+            " (id, show_id, season_number, anilist_id, mal_id, source, matched,"
+            "  manual_override, last_reconciled_at, created_at, updated_at)"
+            " VALUES (?, ?, ?, NULL, NULL, 'unmatched', 0, 0, ?, ?, ?)",
+            (season_id, show_id, season_number, now, now, now),
+        )
+        conn.commit()
+        return get_season(conn, season_id)
 
     tvdb_row = conn.execute(
         "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'tvdb'",

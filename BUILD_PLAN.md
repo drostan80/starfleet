@@ -4057,6 +4057,39 @@ background scheduler.
     (the remainder is genuine backlog plus non-anime shows this
     reconciliation can't reach at all, being AniList-only).
 
+- [x] **B.16 — Fix: `season.anilist_id` reconciliation was running
+  against tv shows** (2026-08-12, same day, found while driving the
+  pending_review backlog toward zero). Direct query confirmed 318 of
+  344 open season-level `anilist_id` reviews (92%) belonged to
+  `tracking_space = 'tv'` shows — NCIS, The Rookie, Fallout, Peacemaker,
+  FBI, etc. — that can never match AniList's catalog by definition.
+  Root cause: `season_mapping.reconcile_season()` (A.4/A.20) never
+  checked `tracking_space` at all, so every new season of every tv
+  show Sonarr ever reports (`metadata.py`'s `_ensure_seasons`, on
+  every fetch) ran a real Fribb lookup, found nothing, and opened a
+  permanently-unresolvable review — structurally the same class of bug
+  as the season-0 noise A.20 already fixed once, just on the
+  `tracking_space` axis instead of the season-number axis. Also found
+  the same missing filter in `dueForSeasonReconciliation`'s own query
+  (Ops's weekly sweep, `resolvers.py`) — `dueForMetadataRefresh` (B.1)
+  correctly has no such filter (TMDB refresh legitimately applies to
+  tv), but this one should have mirrored `show_merge.py`'s/
+  `animeschedule.py`'s existing `tracking_space = 'anime'` filters and
+  didn't.
+  - Fixed both: `reconcile_season()` now short-circuits for a
+    non-anime show (creates/touches the season row, `source =
+    'unmatched'`, no Fribb call, no review — same shape as the
+    manual_override short-circuit just above it) before ever touching
+    Fribb; `dueForSeasonReconciliation` filters `tracking_space =
+    'anime'` server-side. 3 pre-existing tests that happened to use
+    `trackingSpace: TV` as an arbitrary label for otherwise-unrelated
+    Sonarr-fetch/season-creation mechanics were switched to the
+    default `ANIME` (they're genuinely testing Fribb-matching, which
+    is anime-only now); 2 new tests added. 655 passing.
+  - Not yet done: bulk-resolving the 318 already-open reviews as
+    "not applicable" now that the sweep won't regenerate them, and
+    processing the remaining genuinely-anime portion of the backlog.
+
 ---
 
 ## Phase C — Data as thin front-end + mpv/aninote bridge

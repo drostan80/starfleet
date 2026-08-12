@@ -631,9 +631,20 @@ def resolve_due_for_season_reconciliation(_, info, **page_args):
     consumer, so a plain 7-days-ago cutoff (`util.utc_iso_offset(-7)`)
     is used instead. Same computed-in-Python-first shape as
     `dueForMetadataRefresh`/`nextUp` — the airing check isn't one column
-    comparison, so it can't be a single SQL WHERE."""
+    comparison, so it can't be a single SQL WHERE.
+
+    `tracking_space = 'anime'` filter added 2026-08-12: unlike B.1's
+    metadata refresh (which legitimately applies to tv shows too, via
+    TMDB), Fribb/AniList season reconciliation only ever has anything
+    to say about anime — a tv show can never produce a candidate. Same
+    reasoning as `show_merge.py`'s own winner-side filter and
+    `animeschedule.py`'s poll query. Belt-and-suspenders alongside the
+    real fix in `season_mapping.reconcile_season()` itself, which is
+    also reached directly from a Sonarr fetch (A.20), not just here."""
     conn = db.get_connection()
-    watching_shows = conn.execute("SELECT * FROM show WHERE status = 'watching'").fetchall()
+    watching_shows = conn.execute(
+        "SELECT * FROM show WHERE status = 'watching' AND tracking_space = 'anime'"
+    ).fetchall()
     airing_show_ids = [s["id"] for s in watching_shows if _show_is_airing(conn, s["id"])]
     if not airing_show_ids:
         return pagination.paginate_list([], **page_args)
