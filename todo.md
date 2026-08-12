@@ -1,5 +1,13 @@
 # Bugs
 
+- [ ] B.11g — calendar backlog counter, ready to test live, not yet confirmed: a show with
+  unwatched-but-downloaded older episodes now shows a colored "+N" badge next to its title on
+  its next-upcoming row (`~/repos/data` commits `e186fc9`/`0160fe7`). Pressing `w` on that row
+  marks the *oldest* backlog episode watched (not necessarily the one the row is displaying) —
+  LCARS-only, deliberately does not touch AniList for this specific action (see BUILD_PLAN.md's
+  B.11g entry for why). Please test: find a show with a real backlog gap, confirm the badge
+  count and that `w` clears the right (oldest) episode and the count drops by one.
+
 - [ ] trying to mark a show from yesterday that I watch today as watched and...nothing happen
   — two real bugs found and fixed, ready to test live, not yet confirmed:
   (1) `_queue_lcars_watched` silently no-op'd for a non-cached show (`~/repos/data` commit

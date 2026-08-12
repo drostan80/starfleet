@@ -3744,25 +3744,44 @@ background scheduler.
       no-tvdb-link is skipped not guessed at, badge appears only on
       the earliest visible row, no badge when backlog is empty), 536
       passing (was 529), `ruff check`/`format --check` clean.
-    - **Mark-watched-from-it — deliberately NOT wired yet, a real risk
-      found while starting to wire it, not guessed through**:
-      `lcars_queue.enqueue_watch()` (the local pending-queue Data
-      already uses for every other watch mark) has a monotonic
-      no-regression guard — it rejects queuing an *earlier* episode
-      than whatever's already queued/confirmed for that show. But the
-      whole point of clearing the *oldest backlog* episode is to catch
-      up an episode that's behind wherever the show's normal progress
-      already is — precisely the case that guard exists to block by
-      design. Routing this through the existing queue would silently
-      no-op in exactly the situations where a user would actually use
-      it, the same silent-no-op shape as this session's two other real
-      bugs (`744c6ff`/`8b9abab`). Needs a distinct write path (a
-      direct, immediate `add_watch_event` call, bypassing the
-      monotonic queue entirely — `addWatchEvent` is idempotent on
-      LCARS's side, so this is safe to call directly rather than
-      queued) — flagged to the user for confirmation before building,
-      not assumed. `_oldest_backlog_episode()` already exists as the
-      lookup this will need once confirmed.
+    - **Mark-watched-from-it — built, 2026-08-12, `~/repos/data` commit
+      `0160fe7`**: a real risk found while starting to wire this, not
+      guessed through — `lcars_queue.enqueue_watch()` (the local
+      pending-queue Data already uses for every other watch mark) has
+      a monotonic no-regression guard, rejecting an *earlier* episode
+      than whatever's already queued/confirmed for that show. But
+      clearing the *oldest backlog* episode is exactly that — catching
+      up something behind wherever the show's normal progress already
+      sits — precisely the case that guard exists to block by design.
+      Routing through the existing queue would have silently no-op'd
+      in exactly the situations where a user would actually use it,
+      the same shape as this session's two other real bugs
+      (`744c6ff`/`8b9abab`). Also found, reading `watch_queue.enqueue()`
+      before relying on it rather than assuming: its own guard only
+      blocks a regression against what's already queued *this
+      session* — with nothing queued yet, a lower AniList progress
+      would go through and silently regress it on the next flush.
+      Built `_mark_oldest_backlog_watched()`: a direct, immediate
+      `addWatchEvent` call (idempotent server-side, bypasses the
+      monotonic queue entirely) that deliberately never touches
+      AniList at all, for anime or non-anime shows alike — AniList's
+      `progress` is a single high-water mark, not per-episode state,
+      so there's no value this action could correctly push. Wired into
+      `action_mark_watched`: only takes this path when the oldest
+      backlog episode genuinely differs from the row's own displayed
+      one (a real catch-up); when they coincide, `w` behaves exactly
+      as it always has — queued, AniList included, no special-casing
+      just because the row happens to carry a badge. Gates on
+      `self._lcars_client` (unlike `_queue_lcars_watched`, which
+      deliberately doesn't) — there's no queue here to fall back on,
+      so a missing client genuinely can't succeed and must say so; a
+      failure reports itself in `_play_note` and leaves the backlog
+      entry in place rather than clearing it early. 4 new tests
+      (genuine catch-up writes the right episode with no queue/AniList
+      side effects, a coinciding episode is unaffected, a failure is
+      visible not silent), 539 passing (was 536), `ruff check`/
+      `format --check` clean. **Not yet confirmed live by the user** —
+      B.11g stays unchecked, same standing rule as the fix below.
     - **A real, closely-related bug found and fixed while starting
       this step, 2026-08-12 (`~/repos/data` commit `6d1baef`)**: this
       is the user's own separately-reported "watched status doesn't
