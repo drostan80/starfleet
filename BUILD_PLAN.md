@@ -3896,6 +3896,30 @@ background scheduler.
     `test_ids.py`'s "unknown prefix" example — `y` stopped being
     unclaimed — and two `test_ops_scheduler.py` assertions for the
     monthly tier's new third member).
+  - **Correction, 2026-08-12, commit `af28cde`, released `v0.1.4`:
+    auto-merge retired before this sweep was ever actually run against
+    production.** A dry run first (via real shell access, worked
+    around the day's own Tailscale SSH block — see the deploy note on
+    B.15 below) surfaced real false positives at the existing 0.72
+    threshold: 15 candidates, at least 6 completely unrelated shows
+    matched together on nothing more than short, coincidentally-
+    similar titles ("The Rookie" / "THE UROTSUKI", "Inspector Gadget"
+    / "In/Spectre", "Alien: Earth" / "Captain Earth"). Confirmed
+    directly with the user rather than picking a fix alone (see
+    SCOPE.md §5.11's own "Correction, 2026-08-12" note for the
+    reasoning against a stricter threshold or auto-merge-with-
+    review-only-on-ambiguity): `pollShowMerges` now only opens a
+    `pending_review` entry per candidate, never merges. A new
+    `applyShowMerge` mutation is the human-triggered action that
+    actually merges a specific, reviewed pair — carries forward the
+    orphaning guard the old sweep's `claimed_winner_ids` set used to
+    provide, refusing outright if the winner already absorbed a
+    different loser. 18 tests rewritten/added, 653 passing, `ruff
+    check`/`format --check` clean, schema re-validated.
+  - **The original 15-candidate batch itself, reviewed with the user
+    and applied for real, 2026-08-12**: see `todo.md` for the specific
+    outcome per pair — this entry is about the mechanism, not the
+    one-time cleanup.
 - [x] **B.12 — Proxy interactive flows through LCARS**: add-show,
   id-remap move from direct-from-Data to going through LCARS, so
   reconciliation logic applies consistently regardless of trigger.
