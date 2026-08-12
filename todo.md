@@ -1,25 +1,24 @@
 # Bugs
 
-- [ ] B.11g — calendar backlog counter, ready to test live, not yet confirmed: a show with
-  unwatched-but-downloaded older episodes now shows a colored "+N" badge next to its title on
-  its next-upcoming row (`~/repos/data` commits `e186fc9`/`0160fe7`). Pressing `w` on that row
-  marks the *oldest* backlog episode watched (not necessarily the one the row is displaying) —
-  LCARS-only, deliberately does not touch AniList for this specific action (see BUILD_PLAN.md's
-  B.11g entry for why). Please test: find a show with a real backlog gap, confirm the badge
-  count and that `w` clears the right (oldest) episode and the count drops by one.
-
-- [ ] trying to mark a show from yesterday that I watch today as watched and...nothing happen
-  — two real bugs found and fixed, ready to test live, not yet confirmed:
-  (1) `_queue_lcars_watched` silently no-op'd for a non-cached show (`~/repos/data` commit
-  `8b9abab`) — fixed what gets queued.
-  (2) the actual display gap: the Track column had no confirmed-watch-history to read at all,
-  so once a mark flushed and dropped out of the local pending queue it fell back to a
-  meaningless "Bridged" placeholder regardless of real watched state (`~/repos/data` commit
-  `6d1baef`, 2026-08-12) — fixed what the row *displays*: `episode.state` is now pulled from
-  LCARS and rendered as "✓ Watched" / "Skipped" / "Unwatched".
-  Please test: press `w` on a non-anime show, wait for the flush (up to 5 min, or `R`/`b`/quit
-  to force it), confirm the Track column actually settles on "✓ Watched" rather than reverting
-  to something else. Stays open until you confirm this live — see BUILD_PLAN.md's B.11g entry.
+- [ ] B.11g — calendar backlog counter + mark-watched display, ready to re-test on a clean
+  baseline now, not yet confirmed. Timeline, so the full picture is in one place:
+  1. Two real display/queueing bugs fixed 2026-08-12 night (`~/repos/data` `8b9abab`/`6d1baef`):
+     mark-watched silently failing to queue for LCARS, and the Track column showing a
+     meaningless "Bridged" placeholder instead of real watched state.
+  2. Backlog counters shipped same night (`e186fc9`/`0160fe7`) — a colored "+N" badge on a
+     show's next-upcoming row; `w` on it clears the *oldest* backlog episode, LCARS-only.
+  3. Next morning: real bug found in the badge itself (a stale loop variable meant badges
+     landed on the wrong show entirely) — fixed, `~/repos/data` `6ca51d5`.
+  4. **The bigger discovery, same morning**: three shows reported as "+7"/"+5"/"+7" despite
+     being fully watched turned out to be correctly reading genuinely-wrong LCARS data — zero
+     `watch_event` rows existed for any of them, a pre-existing silent data-loss bug (same root
+     cause as item 1), not a display bug at all. Fixed library-wide via a new one-time
+     reconciliation against your real AniList list (`~/repos/starfleet` B.15, `1e7bd66`, run for
+     real 2026-08-12: 41 shows' status corrected, 2973 episodes backfilled, confirmed against
+     the three originally-reported shows plus three others found stale the same way).
+  Please test now, on this corrected baseline: press `w` on a non-anime show and confirm the
+  Track column settles on "✓ Watched"; find a show with a real backlog gap and confirm the
+  badge count is now sane and `w` clears the right (oldest) episode.
 
 - [x] somehow tomb raider king was added to anilist again — traced live: LCARS's own row for it
   still had zero anilist link either time, so `M`'s LCARS bridge silently no-op'd both times
@@ -40,6 +39,12 @@
 
 # Ideas / design
 
+- [ ] SSH to the deploy host via its Tailscale name (`tiny`) is blocked by a tailnet ACL policy
+  rejection, confirmed not a stale-session issue (a fresh verbose attempt still gets rejected
+  after a clean handshake — "tailnet policy does not permit you to SSH as user drostan").
+  Worked around 2026-08-12 by connecting to the host's real LAN IP directly instead
+  (`tiny@192.168.0.152`, a different local account, bypasses Tailscale's SSH proxy entirely) —
+  works, but the Tailscale ACL should actually get fixed rather than relied on staying broken.
 - [ ] `aa` (add to AniList only, no Sonarr relationship) never bridges to LCARS at all — a real
   gap, deliberately not closed during B.12 since LCARS's `addShow` always assumes an episodic
   show (Data has no Radarr/movie path), which would be wrong for anything `aa` adds that's

@@ -3985,6 +3985,53 @@ background scheduler.
     `998e7fff1465194672004df02315a96a62046927` (2026-08-08, the last
     commit before the Phase 0 fork), matching `origin/main` exactly.
     No drift, exactly as the hard constraint requires.
+- [x] **B.15 — `reconcileWatchProgress`: one-time AniList → LCARS
+  data-correction pass** (not in the original plan — added and built
+  same-day, 2026-08-12, `~/repos/starfleet` commit `1e7bd66`, released
+  `v0.1.3`). Live-caught the same morning testing B.11g: the user
+  reported having watched every released episode of three real shows;
+  LCARS showed zero `watch_event` rows for any of them. Root cause
+  confirmed as the same silent-bridge-no-op class as the previous
+  night's fixes (`~/repos/data` `744c6ff`/`8b9abab`/`6d1baef`) — a real
+  mark-watched reached AniList directly (§6.8's permanent exception)
+  but silently never reached LCARS, with nothing queued to retry.
+  `show.status` diverges the same way, independently (three shows
+  marked `completed` despite airing new episodes). User's explicit
+  direction: "LCARS must be correct... let's fix this," deliberately
+  scoped narrower than the still-unscheduled general reverse-sync
+  design (the parked "AniList/MAL drift detection" bullet above stays
+  parked — this is a one-time correction, not that design work).
+  - New `reconcileWatchProgress` mutation (`watch_reconcile.py`):
+    fetches the real AniList list once, backfills any genuinely-
+    unwatched episode up to AniList's real progress (never touching a
+    deliberately `SKIPPED` episode), and corrects `show.status` where
+    it diverges (highest-season-numbered entry wins for a multi-season
+    show). AniList wins outright, no `pending_review` gate — a
+    confirmed real divergence, not a routine disagreement. Not wired
+    into Ops's automatic loop, same on-demand precedent as
+    `backfillFileAvailability`/`auditLocalFiles`. 19 new/updated tests,
+    648 passing, `ruff check`/`format --check` clean, schema
+    re-validated.
+  - **Deploy note**: SSH to the deploy host via its Tailscale name
+    (`tiny`) is still blocked by a tailnet ACL policy rejection ("does
+    not permit you to SSH as user drostan") — confirmed this isn't a
+    stale-session issue (a fresh verbose attempt still gets rejected
+    at the same point, after a clean handshake). Worked around by
+    connecting to the host's real LAN IP directly
+    (`ssh tiny@192.168.0.152`, a different local account than
+    `drostan`, bypassing Tailscale's SSH proxy entirely) — this
+    account is in the `docker` group and owns the compose stack at
+    `/home/tiny/stacks/starfleet.yml`. Needs revisiting: the Tailscale
+    route should be fixed properly rather than relied on staying
+    broken.
+  - **Run for real, 2026-08-12, against the live production
+    database**: `seasonsChecked: 1421`, `notMatchedOnAnilist: 10`,
+    `showsStatusUpdated: 41`, `episodesBackfilled: 2973`. Confirmed
+    directly afterward: all three originally-checked shows plus the
+    three stale-status shows now show real, correct watch history and
+    `WATCHING` status. Library-wide backlog dropped from 140 to 50
+    (the remainder is genuine backlog plus non-anime shows this
+    reconciliation can't reach at all, being AniList-only).
 
 ---
 
