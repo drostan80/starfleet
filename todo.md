@@ -53,3 +53,13 @@
 - [ ] make sure to design the ui for html client well
 - [ ] have html client a login /password thing keep safe
 - [ ] does the html client use a html/browser player or local one? my thought is local first then browser base but is it feasible?
+- [ ] `pending_review` has no surface in any client yet (SCOPE.md §5.6 names Data's status bar/
+  Holodeck's dashboard/Captain's Log's inline prompt as the intended places — none built).
+  Confirmed still wanted (2026-08-12) — deprioritized in favor of driving the backlog itself
+  to near-zero first (see B.16, BUILD_PLAN.md: 452 → 23, the 23 being a real documented
+  structural gap, not noise). Build a minimal version in Data: a count in the status bar plus
+  a simple list/resolve screen.
+- [x] `anilist_id_review.csv` sent earlier 2026-08-12 for manual review is now obsolete/mostly
+  wrong — it was generated before the tv-show contamination bug (B.16) was found, so ~318 of
+  its ~340 rows were tv shows that should never have been on it. Don't use it; the real
+  remaining backlog (23 items, all genuine cour-split cases) doesn't need a spreadsheet pass.

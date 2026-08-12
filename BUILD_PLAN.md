@@ -4086,9 +4086,27 @@ background scheduler.
     Sonarr-fetch/season-creation mechanics were switched to the
     default `ANIME` (they're genuinely testing Fribb-matching, which
     is anime-only now); 2 new tests added. 655 passing.
-  - Not yet done: bulk-resolving the 318 already-open reviews as
-    "not applicable" now that the sweep won't regenerate them, and
-    processing the remaining genuinely-anime portion of the backlog.
+  - **Backlog cleanup, same day, against production**: the 318
+    already-open tv-show reviews bulk-resolved as "not applicable"
+    (individually verified via a random 15-item sample first — all
+    confirmed real tv shows, `matched=0`/`anilist_id=NULL`). Of the
+    remaining genuinely-anime backlog: 99 newly-accumulated
+    `air_date_utc` reviews and 6 `metadata_fetch` retries resolved via
+    the same verified bulk-resolve patterns as earlier that day; 3
+    `show`-level `anilist_id` reviews (Ascendance of a Bookworm, The
+    Melancholy of Haruhi Suzumiya, Mushoku Tensei) manually linked
+    after confirming the correct AniList entry directly against
+    AniList's own catalog — Fribb's tvdb index simply missed these
+    three; an automated search-and-cross-check pass (exact
+    episode-count match required) applied 3 more of the 26 remaining
+    `season`-level `anilist_id` entries automatically. **Full backlog:
+    452 → 23**, all 23 confirmed (spot-checked against AniList's real
+    catalog, e.g. Ascendance of a Bookworm's 60-episode "season 1"
+    vs. AniList's real 14-episode Part 1) to be the same
+    already-documented cour-split gap (§5.5's "real, evidenced gap
+    found 2026-08-12" section above) or shows with too few episodes
+    aired yet to confirm a match — left open on purpose, not a bug to
+    paper over.
 
 ---
 
