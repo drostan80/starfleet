@@ -37,6 +37,17 @@
 
 - [ ] in list view enter does nothing, info shos but the image show only half somehow this seems to not be an issue in calendar view info
 
+- [ ] File availability takes too long to show up (Sonarr import -> visible in Data). Real
+  latency stack, not yet measured end-to-end: Ops's own `pollFileAvailability` sweep runs on
+  an *adaptive* server-computed interval (`recommendedAvailabilityPollIntervalSeconds` —
+  300s/900s/3600s tiers depending on how close to airing, `src/ops/lcars_client.py`), and
+  Data's own status/download check runs on its own separate `DOWNLOAD_CHECK_INTERVAL_SECONDS`
+  (5 min, `src/data/app.py`) on top of that — worst case these stack rather than overlap.
+  Needs: (1) actually measure the real gap live (grab a file, time when it imports in Sonarr
+  vs. when it shows available in Data), (2) decide whether the fix is tightening one of these
+  cadences, adding a push/webhook path instead of polling, or something else — don't just
+  guess-tighten a number without checking what's actually slow first.
+
 # Ideas / design
 
 - [ ] SSH to the deploy host via its Tailscale name (`tiny`) is blocked by a tailnet ACL policy
