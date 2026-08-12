@@ -439,6 +439,14 @@ def resolve_episode(_, info, id):
     return _get_episode(db.get_connection(), id)
 
 
+@query.field("season")
+def resolve_season(_, info, id):
+    """B.17 — thin wrapper around `season_mapping.get_season()`, the
+    single existing definition (see that function's own docstring on
+    why resolvers.py doesn't keep a second copy)."""
+    return season_mapping.get_season(db.get_connection(), id)
+
+
 @query.field("showsByStatus")
 def resolve_shows_by_status(_, info, statuses, **page_args):
     placeholders = ", ".join("?" for _ in statuses)

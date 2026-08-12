@@ -4108,6 +4108,18 @@ background scheduler.
     aired yet to confirm a match — left open on purpose, not a bug to
     paper over.
 
+- [x] **B.17 — `season(id: ID!)` query, for Data's own pending_review
+  surface** (2026-08-12, same day). §5.6 has always named Data's status
+  bar as one of the intended places `pending_review` surfaces — never
+  actually built. A generic reviewer needs to turn a review's
+  `entityType`/`entityId` into a real human label; `show(id:)`/
+  `episode(id:)` already existed for that, but no equivalent existed
+  for `entityType: "season"` (every other season access went through
+  `Show.seasons`) — added, mirroring the other two exactly
+  (`season_mapping.get_season()`, the one existing definition, same
+  reuse discipline as `reconcileSeasonMapping`). 2 new tests, 657
+  passing.
+
 ---
 
 ## Phase C — Data as thin front-end + mpv/aninote bridge

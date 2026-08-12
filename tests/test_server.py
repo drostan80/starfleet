@@ -4418,6 +4418,36 @@ async def test_reconcile_season_mapping_discrepancy_applies_immediately_and_logs
     assert reviews[0]["proposedValueChain"] == ["999", "777"]
 
 
+async def test_season_query_resolves_by_id(client, monkeypatch):
+    """B.17 — added so a generic pending_review consumer can resolve a
+    season-entity review's entityId to a real (show, seasonNumber) label
+    without a wider query; mirrors show(id:)/episode(id:)."""
+    _patch_fribb_dataset(monkeypatch)
+    show = await add_show(client)
+    season = await _reconcile(client, show["id"], 1)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { season(id: $id) { id seasonNumber show { id } } }",
+        {"id": season["id"]},
+        headers=auth_headers(),
+    )
+    result = data["season"]
+    assert result["id"] == season["id"]
+    assert result["seasonNumber"] == 1
+    assert result["show"]["id"] == show["id"]
+
+
+async def test_season_query_returns_null_for_an_unknown_id(client):
+    data = await gql(
+        client,
+        "query($id: ID!) { season(id: $id) { id } }",
+        {"id": "z-nope00"},
+        headers=auth_headers(),
+    )
+    assert data["season"] is None
+
+
 async def test_reconcile_season_mapping_skips_tv_shows_without_opening_a_review(
     client, monkeypatch
 ):

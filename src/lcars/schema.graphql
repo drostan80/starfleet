@@ -1027,6 +1027,8 @@ type Query {
   showsByStatus(statuses: [ShowStatus!]!, first: Int, after: String, last: Int, before: String): ShowConnection!
 
   episode(id: ID!): Episode
+  "B.17 — a single season by id, added so a generic pending_review consumer (Data's own review screen) can resolve a season-entity review's `entityId` to a real show/season-number label without needing a second, wider query. Mirrors show(id:)/episode(id:) — no equivalent existed before this, since every other season access went through Show.seasons."
+  season(id: ID!): Season
   "§8 — episodes airing in the next N days."
   episodesAiringSoon(days: Int!, first: Int, after: String, last: Int, before: String): EpisodeConnection!
   "§8, B.11c — episodes with an air date within [start, end), half-open (matches Data's own calendar_nav.CalendarState.date_range() convention). Unlike episodesAiringSoon (future-only, relative to server 'now'), the caller supplies explicit bounds so a client-side calendar can page arbitrarily into the past or future. Both bounds are plain Z-suffixed UTC strings, same convention every stored timestamp already uses — not reformatted, just validated and compared lexicographically."
