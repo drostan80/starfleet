@@ -3718,6 +3718,54 @@ background scheduler.
     ship the counter against `Query.backlog` as-is, no reconciliation
     needed) and its mark-watched-clears-exactly-one-oldest-episode
     interaction.
+    - **Not yet started** — `Query.backlog` is not wired into Data's
+      `LcarsClient` at all yet. Genuinely under-specified beyond the
+      one-line description above: is the counter line its own
+      selectable table row (`self._visible_episodes` is currently a
+      strict 1:1 mirror of table rows, either a real episode dict or
+      `None` for a day-separator — ~10 action handlers assume that),
+      what does `w` do when it's selected, how does it behave in a
+      flat per-episode table with no per-show grouping. Real
+      architectural surface, not a query-and-patch job like B.11c/f —
+      ask the user these before building, don't guess. Deliberately
+      not started this session; see the adjacent fix below first.
+    - **A real, closely-related bug found and fixed while starting
+      this step, 2026-08-12 (`~/repos/data` commit `6d1baef`)**: this
+      is the user's own separately-reported "watched status doesn't
+      display" symptom, traced to its root cause rather than assumed
+      to be the same shape as the earlier queueing fix
+      (`8b9abab`) — that fix only corrected what gets *queued*, never
+      what the row *displays*. `_lcars_cell` (the non-anime Track
+      column renderer) had no confirmed-watch-history to read at all
+      once a queued mark flushed and dropped out of
+      `_pending_lcars_change` — it fell back to a `"Bridged"`
+      placeholder that said nothing about whether the episode was
+      actually watched, live-reproducing exactly the reported symptom
+      (mark watched, row looks right for a moment, then reverts to
+      something meaningless). Root cause: `episode.state` (already on
+      the schema, A.1) was never requested by `episodesInRange`
+      (B.11c/f) at all. Confirmed live against the deployed instance
+      before writing any fix that the field is already there
+      server-side — a pure Data-side change, no LCARS/Ops redeploy
+      needed. Fixed: `episodesInRange` now requests `state`, patched
+      onto the episode dict as `lcarsState` in `_patch_from_lcars`,
+      read by `_lcars_cell` once nothing is locally queued —
+      `WATCHED` → `"✓ Watched"`, `SKIPPED` → `"Skipped"`, `UNWATCHED`
+      → `"Unwatched"` (replacing the old `"Bridged"` for this case;
+      `"Bridged"` now only means "linked, state not yet known this
+      window" — a real, brief, not-a-bug state, not the meaningless
+      placeholder it was before). `_anilist_cell` (anime rows) and
+      the `B`-key backlog screen's own local computation are
+      deliberately untouched — out of scope for this fix, not owned
+      by B.11g's own text either. 3 new regression tests, 529 passing
+      (was 526), `ruff check`/`format --check` clean.
+    - **Not yet confirmed live by the user** — per this session's own
+      standing rule (never mark a user-facing bug fixed without the
+      user's own confirmation in the running app), this stays
+      unchecked and `todo.md`'s own entry stays open until the user
+      has actually pressed `w` on a non-anime show and watched the
+      Track column settle on `"✓ Watched"` after a flush, not just
+      verified via tests or a direct GraphQL query as done here.
 - [x] **B.14 — Cross-service show-duplicate merge** (2026-08-11,
   commit `25000de`): the
   real, scoped mechanism B.11f's own investigation surfaced and

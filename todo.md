@@ -1,13 +1,17 @@
 # Bugs
 
 - [ ] trying to mark a show from yesterday that I watch today as watched and...nothing happen
-  — NOT actually confirmed fixed, wrongly marked done below. A real bug was found and fixed
-  (`_queue_lcars_watched` silently no-op'd for a non-cached show, `~/repos/data` commit
-  `8b9abab`) but that only fixes what gets queued, not what the calendar row *displays* — the
-  row reads `_pending_lcars_change` (a local queue), not LCARS's own state, so it still won't
-  show anything the user recognizes as "marked watched." Only verified via unit tests + one
-  unrelated DB query (Ghost in the Shell), never in the running app. Re-open until confirmed
-  live.
+  — two real bugs found and fixed, ready to test live, not yet confirmed:
+  (1) `_queue_lcars_watched` silently no-op'd for a non-cached show (`~/repos/data` commit
+  `8b9abab`) — fixed what gets queued.
+  (2) the actual display gap: the Track column had no confirmed-watch-history to read at all,
+  so once a mark flushed and dropped out of the local pending queue it fell back to a
+  meaningless "Bridged" placeholder regardless of real watched state (`~/repos/data` commit
+  `6d1baef`, 2026-08-12) — fixed what the row *displays*: `episode.state` is now pulled from
+  LCARS and rendered as "✓ Watched" / "Skipped" / "Unwatched".
+  Please test: press `w` on a non-anime show, wait for the flush (up to 5 min, or `R`/`b`/quit
+  to force it), confirm the Track column actually settles on "✓ Watched" rather than reverting
+  to something else. Stays open until you confirm this live — see BUILD_PLAN.md's B.11g entry.
 
 - [x] somehow tomb raider king was added to anilist again — traced live: LCARS's own row for it
   still had zero anilist link either time, so `M`'s LCARS bridge silently no-op'd both times
