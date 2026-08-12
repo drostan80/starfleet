@@ -4364,3 +4364,35 @@ changes first:
     actually designed, the simplest fallback is to timestamp a
     reconciled watch as of when LCARS received/detected it, not a
     fabricated real watch time.
+  - **Reinforced 2026-08-12, still not designed or scheduled — two
+    more concrete data points for whenever this is picked up**, both
+    surfaced live using Data's `B` backlog screen (which stalls on
+    whatever AniList state it fetched at launch, never refreshed
+    mid-session — the immediate trigger for this note, not itself a
+    bug to fix):
+    - **Direction confirmed on Data's direct-to-AniList write**: the
+      user's own conclusion from watching this go stale live —
+      writing to AniList *from Data* (§6.8's permanent exception) is
+      convenient but keeps causing exactly this class of problem
+      (this note's existing scenario, plus B.15's real one-time
+      correction, plus the earlier `744c6ff`/`8b9abab`/`6d1baef`
+      bugs) — it fights the "LCARS is the source of truth, Ops is the
+      only thing that writes external services on LCARS's behalf"
+      principle rather than upholding it. Firmer than this plan's
+      earlier "(maybe) roll back Data's direct AniList write" —
+      when this phase is actually picked up, moving the AniList write
+      to LCARS/Ops and removing it from Data is the intended outcome,
+      not one option among several.
+    - **Data's own backlog view (the `B` screen) is in scope for a
+      rework once this lands, not just the sync mechanism itself**:
+      today it's anime-only, computed from Data's local AniList
+      cache. Intended future shape: one view covering anime *and*
+      movies *and* TV shows, all "downloaded, not yet watched",
+      likely with a per-type toggle (exact system not yet devised).
+      Marking watched from it would mark watched in LCARS, which
+      would then push to whichever external service(s) apply per
+      separate rules still to be devised (some already sketched in
+      `todo.md` — e.g. the AniList write-batching/cooldown idea, and
+      the "dropping a show should also update AniList status and
+      untrack Sonarr/Radarr" note) — not designed here, just flagged
+      as the same future work this bullet already tracks.
