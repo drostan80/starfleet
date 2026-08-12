@@ -1122,7 +1122,30 @@ season
                           checked this row
   created_at / updated_at
   UNIQUE (show_id, season_number)
+```
 
+**Real, evidenced gap found 2026-08-12 — one level deeper than the
+`season` fix above.** `season.anilist_id` assumes one AniList entry
+per (show, season_number) — the same assumption `show_id_mapping`
+wrongly made one level up, before `season` fixed it. That assumption
+is *also* wrong for a large fraction of real multi-cour anime: AniList
+routinely splits a single Sonarr/TVDB season into two or more separate
+list entries ("Part 2"/"Cour 2"/"2nd Season Part 2"), each with its
+own id, episode count, and air dates. Checked directly, not assumed:
+of 4 currently-`watching` shows with an unmatched season found during
+a real pending_review triage, **4 of 4** turned out to be exactly this
+— Mushoku Tensei season 1 (AniList: 11-episode Part 1 + 12-episode
+Part 2), season 2 (13 + 12), Re:ZERO season 2 (13 + 12, confirmed via
+AniList's public catalog even though LCARS has no episodes for it
+yet), That Time I Got Reincarnated as a Slime season 2 (12 + 12). None
+of these are safely representable by a single `season.anilist_id`
+value without misattributing roughly half the season's episodes to
+the wrong list entry — left unmatched rather than forced. Not fixed
+here; recorded as a real, now-well-evidenced limitation for whenever
+this table's own design gets revisited, same "don't force it, note it
+for later" discipline this session already applied elsewhere.
+
+```
 episode_numbering_mapping
   id                    n-
   show_id               FK show, UNIQUE (one row per show)
