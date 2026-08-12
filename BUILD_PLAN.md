@@ -3718,17 +3718,51 @@ background scheduler.
     ship the counter against `Query.backlog` as-is, no reconciliation
     needed) and its mark-watched-clears-exactly-one-oldest-episode
     interaction.
-    - **Not yet started** — `Query.backlog` is not wired into Data's
-      `LcarsClient` at all yet. Genuinely under-specified beyond the
-      one-line description above: is the counter line its own
-      selectable table row (`self._visible_episodes` is currently a
-      strict 1:1 mirror of table rows, either a real episode dict or
-      `None` for a day-separator — ~10 action handlers assume that),
-      what does `w` do when it's selected, how does it behave in a
-      flat per-episode table with no per-show grouping. Real
-      architectural surface, not a query-and-patch job like B.11c/f —
-      ask the user these before building, don't guess. Deliberately
-      not started this session; see the adjacent fix below first.
+    - **Scope confirmed with the user, 2026-08-12, before building**:
+      not a new selectable table row (would mean auditing every action
+      handler reading `self._visible_episodes[self._selected_row]`,
+      which assumes a row is always either a real episode or `None`) —
+      folded into an existing cell instead, in a distinct color for
+      visibility, on only the show's earliest visible row. Mark-watched
+      from it clears exactly one oldest episode (B.9's own text,
+      confirmed directly rather than left ambiguous).
+    - **Built (counter half only), 2026-08-12, `~/repos/data` commit
+      `e186fc9`**: `LcarsClient.backlog()` (real cursor-paginated loop,
+      same shape as `episodes_in_range()`; live-checked against the
+      deployed instance first — 140 episodes today, comfortably one
+      page). `_refresh_backlog_counts()` correlates each entry to a
+      tvdb id the same way `_patch_from_lcars()` does, storing
+      per-show lists sorted oldest-airing-first in
+      `self._backlog_by_tvdb` — fetched on mount and the existing
+      `LCARS_HEALTH_CHECK_INTERVAL_SECONDS` tick, same "dispatch
+      immediately, reuse the existing interval" shape B.11a's health
+      check already established. Rendered as a `" +N"` badge appended
+      to the Series cell (chosen over the Track column — Track is a
+      tight fixed 13 chars, Series is flex with real room and sits
+      right next to the title it annotates), warning-colored per the
+      user's own request. 9 new tests (pagination, tvdb correlation,
+      no-tvdb-link is skipped not guessed at, badge appears only on
+      the earliest visible row, no badge when backlog is empty), 536
+      passing (was 529), `ruff check`/`format --check` clean.
+    - **Mark-watched-from-it — deliberately NOT wired yet, a real risk
+      found while starting to wire it, not guessed through**:
+      `lcars_queue.enqueue_watch()` (the local pending-queue Data
+      already uses for every other watch mark) has a monotonic
+      no-regression guard — it rejects queuing an *earlier* episode
+      than whatever's already queued/confirmed for that show. But the
+      whole point of clearing the *oldest backlog* episode is to catch
+      up an episode that's behind wherever the show's normal progress
+      already is — precisely the case that guard exists to block by
+      design. Routing this through the existing queue would silently
+      no-op in exactly the situations where a user would actually use
+      it, the same silent-no-op shape as this session's two other real
+      bugs (`744c6ff`/`8b9abab`). Needs a distinct write path (a
+      direct, immediate `add_watch_event` call, bypassing the
+      monotonic queue entirely — `addWatchEvent` is idempotent on
+      LCARS's side, so this is safe to call directly rather than
+      queued) — flagged to the user for confirmation before building,
+      not assumed. `_oldest_backlog_episode()` already exists as the
+      lookup this will need once confirmed.
     - **A real, closely-related bug found and fixed while starting
       this step, 2026-08-12 (`~/repos/data` commit `6d1baef`)**: this
       is the user's own separately-reported "watched status doesn't
