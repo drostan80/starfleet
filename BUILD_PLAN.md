@@ -3896,9 +3896,87 @@ background scheduler.
     `test_ids.py`'s "unknown prefix" example — `y` stopped being
     unclaimed — and two `test_ops_scheduler.py` assertions for the
     monthly tier's new third member).
-- [ ] **B.12 — Proxy interactive flows through LCARS**: add-show,
+- [x] **B.12 — Proxy interactive flows through LCARS**: add-show,
   id-remap move from direct-from-Data to going through LCARS, so
   reconciliation logic applies consistently regardless of trigger.
+  - **Add-show — audited, not rebuilt: already fully proxied since
+    A.17.** Checked `action_add_show`/`_run_add_show_flow` directly
+    rather than assuming: every successful Sonarr add already calls
+    `_track_new_show_on_lcars` unconditionally (§6.13/A.17: "data will
+    add shows only by bridging to lcars"), including the Sonarr-only
+    (`as`) variant. Sonarr's own add itself necessarily stays
+    direct-from-Data — LCARS has no Sonarr write credentials by
+    design (only read/metadata-fetch, A.8/B.3), so Data is the only
+    thing that *can* call `POST /series`. Nothing to build here.
+  - **One real, related gap found and deliberately left open, not
+    silently ignored**: `action_add_to_anilist_only` (`aa` — no
+    Sonarr relationship at all) writes straight to AniList with no
+    LCARS bridge whatsoever — a genuinely uncovered "add show"
+    trigger. Not closed this pass: `LcarsClient.add_show()` always
+    sends `mediaShape: EPISODIC` ("data has no Radarr/movie path"),
+    an assumption that would be wrong for anything added via `aa`
+    that's actually a movie — a real correctness risk, not just
+    missing wiring, so worth its own scoping rather than rushed
+    through here.
+  - **Id-remap — the real work, `~/repos/data` commit `1ebf02c`,
+    2026-08-12**: found, by reading `_apply_map_remap`/`map-remap`
+    directly, that it only ever wrote to Data's own local `IdMapper`
+    cache — never reached LCARS at all. Also found, checking
+    `_bridge_anilist_link_to_lcars` (the interactive `M` binding's own
+    LCARS push, built B.11f), that it only pushes the show-level
+    crosswalk (`linkShowExternalId` — "this show also has an anilist
+    id somewhere") and never LCARS's own season-level mapping
+    (`season.anilist_id`, A.4's `setSeasonMapping`) — the mapping
+    LCARS's own Fribb reconciliation and show_merge actually read,
+    keyed by season specifically because one show can span multiple
+    AniList entries. A correction made either way — `M` in the TUI or
+    `map-remap` on the CLI — only ever reached Data's own local state
+    before this, never LCARS's, so the two could silently disagree
+    indefinitely.
+    - **A real, separate hazard found and fixed before it ever
+      shipped, not caught after**: `setSeasonMapping`'s own resolver
+      overwrites both `anilistId` and `malId` unconditionally on every
+      call (read `resolve_set_season_mapping` directly to confirm,
+      not assumed) — calling it with `malId` omitted would have
+      silently wiped any MAL id LCARS's own B.10 integration already
+      set on that season. Confirmed this isn't hypothetical: queried
+      a real show live (`Frieren: Beyond Journey's End`) and found a
+      real `malId: 52991` sitting on season 1. Fixed by having the new
+      client method read the season's current `malId` first and pass
+      it straight back unchanged — this call only ever touches the
+      AniList half.
+    - **Built**: `LcarsClient.set_season_anilist_id()` (read-then-write,
+      the malId-preservation fix above). `_bridge_anilist_link_to_lcars`
+      gained a `season` parameter (already available at both its call
+      sites, just not threaded through before) and now pushes both the
+      crosswalk and the season mapping, independently try/except-guarded
+      — one failing doesn't block or undo the other, and either failure
+      is reported, not silently dropped. `_apply_map_remap`/`map-remap`
+      is now async: saves locally exactly as before, then best-effort
+      pushes to LCARS too — but only via the already-persisted
+      `lcars_show_ids.json` cache (A.17/B.11f), never a live search,
+      since this CLI command only ever has a bare tvdb_id on the command
+      line, nothing to search LCARS by title with. Says so plainly (not
+      silently) when the show isn't cached yet, rather than guessing or
+      failing quietly.
+    - **Verified**: query/mutation shapes checked live against the
+      deployed instance first (`show { seasons { seasonNumber malId } }`
+      returns real data, confirmed the malId-preservation concern
+      against a real season). 9 new/updated tests across
+      `test_lcars_client.py`/`test_app_add_show.py`/`test_cli.py`
+      (malId preservation with and without an existing season, the
+      right season threaded through `M`'s own flow end to end, the
+      CLI's local-save-always/LCARS-best-effort split, the
+      show-not-cached-yet path never calling LCARS at all). 544
+      passing (was 539), `ruff check`/`format --check` clean.
+    - **Not yet exercised end-to-end by the user** — same shape as
+      B.11f's own "verified for real throughout, not yet run against
+      Data itself" note: LCARS's own side is verified live and by
+      tests, the actual Data-in-hand `M`/`map-remap` flow isn't yet
+      run for real by the user. Not gating this checkbox on that (this
+      is new capability, not a reported bug — different from B.11g's
+      own live-confirmation gate above) but worth trying next time `M`
+      or `map-remap` come up.
 - [x] **B.13 — Confirm**: the real aniq is still completely untouched,
   standalone, on Trakt, the whole time — this phase changes nothing
   about it.

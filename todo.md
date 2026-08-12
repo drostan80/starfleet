@@ -40,6 +40,10 @@
 
 # Ideas / design
 
+- [ ] `aa` (add to AniList only, no Sonarr relationship) never bridges to LCARS at all — a real
+  gap, deliberately not closed during B.12 since LCARS's `addShow` always assumes an episodic
+  show (Data has no Radarr/movie path), which would be wrong for anything `aa` adds that's
+  actually a movie. Needs its own scoping, not a rushed fix. See BUILD_PLAN.md's B.12 entry.
 - [ ] move all secret and password to a safer place
 - [ ] make sure to design the ui for html client well
 - [ ] have html client a login /password thing keep safe
