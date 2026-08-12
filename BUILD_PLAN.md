@@ -4120,6 +4120,47 @@ background scheduler.
   reuse discipline as `reconcileSeasonMapping`). 2 new tests, 657
   passing.
 
+- [x] **B.18 — Data's own `pending_review` surface: status bar badge +
+  `V` review screen** (2026-08-12, same day, `~/repos/data` commit
+  `a6cb001`). §5.6 has always named Data's status bar as one of three
+  intended surfaces (Holodeck's dashboard and Captain's Log's inline
+  prompt are the other two, still unbuilt) — nothing built one before
+  this. Built directly against the mechanics the same day's live 452→23
+  cleanup pass did by hand over SSH/one-off scripts: the screen's two
+  actions are that same work as real in-app actions instead of a
+  one-off script — `enter` (generic resolve, prompts for an optional
+  note; LCARS's own `resolvePendingReview` is completely generic, so
+  this always applies) and `s` (set an AniList id + resolve in one
+  step, offered only for a `season`/`anilist_id` review — the one case
+  the cleanup actually needed it for — via the same
+  `set_season_anilist_id()` the `M` link-to-anilist flow already uses,
+  B.12).
+  - New `LcarsClient` methods: `pending_reviews()` (paginated),
+    `resolve_pending_review()`, `get_show()`/`get_season()`/
+    `get_episode()` — label resolution for a review's opaque
+    `entityType`/`entityId`, fetched concurrently (`asyncio.gather`)
+    and cached on the App (`_review_label_cache`) rather than
+    sequentially, verified against the real deployed instance that a
+    sequential loop over ~100 rows was noticeably slow.
+  - Status bar: new `Reviews:N (V)` badge, polled on the same cadence
+    as `serviceHealth`/`backlog`, omitted entirely when there are none
+    open — same convention every other status-bar segment already
+    follows.
+  - Real bug caught live while writing this screen's own tests:
+    `OptionList`'s default `enter` binding fires `OptionList.Selected`
+    and consumes the key before the Screen-level `enter` Binding ever
+    sees it — the Binding alone was silently dead. Fixed via
+    `on_option_list_option_selected`.
+  - Every existing test file whose `DataApp` carries an `lcars_client`
+    needed a `pendingReviews` branch added to its mock handler (same
+    thing B.11g's `backlog` check required when it was added) — 9
+    files. New `tests/test_review_screen.py` (9 tests) + 13 new
+    `lcars_client` tests. 562 passing, `ruff` clean. Requires
+    `~/repos/starfleet` v0.1.6+ (B.17's `season(id:)` query).
+  - Not yet done: the user still needs to actually use this live
+    against the real 23-item backlog and confirm it works as intended
+    before this counts as proven, not just tested.
+
 ---
 
 ## Phase C — Data as thin front-end + mpv/aninote bridge
