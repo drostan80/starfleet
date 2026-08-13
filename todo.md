@@ -1,5 +1,33 @@
 # Bugs
 
+- [x] "The Frontier Lord Begins with Zero Subjects" S1E6 showing available a day before its
+  listed air date (reported 2026-08-13). Turned out to be two separate, real, systemic gaps —
+  not the same bug as "The World Is Dancing" below:
+  1. **Never linked to AniList at all**: `trackingSpace` was stuck on `TV` instead of `ANIME`.
+     Root cause: LCARS decides anime-vs-tv *once*, at show-creation time, purely from whether
+     the Fribb crowd-dataset happens to have a tvdb→anilist match *at that exact moment*
+     (`show_backfill.py`'s `_classify_sonarr`) — this show was backfilled 2026-08-11, when
+     Fribb didn't have it yet (a brand-new simulcast). Nothing ever re-checks the
+     classification later, even once Fribb catches up — a real, general, still-open gap, not
+     fixed, just diagnosed. Fixed for this one show only, live, with your OK: direct DB
+     correction (`tracking_space` has no mutation to change it post-creation) plus the real
+     `linkShowExternalId`/`setSeasonMapping`/`refreshShowMetadata` mutations for everything else.
+  2. **A second bug the fix itself exposed**: once linked, `_reconcile_air_dates` (B.4)
+     silently produced *wrong* dates — every episode a week too early. Cause: this show streams
+     a week early on Prime Video before its regular TV broadcast (confirmed via AniList's own
+     synopsis note), so AniList counts 12 episodes where Sonarr only tracks 11 real broadcasts
+     it can see + a not-yet-real 12th slot — i.e. AniList's episode N is Sonarr's episode N-1.
+     `_reconcile_air_dates` matches by plain episode number with no way to detect a real
+     episode-*count* mismatch between sources, so it confidently applied each episode's
+     neighbor's real date. Sonarr's own original dates were correct the whole time. Fixed live:
+     restored all 12 episodes to their own `airDateRawSonarr` value via `setEpisodeAirDate`
+     (MANUAL, outranks automatic reconciliation permanently, so this won't regress on the next
+     Ops sweep).
+  **Both root causes are real, general gaps, not one-off** — noted here rather than
+  `BUILD_PLAN.md`'s "Deliberately not on this plan" section since these are gaps in already-
+  shipped B.4/B.11d mechanisms, not unbuilt scope. Your own call: not fixing generally now,
+  hopefully addressed as a side effect once the bigger schema rework / LCARS-only-read
+  architecture happens later.
 - [ ] Calendar showing a wrong air date / stale "not watched" for an already-downloaded episode
   (reported 2026-08-13, "The World Is Dancing" S1E7 — showed available-not-watched, aired
   Monday 8/10, actually already watched). Checked LCARS directly: already correct server-side
