@@ -151,6 +151,22 @@
 
 # Ideas / design
 
+- [ ] **Hierarchical season subdivision for legitimate cross-source granularity mismatches** —
+  raised 2026-08-13, right after the duplicate-`anilist_id` hardening fix (`watch_reconcile.py`,
+  `v0.1.11`) shipped. That fix treats every `anilist_id` shared by more than one season as an
+  error (flag via `pending_review`, apply nothing, a human corrects the mapping) — correct for
+  the actual mistake case (two unrelated shows accidentally linked to the same entry, confirmed
+  live), but it has no concept of a *legitimate* collision: one real external entry that
+  genuinely corresponds to more than one thing LCARS tracks as separate seasons. User's proposal,
+  not built, not designed in detail yet: when that's genuinely the case, LCARS should subdivide
+  its own season numbering to match the most granular source (`1`, `1.1`, `1.1.1`, `1.2`, `1.3`,
+  `2`, ...) and remap at the *episode* level instead of the season level, rather than picking a
+  winner. User's own read: unlikely to come up for AniList specifically (it tends to issue
+  separate ids per cour/part already, matching how this session's own reproduced collision was a
+  real linking mistake, not a genuine AniList-side granularity gap) but a real concern for
+  whatever other data source LCARS integrates with later, if that source splits seasons
+  differently than AniList/LCARS do. Explicitly parked for a later pros/cons discussion, not
+  something to build off this note alone.
 - [ ] A way to correct a schedule discrepancy (wrong air date, wrong episode-number alignment
   against AniList) *from Data itself* is needed — noted 2026-08-13 after having to fix "The
   Frontier Lord Begins with Zero Subjects" by hand: no client-facing way existed to do any of
