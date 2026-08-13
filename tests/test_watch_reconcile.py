@@ -90,6 +90,7 @@ def test_returns_all_zero_when_anilist_not_configured(conn):
         "not_matched_on_anilist": 0,
         "shows_status_updated": 0,
         "episodes_backfilled": 0,
+        "ambiguous_anilist_id_conflicts": 0,
     }
 
 
@@ -237,6 +238,7 @@ def test_ignores_seasons_with_no_anilist_id_at_all(conn, monkeypatch):
         "not_matched_on_anilist": 0,
         "shows_status_updated": 0,
         "episodes_backfilled": 0,
+        "ambiguous_anilist_id_conflicts": 0,
     }
 
 
@@ -350,3 +352,101 @@ def test_poll_anilist_activity_new_activity_triggers_reconcile_and_advances_chec
     ).fetchone()
     assert checkpoint["last_activity_id"] == 502  # advanced to the newest seen
     assert checkpoint["last_activity_created_at"] == 1700000200
+
+
+# --- reconcile hardening, 2026-08-13: real bugs found + fixed after -----
+# the first live triggered reconcile via B.5.3, both reproduced directly
+# before being fixed, not theoretical.
+
+
+def test_two_seasons_sharing_one_anilist_id_are_excluded_not_cross_applied(conn, monkeypatch):
+    """The real, reproduced bug: nothing anywhere in this codebase
+    checks for this (setSeasonMapping has no such guard; B.14's own
+    duplicate detection watches a different signal and never sees a
+    pair that already both have an anilist link) — and unlike an
+    unmatched season, it doesn't self-heal. Both seasons must be
+    excluded from this run entirely, not just have one side "win"."""
+    _show(conn, "s-dup001", status="planned")
+    _show(conn, "s-dup002", status="planned")
+    _season(conn, "z-dup001", "s-dup001", 1, anilist_id=999)
+    _season(conn, "z-dup002", "s-dup002", 1, anilist_id=999)
+    _episode(conn, "e-dup001", "s-dup001", 1, 1)
+    _episode(conn, "e-dup002", "s-dup002", 1, 1)
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(999, status="COMPLETED", progress=1)])
+
+    result = watch_reconcile.reconcile_watch_progress(conn)
+
+    assert result["ambiguous_anilist_id_conflicts"] == 2
+    assert result["seasons_checked"] == 0  # neither side counted as a real match this run
+    assert result["shows_status_updated"] == 0
+    assert result["episodes_backfilled"] == 0
+
+    for show_id in ("s-dup001", "s-dup002"):
+        row = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
+        assert row["status"] == "planned"  # untouched, not cross-contaminated
+        ep = conn.execute("SELECT state FROM episode WHERE show_id = ?", (show_id,)).fetchone()
+        assert ep["state"] == "unwatched"
+
+
+def test_two_seasons_sharing_one_anilist_id_each_get_their_own_pending_review(conn, monkeypatch):
+    _show(conn, "s-dup001", status="planned")
+    _show(conn, "s-dup002", status="planned")
+    _season(conn, "z-dup001", "s-dup001", 1, anilist_id=999)
+    _season(conn, "z-dup002", "s-dup002", 1, anilist_id=999)
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(999, status="COMPLETED", progress=0)])
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    reviews = conn.execute(
+        "SELECT entity_id, field FROM pending_review WHERE field = 'anilist_id_conflict'"
+    ).fetchall()
+    assert {r["entity_id"] for r in reviews} == {"z-dup001", "z-dup002"}
+
+
+def test_a_stale_link_on_the_highest_season_does_not_fall_back_to_a_lower_seasons_status(
+    conn, monkeypatch
+):
+    """The real, reproduced bug: a show genuinely `watching` (its real
+    current season not yet matched on the real list — e.g. linked but
+    not yet added there) got wrongly reverted to `completed` by an
+    older, unrelated, already-finished season. This case is expected
+    to self-heal once the real match appears — deliberately NOT a
+    pending_review, unlike the conflict case above."""
+    _show(conn, "s-stl001", status="watching")  # user IS watching the new season right now
+    _season(conn, "z-stl001", "s-stl001", 1, anilist_id=100)  # old, finished cour — resolves fine
+    _season(conn, "z-stl002", "s-stl001", 2, anilist_id=999999)  # current cour — never resolves
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(100, status="COMPLETED", progress=0)])
+
+    result = watch_reconcile.reconcile_watch_progress(conn)
+
+    assert result["shows_status_updated"] == 0  # refused to guess from the lower season
+    assert result["not_matched_on_anilist"] == 1  # season 2 correctly counted as unmatched
+    row = conn.execute("SELECT status FROM show WHERE id = 's-stl001'").fetchone()
+    assert row["status"] == "watching"  # untouched, not wrongly reverted
+    # No pending_review opened for this case — expected to self-heal.
+    assert (
+        conn.execute("SELECT * FROM pending_review WHERE entity_id = 'z-stl002'").fetchone() is None
+    )
+
+
+def test_the_true_highest_season_status_still_applies_normally_when_it_resolves(conn, monkeypatch):
+    """Confirms the fix didn't just break the normal multi-season case
+    — when the highest season DOES resolve, its status still wins,
+    same as before this hardening pass."""
+    _show(conn, "s-stl002", status="completed")
+    _season(conn, "z-stl003", "s-stl002", 1, anilist_id=100)
+    _season(conn, "z-stl004", "s-stl002", 2, anilist_id=200)
+    conn.commit()
+    _configure_anilist(
+        monkeypatch,
+        [_entry(100, status="COMPLETED", progress=0), _entry(200, status="CURRENT", progress=0)],
+    )
+
+    result = watch_reconcile.reconcile_watch_progress(conn)
+
+    assert result["shows_status_updated"] == 1
+    row = conn.execute("SELECT status FROM show WHERE id = 's-stl002'").fetchone()
+    assert row["status"] == "watching"  # season 2's status, not season 1's

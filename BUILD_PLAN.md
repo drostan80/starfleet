@@ -4515,6 +4515,57 @@ this order because each step is provably independent of the next
     solid enough to size B.5.2's tiers and Ops's own polling interval
     from. Deliberately NOT wired into Ops's automatic loop yet, on
     purpose, until that happens — every call so far has been by hand.
+- [x] **B.5.3, hardening — two real bugs in `reconcile_watch_progress`
+  itself, both found by questioning the first live trigger's numbers
+  rather than accepting them, both reproduced directly, both fixed
+  2026-08-13.** Directly prompted by the user's own pushback on
+  whether "full sweep, regularly" could really hit these cases, or
+  whether review/organic self-healing already covered them — checked
+  rather than assumed either way; one genuinely didn't self-heal, one
+  genuinely did (user's own read on that half was correct, corrected
+  my own earlier overstatement of it).
+  1. **Two seasons sharing one `anilist_id` — real, not caught
+     anywhere else, doesn't self-heal.** `setSeasonMapping` has no
+     check against reusing an id already assigned elsewhere; B.14's
+     own duplicate-show detection watches a different signal entirely
+     (tvdb-linked-no-anilist vs. anilist-linked-no-tvdb) and never
+     even sees a pair that already both have an anilist link —
+     confirmed by reading `show_merge.py` directly, not assumed.
+     Reproduced live in a throwaway script before writing any fix:
+     two unrelated shows both received the same watch state from one
+     real AniList entry. Every future reconcile would keep
+     reapplying the cross-contamination forever, silently. Fixed:
+     detected up front (grouped by `anilist_id`, anything claimed by
+     more than one season), excluded entirely from that run (status
+     *and* episode-progress backfill, not just one of them), one
+     `pending_review` entry per conflicted season (existing `V`
+     screen, matches how every other genuine AniList-link ambiguity
+     in this codebase is already surfaced — §3 principle 1).
+  2. **A stale/unresolved link on a show's true highest season
+     silently falling back to an older, lower season's status — real,
+     but the user's own instinct was right that it mostly self-heals.**
+     Reproduced: a show genuinely `watching` (current season not yet
+     matched) got wrongly reverted to `completed` by an unrelated,
+     already-finished earlier season. Common cause is entirely benign
+     (linked correctly, just not yet added to the user's own AniList
+     list) and resolves itself once a real match exists on both
+     sides — so, unlike #1, deliberately **not** routed through
+     `pending_review`; that would fire on every ordinary freshly-
+     linked season and be pure noise for no benefit. Fixed by simply
+     refusing to guess: a show's status is only ever set from its
+     true highest linked season number (computed up front across all
+     of a show's linked seasons, not just the ones that happen to
+     resolve), never a lower one standing in for it. Episode-level
+     progress backfill untouched by this fix — that already applies
+     per-season independently and was never the part with the bug.
+  - New `ambiguousAnilistIdConflicts: Int!` on `WatchProgressReconcileResult`/
+    `pollAnilistActivity`'s nested result, surfaced end to end, not
+    just internal. 5 new tests (both bugs reproduced as regression
+    tests, plus one confirming the normal multi-season case still
+    works unchanged). Full suite: 705 passing, `ruff check`/
+    `format --check` clean. No schema migration — `pending_review`
+    already existed as a table, only a new GraphQL field on an
+    existing type. Deployed 2026-08-13, same day.
 - [ ] **B.5.3a — Scoped/targeted reconcile — deliberately parked, good-
   to-have for later, not needed now.** Real design discussion,
   2026-08-13, prompted directly by the first triggered reconcile above

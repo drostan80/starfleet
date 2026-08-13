@@ -6389,6 +6389,7 @@ mutation {
     notMatchedOnAnilist
     showsStatusUpdated
     episodesBackfilled
+    ambiguousAnilistIdConflicts
   }
 }
 """
@@ -6401,6 +6402,7 @@ async def test_reconcile_watch_progress_no_op_when_anilist_not_configured(client
         "notMatchedOnAnilist": 0,
         "showsStatusUpdated": 0,
         "episodesBackfilled": 0,
+        "ambiguousAnilistIdConflicts": 0,
     }
 
 
@@ -6446,6 +6448,7 @@ async def test_reconcile_watch_progress_backfills_and_corrects_status_through_re
         "notMatchedOnAnilist": 0,
         "showsStatusUpdated": 1,
         "episodesBackfilled": 2,
+        "ambiguousAnilistIdConflicts": 0,
     }
 
     show_data = await gql(
@@ -6694,6 +6697,7 @@ mutation {
       notMatchedOnAnilist
       showsStatusUpdated
       episodesBackfilled
+      ambiguousAnilistIdConflicts
     }
   }
 }

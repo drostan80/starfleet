@@ -936,12 +936,13 @@ type MalTokenRefreshResult {
 # B.15 — AniList -> LCARS watch reconciliation (live-caught 2026-08-12)
 # ---------------------------------------------------------------------------
 
-"reconcileWatchProgress's own confirmation summary. seasonsChecked: LCARS seasons matched to a real AniList list entry this run. notMatchedOnAnilist: a season with an anilist_id LCARS knows about, but no corresponding entry on the real list (removed from AniList, or a stale/wrong id) — a real, if rare, self-healing-not-yet outcome, not an error. showsStatusUpdated / episodesBackfilled: real corrections actually applied — see watch_reconcile.py's own module docstring for exactly what wins on a divergence and why."
+"reconcileWatchProgress's own confirmation summary. seasonsChecked: LCARS seasons matched to a real AniList list entry this run. notMatchedOnAnilist: a season with an anilist_id LCARS knows about, but no corresponding entry on the real list (removed from AniList, or a stale/wrong id) — a real, if rare, self-healing-not-yet outcome, not an error. showsStatusUpdated / episodesBackfilled: real corrections actually applied — see watch_reconcile.py's own module docstring for exactly what wins on a divergence and why. ambiguousAnilistIdConflicts (2026-08-13 hardening): seasons excluded from this run because more than one season claims the same anilist_id — real, reproduced, doesn't self-heal, each one gets its own pending_review entry rather than a guess."
 type WatchProgressReconcileResult {
   seasonsChecked: Int!
   notMatchedOnAnilist: Int!
   showsStatusUpdated: Int!
   episodesBackfilled: Int!
+  ambiguousAnilistIdConflicts: Int!
 }
 
 "pollAnilistActivity's own confirmation summary — B.5.3. activitiesSeen: how many new AniList activity-feed entries (type ANIME_LIST) existed since the last check, purely a cheap 'did anything change' trigger signal, not itself a source of truth for what changed. reconcileResult: reconcileWatchProgress's own result, populated only when activitiesSeen > 0 (only then does this actually run that heavier sweep) — null on every quiet poll rather than a dict of zeros, so a caller can tell 'nothing new' apart from 'checked and genuinely found nothing to fix' at a glance."

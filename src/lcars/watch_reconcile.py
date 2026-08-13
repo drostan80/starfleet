@@ -46,7 +46,7 @@ Scope, deliberately narrow:
     the honest fallback rather than fabricating a real-looking one.
 """
 
-from lcars import anilist_client, config, ids, util
+from lcars import anilist_client, config, ids, pending_review, util
 
 # B.5.3, 2026-08-13 — see the module docstring's own note above for how
 # this relates to reconcile_watch_progress. Design checked live against
@@ -100,13 +100,44 @@ def reconcile_watch_progress(conn) -> dict:
     """Fetches the real AniList list once, then reconciles every LCARS
     `season` row with a known `anilist_id` against it. No AniList
     credential configured is the same clean no-op every other
-    best-effort integration in this codebase gets, not an error."""
+    best-effort integration in this codebase gets, not an error.
+
+    **Two hardening fixes, 2026-08-13, both found and reproduced (not
+    theoretical) during the first real triggered reconcile via B.5.3**:
+
+    1. **Two seasons sharing one `anilist_id`** (real, and not caught
+       anywhere else: `setSeasonMapping` has no check against reusing
+       an id already assigned elsewhere, and B.14's own duplicate-show
+       detection watches a different signal entirely — tvdb-linked-
+       no-anilist vs. anilist-linked-no-tvdb — so it never even sees a
+       pair that already both have an anilist link). Reproduced: both
+       shows silently received the same watch state from one real
+       AniList entry. Doesn't self-heal — every future run keeps
+       reapplying the same cross-contamination. Fixed: detected up
+       front, excluded from this run entirely, flagged via
+       `pending_review` (a human decision, same as every other
+       genuine ambiguity in this codebase — §3 principle 1).
+    2. **A stale/unresolved link on a show's actual highest season
+       silently falling back to an older, lower season's status.**
+       Reproduced: a show genuinely `watching` (its real current
+       season not yet matched) got wrongly reverted to `completed` by
+       an unrelated, already-finished earlier season. Unlike #1, this
+       usually *does* self-heal (the common cause is simply "linked,
+       but not yet added to the user's own AniList list yet" — nothing
+       wrong, just not there yet), so this is deliberately NOT flagged
+       via `pending_review` — that would fire on every ordinary
+       freshly-linked season and be pure noise. Fixed instead by
+       simply not guessing: a show's status is only ever set from its
+       true highest linked season number, never a lower one standing
+       in for it.
+    """
     cfg = config.get_current()
     result = {
         "seasons_checked": 0,
         "not_matched_on_anilist": 0,
         "shows_status_updated": 0,
         "episodes_backfilled": 0,
+        "ambiguous_anilist_id_conflicts": 0,
     }
     if not cfg.anilist_access_token:
         return result
@@ -119,13 +150,59 @@ def reconcile_watch_progress(conn) -> dict:
     ).fetchall()
 
     now = util.now_utc_iso()
-    # show_id -> (highest season_number seen so far, that season's own
-    # AniList status) — applied to show.status once every season's been
-    # walked, so a show with multiple linked seasons doesn't get its
-    # status flip-flopped mid-loop by whichever season happens first.
+
+    # Fix 1 — detect any anilist_id claimed by more than one season
+    # before touching anything. Excluded from this entire run (not
+    # just skipped for status — also skipped for episode-progress
+    # backfill below, since that data can't be trusted to belong to
+    # either show either) and flagged for a human via pending_review,
+    # one entry per conflicted season so it surfaces per-show in the
+    # existing review screen.
+    seasons_by_anilist_id: dict[int, list] = {}
+    for season in seasons:
+        seasons_by_anilist_id.setdefault(season["anilist_id"], []).append(season)
+    conflicted_season_ids: set[str] = set()
+    for anilist_id, dupes in seasons_by_anilist_id.items():
+        if len(dupes) <= 1:
+            continue
+        show_ids = [d["show_id"] for d in dupes]
+        for season in dupes:
+            conflicted_season_ids.add(season["id"])
+            other_shows = [s for s in show_ids if s != season["show_id"]]
+            pending_review.open_or_extend(
+                conn,
+                "season",
+                season["id"],
+                "anilist_id_conflict",
+                "anilist_reconcile",
+                None,
+                f"anilist_id {anilist_id} also claimed by show(s): {other_shows}",
+            )
+    result["ambiguous_anilist_id_conflicts"] = len(conflicted_season_ids)
+
+    # Fix 2 — a show's true highest linked season number, computed up
+    # front from every season this show has an anilist_id for
+    # (conflicted ones excluded — already unusable), regardless of
+    # whether that highest season actually resolves against the real
+    # list. Used below to refuse a status update sourced from anything
+    # other than that true highest season.
+    highest_season_number_by_show: dict[str, int] = {}
+    for season in seasons:
+        if season["id"] in conflicted_season_ids:
+            continue
+        show_id = season["show_id"]
+        current = highest_season_number_by_show.get(show_id)
+        if current is None or season["season_number"] > current:
+            highest_season_number_by_show[show_id] = season["season_number"]
+
+    # show_id -> (season_number, that season's own AniList status) —
+    # only ever set from a show's true highest linked season (Fix 2
+    # above), applied to show.status once every season's been walked.
     status_candidate_by_show: dict[str, tuple[int, str]] = {}
 
     for season in seasons:
+        if season["id"] in conflicted_season_ids:
+            continue
         entry = by_anilist_id.get(season["anilist_id"])
         if entry is None:
             result["not_matched_on_anilist"] += 1
@@ -134,8 +211,7 @@ def reconcile_watch_progress(conn) -> dict:
 
         show_id = season["show_id"]
         season_number = season["season_number"]
-        current_best = status_candidate_by_show.get(show_id)
-        if current_best is None or season_number > current_best[0]:
+        if season_number == highest_season_number_by_show.get(show_id):
             status_candidate_by_show[show_id] = (season_number, entry["status"])
 
         progress = entry["progress"] or 0
