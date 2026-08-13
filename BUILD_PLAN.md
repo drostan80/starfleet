@@ -3709,7 +3709,7 @@ background scheduler.
       pins the actual fix (a non-precached show still queues via the
       live fallback). 526 tests passing (net +1, several rewritten),
       `ruff check`/`format --check` clean.
-  - [ ] **B.11g — B.9's two deferred Data-side pieces**: the
+  - [x] **B.11g — B.9's two deferred Data-side pieces**: the
     calendar-native counter line under a show's next-episode entry
     (backed by `Query.backlog` as-is — asked the user directly
     whether Data's existing B-view predicate and LCARS's
@@ -3812,13 +3812,7 @@ background scheduler.
       deliberately untouched — out of scope for this fix, not owned
       by B.11g's own text either. 3 new regression tests, 529 passing
       (was 526), `ruff check`/`format --check` clean.
-    - **Not yet confirmed live by the user** — per this session's own
-      standing rule (never mark a user-facing bug fixed without the
-      user's own confirmation in the running app), this stays
-      unchecked and `todo.md`'s own entry stays open until the user
-      has actually pressed `w` on a non-anime show and watched the
-      Track column settle on `"✓ Watched"` after a flush, not just
-      verified via tests or a direct GraphQL query as done here.
+    - **Confirmed live by the user, 2026-08-13** — B.11g closed.
 - [x] **B.14 — Cross-service show-duplicate merge** (2026-08-11,
   commit `25000de`): the
   real, scoped mechanism B.11f's own investigation surfaced and

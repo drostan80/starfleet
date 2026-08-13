@@ -31,7 +31,7 @@
   shipped B.4/B.11d mechanisms, not unbuilt scope. Your own call: not fixing generally now,
   hopefully addressed as a side effect once the bigger schema rework / LCARS-only-read
   architecture happens later.
-- [ ] Calendar showing a wrong air date / stale "not watched" for an already-downloaded episode
+- [x] Calendar showing a wrong air date / stale "not watched" for an already-downloaded episode
   (reported 2026-08-13, "The World Is Dancing" S1E7 — showed available-not-watched, aired
   Monday 8/10, actually already watched). Checked LCARS directly: already correct server-side
   (airDateUtc 2026-08-10, state WATCHED) — not a LCARS/data bug at all, purely Data's own stale
@@ -55,9 +55,7 @@
   time regardless of restarts — LCARS's own patch was always the only real fix, and it wasn't
   reaching far enough. Fixed: `~/repos/data` `ce97a59` — pads the LCARS query 14 days beyond
   the visible window on both sides (safe: correlation is by season/episode number, not date).
-  564 tests passing. **Still not confirmed live** — needs one more Data restart; this one
-  should actually move the episode off today's row (correctly, into the past, since it
-  already aired and was watched) rather than just leave today's row wrong. Separately, still
+  564 tests passing. **Confirmed live by the user, 2026-08-13.** Separately, still
   real and not addressed by either fix: Data's own direct Sonarr/AniList polling/caching on
   open (the thing you called out as "weird refresh") — deferred to the bigger
   LCARS/Ops-owns-all-writes rewrite, see BUILD_PLAN.md.
