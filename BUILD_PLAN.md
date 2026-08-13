@@ -4243,10 +4243,14 @@ own numbered phase once actually picked up — this is that. Builds in
 this order because each step is provably independent of the next
 (confirmed live, not assumed) before being started.
 
-- [x] **B.5.1 — Sonarr/Radarr file-availability webhooks.** Built
-  2026-08-13. Local API, no third-party rate budget — "fair game,"
-  per the user — so this was built and proven in complete isolation
-  from the AniList work below.
+- [ ] **B.5.1 — Sonarr/Radarr file-availability webhooks.** **Code
+  built and tested 2026-08-13; stays unchecked until confirmed live**
+  — same standing rule this session already relearned twice (never
+  mark a user-facing/production path fixed without real confirmation
+  in the running system): this code has never received an actual
+  Sonarr/Radarr payload. Local API, no third-party rate budget — "fair
+  game," per the user — so this was built and proven (at the unit/
+  route-test level) in complete isolation from the AniList work below.
   - Payload shapes confirmed directly against Sonarr/Radarr's own
     source (`WebhookGrabPayload`/`WebhookImportPayload`/`WebhookSeries`/
     `WebhookEpisode`/`WebhookEpisodeFile`, Radarr's `Movie`/`MovieFile`
@@ -4312,18 +4316,35 @@ this order because each step is provably independent of the next
     into `_apply_episode_availability`/`_apply_show_availability_radarr`
     so the poller and the webhook handlers write through one path each,
     not two copies of the same SQL.
-  - 27 new tests (12 `test_availability.py`, apply-logic level; 10
+  - **Pre-deploy review caught two real gaps, both fixed before this
+    line was written, not after**: (1) the `Router`/`Mount`
+    restructure could plausibly have changed how Ariadne's own `GET /`
+    (the playground/explorer) resolves — confirmed live against the
+    real app that it still serves the same explorer HTML unchanged, now
+    covered by its own regression test, not just inferred from the
+    passing `POST /` tests. (2) `_webhook_view`'s `except Exception`
+    path logged and returned 200 but never rolled back a mid-loop
+    partial write — harmless-looking, except `db.py` hands the whole
+    app one shared connection, so a dangling uncommitted write would
+    have ridden along on the *next*, unrelated `conn.commit()`
+    anywhere else in the process. Added the rollback, plus a test that
+    forces a mid-apply failure and confirms an unrelated mutation
+    right after doesn't carry the poisoned write with it.
+  - 29 new tests (12 `test_availability.py`, apply-logic level; 12
     `test_server.py`, route/auth/routing level — auth rejection,
     wrong/missing/unconfigured secret, cross-service secret isolation,
     Test-event 200, malformed-body 200-not-500, GraphQL still answering
-    at `/` alongside the new routes), all passing; full suite green,
-    `ruff check`/`format --check` clean.
-  - **Not yet deployed** — `sonarr_webhook_secret`/`radarr_webhook_secret`
-    exist in `config.py` but production `lcars.ini`/compose secrets
-    aren't wired yet, and Sonarr/Radarr's own webhook connections
-    haven't been configured to point at LCARS. Next: deploy, configure
-    both services' webhook connections (custom header, per-service
-    secret), confirm live with a real grab/import, only then consider
+    at both `POST /` and `GET /` alongside the new routes, the
+    rollback-on-failure case above), all passing; full suite green (686
+    passing), `ruff check`/`format --check` clean.
+  - **Not yet deployed, not yet confirmed live — this code has never
+    received a real Sonarr/Radarr payload.** `sonarr_webhook_secret`/
+    `radarr_webhook_secret` exist in `config.py` but production
+    `lcars.ini`/compose secrets aren't wired yet, and Sonarr/Radarr's
+    own webhook connections haven't been configured to point at LCARS.
+    Next: deploy, configure both services' webhook connections (custom
+    header, per-service secret), confirm live with a real grab/import,
+    only then consider
     lengthening `pollFileAvailability`'s interval.
 - [ ] **B.5.2 — AniList request scheduler: the throttle becomes a
   priority queue.** Confirmed first, not assumed: every `anilist_client`

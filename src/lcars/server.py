@@ -106,7 +106,13 @@ def _webhook_view(header_name: str, secret: str | None, apply_fn):
         except Exception:
             # Best-effort, matching this whole module's philosophy (A.8):
             # an unexpected payload shape must never surface as a 500 that
-            # could make Sonarr/Radarr treat the connection as broken.
+            # could make Sonarr/Radarr treat the connection as broken. The
+            # rollback matters more than usual here: db.py hands out one
+            # shared connection to the whole app, so an uncommitted write
+            # left dangling by a mid-loop exception would otherwise ride
+            # along on the next unrelated conn.commit() anywhere else in
+            # the process.
+            db.get_connection().rollback()
             logger.exception("Webhook to %s: failed to apply", request.url.path)
             return JSONResponse({"ok": True})
         return JSONResponse({"ok": True, **result})

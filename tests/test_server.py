@@ -16,6 +16,7 @@ import pytest
 
 from lcars import (
     anilist_client,
+    availability,
     config,
     db,
     export_import,
@@ -6574,6 +6575,49 @@ async def test_sonarr_webhook_route_malformed_body_returns_200_not_500(webhook_c
     assert resp.status_code == 200
 
 
+async def test_sonarr_webhook_route_apply_failure_rolls_back_and_does_not_poison_the_connection(
+    webhook_client, monkeypatch
+):
+    """A real risk found before deploy, not guessed at: `db.py` hands out
+    one shared connection to the whole app. If `apply_sonarr_webhook`
+    raises mid-write with no rollback, the dangling uncommitted write
+    would ride along on the *next* unrelated `conn.commit()` anywhere
+    else in the process — confirmed here by making a genuinely unrelated
+    GraphQL mutation right after the failure and checking its own write
+    is the only thing that landed."""
+    show = await add_show(webhook_client, trackingSpace="TV", tvdbId=55555)
+
+    def _boom(conn, payload):
+        conn.execute("UPDATE show SET title_romaji = 'poisoned' WHERE id = ?", (show["id"],))
+        raise RuntimeError("simulated mid-apply failure")
+
+    monkeypatch.setattr(availability, "apply_sonarr_webhook", _boom)
+    resp = await webhook_client.post(
+        "/webhooks/sonarr",
+        json=_sonarr_grab_payload(55555),
+        headers={"X-Lcars-Webhook-Secret": SONARR_WEBHOOK_SECRET},
+    )
+    assert resp.status_code == 200
+
+    # An unrelated mutation, right after — if the dangling write wasn't
+    # rolled back, this commit would carry it along too.
+    await gql(
+        webhook_client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    data = await gql(
+        webhook_client,
+        "query($id: ID!) { show(id: $id) { titleRomaji status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["titleRomaji"] != "poisoned"
+    assert data["show"]["status"] == "WATCHING"
+
+
 async def test_radarr_webhook_route_applies_with_correct_secret(webhook_client):
     show = await add_show(
         webhook_client, mediaShape="MOVIE", trackingSpace="TV", titleRomaji="A Movie", tmdbId=54321
@@ -6614,6 +6658,17 @@ async def test_graphql_still_answers_at_root_alongside_webhook_routes(webhook_cl
         "/", json={"query": "{ shows { edges { node { id } } } }"}, headers=auth_headers()
     )
     assert resp.status_code == 200
+
+
+async def test_graphql_get_explorer_still_works_through_the_new_router(webhook_client):
+    """`Mount("/", ...)` rewrites the ASGI scope before delegating to
+    Ariadne's own app — GET (the playground/explorer) is a real, separate
+    code path from POST (query execution) inside Ariadne, and nothing
+    else in this file exercises it. Confirms the B.5.1 routing rework
+    didn't silently break it."""
+    resp = await webhook_client.get("/", headers=auth_headers())
+    assert resp.status_code == 200
+    assert "graphql" in resp.text.lower()
 
 
 async def test_webhook_route_never_accepts_the_graphql_bearer_token(webhook_client):
