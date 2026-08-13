@@ -4383,7 +4383,16 @@ this order because each step is provably independent of the next
       payload) does this line get checked, and only then is
       lengthening `pollFileAvailability`'s interval worth considering.
 - [ ] **B.5.2 — AniList request scheduler: the throttle becomes a
-  priority queue.** Confirmed first, not assumed: every `anilist_client`
+  priority queue.** **Build order reversed, 2026-08-13, user's own
+  call**: B.5.3 goes first. B.5.2 is well-understood plumbing regardless
+  of what feeds it; B.5.3's real API cost/cadence is the actual unknown,
+  and sizing this queue's tiers around a guess about that would mean
+  redesigning it once real numbers exist anyway. B.5.3 gets built first
+  against the existing flat throttle (already shipped, no queue yet),
+  run for real, then rewired to submit through this queue once it
+  exists — using real activity volume/pagination/score-edit-coverage
+  data instead of assumptions. Confirmed first, not assumed: every
+  `anilist_client`
   reference in this codebase lives under `src/lcars/`; `src/ops/` only
   ever calls LCARS's own GraphQL, never AniList directly (grep-checked
   2026-08-13). So all AniList traffic already funnels through one
@@ -4406,7 +4415,8 @@ this order because each step is provably independent of the next
     don't-overwhelm-the-API pacing distinct from the queue's per-call
     throttle.
 - [ ] **B.5.3 — AniList activity-feed read-back (entry-level
-  bidirectional sync).** Answers this plan's own earlier open
+  bidirectional sync).** **Built before B.5.2 — see that entry's own
+  note.** Answers this plan's own earlier open
   question ("Deliberately not on this plan," AniList/MAL drift
   detection) with real facts checked live against AniList's API
   2026-08-13, not assumed:
