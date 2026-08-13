@@ -151,6 +151,34 @@
 
 # Ideas / design
 
+- [ ] **LiveChart.me's headlines RSS as a possible forward-looking delay-announcement source** —
+  raised 2026-08-13, prompted by wanting confirmation that animeschedule.net's RSS (B.5) could
+  eventually catch a schedule delay like "Draw This, Then Die!" episode 7's (a full week later
+  than Sonarr's own raw date, correctly caught by AniList's `airingSchedule`/B.4 instead).
+  Checked directly, not assumed: animeschedule.net's own `/rss` index page lists exactly three
+  feeds (RAW/SUB/DUB, `/jpnrss.xml`/`/subrss.xml`/`/dubrss.xml`) — no fourth "headline" feed
+  exists there at all; all three are strictly post-release confirmation ("Episode N ... is out!"),
+  structurally incapable of announcing a *future* delay regardless of polling frequency or
+  timing. `/api/v3/timetables/{airType}` (the endpoint that would carry real forward-looking
+  schedule data) remains 401-gated behind a private-access process B.5's own build never got
+  past, unchanged from B.5's original finding.
+  **User then pointed at the actually-relevant find**: `https://www.livechart.me/feeds/headlines`
+  — a different site, a real curated-news RSS (confirmed live: item titles are genuine anime news
+  — teaser reveals, PV drops, debut dates, staff announcements — not release confirmations), a
+  much more plausible category of feed for a delay/postponement announcement to actually appear
+  in. Checked the live feed's most recent 50 items (~10 days, Aug 3–13): no genuine delay/
+  postponement headline present (two keyword matches were false positives — "Chaos **Break**er
+  arc" / "**BEATBREAK**" — not real hits). Tried LiveChart's own site search
+  (`/search?q=...`) for delay-related terms — returned pages but surfaced zero headline result
+  links, so no historical example found that way either. Inconclusive either way: real content
+  type, no confirmed example yet of *this specific kind* of announcement (a delay/postponement)
+  appearing in it.
+  **Not set up for ongoing automated monitoring** — checked what's actually available for that
+  (`CronCreate`): session-only, gone if the session ends, recurring jobs auto-expire after 7 days
+  regardless, a real mismatch against "no idea how long we'll have to wait." User's own call:
+  skip automation, leave this as a manual/future-session check instead — next time a real
+  broadcast delay happens to a tracked show, check `https://www.livechart.me/feeds/headlines`
+  (or its `/search`) for a matching headline before assuming either way.
 - [ ] **Hierarchical season subdivision for legitimate cross-source granularity mismatches** —
   raised 2026-08-13, right after the duplicate-`anilist_id` hardening fix (`watch_reconcile.py`,
   `v0.1.11`) shipped. That fix treats every collision between LCARS's season model and an
