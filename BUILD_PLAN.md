@@ -4481,21 +4481,40 @@ this order because each step is provably independent of the next
   - **Deployed 2026-08-13** (`v0.1.10`, `lcars.db` backed up first —
     `lcars.db.bak-pre-b5.3-20260813-193314` — before the migration ran;
     migration confirmed applied, both containers healthy). Called by
-    hand twice against production: first call seeded the checkpoint
-    (`activitiesSeen: 0`, no reconcile) — confirmed the seeded
-    `(last_activity_id, last_activity_created_at)` matches AniList's
-    own real latest activity exactly (`1134531665, 1786645107`,
-    queried directly, not inferred); second call stayed quiet
-    (`activitiesSeen: 0`) as expected with nothing new since. **Still
-    stays unchecked** — a quiet-poll confirmation isn't the same as a
-    real triggered reconcile: still need to watch an episode, call
-    again, and confirm it sees exactly that one activity and applies a
-    sane reconcile, then let it sit through real, varied usage
-    (multiple sessions, a status change, not just one watched episode)
-    before treating the resulting cadence numbers as real enough to
-    size B.5.2's tiers and Ops's own polling interval from. Deliberately
-    NOT wired into Ops's automatic loop yet, on purpose, until those
-    numbers exist — every call so far has been by hand.
+    hand three times against production:
+    1. First call seeded the checkpoint (`activitiesSeen: 0`, no
+       reconcile) — confirmed the seeded `(last_activity_id,
+       last_activity_created_at)` matches AniList's own real latest
+       activity exactly (`1134531665, 1786645107`, queried directly,
+       not inferred).
+    2. Second call stayed quiet (`activitiesSeen: 0`) as expected with
+       nothing new since.
+    3. **Third call, after the user manually marked an episode watched
+       on AniList directly — the real triggered-reconcile test.**
+       `activitiesSeen: 1` (correct — exactly the one action taken).
+       The triggered `reconcileResult` was large (`seasonsChecked:
+       1440`, `showsStatusUpdated: 14`, `episodesBackfilled: 136`) —
+       expected in shape (`reconcile_watch_progress` always re-checks
+       the *entire* list, not just the changed show, by design) but
+       large enough in size to need verification before trusting it,
+       not just accepting the numbers. Checked: every single one of
+       the 14 status changes and every show in the 136-episode
+       backfill traces directly to AniList links established *earlier
+       this same session* (the 6 B.19/B.20 cour-split Part-1 links,
+       the 7 "not yet aired, romaji-titled" shows reviewed/closed the
+       same way, and Frontier Lord's own live fix) — none of those
+       shows had ever had a reconcile pass run against their new links
+       until this trigger fired, so a large first catch-up was
+       expected, not a red flag. One genuinely new, unexplained change
+       (`Dogul Wang`, `watching → dropped`) flagged to the user
+       directly for their own confirmation rather than assumed correct
+       — real per-show verification, not just "the shape looks right."
+    **Still stays unchecked** — one triggered reconcile confirmed
+    plausible is not the same as this having sat through real, varied,
+    sustained usage; still want that before treating cadence numbers as
+    solid enough to size B.5.2's tiers and Ops's own polling interval
+    from. Deliberately NOT wired into Ops's automatic loop yet, on
+    purpose, until that happens — every call so far has been by hand.
 - [ ] **B.5.4 — Prove B.5.1–B.5.3 stable in real use**, then proceed to
   Phase C's existing **C.1** (drop Data's own Sonarr-polling/
   AniList-polling/air-date-correction logic, i.e. remove AniList and
