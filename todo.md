@@ -1,5 +1,38 @@
 # Bugs
 
+- [ ] **Two shows ("The World Is Dancing" ep7, "The Forsaken Saintess..." ep6, both Monday
+  8/10) show unwatched in Data despite being genuinely watched; marking them from Data appears
+  to do nothing** — reported 2026-08-13, late in the same session as the B.11f calendar-staleness
+  fix earlier tonight. Diagnosed as far as server-side data can go; the actual display bug needs
+  something from Data's own running instance to finish, not yet done.
+  - **Confirmed on the LCARS side, both genuinely correct**: World Is Dancing (`s-sk7nty`)
+    episode 7 `state = 'watched'`. Forsaken Saintess (`s-8y3318`) episode 6 `state = 'watched'`
+    too — but with **8 separate `watch_event` rows for that one episode**, spread from
+    2026-08-11 through tonight, roughly one every several hours. That's the real tell: every
+    "mark watched" press *is* reaching LCARS and succeeding, every time — the write isn't
+    failing, Data's own display just never reflects it, so the user keeps retrying over days.
+  - **An old, previously-found loose end resurfaced and only now reported**: "The World Is
+    Dancing" actually has two separate show rows in LCARS — the real tracked one (`s-sk7nty`,
+    correct data above) and a stale untracked duplicate (`s-1ppmhy`, created 2026-08-11, zero
+    episodes, no external ids at all). This was flagged mid-investigation earlier in this same
+    session and never surfaced to the user or written down at the time — a real process lapse,
+    noted so it isn't repeated. Based on `_patch_from_lcars`'s own correlation (keyed by tvdb id,
+    which the duplicate doesn't have), it's unlikely to be the actual cause of this display bug,
+    but it's a genuinely unresolved leftover regardless and needs its own cleanup (likely a
+    manual untrack/delete, or folding into the B.14 duplicate-merge backlog already logged
+    above).
+  - **Where the Data-side diagnosis got to, not finished**: `~/repos/data`'s `_patch_from_lcars`
+    (the B.11f fix) only applies LCARS's corrected watched-state to an episode if it can match
+    it against Data's own *local*, Sonarr-sourced episode record via `(seriesId, season,
+    episode)` (`episodes_by_key`, `app.py`). If that specific match silently fails for these two
+    episodes, the correction from LCARS gets skipped with no error at all, and Data falls back
+    to stale local state — a real, plausible mechanism, not confirmed. Restarting Data (already
+    tried, per the user) wouldn't fix this if the root cause is the correlation itself rather
+    than stale in-memory state.
+  - **Why this stopped here**: diagnosing further needs something from Data's own running
+    instance (its own local Sonarr-sourced `self._episodes`/`self._series_by_id` state, or its
+    own log output) — not visible from the server side alone. Queued for review, not
+    investigated live tonight.
 - [ ] **Freshly-Sonarr-linked show shows every episode "missing" even when real files exist** —
   found 2026-08-13, directly caused by fixing "Otome Kaijuu Caraméliser"/"Kaiju Girl Caramelise"
   earlier tonight (linking its real Sonarr tvdb id, then `refreshShowMetadata`). Root cause
