@@ -4566,6 +4566,12 @@ this order because each step is provably independent of the next
     `format --check` clean. No schema migration — `pending_review`
     already existed as a table, only a new GraphQL field on an
     existing type. Deployed 2026-08-13, same day.
+  - **Real-world validation, same night**: the very next `reconcileWatchProgress` call against
+    production (triggered while fixing an unrelated report — see `todo.md`'s own entry on the
+    34-pair/68-row collision find) hit Fix 1 for real at scale — `ambiguousAnilistIdConflicts:
+    68`, all safely quarantined, nothing applied to any of them, exactly as designed. Confirmed
+    the fix isn't just correct in a synthetic test; it holds up against real, messy, unpredicted
+    production data on its first real exposure to it.
 - [ ] **B.5.3a — Scoped/targeted reconcile — deliberately parked, good-
   to-have for later, not needed now.** Real design discussion,
   2026-08-13, prompted directly by the first triggered reconcile above

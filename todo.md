@@ -1,5 +1,60 @@
 # Bugs
 
+- [ ] **34 pairs (68 season rows) of colliding `anilist_id` links found across the whole library**
+  — surfaced 2026-08-13, the first time the new duplicate-detection hardening (`v0.1.11`) ran
+  against the real, full account rather than a synthetic test. Started from one specific report
+  ("Otome Kaijuu Caraméliser" episode 7, marked watched directly on AniList, not appearing in
+  Data): root cause there was unrelated to duplicates — that show had only an `anilist` external
+  id, no `tvdb` link at all, so LCARS had zero episode rows for it (same class of gap as the
+  already-logged `aa` add-to-AniList-only issue). Fixed live: found the real Sonarr entry
+  ("KAIJU GIRL CARAMELISE," tvdbId 471878 — a real title mismatch is exactly why nothing
+  auto-linked it), linked it via `linkShowExternalId`, `refreshShowMetadata` pulled in the real
+  12 episodes, `reconcileWatchProgress` backfilled episodes 1–7 as watched. Confirmed via direct
+  DB read (real `watch_event` rows through episode 7) — should appear in Data on its own next
+  periodic refresh; user to confirm.
+  **That same reconcile call is what surfaced the 68-row collision**: `ambiguousAnilistIdConflicts:
+  68`. All safely quarantined exactly as the hardening fix was designed to do — nothing applied
+  to any of them, one `pending_review` entry per season, in the same `V` screen already used for
+  everything else this session. Two distinct shapes, not one:
+  - **15 pairs are one show with two season rows both pointing at the same id** (same `show_id`
+    both times) — not duplicate shows, a stray extra season row: Witch Hat Atelier, The Weakest
+    Tamer, Gushing Over Magical Girls, The Fable, Sentenced to Be a Hero, Makeine, I Left my
+    A-Rank Party, The Unaware Atelier Meister, HOTEL INHUMANS, The Ramparts of Ice, A Star
+    Brighter Than the Sun, Jack-of-All-Trades Party of None, Tune In to the Midnight Heart,
+    Akane-banashi, KILL BLUE.
+  - **19 pairs are two separate LCARS shows sharing one id.** At least 5 are unmistakably the
+    same show under two titles, same shape as the Frontier Lord bug earlier tonight (English
+    title vs. its own Japanese romaji title as a second stub): Frontier Lord itself (`anilist_id
+    196218` — the stray stub, "Ryoumin 0-Nin Start no Henkyou Ryoushu-sama," predates tonight's
+    live fix, untouched by it), Mushoku Tensei / "Isekai Ittara Honki Dasu" (its own Japanese
+    subtitle), Slime / "Tensei Shitara Slime Datta Ken" (its own Japanese title), 100 Girlfriends
+    / "Kimi no Koto ga..." (its own Japanese title), You and I Are Polar Opposites / "Seihantai
+    na Kimi to Boku." The remaining ~14 look like a sequel season tracked as its own separate
+    show, linked to the wrong (earlier cour's) id instead of its own real one: Dr. STONE (twice,
+    two different ids), Fire Force, Re:Zero, Shangri-La Frontier, DAN DA DAN, Kaiju No. 8, Undead
+    Unluck, Frieren, HELL MODE, Head Start at Birth, Haruhi, Ascendance of a Bookworm. This
+    categorization is a read from titles only, not verified show-by-show — treat as a starting
+    point for review, not a conclusion.
+  **When this actually happened, checked rather than assumed** (the user's own hypothesis going
+  in was "probably initial database population, stray errors surfacing now" — checked, and it's
+  more specific than that): every one of the 68 rows has `created_at = 2026-08-11`, all on that
+  one day, none from the original population (which was 2026-08-08/09) and none from today's own
+  work (cour-split Part-1 links, Frontier Lord's fix) — so nothing done today introduced a new
+  collision. 53 of the 68 came from `source = 'manual'` (i.e. `setSeasonMapping`, not automatic
+  Fribb matching), 15 from `source = 'fribb'` — points at a specific bulk operation on 2026-08-11
+  (likely the untracked-show/AniList-list backfill work from around that date), not a slow
+  ongoing leak.
+  **Not fixed tonight, by design** — user's own call: this is part of getting the database
+  correct to start with; work through the 68 queued reviews tomorrow, at your own pace, via the
+  existing `V` screen — same proven workflow as the B.18/B.20 review cleanup earlier this week.
+  **Prevention, logged not built**: since this traces to one specific bulk operation rather than
+  an ongoing leak, no fix is urgent — but the actual gap is real and still open: neither
+  `setSeasonMapping` (the dominant source here, 53/68) nor the Fribb auto-linking path
+  (`season_mapping.py`, 15/68) check whether an `anilist_id` is already used elsewhere before
+  saving it. The hardening fix catches the damage after the fact on the next reconcile; it
+  doesn't stop a new collision from being *written* in the first place. Worth a write-time guard
+  on `setSeasonMapping` specifically if another bulk operation like 2026-08-11's is ever run
+  again — not needed for today's one-time cleanup.
 - [x] Production's DNS died entirely, 2026-08-13, found by accident while trying to run a live
   AniList check for B.5.3: the host's `/etc/resolv.conf` was fully Tailscale-managed
   (`nameserver 100.100.100.100`, its MagicDNS stub resolver — "DO NOT EDIT THIS FILE BY HAND"),
