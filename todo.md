@@ -1,5 +1,31 @@
 # Bugs
 
+- [ ] **Freshly-Sonarr-linked show shows every episode "missing" even when real files exist** —
+  found 2026-08-13, directly caused by fixing "Otome Kaijuu Caraméliser"/"Kaiju Girl Caramelise"
+  earlier tonight (linking its real Sonarr tvdb id, then `refreshShowMetadata`). Root cause
+  precisely diagnosed, not guessed: `metadata.py`'s `_fetch_sonarr` (the episode-creation path)
+  never sets `available_via_sonarr`/`file_path_sonarr` at all — its own `INSERT INTO episode`
+  doesn't touch those columns, so they silently take the schema default (`'unavailable'`).
+  Availability has always been `availability.py`'s own separate concern, by design — the gap is
+  in how the two interact: `poll_file_availability` (the regular, automatic poller) only reads
+  Sonarr `/history` events *newer than its own checkpoint* (confirmed live:
+  `2026-08-13T20:29:38Z`, long after this show's real episodes actually imported weeks ago) — it
+  can never retroactively discover an import that happened before a show was linked. Confirmed
+  via direct DB read: all 12 episodes show `available_via_sonarr = 'unavailable'`,
+  `file_path_sonarr = NULL`, despite episodes 1–7 being real, watched, on-disk files.
+  **Not specific to this one show** — any show newly linked to Sonarr while its real import
+  history predates that link will end up exactly like this: correct watch state, real files,
+  every episode shown missing. Today's fix just happened to be the first time this exact path
+  got exercised (a freshly-tvdb-linked, previously-anilist-only show).
+  **Two existing tools could fix it after the fact, neither runs automatically here**:
+  `backfillFileAvailability` (full history walk, ignores checkpoint, deliberately manual/
+  on-demand per its own `ops backfill-availability` design) or `auditLocalFiles`'s current-state
+  reconciliation (queries Sonarr's own current file state directly, not history-based, so it
+  doesn't care when the import happened). Not run tonight — user's own call, fix tomorrow.
+  **Real future fix worth considering**: `refreshShowMetadata`/`_fetch_sonarr` triggering (or at
+  least prompting) a per-show availability reconciliation whenever it creates episode rows for a
+  show that had none before — today it only ever creates the rows, never checks whether they're
+  already actually available. Not designed in detail, not built.
 - [ ] **34 pairs (68 season rows) of colliding `anilist_id` links found across the whole library**
   — surfaced 2026-08-13, the first time the new duplicate-detection hardening (`v0.1.11`) ran
   against the real, full account rather than a synthetic test. Started from one specific report
