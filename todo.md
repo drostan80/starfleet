@@ -12,17 +12,20 @@
      fixed, just diagnosed. Fixed for this one show only, live, with your OK: direct DB
      correction (`tracking_space` has no mutation to change it post-creation) plus the real
      `linkShowExternalId`/`setSeasonMapping`/`refreshShowMetadata` mutations for everything else.
-  2. **A second bug the fix itself exposed**: once linked, `_reconcile_air_dates` (B.4)
-     silently produced *wrong* dates — every episode a week too early. Cause: this show streams
-     a week early on Prime Video before its regular TV broadcast (confirmed via AniList's own
-     synopsis note), so AniList counts 12 episodes where Sonarr only tracks 11 real broadcasts
-     it can see + a not-yet-real 12th slot — i.e. AniList's episode N is Sonarr's episode N-1.
-     `_reconcile_air_dates` matches by plain episode number with no way to detect a real
-     episode-*count* mismatch between sources, so it confidently applied each episode's
-     neighbor's real date. Sonarr's own original dates were correct the whole time. Fixed live:
-     restored all 12 episodes to their own `airDateRawSonarr` value via `setEpisodeAirDate`
-     (MANUAL, outranks automatic reconciliation permanently, so this won't regress on the next
-     Ops sweep).
+  2. **A second bug — mine, not the code's, real correction needed**: after linking, the
+     automatic AniList reconciliation (`_reconcile_air_dates`, B.4) had actually already
+     produced the *right* dates. Misdiagnosed it live as wrong (mis-analyzed the pattern as a
+     +1 episode-*number* shift) and "fixed" it by overwriting all 12 episodes back to Sonarr's
+     own raw dates — which was backwards. The real, confirmed (checked directly against
+     AniList, all 12 episodes, uniform) shape: this show streams a full **week** early on Prime
+     Video before its regular TV broadcast (per AniList's own synopsis note) — same episode
+     *number* both sides, AniList's date is always exactly 7 days earlier than Sonarr/TVDB's
+     for that same episode, no numbering shift at all. User caught the bad "fix" immediately
+     (episode 6 should show aired last week/available, episode 7 airing tomorrow/not yet
+     available — the state my revert broke). Re-corrected live: all 12 episodes set via
+     `setEpisodeAirDate` (MANUAL) to AniList's date for that *same* episode number. Verified
+     against `availableViaSonarr` afterward: ep6 (8/7, last week) AVAILABLE, ep7 (8/14,
+     tomorrow) UNAVAILABLE — consistent.
   **Both root causes are real, general gaps, not one-off** — noted here rather than
   `BUILD_PLAN.md`'s "Deliberately not on this plan" section since these are gaps in already-
   shipped B.4/B.11d mechanisms, not unbuilt scope. Your own call: not fixing generally now,
