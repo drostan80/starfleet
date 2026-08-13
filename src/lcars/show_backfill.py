@@ -102,19 +102,21 @@ promotion path) rather than creating a second row. See
 `backfill_untracked_shows()`'s own docstring below for the `promoted`
 vs `created` split this added to the result shape.
 
-Throttled between anime-classified adds (only those trigger AniList
-calls) to stay inside AniList's 30 req/min budget — the same budget
-Data's own anilist.py docstring cites as the reason its own `P`
-(manual AniList sync) is deliberately not automatic. Scaled by season
-count (see `_anilist_call_estimate()`) rather than a flat per-show
-sleep — caught in review: a flat 2s sleep assumed one AniList call per
-show, but `_fetch_anilist` (1 call) plus `_reconcile_air_dates` (1
-call *per season*, its own B.4 docstring) plus this module's own
-status-seed read means even a single-season show makes 3 calls, not
-1. An AniList-sweep-sourced show already knows its own status (the
-same `MediaListCollection` call that found it) and skips the status-
-seed's own live read entirely — one fewer AniList call than a
-Sonarr/Fribb-resolved anime show needs.
+**Throttling moved out of this module, 2026-08-13** — used to sleep
+here between anime-classified adds, scaled by an estimated call count,
+to stay inside AniList's 30 req/min budget (the same budget Data's own
+anilist.py docstring cites as the reason its own `P`, manual AniList
+sync, is deliberately not automatic). Removed once `anilist_client.py`
+grew a real throttle at its own `_graphql_request` choke point (the
+production fix for a real burst of false "Too many requests"
+pending_review entries — that module's own comment has the full
+story): this module's own version was only ever an *estimate* (season
+count read off the DB, not the real call count metadata.py was about
+to make) and only ever throttled *between* shows, never between the
+several individual AniList calls one single multi-season show's own
+processing already fires back-to-back — the choke-point throttle is
+strictly more precise (paces every real call, not an estimated batch)
+and covers this module for free, no bookkeeping duplicated here.
 
 Idempotent/resumable by construction, no bespoke resume-state needed:
 re-running this after a partial run (interrupted, rate-limited,
@@ -139,15 +141,8 @@ backfilled `watching` show starts with every episode unwatched, so
 progress by hand.
 """
 
-import time
-
 from lcars import anilist_client, fribb, ids, local_audit, shows, util
 from lcars.config import get_current
-
-# AniList's own 30 req/min budget is exactly 2.0s/call — a small margin
-# above that rather than the bare minimum, so a genuinely-timed call
-# right at the boundary doesn't tip over it.
-ANILIST_SECONDS_PER_CALL = 2.1
 
 # The reverse of resolvers.py's own _STATUS_TO_ANILIST (A.9's push-
 # direction map) — REPEATING has no direct target there either (LCARS
@@ -386,27 +381,6 @@ def preview_backfill(conn) -> list[dict]:
     return preview_backfill_with_status(conn)["items"]
 
 
-def _anilist_call_estimate(conn, show_id: str) -> int:
-    """Roughly how many AniList calls this show's own create_show()
-    (plus this module's own status-seed, when it needs a live read)
-    likely just made: 1 for _fetch_anilist, 1 per season for
-    _reconcile_air_dates (metadata.py's own B.4 docstring: "calls this
-    once per season, not once per show"), 1 for _seed_status_from_anilist's
-    own read when it needs one. Not a precise instrumentation of
-    metadata.py's internals — a cheap, conservative proxy computed from
-    what create_show() already wrote (the season table), used only to
-    scale this module's own throttle sleep. At least 1 season assumed
-    even if none were written yet (a Sonarr-fetch failure, an
-    AniList-sweep-sourced show with no seasons yet, or a not-yet-aired
-    show with no seasons resolved) — never throttles less than the
-    single-season case, which slightly over-throttles an AniList-sweep
-    show (no status-seed call needed there) rather than under-throttle
-    it."""
-    row = conn.execute("SELECT COUNT(*) AS n FROM season WHERE show_id = ?", (show_id,)).fetchone()
-    season_count = max(row["n"] if row else 0, 1)
-    return 2 + season_count
-
-
 def backfill_untracked_shows(conn) -> dict:
     """The real run — one shows.create_show() per untracked Sonarr/
     Radarr item (local_audit.audit_local_files()'s own untracked_shows,
@@ -455,11 +429,6 @@ def backfill_untracked_shows(conn) -> dict:
         if classification["tracking_space"] == "anime":
             known_status = entry.get("status") if entry["service"] == "anilist" else None
             _seed_status_from_anilist(conn, show_id, known_status=known_status)
-            calls = _anilist_call_estimate(conn, show_id)
-            if known_status is None:
-                time.sleep(calls * ANILIST_SECONDS_PER_CALL)
-            else:
-                time.sleep((calls - 1) * ANILIST_SECONDS_PER_CALL)  # no live status read made
     return {"created": created, "promoted": promoted, "failed": failed}
 
 

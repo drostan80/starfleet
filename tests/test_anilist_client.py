@@ -323,3 +323,57 @@ def test_save_media_list_entry_raises_ani_list_auth_error_on_401():
     )
     with pytest.raises(anilist_client.AniListAuthError, match="anilist-login"):
         anilist_client.save_media_list_entry("bad-tok", 123, score=17.0, client=fake)
+
+
+# --- _throttle_anilist_call (2026-08-13, the "Too many requests" fix) -------
+# The repo-wide `tests/conftest.py` autouse fixture neuters the real
+# `time.sleep` for every other test in this file (and everywhere else);
+# these tests undo that locally to exercise the throttle itself.
+
+
+def test_throttle_sleeps_the_remaining_gap_when_called_too_soon(monkeypatch):
+    monkeypatch.setattr(anilist_client, "_last_anilist_call_at", 99.0)
+    times = iter([100.0, 100.0])  # elapsed-check read, then the recorded call time
+    monkeypatch.setattr(anilist_client.time, "monotonic", lambda: next(times))
+    slept = []
+    monkeypatch.setattr(anilist_client.time, "sleep", lambda s: slept.append(s))
+
+    anilist_client._throttle_anilist_call()
+
+    assert slept == [pytest.approx(anilist_client._ANILIST_SECONDS_PER_CALL - 1.0)]
+    assert anilist_client._last_anilist_call_at == 100.0
+
+
+def test_throttle_does_not_sleep_once_enough_time_has_already_passed(monkeypatch):
+    monkeypatch.setattr(anilist_client, "_last_anilist_call_at", 100.0)
+    monkeypatch.setattr(anilist_client.time, "monotonic", lambda: 500.0)
+    slept = []
+    monkeypatch.setattr(anilist_client.time, "sleep", lambda s: slept.append(s))
+
+    anilist_client._throttle_anilist_call()
+
+    assert slept == []
+    assert anilist_client._last_anilist_call_at == 500.0
+
+
+def test_throttle_never_sleeps_on_the_very_first_call_this_process(monkeypatch):
+    monkeypatch.setattr(anilist_client, "_last_anilist_call_at", None)
+    slept = []
+    monkeypatch.setattr(anilist_client.time, "sleep", lambda s: slept.append(s))
+
+    anilist_client._throttle_anilist_call()
+
+    assert slept == []
+    assert anilist_client._last_anilist_call_at is not None
+
+
+def test_graphql_request_invokes_the_throttle(monkeypatch):
+    """Confirms the throttle is actually wired into the one real choke
+    point every caller passes through, not just unit-tested in
+    isolation."""
+    called = []
+    monkeypatch.setattr(anilist_client, "_throttle_anilist_call", lambda: called.append(1))
+    media = {"title": {"romaji": "Golden Kamuy"}}
+    fake = _FakeClient(response=_FakeResponse(payload={"data": {"Media": media}}))
+    anilist_client.fetch_media(123, client=fake)
+    assert called == [1]

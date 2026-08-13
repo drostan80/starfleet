@@ -16,6 +16,8 @@ execution model (§11.2) — a sync `httpx.Client` throughout, not
 Data's `httpx.AsyncClient`.
 """
 
+import time
+
 import httpx
 
 GRAPHQL_URL = "https://graphql.anilist.co"
@@ -25,6 +27,52 @@ TOKEN_URL = "https://anilist.co/api/v2/oauth/token"
 # history of why this redirect (not a local callback server, not the
 # Implicit Grant) is the one that actually works; unchanged here.
 PIN_REDIRECT_URI = "https://anilist.co/api/v2/oauth/pin"
+
+# 2026-08-13 — quick fix for a real production burst (22 false
+# pending_review "Too many requests" entries), while the bigger
+# LCARS/Ops-owns-every-AniList-write rewrite is still just a note in
+# BUILD_PLAN.md, not built. Root cause: `run_once` (B.1's daily
+# metadata refresh, ops/scheduler.py) loops over every show due for
+# refresh calling `refresh_show_metadata` back-to-back with zero
+# delay, and each show fires 1 (`_fetch_anilist`) + 1-per-season
+# (`_reconcile_air_dates`) real GraphQL calls (metadata.py) — nothing
+# anywhere throttled that loop. show_backfill.py already established
+# the actual budget to design against (AniList's real ~30 req/min,
+# 2.1s/call with a small safety margin) but only applied it between
+# shows in its own one-time sweep, not here, and not at the one place
+# every GraphQL call in the whole process actually funnels through.
+# Fixed at that single choke point instead (`_graphql_request` below)
+# so it's automatically enforced for every current and future caller
+# — this loop, show_backfill's own calls, interactive addShow/refresh
+# mutations, watch_reconcile, all of it — process-wide, no per-caller
+# bookkeeping needed. Doesn't reduce total call *volume*, just paces
+# it under the documented budget, which is what was actually being
+# violated. Module-level, not per-client, deliberately: LCARS's own
+# sync/one-shared-connection execution model (§11.2, this module's own
+# docstring) means there's never real concurrent AniList traffic
+# within one process to coordinate across.
+#
+# Known real limitation, not fixed by this: AniList's rate limit is
+# per-account, not per-process — Data still writes to AniList directly
+# too (§6.8's permanent exception), and aniq is a third, fully
+# independent legacy client. This throttle only paces LCARS/Ops's own
+# share of that shared budget; it can't see or pace the other two.
+# That's exactly the gap the parked "AniList write should live only in
+# LCARS/Ops" rewrite (BUILD_PLAN.md, "Deliberately not on this plan")
+# is for — not addressed here.
+_ANILIST_SECONDS_PER_CALL = 2.1
+_last_anilist_call_at: float | None = None
+
+
+def _throttle_anilist_call() -> None:
+    global _last_anilist_call_at
+    now = time.monotonic()
+    if _last_anilist_call_at is not None:
+        wait = _ANILIST_SECONDS_PER_CALL - (now - _last_anilist_call_at)
+        if wait > 0:
+            time.sleep(wait)
+    _last_anilist_call_at = time.monotonic()
+
 
 _MEDIA_QUERY = """
 query ($mediaId: Int) {
@@ -100,7 +148,12 @@ def _graphql_request(
 ) -> dict:
     """Shared error handling for every GraphQL call this module makes
     (fetch_media, save_media_list_entry) — connect/timeout/HTTP/
-    GraphQL-error-body/401 all handled once."""
+    GraphQL-error-body/401 all handled once.
+
+    2026-08-13 — also the single choke point every real call passes
+    through, so `_throttle_anilist_call()` lives here rather than in
+    each caller (see that function's own comment for why)."""
+    _throttle_anilist_call()
     owns_client = client is None
     client = client or httpx.Client(timeout=10.0)
     headers = {"Authorization": f"Bearer {token}"} if token else {}

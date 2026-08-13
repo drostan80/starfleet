@@ -499,7 +499,6 @@ def test_backfill_creates_a_show_per_untracked_item(conn, monkeypatch):
         _sonarr_series(2, 222, "Show B"),  # Fribb match — anime
     ]
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
-    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: None)  # no real sleep in tests
 
     result = show_backfill.backfill_untracked_shows(conn)
     assert len(result["created"]) == 2
@@ -526,7 +525,6 @@ def test_backfill_creates_an_anilist_sweep_show_with_known_status(conn, monkeypa
         "fetch_my_list_status",
         lambda *a, **kw: fetch_status_calls.append(1) or "SHOULD_NOT_BE_CALLED",
     )
-    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: None)
 
     result = show_backfill.backfill_untracked_shows(conn)
     assert len(result["created"]) == 1
@@ -542,7 +540,6 @@ def test_backfill_is_idempotent_on_rerun(conn, monkeypatch):
     _patch_fribb(monkeypatch, [])
     series = [_sonarr_series(1, 111, "Show A")]
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
-    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: None)
 
     first = show_backfill.backfill_untracked_shows(conn)
     assert len(first["created"]) == 1
@@ -578,7 +575,6 @@ def test_backfill_promotes_a_stub_a_relation_walk_created_mid_run_instead_of_dup
         _sonarr_series(2, 222, "Show B"),
     ]
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
-    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: None)
 
     fake_media_by_id = {
         900: {
@@ -621,65 +617,17 @@ def test_backfill_promotes_a_stub_a_relation_walk_created_mid_run_instead_of_dup
     assert {r["external_id"] for r in anilist_links} == {"900", "950"}  # no id shared by two rows
 
 
-def test_backfill_throttles_only_between_anime_adds(conn, monkeypatch):
-    _configure_sonarr()
-    dataset = [
-        {"tvdb_id": 222, "anilist_id": 888, "mal_id": None, "season": {"tvdb": 1}},
-        {"tvdb_id": 333, "anilist_id": 889, "mal_id": None, "season": {"tvdb": 1}},
-    ]
-    _patch_fribb(monkeypatch, dataset)
-    series = [
-        _sonarr_series(1, 111, "TV Show"),  # no Fribb match
-        _sonarr_series(2, 222, "Anime Show A"),
-        _sonarr_series(3, 333, "Anime Show B"),
-    ]
-    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
-    sleeps = []
-    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: sleeps.append(s))
-
-    show_backfill.backfill_untracked_shows(conn)
-    assert len(sleeps) == 2  # once per anime show, not the tv one
-    # No episodes fetched (the fake Sonarr client returns none) — no season
-    # row gets created, so _anilist_call_estimate()'s own "at least 1
-    # season assumed" floor applies: 2 + 1 = 3 calls' worth of throttle.
-    # No AniList token configured, so _seed_status_from_anilist() no-ops
-    # before making any live call either way — full 3-call throttle still
-    # applies (the sleep is sized before knowing the seed will no-op).
-    expected = 3 * show_backfill.ANILIST_SECONDS_PER_CALL
-    assert sleeps == [expected, expected]
-
-
-def test_backfill_throttle_scales_with_season_count(conn, monkeypatch):
-    _configure_sonarr()
-    dataset = [{"tvdb_id": 111, "anilist_id": 888, "mal_id": None, "season": {"tvdb": 1}}]
-    _patch_fribb(monkeypatch, dataset)
-    series = [_sonarr_series(1, 111, "Multi-Season Anime")]
-    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient(series))
-    sleeps = []
-    monkeypatch.setattr(show_backfill.time, "sleep", lambda s: sleeps.append(s))
-    # _anilist_call_estimate() reads directly from the season table — a
-    # season row inserted straight into the DB is enough to exercise the
-    # scaling without needing a real multi-season Sonarr fetch.
-    real_create_show = show_backfill.shows.create_show
-
-    def _create_and_add_seasons(conn, classification):
-        # Season 1 already gets created automatically by _fetch_anilist's
-        # own _upsert_season(show_id, 1, ...) once an anilist_id is
-        # resolved (metadata.py) — only seasons 2/3 need adding here.
-        show_id = real_create_show(conn, classification)
-        for n in (2, 3):
-            conn.execute(
-                "INSERT INTO season (id, show_id, season_number, source, created_at, updated_at)"
-                " VALUES (?, ?, ?, 'manual', 'x', 'x')",
-                (f"z-seas{n:02d}", show_id, n),
-            )
-        conn.commit()
-        return show_id
-
-    monkeypatch.setattr(show_backfill.shows, "create_show", _create_and_add_seasons)
-
-    show_backfill.backfill_untracked_shows(conn)
-    assert sleeps == [5 * show_backfill.ANILIST_SECONDS_PER_CALL]  # 2 + 3 seasons
+def test_backfill_no_longer_has_its_own_throttle_mechanism():
+    """2026-08-13 — this module's own estimate-based, per-show throttle
+    was removed once `anilist_client.py` grew a real one at its actual
+    `_graphql_request` choke point (that module's own comment has the
+    full story; see also the now-superseded paragraph this module's
+    own docstring used to carry). A pin, not a behavior test: the real
+    throttling behavior itself is covered directly in
+    test_anilist_client.py, against the module that now actually owns
+    it."""
+    assert not hasattr(show_backfill, "ANILIST_SECONDS_PER_CALL")
+    assert not hasattr(show_backfill, "_anilist_call_estimate")
 
 
 # --- _seed_status_from_anilist -------------------------------------------------
