@@ -11,11 +11,25 @@
   importing). So once an episode's fully downloaded and you stop navigating, its LCARS-sourced
   fields can go stale for the rest of the session, nothing ever re-syncs them. Fixed:
   `~/repos/data` `6e6193f` — added the same periodic interval the other three already have.
-  563 tests passing. **Not yet confirmed live** — needs a Data restart to pick up (this fixes
-  the mechanism going forward; the already-stale display in a process running from before the
-  fix won't self-correct without one). Separately, still real and not addressed by this: Data's
-  own direct Sonarr/AniList polling/caching on open (the thing you called out as "weird
-  refresh") — deferred to the bigger LCARS/Ops-owns-all-writes rewrite, see BUILD_PLAN.md.
+  **Called this fixed too early — user restarted Data several times, still wrong.** Dug
+  further and found a second, deeper bug the timer fix didn't touch: `_patch_from_lcars()`
+  queried LCARS for exactly the *visible* calendar window — but the episode is displayed
+  under Sonarr's own wrong date (confirmed live: Sonarr's raw date for this episode is
+  2026-08-13, a consistent 3-day-off pattern across S1E5-E9 — the exact same TVDB-is-wrong-for-
+  brand-new-simulcasts failure `_patch_air_dates()`'s own docstring already named this show
+  for, 2026-07-09), and LCARS's correct date (8/10) falls outside that window entirely — so
+  the correction query never even asked about the day LCARS actually has right. Also confirmed
+  Data's own separate AniList correction can never fix this show either: its local Fribb
+  dataset entry for this tvdb id has no anilist_id at all, so that path silently no-ops every
+  time regardless of restarts — LCARS's own patch was always the only real fix, and it wasn't
+  reaching far enough. Fixed: `~/repos/data` `ce97a59` — pads the LCARS query 14 days beyond
+  the visible window on both sides (safe: correlation is by season/episode number, not date).
+  564 tests passing. **Still not confirmed live** — needs one more Data restart; this one
+  should actually move the episode off today's row (correctly, into the past, since it
+  already aired and was watched) rather than just leave today's row wrong. Separately, still
+  real and not addressed by either fix: Data's own direct Sonarr/AniList polling/caching on
+  open (the thing you called out as "weird refresh") — deferred to the bigger
+  LCARS/Ops-owns-all-writes rewrite, see BUILD_PLAN.md.
 - [ ] B.11g — calendar backlog counter + mark-watched display, ready to re-test on a clean
   baseline now, not yet confirmed. Timeline, so the full picture is in one place:
   1. Two real display/queueing bugs fixed 2026-08-12 night (`~/repos/data` `8b9abab`/`6d1baef`):
