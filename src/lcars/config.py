@@ -128,6 +128,19 @@ class Config:
     mal_access_token: str | None = None
     mal_refresh_token: str | None = None
     mal_token_refreshed_at: str | None = None
+    # B.5.1 — shared secrets for the /webhooks/sonarr and /webhooks/radarr
+    # routes (server.py). Not the bearer token: Sonarr/Radarr can't send
+    # one, and confirmed live against both projects' actual notification
+    # settings (WebhookSettings.cs, both repos) that they support a
+    # user-defined custom HTTP header on outgoing webhooks — so this rides
+    # the same header-based shape as the bearer token, just its own header
+    # name and its own per-service secret (Sonarr's compromise doesn't
+    # expose Radarr's), rather than the URL-embedded-secret pattern
+    # originally assumed in todo.md before this was checked. Optional, same
+    # "not configured = route stays closed" treatment as everything else in
+    # this dataclass — checked in server.py, not here.
+    sonarr_webhook_secret: str | None = None
+    radarr_webhook_secret: str | None = None
 
 
 def _resolve_secret(value: str | None, env_var: str) -> str | None:
@@ -184,6 +197,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.mal_token_refreshed_at = parser["lcars"].get(
                 "mal_token_refreshed_at", fallback=None
             )
+            cfg.sonarr_webhook_secret = parser["lcars"].get("sonarr_webhook_secret", fallback=None)
+            cfg.radarr_webhook_secret = parser["lcars"].get("radarr_webhook_secret", fallback=None)
     cfg.bearer_token = _resolve_secret(cfg.bearer_token, "LCARS_BEARER_TOKEN")
     env_db_path = os.environ.get("LCARS_DB_PATH")
     if env_db_path is not None:
@@ -205,6 +220,12 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     cfg.mal_client_secret = _resolve_secret(cfg.mal_client_secret, "LCARS_MAL_CLIENT_SECRET")
     cfg.mal_access_token = _resolve_secret(cfg.mal_access_token, "LCARS_MAL_ACCESS_TOKEN")
     cfg.mal_refresh_token = _resolve_secret(cfg.mal_refresh_token, "LCARS_MAL_REFRESH_TOKEN")
+    cfg.sonarr_webhook_secret = _resolve_secret(
+        cfg.sonarr_webhook_secret, "LCARS_SONARR_WEBHOOK_SECRET"
+    )
+    cfg.radarr_webhook_secret = _resolve_secret(
+        cfg.radarr_webhook_secret, "LCARS_RADARR_WEBHOOK_SECRET"
+    )
     # mal_token_refreshed_at isn't a secret (a plain timestamp) — same
     # non-secret treatment sonarr_url/radarr_url/home_timezone already get.
     cfg.mal_token_refreshed_at = os.environ.get(

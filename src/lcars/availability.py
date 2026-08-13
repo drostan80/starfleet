@@ -46,6 +46,60 @@ availability()` is the manual counterpart (`ops backfill-availability`
 CLI) that actually walks a service's full history, ignoring any
 existing checkpoint — run once, deliberately, at a moment of the
 user's own choosing, not on Ops's timer.
+
+**B.5.1, 2026-08-13 — real-time counterpart via Sonarr/Radarr webhooks**
+(`apply_sonarr_webhook`/`apply_radarr_webhook` below, wired in
+server.py's `/webhooks/sonarr`/`/webhooks/radarr` routes). Payload
+shapes confirmed directly against both projects' own source
+(`WebhookGrabPayload`/`WebhookImportPayload`/`WebhookSeries`/
+`WebhookEpisode`/`WebhookEpisodeFile` and their Radarr `Movie`/
+`MovieFile` equivalents, plus `Json.cs`'s `CamelCasePropertyNames
+ContractResolver` for field casing and `WebhookEventType`'s own
+`DefaultNamingStrategy` override for the *value* casing) — not
+recalled from memory, since a wrong key path here silently no-ops
+forever, the exact failure class this project has already hit three
+times. Two real, confirmed differences from the `/history` shape this
+module already reads:
+  - Webhook `eventType` values are `Grab`/`Download`/`Test` (PascalCase,
+    a deliberate exception to the payload's otherwise-camelCase field
+    names) — not `/history`'s `grabbed`/`downloadFolderImported`/
+    `episodeFileDeleted`. A second mapping table, not a reuse of
+    `_SONARR_EVENT_STATUS`/`_RADARR_EVENT_STATUS`.
+  - Sonarr's payload carries `episodes` (a list) even for a single-
+    episode grab/import — a season-pack grab is one webhook call
+    covering every episode it touches, unlike `/history`'s one-record-
+    one-episode shape. Looped, never assumed singular.
+`Test` (and any event type this doesn't act on — `Rename`,
+`SeriesAdd`/`MovieAdded`, delete events, health, etc.) is a real
+requirement to handle cleanly, not just ignore: Sonarr/Radarr both
+refuse to save a webhook connection whose test request doesn't
+succeed, so the unmapped-event-type path always returns a "did
+nothing, that's fine" result rather than an error.
+
+**Deliberate design choice: the webhook handlers never touch
+`availability_poll_checkpoint`.** That column means "how far the
+poller has read Sonarr/Radarr's own `/history` log" — a different
+fact than "what a webhook just told us," and the two must not be
+conflated. This also answers the real question of what happens if a
+webhook and the (now much less frequent, safety-net-only) poller
+apply conflicting state for the same episode close together: the
+poller always replays Sonarr/Radarr's own authoritative `/history` log
+in full, chronological order from its own checkpoint forward, so
+whenever it runs it re-derives the same final state a webhook already
+reached (or a later one, if something changed since) — it can only
+converge toward the truth, never lastingly regress past it. No new
+"last event timestamp" column was added to arbitrate between the two
+writers; not needed, matches this project's existing "apply
+immediately, reconcile in the background" principle (§3 principle 1)
+rather than inventing a new synchronization primitive for it.
+
+Auth for these routes is a per-service shared secret compared against
+a custom request header (`config.py`'s `sonarr_webhook_secret`/
+`radarr_webhook_secret`, checked in server.py) — confirmed live against
+both projects' own `WebhookSettings.cs` that a user-defined custom
+header is a real, supported option on their webhook connections, not
+the URL-embedded-secret fallback originally assumed before this was
+checked.
 """
 
 import logging
@@ -146,6 +200,39 @@ def _show_id_for_tvdb(conn, tvdb_id: int) -> str | None:
     return row["show_id"] if row else None
 
 
+def _apply_episode_availability(
+    conn, show_id: str, season: int, episode: int, status: str, path: str | None
+) -> str | None:
+    """Shared by `_poll_sonarr` and `apply_sonarr_webhook` — the one place
+    that writes `episode.available_via_sonarr`/`file_path_sonarr`/
+    `available_checked_at`. Returns the touched episode's id, or None if
+    no matching row exists yet (episode not fetched into LCARS yet — not
+    an error, same "not yet, not wrong" treatment `_poll_sonarr` already
+    gave this case before this was extracted)."""
+    row = conn.execute(
+        "SELECT id FROM episode WHERE show_id = ? AND season = ? AND episode = ?",
+        (show_id, season, episode),
+    ).fetchone()
+    if row is None:
+        return None
+    conn.execute(
+        "UPDATE episode SET available_via_sonarr = ?, file_path_sonarr = ?,"
+        " available_checked_at = ? WHERE id = ?",
+        (status, path, util.now_utc_iso(), row["id"]),
+    )
+    return row["id"]
+
+
+def _apply_show_availability_radarr(conn, show_id: str, status: str, path: str | None) -> None:
+    """Radarr's counterpart to `_apply_episode_availability` above — shared
+    by `_poll_radarr` and `apply_radarr_webhook`."""
+    conn.execute(
+        "UPDATE show SET available_via_radarr = ?, file_path_radarr = ?,"
+        " available_checked_at = ? WHERE id = ?",
+        (status, path, util.now_utc_iso(), show_id),
+    )
+
+
 def _show_id_for_tmdb_movie(conn, tmdb_id: int) -> str | None:
     row = conn.execute(
         "SELECT s.id FROM show s"
@@ -203,7 +290,6 @@ def _poll_sonarr(conn, backfill: bool = False) -> int:
         return 0
 
     touched_episode_ids: set[str] = set()
-    now = util.now_utc_iso()
     for record in records:
         status = _SONARR_EVENT_STATUS.get(record["eventType"])
         if status is None:
@@ -215,19 +301,13 @@ def _poll_sonarr(conn, backfill: bool = False) -> int:
         show_id = _show_id_for_tvdb(conn, series["tvdbId"])
         if show_id is None:
             continue  # not (yet) tracked in LCARS — not an error, §5.1
-        row = conn.execute(
-            "SELECT id FROM episode WHERE show_id = ? AND season = ? AND episode = ?",
-            (show_id, episode["seasonNumber"], episode["episodeNumber"]),
-        ).fetchone()
-        if row is None:
-            continue  # episode not yet fetched into LCARS — A.8's job, not this poll's
         path = record["data"].get("importedPath") if status == "available" else None
-        conn.execute(
-            "UPDATE episode SET available_via_sonarr = ?, file_path_sonarr = ?,"
-            " available_checked_at = ? WHERE id = ?",
-            (status, path, now, row["id"]),
+        episode_id = _apply_episode_availability(
+            conn, show_id, episode["seasonNumber"], episode["episodeNumber"], status, path
         )
-        touched_episode_ids.add(row["id"])
+        if episode_id is None:
+            continue  # episode not yet fetched into LCARS — A.8's job, not this poll's
+        touched_episode_ids.add(episode_id)
 
     _set_checkpoint(conn, "sonarr", records[-1]["date"])
     conn.commit()
@@ -260,7 +340,6 @@ def _poll_radarr(conn, backfill: bool = False) -> int:
         return 0
 
     touched_show_ids: set[str] = set()
-    now = util.now_utc_iso()
     for record in records:
         status = _RADARR_EVENT_STATUS.get(record["eventType"])
         if status is None:
@@ -272,16 +351,83 @@ def _poll_radarr(conn, backfill: bool = False) -> int:
         if show_id is None:
             continue  # not tracked as a standalone movie show in LCARS
         path = record["data"].get("importedPath") if status == "available" else None
-        conn.execute(
-            "UPDATE show SET available_via_radarr = ?, file_path_radarr = ?,"
-            " available_checked_at = ? WHERE id = ?",
-            (status, path, now, show_id),
-        )
+        _apply_show_availability_radarr(conn, show_id, status, path)
         touched_show_ids.add(show_id)
 
     _set_checkpoint(conn, "radarr", records[-1]["date"])
     conn.commit()
     return len(touched_show_ids)
+
+
+# B.5.1 — webhook eventType values, confirmed against Sonarr/Radarr's own
+# WebhookEventType.cs: PascalCase strings (a deliberate exception to the
+# rest of the payload's camelCase field names — see the module docstring),
+# and genuinely distinct from `/history`'s own eventType vocabulary above.
+_SONARR_WEBHOOK_EVENT_STATUS = {
+    "Grab": "downloading",
+    "Download": "available",
+}
+_RADARR_WEBHOOK_EVENT_STATUS = {
+    "Grab": "downloading",
+    "Download": "available",
+}
+
+
+def apply_sonarr_webhook(conn, payload: dict) -> dict:
+    """Real-time counterpart to `_poll_sonarr` — see the module docstring's
+    B.5.1 section for the full design rationale (payload shape, why this
+    never touches `availability_poll_checkpoint`). Returns
+    {"episodes_updated": int}, same shape as pollFileAvailability's own
+    result, for server.py's webhook route to echo back.
+
+    Any `eventType` this doesn't act on (`Test` included) is a deliberate,
+    silent no-op — Sonarr won't save a webhook connection whose test
+    request fails, so this must never error on content it doesn't
+    recognize."""
+    status = _SONARR_WEBHOOK_EVENT_STATUS.get(payload.get("eventType"))
+    if status is None:
+        return {"episodes_updated": 0}
+    series = payload.get("series")
+    episodes = payload.get("episodes") or []
+    if series is None or series.get("tvdbId") is None or not episodes:
+        return {"episodes_updated": 0}
+    show_id = _show_id_for_tvdb(conn, series["tvdbId"])
+    if show_id is None:
+        return {"episodes_updated": 0}  # not (yet) tracked in LCARS — same as the poller
+    path = None
+    if status == "available":
+        path = (payload.get("episodeFile") or {}).get("path")
+    touched_episode_ids: set[str] = set()
+    for ep in episodes:
+        if ep.get("seasonNumber") is None or ep.get("episodeNumber") is None:
+            continue
+        episode_id = _apply_episode_availability(
+            conn, show_id, ep["seasonNumber"], ep["episodeNumber"], status, path
+        )
+        if episode_id is not None:
+            touched_episode_ids.add(episode_id)
+    conn.commit()
+    return {"episodes_updated": len(touched_episode_ids)}
+
+
+def apply_radarr_webhook(conn, payload: dict) -> dict:
+    """Radarr's counterpart to `apply_sonarr_webhook` above — see that
+    function's docstring, same shape. Returns {"shows_updated": int}."""
+    status = _RADARR_WEBHOOK_EVENT_STATUS.get(payload.get("eventType"))
+    if status is None:
+        return {"shows_updated": 0}
+    movie = payload.get("movie")
+    if movie is None or movie.get("tmdbId") is None:
+        return {"shows_updated": 0}
+    show_id = _show_id_for_tmdb_movie(conn, movie["tmdbId"])
+    if show_id is None:
+        return {"shows_updated": 0}  # not tracked as a standalone movie show in LCARS
+    path = None
+    if status == "available":
+        path = (payload.get("movieFile") or {}).get("path")
+    _apply_show_availability_radarr(conn, show_id, status, path)
+    conn.commit()
+    return {"shows_updated": 1}
 
 
 def recommended_poll_interval_seconds(conn) -> int:

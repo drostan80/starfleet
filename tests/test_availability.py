@@ -238,6 +238,174 @@ def test_poll_sonarr_not_configured_is_a_clean_no_op(conn, monkeypatch):
     assert called == []  # never even constructed
 
 
+# --- B.5.1: Sonarr/Radarr webhooks --------------------------------------
+#
+# Payload shapes mirror what Sonarr/Radarr actually send (confirmed live
+# against their own source, availability.py's module docstring) —
+# camelCase field names, PascalCase eventType values, `episodes`/`movie`
+# nesting distinct from `/history`'s own record shape above.
+
+
+def _sonarr_webhook(event_type, tvdb_id=457078, episodes=None, imported_path=None):
+    payload = {
+        "eventType": event_type,
+        "series": {"id": 955, "title": "Test Show", "tvdbId": tvdb_id},
+        "episodes": episodes or [{"id": 36997, "seasonNumber": 1, "episodeNumber": 1}],
+    }
+    if event_type == "Download":
+        payload["episodeFile"] = {"id": 1, "path": imported_path or "/data/x.mkv"}
+        payload["isUpgrade"] = False
+    return payload
+
+
+def _radarr_webhook(event_type, tmdb_id=687163, imported_path=None):
+    payload = {
+        "eventType": event_type,
+        "movie": {"id": 308, "title": "Test Movie", "tmdbId": tmdb_id},
+    }
+    if event_type == "Download":
+        payload["movieFile"] = {"id": 1, "path": imported_path or "/data/y.mkv"}
+        payload["isUpgrade"] = False
+    return payload
+
+
+def test_sonarr_webhook_grab_sets_downloading(conn):
+    _add_show(conn, "s-whk001", tvdb_id=457078)
+    _add_episode(conn, "e-whk001", "s-whk001")
+    result = availability.apply_sonarr_webhook(conn, _sonarr_webhook("Grab"))
+    assert result == {"episodes_updated": 1}
+    row = conn.execute(
+        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-whk001'"
+    ).fetchone()
+    assert row["available_via_sonarr"] == "downloading"
+    assert row["file_path_sonarr"] is None
+
+
+def test_sonarr_webhook_download_sets_available_with_path(conn):
+    _add_show(conn, "s-whk002", tvdb_id=457078)
+    _add_episode(conn, "e-whk002", "s-whk002")
+    result = availability.apply_sonarr_webhook(
+        conn, _sonarr_webhook("Download", imported_path="/data/real.mkv")
+    )
+    assert result == {"episodes_updated": 1}
+    row = conn.execute(
+        "SELECT available_via_sonarr, available_locally, file_path_sonarr"
+        " FROM episode WHERE id = 'e-whk002'"
+    ).fetchone()
+    assert row["available_via_sonarr"] == "available"
+    assert row["available_locally"] == 1
+    assert row["file_path_sonarr"] == "/data/real.mkv"
+
+
+def test_sonarr_webhook_multi_episode_payload_updates_every_episode(conn):
+    """A season-pack grab is one webhook call covering every episode it
+    touches (`episodes`, a list) — the real, confirmed difference from
+    `/history`'s one-record-one-episode shape."""
+    _add_show(conn, "s-whk003", tvdb_id=457078)
+    _add_episode(conn, "e-wk03a1", "s-whk003", season=1, episode=1)
+    _add_episode(conn, "e-wk03a2", "s-whk003", season=1, episode=2)
+    result = availability.apply_sonarr_webhook(
+        conn,
+        _sonarr_webhook(
+            "Grab",
+            episodes=[
+                {"id": 1, "seasonNumber": 1, "episodeNumber": 1},
+                {"id": 2, "seasonNumber": 1, "episodeNumber": 2},
+            ],
+        ),
+    )
+    assert result == {"episodes_updated": 2}
+    rows = conn.execute(
+        "SELECT available_via_sonarr FROM episode WHERE show_id = 's-whk003'"
+    ).fetchall()
+    assert all(r["available_via_sonarr"] == "downloading" for r in rows)
+
+
+def test_sonarr_webhook_test_event_is_a_clean_no_op(conn):
+    """Sonarr refuses to save a webhook connection whose Test request
+    fails — this must return cleanly regardless of the payload's own
+    (fake, Sonarr-generated) content, not error on it."""
+    result = availability.apply_sonarr_webhook(
+        conn,
+        {
+            "eventType": "Test",
+            "series": {"id": 1, "title": "Test Title", "tvdbId": 1234},
+            "episodes": [{"id": 123, "seasonNumber": 1, "episodeNumber": 1}],
+        },
+    )
+    assert result == {"episodes_updated": 0}
+
+
+def test_sonarr_webhook_unrecognized_event_type_is_a_no_op(conn):
+    result = availability.apply_sonarr_webhook(conn, _sonarr_webhook("Rename"))
+    assert result == {"episodes_updated": 0}
+
+
+def test_sonarr_webhook_skips_an_untracked_show(conn):
+    result = availability.apply_sonarr_webhook(conn, _sonarr_webhook("Grab", tvdb_id=999999))
+    assert result == {"episodes_updated": 0}
+
+
+def test_sonarr_webhook_skips_an_unfetched_episode(conn):
+    _add_show(conn, "s-whk004", tvdb_id=457078)
+    result = availability.apply_sonarr_webhook(
+        conn,
+        _sonarr_webhook("Grab", episodes=[{"id": 1, "seasonNumber": 5, "episodeNumber": 99}]),
+    )
+    assert result == {"episodes_updated": 0}
+
+
+def test_sonarr_webhook_never_touches_the_poll_checkpoint(conn):
+    """The real design decision (module docstring): a webhook applying
+    state must not advance/create availability_poll_checkpoint — that
+    column means "how far the poller has read /history," a different
+    fact than "what a webhook just told us.\""""
+    _add_show(conn, "s-whk005", tvdb_id=457078)
+    _add_episode(conn, "e-whk005", "s-whk005")
+    availability.apply_sonarr_webhook(conn, _sonarr_webhook("Grab"))
+    assert availability._get_checkpoint(conn, "sonarr") is None
+
+
+def test_radarr_webhook_grab_sets_downloading(conn):
+    _add_show(conn, "s-whk006", tmdb_id=687163, media_shape="movie")
+    result = availability.apply_radarr_webhook(conn, _radarr_webhook("Grab"))
+    assert result == {"shows_updated": 1}
+    row = conn.execute(
+        "SELECT available_via_radarr, file_path_radarr FROM show WHERE id = 's-whk006'"
+    ).fetchone()
+    assert row["available_via_radarr"] == "downloading"
+    assert row["file_path_radarr"] is None
+
+
+def test_radarr_webhook_download_sets_available_with_path(conn):
+    _add_show(conn, "s-whk007", tmdb_id=687163, media_shape="movie")
+    result = availability.apply_radarr_webhook(
+        conn, _radarr_webhook("Download", imported_path="/data/movie.mkv")
+    )
+    assert result == {"shows_updated": 1}
+    row = conn.execute(
+        "SELECT available_via_radarr, file_path_radarr FROM show WHERE id = 's-whk007'"
+    ).fetchone()
+    assert row["available_via_radarr"] == "available"
+    assert row["file_path_radarr"] == "/data/movie.mkv"
+
+
+def test_radarr_webhook_test_event_is_a_clean_no_op(conn):
+    result = availability.apply_radarr_webhook(
+        conn,
+        {
+            "eventType": "Test",
+            "movie": {"id": 1, "title": "Test Title", "tmdbId": 1234},
+        },
+    )
+    assert result == {"shows_updated": 0}
+
+
+def test_radarr_webhook_skips_an_untracked_show(conn):
+    result = availability.apply_radarr_webhook(conn, _radarr_webhook("Grab", tmdb_id=999999))
+    assert result == {"shows_updated": 0}
+
+
 def test_poll_sonarr_client_error_is_caught(conn, monkeypatch):
     _configure_sonarr()
 

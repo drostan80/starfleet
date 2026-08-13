@@ -1,24 +1,38 @@
-"""The ASGI app — Ariadne schema binding, bearer-token auth, and the
-X-LCARS-Client context extraction (SCOPE.md §8, §5.7 addendum).
+"""The ASGI app — Ariadne schema binding, bearer-token auth, the
+X-LCARS-Client context extraction (SCOPE.md §8, §5.7 addendum), and
+(B.5.1, 2026-08-13) the Sonarr/Radarr webhook routes.
 
 `create_app()` (not a bare module-level `app`) is the real entrypoint —
 deliberately, so building an app is an explicit action with its own DB
 connection, not an import-time side effect that would fire on `import
 lcars.server` alone (e.g. during test collection). Run via uvicorn's
 factory mode: `uvicorn lcars.server:create_app --factory`.
+
+B.5.1 — the app is a real `Router` now, not a bare `GraphQL` app wrapped
+in one middleware: webhooks can't present a bearer token (Sonarr/Radarr
+send their own per-service secret via a custom header instead, see
+`_webhook_view` below), so `BearerTokenMiddleware` must scope to the
+GraphQL mount only, not the whole app — getting this backwards is how
+GraphQL would end up accidentally unauthenticated. GraphQL still answers
+at exactly `/` (existing clients — Data, Ops — already POST there;
+unchanged), matched last so the two `/webhooks/*` routes take priority.
 """
 
 import hmac
+import logging
 from importlib import resources
 
 from ariadne import make_executable_schema
 from ariadne.asgi import GraphQL
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Mount, Route, Router
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from lcars import config, db
+from lcars import availability, config, db
 from lcars.resolvers import BINDABLES
+
+logger = logging.getLogger("lcars.server")
 
 
 def _load_sdl() -> str:
@@ -63,10 +77,69 @@ class BearerTokenMiddleware:
         await self._app(scope, receive, send)
 
 
-def build_app(bearer_token: str | None) -> ASGIApp:
+def _webhook_view(header_name: str, secret: str | None, apply_fn):
+    """B.5.1 — one route factory shared by `/webhooks/sonarr` and
+    `/webhooks/radarr`: constant-time header-secret check (same
+    `hmac.compare_digest` pattern as `BearerTokenMiddleware`, `secret is
+    None` rejects everything rather than accepting any request, same
+    reasoning as that class's own `_expected` — an unconfigured route
+    stays closed, not open), then hands the parsed JSON body to
+    `apply_fn` (`availability.apply_sonarr_webhook`/`apply_radarr_webhook`).
+
+    A malformed body or a payload shape this doesn't recognize is a
+    no-op, not a 500 — Sonarr/Radarr's own retry-on-error behavior on a
+    real failure response has no benefit here (a payload we can't act on
+    now won't be actionable on retry either), and `pollFileAvailability`
+    remains the reconciling safety net regardless (module docstring)."""
+
+    async def view(request: Request):
+        presented = request.headers.get(header_name, "")
+        if secret is None or not hmac.compare_digest(presented, secret):
+            return PlainTextResponse("Unauthorized", status_code=401)
+        try:
+            payload = await request.json()
+        except ValueError:
+            logger.warning("Webhook to %s: body was not valid JSON", request.url.path)
+            return JSONResponse({"ok": True})  # see docstring — ack, don't error
+        try:
+            result = apply_fn(db.get_connection(), payload)
+        except Exception:
+            # Best-effort, matching this whole module's philosophy (A.8):
+            # an unexpected payload shape must never surface as a 500 that
+            # could make Sonarr/Radarr treat the connection as broken.
+            logger.exception("Webhook to %s: failed to apply", request.url.path)
+            return JSONResponse({"ok": True})
+        return JSONResponse({"ok": True, **result})
+
+    return view
+
+
+def build_app(
+    bearer_token: str | None,
+    sonarr_webhook_secret: str | None = None,
+    radarr_webhook_secret: str | None = None,
+) -> ASGIApp:
     schema = build_schema()
     graphql_app = GraphQL(schema, context_value=_context_value)
-    return BearerTokenMiddleware(graphql_app, bearer_token)
+    protected_graphql = BearerTokenMiddleware(graphql_app, bearer_token)
+    routes = [
+        Route(
+            "/webhooks/sonarr",
+            _webhook_view(
+                "x-lcars-webhook-secret", sonarr_webhook_secret, availability.apply_sonarr_webhook
+            ),
+            methods=["POST"],
+        ),
+        Route(
+            "/webhooks/radarr",
+            _webhook_view(
+                "x-lcars-webhook-secret", radarr_webhook_secret, availability.apply_radarr_webhook
+            ),
+            methods=["POST"],
+        ),
+        Mount("/", app=protected_graphql),  # last — catch-all, must not shadow the two above
+    ]
+    return Router(routes)
 
 
 def create_app() -> ASGIApp:
@@ -75,4 +148,4 @@ def create_app() -> ASGIApp:
     cfg = config.load_config()
     db.connect(cfg.db_path)
     config.set_current(cfg)  # A.8 — Sonarr/Radarr credentials for metadata.py
-    return build_app(cfg.bearer_token)
+    return build_app(cfg.bearer_token, cfg.sonarr_webhook_secret, cfg.radarr_webhook_secret)

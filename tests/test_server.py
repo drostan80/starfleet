@@ -79,6 +79,29 @@ async def client(migrated_db, monkeypatch):
     db.close()
 
 
+SONARR_WEBHOOK_SECRET = "sonarr-secret-abc"
+RADARR_WEBHOOK_SECRET = "radarr-secret-xyz"
+
+
+@pytest.fixture
+async def webhook_client(migrated_db, monkeypatch):
+    """B.5.1 — same shape as `client` above, but built with both webhook
+    secrets configured so `/webhooks/sonarr`/`/webhooks/radarr` are open
+    for these tests specifically; the plain `client` fixture deliberately
+    leaves them unconfigured (closed) so every other test in this file
+    stays a clean negative case for "webhooks not set up"."""
+    db.connect(migrated_db)
+    config.set_current(config.Config())
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: None)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+    monkeypatch.setattr(fribb, "load_dataset", lambda: [])
+    app = build_app(BEARER_TOKEN, SONARR_WEBHOOK_SECRET, RADARR_WEBHOOK_SECRET)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    db.close()
+
+
 def auth_headers(client_name: str | None = "data") -> dict:
     headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
     if client_name is not None:
@@ -6446,3 +6469,160 @@ async def test_reconcile_watch_progress_backfills_and_corrects_status_through_re
         headers=auth_headers(),
     )
     assert ep3_data["episode"]["state"] == "UNWATCHED"  # beyond progress=2, untouched
+
+
+# --- B.5.1: Sonarr/Radarr webhook routes --------------------------------
+#
+# Route-level: auth, routing (GraphQL at "/" still works alongside the two
+# new routes), and the "unconfigured secret = closed route" default. The
+# apply logic itself (episodes list, Test-event handling, checkpoint
+# isolation) is covered directly in test_availability.py — these confirm
+# the transport layer wires it up correctly, not re-derive that coverage.
+
+
+def _sonarr_grab_payload(tvdb_id):
+    return {
+        "eventType": "Grab",
+        "series": {"id": 1, "title": "Test Show", "tvdbId": tvdb_id},
+        "episodes": [{"id": 1, "seasonNumber": 1, "episodeNumber": 1}],
+    }
+
+
+def _radarr_grab_payload(tmdb_id):
+    return {
+        "eventType": "Grab",
+        "movie": {"id": 1, "title": "Test Movie", "tmdbId": tmdb_id},
+    }
+
+
+async def test_sonarr_webhook_route_rejects_missing_secret(webhook_client):
+    resp = await webhook_client.post("/webhooks/sonarr", json=_sonarr_grab_payload(1))
+    assert resp.status_code == 401
+
+
+async def test_sonarr_webhook_route_rejects_wrong_secret(webhook_client):
+    resp = await webhook_client.post(
+        "/webhooks/sonarr",
+        json=_sonarr_grab_payload(1),
+        headers={"X-Lcars-Webhook-Secret": "not-the-real-secret"},
+    )
+    assert resp.status_code == 401
+
+
+async def test_sonarr_webhook_route_unconfigured_secret_stays_closed(client):
+    """The plain `client` fixture (BEARER_TOKEN only, no webhook secrets)
+    — confirms an unconfigured route rejects everything, same as
+    BearerTokenMiddleware's own `secret is None` guard, rather than
+    accepting any request once no secret is set."""
+    resp = await client.post(
+        "/webhooks/sonarr",
+        json=_sonarr_grab_payload(1),
+        headers={"X-Lcars-Webhook-Secret": ""},
+    )
+    assert resp.status_code == 401
+
+
+async def test_sonarr_webhook_route_applies_with_correct_secret(webhook_client, migrated_db):
+    show = await add_show(webhook_client, trackingSpace="TV", tvdbId=12345)
+    _insert_next_up_episode(
+        migrated_db, "e-whkr01", show["id"], season=1, episode=1, available=False
+    )
+
+    resp = await webhook_client.post(
+        "/webhooks/sonarr",
+        json=_sonarr_grab_payload(12345),
+        headers={"X-Lcars-Webhook-Secret": SONARR_WEBHOOK_SECRET},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "episodes_updated": 1}
+
+    data = await gql(
+        webhook_client,
+        "query($id: ID!) { episode(id: $id) { availableViaSonarr } }",
+        {"id": "e-whkr01"},
+        headers=auth_headers(),
+    )
+    assert data["episode"]["availableViaSonarr"] == "DOWNLOADING"
+
+
+async def test_sonarr_webhook_route_test_event_returns_200_with_no_side_effect(webhook_client):
+    """The real requirement this route exists to satisfy: Sonarr won't
+    save a webhook connection whose Test click doesn't get a success
+    response back."""
+    resp = await webhook_client.post(
+        "/webhooks/sonarr",
+        json={
+            "eventType": "Test",
+            "series": {"id": 1, "title": "Test Title", "tvdbId": 1234},
+            "episodes": [{"id": 123, "seasonNumber": 1, "episodeNumber": 1}],
+        },
+        headers={"X-Lcars-Webhook-Secret": SONARR_WEBHOOK_SECRET},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "episodes_updated": 0}
+
+
+async def test_sonarr_webhook_route_malformed_body_returns_200_not_500(webhook_client):
+    resp = await webhook_client.post(
+        "/webhooks/sonarr",
+        content=b"not json",
+        headers={
+            "X-Lcars-Webhook-Secret": SONARR_WEBHOOK_SECRET,
+            "Content-Type": "application/json",
+        },
+    )
+    assert resp.status_code == 200
+
+
+async def test_radarr_webhook_route_applies_with_correct_secret(webhook_client):
+    show = await add_show(
+        webhook_client, mediaShape="MOVIE", trackingSpace="TV", titleRomaji="A Movie", tmdbId=54321
+    )
+
+    resp = await webhook_client.post(
+        "/webhooks/radarr",
+        json=_radarr_grab_payload(54321),
+        headers={"X-Lcars-Webhook-Secret": RADARR_WEBHOOK_SECRET},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "shows_updated": 1}
+
+    data = await gql(
+        webhook_client,
+        "query($id: ID!) { show(id: $id) { availableViaRadarr } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["availableViaRadarr"] == "DOWNLOADING"
+
+
+async def test_radarr_webhook_route_wrong_secret_does_not_authorize_sonarrs_route(webhook_client):
+    """Each service's secret is genuinely its own — Sonarr's secret must
+    not double as Radarr's, or a leak of one compromises both routes."""
+    resp = await webhook_client.post(
+        "/webhooks/radarr",
+        json=_radarr_grab_payload(1),
+        headers={"X-Lcars-Webhook-Secret": SONARR_WEBHOOK_SECRET},
+    )
+    assert resp.status_code == 401
+
+
+async def test_graphql_still_answers_at_root_alongside_webhook_routes(webhook_client):
+    """Routing sanity: adding the two webhook routes must not shadow or
+    break GraphQL's own existing root path."""
+    resp = await webhook_client.post(
+        "/", json={"query": "{ shows { edges { node { id } } } }"}, headers=auth_headers()
+    )
+    assert resp.status_code == 200
+
+
+async def test_webhook_route_never_accepts_the_graphql_bearer_token(webhook_client):
+    """The bearer token and the webhook secrets are deliberately different
+    credentials — confirms BearerTokenMiddleware's own token doesn't
+    accidentally satisfy the webhook route's header check."""
+    resp = await webhook_client.post(
+        "/webhooks/sonarr",
+        json=_sonarr_grab_payload(1),
+        headers={"X-Lcars-Webhook-Secret": BEARER_TOKEN},
+    )
+    assert resp.status_code == 401

@@ -4243,31 +4243,88 @@ own numbered phase once actually picked up — this is that. Builds in
 this order because each step is provably independent of the next
 (confirmed live, not assumed) before being started.
 
-- [ ] **B.5.1 — Sonarr/Radarr file-availability webhooks.** Local API,
-  no third-party rate budget — "fair game," per the user — so this can
-  be built and proven in complete isolation from the AniList work
-  below.
-  - LCARS's `server.py` currently mounts exactly one thing —
-    `GraphQL(schema, ...)` under one bearer-token
-    `BearerTokenMiddleware` covering the whole app. Needs its own
-    route(s) alongside the GraphQL mount (`/webhooks/sonarr`,
-    `/webhooks/radarr`).
-  - Auth: Sonarr/Radarr don't send a bearer token — their pattern is a
-    secret embedded in the callback URL path. That secret goes in
-    `/opt/appdata/lcars/secrets/` alongside the bearer token and the
-    rest, never in `starfleet.yml` in the clear (user confirmed
-    2026-08-13).
-  - Behavior: `Grab` → `DOWNLOADING` immediately; `Download`/import →
-    `AVAILABLE`, only once the file actually lands. A re-download
-    (upgrade) replays the same sequence — confirmed with the user this
-    is a feature (don't trust a file until Sonarr says it's actually
-    landed), not a bug to guard against.
-  - `pollFileAvailability` **stays permanently**, not removed once
-    webhooks land — webhook delivery is neither guaranteed nor
+- [x] **B.5.1 — Sonarr/Radarr file-availability webhooks.** Built
+  2026-08-13. Local API, no third-party rate budget — "fair game,"
+  per the user — so this was built and proven in complete isolation
+  from the AniList work below.
+  - Payload shapes confirmed directly against Sonarr/Radarr's own
+    source (`WebhookGrabPayload`/`WebhookImportPayload`/`WebhookSeries`/
+    `WebhookEpisode`/`WebhookEpisodeFile`, Radarr's `Movie`/`MovieFile`
+    equivalents, `WebhookEventType`, and `Json.cs`'s serializer
+    settings), not recalled from memory — a wrong key path here
+    silently no-ops forever, this project's own recurring failure
+    class. `eventType` is `Grab`/`Download`/`Test` (PascalCase, a
+    deliberate exception to otherwise-camelCase field names); `episodes`
+    is always a list, even for a single episode (a season-pack grab is
+    one call covering every episode it touches) — genuinely different
+    from `/history`'s one-record-one-episode shape `_poll_sonarr`
+    already read, so a second event-type mapping and a per-episode loop
+    were both required, not a reuse of the existing one.
+  - `server.py` restructured from a bare `GraphQL` app wrapped in one
+    `BearerTokenMiddleware` into a real `Router`: `/webhooks/sonarr` and
+    `/webhooks/radarr` as their own `Route`s, GraphQL demoted to a
+    `Mount("/", ...)` matched last so it still answers at exactly `/`
+    (existing Data/Ops clients unchanged) without the webhook routes
+    shadowing it or the bearer middleware wrapping them by accident.
+  - **Auth: real finding, better than what was assumed** — checked
+    directly against both projects' own `WebhookSettings.cs` rather
+    than going with the originally-assumed URL-embedded-secret
+    pattern: Sonarr/Radarr's webhook connection settings support a
+    genuine custom HTTP header (`Headers`, a `KeyValueList` in their
+    own UI). Used that instead — a per-service shared secret
+    (`config.py`'s `sonarr_webhook_secret`/`radarr_webhook_secret`,
+    same file/env/`_FILE`-secret precedence as every other credential
+    here) compared via `hmac.compare_digest` against a custom header,
+    same constant-time pattern as the existing bearer token. No secret
+    ever sits in a URL or a log line. Goes in
+    `/opt/appdata/lcars/secrets/` alongside the rest at deploy time
+    (not yet deployed — config values exist, production `lcars.ini`/
+    compose secrets not yet wired, see below).
+  - Behavior: `Grab` → `downloading` immediately; `Download`/import →
+    `available`, only once the file actually lands, using
+    `episodeFile.path`/`movieFile.path` (confirmed field, not
+    `/history`'s `data.importedPath`). A re-download (upgrade) replays
+    the same sequence — confirmed with the user this is a feature
+    (don't trust a file until Sonarr says it's actually landed), not a
+    bug to guard against. `Test` and any other event type this doesn't
+    act on is a deliberate silent no-op, not an error — required,
+    since Sonarr/Radarr both refuse to save a webhook connection whose
+    Test request fails.
+  - **Checkpoint interaction, a real design decision, resolved**:
+    webhook handlers never touch `availability_poll_checkpoint` — that
+    column means "how far the poller has read `/history`," a different
+    fact than "what a webhook just told us." No new synchronization
+    column was added to arbitrate between the two writers either;
+    not needed, since the poller always replays Sonarr/Radarr's own
+    authoritative `/history` log in full chronological order from its
+    checkpoint forward, so it can only ever converge on the same truth
+    a webhook already reached, never lastingly regress past it — same
+    "apply immediately, reconcile in the background" principle (§3
+    principle 1) already established elsewhere, not a new mechanism.
+  - `pollFileAvailability` **stays permanently**, not removed now that
+    webhooks exist — webhook delivery is neither guaranteed nor
     ordered (a missed/failed POST is just gone, no retry), so it
     remains the reconciling safety net. User confirmed 2026-08-13 it's
     cheap enough to keep running, just on a longer interval once
-    webhooks are doing the real-time work.
+    webhooks are doing the real-time work (interval not yet changed —
+    `recommended_poll_interval_seconds` untouched by this step).
+  - Shared apply logic extracted from `_poll_sonarr`/`_poll_radarr`
+    into `_apply_episode_availability`/`_apply_show_availability_radarr`
+    so the poller and the webhook handlers write through one path each,
+    not two copies of the same SQL.
+  - 27 new tests (12 `test_availability.py`, apply-logic level; 10
+    `test_server.py`, route/auth/routing level — auth rejection,
+    wrong/missing/unconfigured secret, cross-service secret isolation,
+    Test-event 200, malformed-body 200-not-500, GraphQL still answering
+    at `/` alongside the new routes), all passing; full suite green,
+    `ruff check`/`format --check` clean.
+  - **Not yet deployed** — `sonarr_webhook_secret`/`radarr_webhook_secret`
+    exist in `config.py` but production `lcars.ini`/compose secrets
+    aren't wired yet, and Sonarr/Radarr's own webhook connections
+    haven't been configured to point at LCARS. Next: deploy, configure
+    both services' webhook connections (custom header, per-service
+    secret), confirm live with a real grab/import, only then consider
+    lengthening `pollFileAvailability`'s interval.
 - [ ] **B.5.2 — AniList request scheduler: the throttle becomes a
   priority queue.** Confirmed first, not assumed: every `anilist_client`
   reference in this codebase lives under `src/lcars/`; `src/ops/` only

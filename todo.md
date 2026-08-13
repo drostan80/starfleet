@@ -97,9 +97,10 @@
 
 - [ ] in list view enter does nothing, info shos but the image show only half somehow this seems to not be an issue in calendar view info
 
-- [ ] File availability takes too long to show up (Sonarr import -> visible in Data). **Designed
-  2026-08-13, see `BUILD_PLAN.md` Phase B.5 (B.5.1) for the built-out plan** — kept here as the
-  original latency writeup. Current
+- [ ] File availability takes too long to show up (Sonarr import -> visible in Data). **B.5.1
+  (webhooks) built 2026-08-13, see `BUILD_PLAN.md` Phase B.5 — not yet deployed/configured on
+  Sonarr/Radarr's side, so this stays open until confirmed live.** Kept here as the original
+  latency writeup. Current
   latency stack (not yet measured end-to-end): Ops's own `pollFileAvailability` sweep runs on
   an *adaptive* server-computed interval (`recommendedAvailabilityPollIntervalSeconds` —
   300s/900s/3600s tiers depending on how close to airing, `src/ops/lcars_client.py`), and
