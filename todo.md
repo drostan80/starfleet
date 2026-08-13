@@ -1,5 +1,21 @@
 # Bugs
 
+- [ ] Calendar showing a wrong air date / stale "not watched" for an already-downloaded episode
+  (reported 2026-08-13, "The World Is Dancing" S1E7 — showed available-not-watched, aired
+  Monday 8/10, actually already watched). Checked LCARS directly: already correct server-side
+  (airDateUtc 2026-08-10, state WATCHED) — not a LCARS/data bug at all, purely Data's own stale
+  in-memory display. Root cause traced: `_trigger_lcars_window_refresh()` (B.11f, the calendar's
+  own air-date/watched-state patch from LCARS) had no periodic timer at all, unlike the other
+  three LCARS-driven refreshes in `on_mount` — it only fired on initial load, explicit calendar
+  nav, `R` re-auth, or `_check_download_status`'s own re-poll (dormant once a file finishes
+  importing). So once an episode's fully downloaded and you stop navigating, its LCARS-sourced
+  fields can go stale for the rest of the session, nothing ever re-syncs them. Fixed:
+  `~/repos/data` `6e6193f` — added the same periodic interval the other three already have.
+  563 tests passing. **Not yet confirmed live** — needs a Data restart to pick up (this fixes
+  the mechanism going forward; the already-stale display in a process running from before the
+  fix won't self-correct without one). Separately, still real and not addressed by this: Data's
+  own direct Sonarr/AniList polling/caching on open (the thing you called out as "weird
+  refresh") — deferred to the bigger LCARS/Ops-owns-all-writes rewrite, see BUILD_PLAN.md.
 - [ ] B.11g — calendar backlog counter + mark-watched display, ready to re-test on a clean
   baseline now, not yet confirmed. Timeline, so the full picture is in one place:
   1. Two real display/queueing bugs fixed 2026-08-12 night (`~/repos/data` `8b9abab`/`6d1baef`):
@@ -19,14 +35,15 @@
   Please test now, on this corrected baseline: press `w` on a non-anime show and confirm the
   Track column settles on "✓ Watched"; find a show with a real backlog gap and confirm the
   badge count is now sane and `w` clears the right (oldest) episode.
-
+- [ ] on above bug, seems mostly fixed
 - [x] somehow tomb raider king was added to anilist again — traced live: LCARS's own row for it
   still had zero anilist link either time, so `M`'s LCARS bridge silently no-op'd both times
   with no feedback, and the user pressed it a second time believing the first had failed,
   writing a real second entry to AniList itself. Fixed with a live LCARS search fallback
   (matched against the show's own tvdb id before trusting it) plus real user-facing messages
   on every failure path. `~/repos/data` commit `744c6ff`.
-
+- [ ] make sure that dropping a show in data writes to LCARS but also triggers to update status on anilist, and un track on sonarr/radarr...
+- [ ] above is not fully solved, tomb raider king, chainsmoker cat, maybe other, shows that were dropped are in data's calendar, and have been "undropped" (maybe) this needs to be checked, tho I may fix this by dropping shows from data's interface
 - [x] hitting enter to watch a show: nothing happens, resolved path not found, same as before and
   I did warn you, since the path is on the remote server data need to know how to access it
   locally, the directory is mounted so path can be mapped this is what was done for aniq
@@ -60,6 +77,8 @@
     principle 1) rather than a hard cutover.
   - Worth still doing step (1) from before first regardless (measure the real current gap
     live) — helps confirm how much this actually buys before investing the design work.
+  - we are trying to save calls to anilist (and other 3rd party) API, local API (sonarr, radarr are fair game and webhook is an option
+    - an idea is to keep the regular sweep hourly or so, maybe less even, but send changes as they come while batching them, to explain if I make a change (mark watch, add a score...) that need to be reflected on anilist, it should be sent to anilist after 60s or which ever is the cool down period for anilist api (let's check and discuss not apply this half research idea without checking) BUT if another action that needs reflecting on anilist is made within this time, then the countdown to write restarts, both changes are queued and will be written to anilist after the countdown end.
 
 # Ideas / design
 
