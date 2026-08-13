@@ -4515,6 +4515,44 @@ this order because each step is provably independent of the next
     solid enough to size B.5.2's tiers and Ops's own polling interval
     from. Deliberately NOT wired into Ops's automatic loop yet, on
     purpose, until that happens — every call so far has been by hand.
+- [ ] **B.5.3a — Scoped/targeted reconcile — deliberately parked, good-
+  to-have for later, not needed now.** Real design discussion,
+  2026-08-13, prompted directly by the first triggered reconcile above
+  (1 real activity, 14 shows/136 episodes corrected) — pros/cons
+  weighed explicitly, not just deferred by default:
+  - **The case for it**: today's `reconcile_watch_progress` always
+    sweeps the *entire* AniList list on every trigger, regardless of
+    what actually changed — cost scales with total library size
+    forever, not with real activity volume; blast radius per trigger
+    isn't bounded to the thing that changed (correct here, but made
+    today's result need real per-show investigation to trust rather
+    than being self-evidently traceable); and it's the one piece of
+    B.5 that doesn't yet match the webhook-plus-safety-net-sweep shape
+    already proven out for Sonarr/Radarr (B.3/B.5.1) — a scoped
+    correction (only the show(s) the activity names) plus a periodic
+    full sweep during downtime as the backstop would bring AniList
+    read-back onto the same architecture.
+  - **The case against building it now, and why the user's own call is
+    the right one**: confirmed live today that the *current* full
+    sweep costs exactly one AniList call plus sub-second local SQLite
+    work at 1440 seasons — genuinely cheap right now, not a real
+    blocking or API-budget problem. A scoped mode is real new code
+    (the activity feed would need to carry `media.id`, deliberately
+    left out of B.5.3 to keep it minimal; `reconcile_watch_progress`
+    would need a real targeted-apply mode, its own tests, its own
+    edge cases around sibling seasons of a cour-split show) — and it
+    would *still* need the periodic full sweep as a safety net
+    regardless, so it's additive complexity, not a replacement for
+    anything. **User's own reasoning, 2026-08-13**: since a full sweep
+    is needed either way (as the eventual safety net), better to spend
+    this stretch actually hardening that full-sweep logic itself first
+    — catching bugs, handling volume, handling complexity — while it's
+    still cheap enough to run on every trigger, rather than splitting
+    effort into two apply paths before either one is proven. The
+    scoped version becomes valuable specifically once the database has
+    grown enough that a full sweep per trigger stops being cheap — not
+    needed today, genuinely useful later, logged here so it isn't
+    forgotten or rebuilt from scratch when that day comes.
 - [ ] **B.5.4 — Prove B.5.1–B.5.3 stable in real use**, then proceed to
   Phase C's existing **C.1** (drop Data's own Sonarr-polling/
   AniList-polling/air-date-correction logic, i.e. remove AniList and
