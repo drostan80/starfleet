@@ -153,20 +153,27 @@
 
 - [ ] **Hierarchical season subdivision for legitimate cross-source granularity mismatches** —
   raised 2026-08-13, right after the duplicate-`anilist_id` hardening fix (`watch_reconcile.py`,
-  `v0.1.11`) shipped. That fix treats every `anilist_id` shared by more than one season as an
-  error (flag via `pending_review`, apply nothing, a human corrects the mapping) — correct for
-  the actual mistake case (two unrelated shows accidentally linked to the same entry, confirmed
-  live), but it has no concept of a *legitimate* collision: one real external entry that
-  genuinely corresponds to more than one thing LCARS tracks as separate seasons. User's proposal,
-  not built, not designed in detail yet: when that's genuinely the case, LCARS should subdivide
-  its own season numbering to match the most granular source (`1`, `1.1`, `1.1.1`, `1.2`, `1.3`,
-  `2`, ...) and remap at the *episode* level instead of the season level, rather than picking a
-  winner. User's own read: unlikely to come up for AniList specifically (it tends to issue
-  separate ids per cour/part already, matching how this session's own reproduced collision was a
-  real linking mistake, not a genuine AniList-side granularity gap) but a real concern for
-  whatever other data source LCARS integrates with later, if that source splits seasons
-  differently than AniList/LCARS do. Explicitly parked for a later pros/cons discussion, not
-  something to build off this note alone.
+  `v0.1.11`) shipped. That fix treats every collision between LCARS's season model and an
+  external source's own entries as an error: flag via `pending_review`, apply nothing, a human
+  resolves it. What's actually built and confirmed live only covers one direction of collision —
+  **one external id claimed by two different LCARS seasons** (the real, reproduced bug: two
+  unrelated shows both linked to the same `anilist_id`). User's own framing generalizes this to
+  the *class* of problem, both directions: one external id spanning two+ LCARS seasons, or two+
+  external ids that should both map onto one LCARS season (today's schema can't even represent
+  the latter — `season.anilist_id` holds a single value) — same underlying cause either way, a
+  granularity mismatch between LCARS's own season model and whatever external source it's
+  matching against (mostly a non-issue for AniList specifically, which tends to issue separate
+  ids per cour/part already — this session's own reproduced case was a real linking mistake, not
+  a genuine AniList-side granularity gap; the real concern is future non-AniList sources that
+  split seasons differently).
+  **User's own resolution framing, both directions**: flag it (as already built), then a human
+  decides between exactly two paths — (a) **incorrect**: it's a mistake, map the correct id to
+  the correct season, done, matches what's already built; or (b) **correct but genuinely
+  granular**: divide LCARS's own season into hierarchical sub-parts to match the more granular
+  source (`1`, `1.1`, `1.1.1`, `1.2`, `1.3`, `2`, ...) and remap at the *episode* level instead of
+  the season level, rather than picking a winner. Only path (a) exists today; path (b) is the new
+  scope this note tracks. Explicitly parked for a later pros/cons discussion, not something to
+  build off this note alone.
 - [ ] A way to correct a schedule discrepancy (wrong air date, wrong episode-number alignment
   against AniList) *from Data itself* is needed — noted 2026-08-13 after having to fix "The
   Frontier Lord Begins with Zero Subjects" by hand: no client-facing way existed to do any of
