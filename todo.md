@@ -127,6 +127,16 @@
 
 # Ideas / design
 
+- [ ] A way to correct a schedule discrepancy (wrong air date, wrong episode-number alignment
+  against AniList) *from Data itself* is needed — noted 2026-08-13 after having to fix "The
+  Frontier Lord Begins with Zero Subjects" by hand: no client-facing way existed to do any of
+  it, so it took a direct DB edit for `tracking_space` (no mutation exists for that at all) plus
+  hand-written one-off scripts calling `setEpisodeAirDate` per episode against the live GraphQL
+  API. `setEpisodeAirDate` itself is a real, existing mutation — Data just has no UI/action that
+  calls it. Not designed here, just flagged: what the actual correction flow should look like
+  from the calendar (pick an episode, enter/confirm a date), whether `tracking_space`
+  reclassification needs its own mutation built too, and whether this belongs in Data proper or
+  a future admin/ops-facing surface instead.
 - [ ] SSH to the deploy host via its Tailscale name (`tiny`) is blocked by a tailnet ACL policy
   rejection, confirmed not a stale-session issue (a fresh verbose attempt still gets rejected
   after a clean handshake — "tailnet policy does not permit you to SSH as user drostan").
