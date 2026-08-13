@@ -16,14 +16,14 @@ of watched-state (a show that resumed airing after being marked
 Explicitly scoped narrow, per the user's own direction (2026-08-12):
 "LCARS must be correct... fix this" — not the full generalized,
 recurring reverse-sync architecture from `BUILD_PLAN.md`'s own parked
-"AniList/MAL drift detection" bullet (still deliberately unscheduled;
-this doesn't replace or preempt that design work, which still needs
-its own schema-review-first pass before anything ongoing gets built).
-This is a real, reusable mutation — not a throwaway script — but
+"AniList/MAL drift detection" bullet. This function itself is still
 deliberately NOT wired into Ops's automatic loop (matches
 `backfillFileAvailability`/`auditLocalFiles`/`backfillUntrackedShows`'s
-own "on-demand, deliberately triggered" precedent) until/unless the
-later design work decides it should recur.
+own "on-demand, deliberately triggered" precedent) — but B.5.3
+(2026-08-13, below) is the "later design work" this note used to defer
+to: `poll_anilist_activity` is a real recurring trigger for exactly
+this function, built once AniList's own activity feed was confirmed
+live to be a viable, cheap enough signal for "did anything change."
 
 Scope, deliberately narrow:
   - `show.status` and per-episode `episode.state`/`watch_event` only.
@@ -47,6 +47,40 @@ Scope, deliberately narrow:
 """
 
 from lcars import anilist_client, config, ids, util
+
+# B.5.3, 2026-08-13 — see the module docstring's own note above for how
+# this relates to reconcile_watch_progress. Design checked live against
+# the user's real AniList account before being written, not assumed:
+# the activity feed genuinely is visible for this account (5000+ real
+# entries, confirmed non-private), the exact query shape used below
+# (`Page.pageInfo` + `activities` in one selection, `sort: ID`) executes
+# correctly, and real cadence is bursty in minutes during an active
+# watching session, hours apart otherwise — informing why this is a
+# cheap poll-and-trigger, not something that needs its own detailed
+# per-activity apply logic (reconcile_watch_progress already is that,
+# and reused as-is).
+#
+# Deliberately built against the existing flat AniList throttle
+# (anilist_client._graphql_request's own `_ANILIST_SECONDS_PER_CALL`
+# gate, shipped 2026-08-13 for the rate-limit incident), not yet B.5.2's
+# still-unbuilt priority queue — a quiet poll costs 1 call (the
+# viewer id is cached after this process's first real fetch, see
+# _cached_viewer_id below — an earlier draft called fetch_viewer_id
+# unconditionally on every poll, caught and fixed before this shipped,
+# not after), a triggered one costs 2 (+ reconcile_watch_progress's own
+# fetch_my_anime_list) ≈ 4.2s of blocking sleep inside this resolver on
+# LCARS's single request-handling thread. Acceptable at the low cadence
+# this is manually tested at; a known, temporary condition B.5.2
+# resolves once real numbers from running this decide its tiers — not
+# rediscovered as a bug later.
+#
+# Deliberately NOT wired into Ops's automatic loop in this same change
+# — per the user's own build-order call (2026-08-13): gather real
+# numbers (how often activity actually appears, whether a triggered
+# reconcile ever fires spuriously, whether pagination ever triggers)
+# by calling the `pollAnilistActivity` mutation by hand against
+# production first, then decide B.5.2's tiers and Ops's own cadence
+# from that, not from a guess.
 
 _ANILIST_TO_STATUS = {
     "CURRENT": "watching",
@@ -159,5 +193,98 @@ def reconcile_watch_progress(conn) -> dict:
         )
         result["shows_status_updated"] += 1
 
+    conn.commit()
+    return result
+
+
+# B.5.3 — cached after the first real fetch within this process's
+# lifetime: a viewer id is a stable property of a fixed account (there's
+# only ever one AniList account here), not something that needs
+# re-fetching on every poll. Found before it shipped, not after: an
+# earlier draft called fetch_viewer_id unconditionally at the top of
+# poll_anilist_activity, which would have doubled every poll's real call
+# count (2 calls quiet, 4 triggered, not 1/2) and directly distorted the
+# real-cadence numbers this whole build-order reversal exists to gather.
+_viewer_id_cache: int | None = None
+
+
+def _cached_viewer_id(token: str) -> int:
+    global _viewer_id_cache
+    if _viewer_id_cache is None:
+        _viewer_id_cache = anilist_client.fetch_viewer_id(token)
+    return _viewer_id_cache
+
+
+def _get_activity_checkpoint(conn) -> tuple[int, int] | None:
+    row = conn.execute(
+        "SELECT last_activity_id, last_activity_created_at"
+        " FROM anilist_activity_checkpoint WHERE id = 1"
+    ).fetchone()
+    if row is None or row["last_activity_id"] is None:
+        return None
+    return (row["last_activity_id"], row["last_activity_created_at"])
+
+
+def _set_activity_checkpoint(conn, last_activity_id: int, last_activity_created_at: int) -> None:
+    conn.execute(
+        "INSERT INTO anilist_activity_checkpoint"
+        " (id, last_activity_id, last_activity_created_at, updated_at)"
+        " VALUES (1, ?, ?, ?)"
+        " ON CONFLICT (id) DO UPDATE SET last_activity_id = excluded.last_activity_id,"
+        "   last_activity_created_at = excluded.last_activity_created_at,"
+        "   updated_at = excluded.updated_at",
+        (last_activity_id, last_activity_created_at, util.now_utc_iso()),
+    )
+
+
+def poll_anilist_activity(conn) -> dict:
+    """B.5.3 — see the module-level comment above this section for the
+    full design rationale. Polls AniList's own activity feed (one cheap
+    call, almost always) since the last checkpoint; only when it shows
+    something genuinely new does this go on to actually run
+    `reconcile_watch_progress` (a second, heavier call) — the activity
+    feed is purely a "did anything change" signal, never itself the
+    thing applying a correction.
+
+    Returns `{"activities_seen": int, "reconcile_result": dict | None}`
+    — `reconcile_result` is `reconcile_watch_progress`'s own result
+    dict, present only when it actually ran (i.e. `activities_seen >
+    0`), `None` on every quiet poll rather than a dict of zeros, so a
+    caller can tell "nothing new" apart from "checked and genuinely
+    found nothing to fix" at a glance.
+
+    No AniList credential configured is the same clean no-op every
+    other best-effort integration in this codebase gets."""
+    result: dict = {"activities_seen": 0, "reconcile_result": None}
+    cfg = config.get_current()
+    if not cfg.anilist_access_token:
+        return result
+
+    viewer_id = _cached_viewer_id(cfg.anilist_access_token)
+    checkpoint = _get_activity_checkpoint(conn)
+    if checkpoint is None:
+        # First-ever call — seed straight to "everything up to right
+        # now" rather than walking this account's entire activity
+        # history (5000+ deep on a real account, confirmed live) and
+        # triggering a reconcile for all of it. Same seed-and-skip
+        # shape availability.py's own _poll_sonarr established.
+        marker = anilist_client.fetch_latest_activity_marker(cfg.anilist_access_token, viewer_id)
+        seed_id, seed_created_at = marker if marker is not None else (0, 0)
+        _set_activity_checkpoint(conn, seed_id, seed_created_at)
+        conn.commit()
+        return result
+
+    since_id, since_created_at = checkpoint
+    new_activities = anilist_client.fetch_activity_feed(
+        cfg.anilist_access_token, viewer_id, since_id, since_created_at
+    )
+    result["activities_seen"] = len(new_activities)
+    if not new_activities:
+        return result
+
+    result["reconcile_result"] = reconcile_watch_progress(conn)
+    newest_id = max(a["id"] for a in new_activities)
+    newest_created_at = max(a["created_at"] for a in new_activities)
+    _set_activity_checkpoint(conn, newest_id, newest_created_at)
     conn.commit()
     return result

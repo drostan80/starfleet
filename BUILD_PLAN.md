@@ -4416,35 +4416,80 @@ this order because each step is provably independent of the next
     throttle.
 - [ ] **B.5.3 — AniList activity-feed read-back (entry-level
   bidirectional sync).** **Built before B.5.2 — see that entry's own
-  note.** Answers this plan's own earlier open
-  question ("Deliberately not on this plan," AniList/MAL drift
-  detection) with real facts checked live against AniList's API
-  2026-08-13, not assumed:
+  note.** Code built and tested 2026-08-13; **stays unchecked until
+  confirmed live against real activity**, same standing rule as B.5.1
+  — its whole purpose is producing measurements that don't exist yet,
+  so "code complete" and "done" are genuinely different things here.
   - No push mechanism exists on AniList's side at all — confirmed via
     schema introspection, `__schema.subscriptionType` is `null`. Read-
-    back has to be a scheduled poll, watermarked by the last-seen
-    `createdAt`/activity id, same as every other AniList call —
-    competes for the same priority-queue budget as B.5.2, tier 2.
-  - The mechanism: `Page.activities(userId, type: MEDIA_LIST,
-    createdAt_greater: <watermark>, sort: ID_ASC)` — confirmed live
-    (tested against AniList's global feed, not the user's own account
-    yet) to return real, individual, timestamped status/progress
-    change events. This supersedes this plan's older assumption (that
-    `progress` has no usable timestamp at all) for *entry-level*
-    change detection specifically.
+    back is a scheduled poll, watermarked by the last-seen activity
+    `(id, createdAt)` — competes for the same priority-queue budget as
+    B.5.2, tier 2.
+  - The mechanism: `Page.activities(userId, type: ANIME_LIST,
+    createdAt_greater: <watermark - 1>, sort: ID)`, confirmed live
+    against the real account (2026-08-13, 5000+ entries, non-private —
+    the one check that decided this architecture was viable at all).
+    `type: ANIME_LIST` specifically, not `MEDIA_LIST` — caught before
+    shipping: `MEDIA_LIST` is documented as "Anime & Manga... only
+    used in query arguments" and the live probe's own results included
+    a manga chapter-read activity; `ANIME_LIST` confirmed live to
+    accept as a query argument and correctly exclude manga entries.
+    Watermark stores both `id` and `createdAt`, not `createdAt` alone
+    — confirmed live several real activities can share one `createdAt`
+    (whole-second resolution), so `id` (confirmed monotonic under
+    `sort: ID`) is the real cursor.
+  - **Design: the activity feed is a cheap trigger, not an apply
+    path.** Doesn't parse AniList's own `status`/`progress` strings at
+    all — when new activity exists, it just re-runs the existing,
+    already-tested `reconcile_watch_progress` (B.15) in full, reusing
+    it exactly rather than building a second, parallel apply mechanism.
+    This also resolves this plan's own earlier open question about
+    whether score-only edits generate an activity entry: they might
+    not, but `reconcile_watch_progress` never touches score either
+    (deliberately, per B.15's own scope) — so that gap doesn't matter
+    for what this integration actually does. Not a general-purpose
+    drift detector; specifically the trigger for this one existing
+    reconciliation.
+  - First-ever call seeds the checkpoint to the account's current
+    latest activity (`sort: ID_DESC, perPage: 1` — one cheap call, not
+    a walk) and returns without reconciling — same seed-and-skip shape
+    `_poll_sonarr` established for a never-before-polled service,
+    necessary here too: a first call with no seed would walk this
+    account's entire 5000+-deep history and trigger a reconcile over
+    all of it.
+  - **A real bug caught in review, before this shipped**: an early
+    draft called `fetch_viewer_id` unconditionally on every poll —
+    harmless-looking, but it doubled every poll's true call cost (2
+    calls quiet, not 1; 4 triggered, not 2), which would have directly
+    distorted the real cadence numbers this whole build-order reversal
+    exists to gather. Fixed: viewer id cached module-level after the
+    first real fetch in a process's lifetime (`_cached_viewer_id`) —
+    needed its own autouse test fixture (`tests/conftest.py`) to reset
+    between tests, same class of problem the AniList throttle's own
+    module-level state already needed one for.
+  - New `AnilistActivityPollResult` GraphQL type / `pollAnilistActivity`
+    mutation (schema.graphql, resolvers.py) — `activitiesSeen: Int!`,
+    `reconcileResult: WatchProgressReconcileResult` (null on a quiet
+    poll, not zeros, so a caller can tell "nothing new" apart from
+    "checked and found nothing to fix"). New `anilist_activity_
+    checkpoint` migration (singleton row). 15 new tests across
+    `test_anilist_client.py`/`test_watch_reconcile.py`/`test_server.py`;
+    full suite 701 passing, `ruff check`/`format --check` clean.
   - **Known ceiling, unchanged**: entry-level only (per-show), never
-    per-episode or a real watch timestamp — same limitation already
-    on record here.
-  - **Open, unverified, flag before relying on this alone**: unclear
-    whether a score-only edit (no status/progress change) generates an
-    activity entry at all. If it doesn't, `MediaList.updatedAt`
-    (confirmed present, a per-entry Unix timestamp) is the backstop —
-    folds into the nightly bulk-pull tier (B.5.2) rather than needing
-    its own schedule.
-  - What this doesn't catch, the existing reconciliation sweep (B.15)
-    already covers — user confirmed 2026-08-13 existing shows in the
-    database are in scope for it already; its own scheduling may need
-    revisiting once this lands, expected and fine, not a blocker.
+    per-episode or a real watch timestamp — same limitation already on
+    record here.
+  - **Not yet deployed, not yet called against production even once**
+    — next: deploy (this includes a real schema migration — back up
+    `lcars.db` first, confirmed prior `alembic downgrade` issues exist
+    against a database with real rows), then call `pollAnilistActivity`
+    by hand a few times: confirm the seeded watermark matches AniList's
+    real latest activity, watch an episode and confirm the next call
+    sees exactly that one activity and triggers a sane reconcile, and
+    record real numbers (calls per poll, how often non-empty, whether
+    pagination ever fires) — that's what actually sizes B.5.2's tiers
+    and Ops's own polling interval, not a guess. Deliberately NOT wired
+    into Ops's automatic loop yet, on purpose, until those numbers
+    exist.
 - [ ] **B.5.4 — Prove B.5.1–B.5.3 stable in real use**, then proceed to
   Phase C's existing **C.1** (drop Data's own Sonarr-polling/
   AniList-polling/air-date-correction logic, i.e. remove AniList and

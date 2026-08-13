@@ -14,13 +14,27 @@ of this, the same way `test_show_backfill.py`'s pre-existing per-test
 `monkeypatch.setattr(show_backfill.time, "sleep", ...)` calls already
 neuter that module's own, separate, real sleep — this generalizes the
 same idea process-wide rather than adding it test-by-test.
+
+B.5.3, same day — `watch_reconcile._viewer_id_cache` is the same class
+of problem: module-level, deliberately persists across calls within one
+real process (so a real deployment only ever fetches the viewer id
+once), but that means a test that populates it would leak that value
+into every later test in the same pytest process regardless of what
+that later test's own `fetch_viewer_id` monkeypatch says — a real bug
+caught before it could hide a wrong-viewer-id test failure, not a
+hypothetical. Reset alongside the throttle for the same reason.
 """
 
 import pytest
 
-from lcars import anilist_client
+from lcars import anilist_client, watch_reconcile
 
 
 @pytest.fixture(autouse=True)
 def _no_real_anilist_throttle_sleep(monkeypatch):
     monkeypatch.setattr(anilist_client.time, "sleep", lambda seconds: None)
+
+
+@pytest.fixture(autouse=True)
+def _reset_anilist_viewer_id_cache(monkeypatch):
+    monkeypatch.setattr(watch_reconcile, "_viewer_id_cache", None)

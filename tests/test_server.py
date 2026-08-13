@@ -6681,3 +6681,82 @@ async def test_webhook_route_never_accepts_the_graphql_bearer_token(webhook_clie
         headers={"X-Lcars-Webhook-Secret": BEARER_TOKEN},
     )
     assert resp.status_code == 401
+
+
+# --- pollAnilistActivity (B.5.3, 2026-08-13) -----------------------------
+
+POLL_ANILIST_ACTIVITY = """
+mutation {
+  pollAnilistActivity {
+    activitiesSeen
+    reconcileResult {
+      seasonsChecked
+      notMatchedOnAnilist
+      showsStatusUpdated
+      episodesBackfilled
+    }
+  }
+}
+"""
+
+
+async def test_poll_anilist_activity_no_op_when_anilist_not_configured(client):
+    data = await gql(client, POLL_ANILIST_ACTIVITY, headers=auth_headers())
+    assert data["pollAnilistActivity"] == {"activitiesSeen": 0, "reconcileResult": None}
+
+
+async def test_poll_anilist_activity_first_call_seeds_without_reconciling(client, monkeypatch):
+    config.set_current(config.Config(anilist_access_token="tok-123"))
+    monkeypatch.setattr(anilist_client, "fetch_viewer_id", lambda token: 24011)
+    monkeypatch.setattr(
+        anilist_client, "fetch_latest_activity_marker", lambda token, uid: (999, 1700000000)
+    )
+    data = await gql(client, POLL_ANILIST_ACTIVITY, headers=auth_headers())
+    assert data["pollAnilistActivity"] == {"activitiesSeen": 0, "reconcileResult": None}
+
+
+async def test_poll_anilist_activity_new_activity_returns_nested_reconcile_result(
+    client, monkeypatch
+):
+    show = await add_show(client, anilistId=100, titleRomaji="Poll Test")
+    await _link_season_anilist(client, show["id"], 1, 100)
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    config.set_current(config.Config(anilist_access_token="tok-123"))
+    monkeypatch.setattr(anilist_client, "fetch_viewer_id", lambda token: 24011)
+    # A checkpoint already exists (the "not first call" path) — seed it
+    # directly rather than via a second mutation round-trip.
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO anilist_activity_checkpoint"
+        " (id, last_activity_id, last_activity_created_at, updated_at)"
+        " VALUES (1, 500, 1700000000, 'x')"
+    )
+    conn.commit()
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_activity_feed",
+        lambda token, uid, since_id, since_created_at: [{"id": 501, "created_at": 1700000100}],
+    )
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_my_anime_list",
+        lambda token: [{"anilist_id": 100, "status": "CURRENT", "progress": 0, "format": "TV"}],
+    )
+
+    data = await gql(client, POLL_ANILIST_ACTIVITY, headers=auth_headers())
+
+    assert data["pollAnilistActivity"]["activitiesSeen"] == 1
+    assert data["pollAnilistActivity"]["reconcileResult"]["showsStatusUpdated"] == 1
+
+    show_data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert show_data["show"]["status"] == "WATCHING"

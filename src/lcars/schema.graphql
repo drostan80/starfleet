@@ -944,6 +944,12 @@ type WatchProgressReconcileResult {
   episodesBackfilled: Int!
 }
 
+"pollAnilistActivity's own confirmation summary — B.5.3. activitiesSeen: how many new AniList activity-feed entries (type ANIME_LIST) existed since the last check, purely a cheap 'did anything change' trigger signal, not itself a source of truth for what changed. reconcileResult: reconcileWatchProgress's own result, populated only when activitiesSeen > 0 (only then does this actually run that heavier sweep) — null on every quiet poll rather than a dict of zeros, so a caller can tell 'nothing new' apart from 'checked and genuinely found nothing to fix' at a glance."
+type AnilistActivityPollResult {
+  activitiesSeen: Int!
+  reconcileResult: WatchProgressReconcileResult
+}
+
 # ---------------------------------------------------------------------------
 # §6.7 per-integration service-health tracking (B.6)
 # ---------------------------------------------------------------------------
@@ -1431,6 +1437,21 @@ type Mutation {
   than the still-unscheduled general reverse-sync design.
   """
   reconcileWatchProgress: WatchProgressReconcileResult!
+
+  """
+  B.5.3, 2026-08-13 — the recurring trigger watch_reconcile.py's own
+  module docstring said reconcileWatchProgress above was waiting on:
+  polls AniList's own activity feed (one cheap call, watermarked, since
+  the last check) and only runs reconcileWatchProgress's own heavier
+  full-list sweep when that feed actually shows something new. Not yet
+  wired into Ops's automatic loop — deliberately called by hand a few
+  times against production first (user's own build-order call,
+  2026-08-13) to gather real numbers (activity cadence, whether a
+  triggered reconcile ever fires spuriously) before deciding Ops's own
+  polling interval and B.5.2's still-unbuilt priority-queue tiers from
+  real data instead of a guess.
+  """
+  pollAnilistActivity: AnilistActivityPollResult!
 
   # -- 5.6 pending_review ----------------------------------------------------
   """

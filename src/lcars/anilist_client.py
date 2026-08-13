@@ -344,6 +344,112 @@ def fetch_my_anime_list(token: str, client: httpx.Client | None = None) -> list[
     return list(by_id.values())
 
 
+_LATEST_ACTIVITY_QUERY = """
+query ($userId: Int) {
+  Page(page: 1, perPage: 1) {
+    activities(userId: $userId, type: ANIME_LIST, sort: ID_DESC) {
+      ... on ListActivity { id createdAt }
+    }
+  }
+}
+"""
+
+
+def fetch_latest_activity_marker(
+    token: str, viewer_id: int, client: httpx.Client | None = None
+) -> tuple[int, int] | None:
+    """B.5.3 — the single most recent `ANIME_LIST` activity-feed entry's
+    `(id, createdAt)`, or None if the viewer has none at all. The seed
+    value for `poll_anilist_activity`'s (watch_reconcile.py) very first
+    call: confirmed live against the user's real account (2026-08-13)
+    that activity history runs 5000+ entries deep, so a first poll must
+    seed straight to "everything up to right now" rather than walking
+    that whole history — same seed-and-skip shape
+    `availability.py`'s own `_poll_sonarr` already established for a
+    never-before-polled service, one cheap `perPage: 1` call instead of
+    availability's own "just seed to wall-clock now," since AniList's
+    activity feed has no equivalent of "now" beyond its own latest real
+    entry.
+
+    `sort: ID_DESC` — confirmed via schema introspection this is the
+    only descending option AniList's `ActivitySort` enum offers
+    (`ID`/`ID_DESC`/`PINNED`, not `ID_ASC`/`ID_DESC` as might be
+    assumed); `fetch_activity_feed` below uses plain `ID` (ascending)
+    for its own incremental walk."""
+    data = _graphql_request(
+        _LATEST_ACTIVITY_QUERY, {"userId": viewer_id}, token=token, client=client
+    )
+    activities = data["Page"]["activities"]
+    if not activities:
+        return None
+    latest = activities[0]
+    return (latest["id"], latest["createdAt"])
+
+
+_ACTIVITY_FEED_QUERY = """
+query ($userId: Int, $since: Int, $page: Int) {
+  Page(page: $page, perPage: 50) {
+    pageInfo { hasNextPage }
+    activities(userId: $userId, type: ANIME_LIST, createdAt_greater: $since, sort: ID) {
+      ... on ListActivity { id createdAt }
+    }
+  }
+}
+"""
+
+
+def fetch_activity_feed(
+    token: str,
+    viewer_id: int,
+    since_id: int,
+    since_created_at: int,
+    client: httpx.Client | None = None,
+) -> list[dict]:
+    """B.5.3 — every `ANIME_LIST` activity-feed entry strictly newer
+    than `(since_id, since_created_at)`, oldest-first, as
+    `{"id": int, "created_at": int}` dicts. Deliberately doesn't fetch
+    `status`/`progress`/`media` — this function is only ever used as a
+    cheap "did anything change" trigger (watch_reconcile.py's
+    `poll_anilist_activity`), which reuses the existing, already-tested
+    `reconcile_watch_progress()` to actually apply anything rather than
+    parsing AniList's activity `status`/`progress` strings itself.
+
+    `createdAt_greater` is queried as `since_created_at - 1`, not
+    `since_created_at` directly — confirmed live (2026-08-13, real
+    account) that several real activities can share one `createdAt`
+    (whole-second resolution); a strict server-side `greater than` on
+    the timestamp alone risks silently skipping same-second entries
+    this caller hasn't actually seen yet. The `id > since_id` filter
+    below is what actually excludes already-processed entries — `id`
+    is confirmed monotonically increasing with creation order under
+    `sort: ID`, so it's the real cursor; `created_at` only narrows the
+    server-side query cheaply.
+
+    Walks every page while AniList reports `hasNextPage` — real-world
+    cadence confirmed live is bursty in minutes during an active
+    watching session, hours apart otherwise, so more than one page
+    (50 entries) landing between polls should be rare, but isn't
+    assumed impossible."""
+    since_query = max(0, since_created_at - 1)
+    new_activities: list[dict] = []
+    page = 1
+    while True:
+        data = _graphql_request(
+            _ACTIVITY_FEED_QUERY,
+            {"userId": viewer_id, "since": since_query, "page": page},
+            token=token,
+            client=client,
+        )
+        page_data = data["Page"]
+        for activity in page_data["activities"]:
+            if activity["id"] > since_id:
+                new_activities.append({"id": activity["id"], "created_at": activity["createdAt"]})
+        if not page_data["pageInfo"]["hasNextPage"]:
+            break
+        page += 1
+    return new_activities
+
+
 def exchange_code(
     client_id: str,
     client_secret: str,

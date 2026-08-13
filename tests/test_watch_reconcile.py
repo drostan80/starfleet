@@ -238,3 +238,115 @@ def test_ignores_seasons_with_no_anilist_id_at_all(conn, monkeypatch):
         "shows_status_updated": 0,
         "episodes_backfilled": 0,
     }
+
+
+# --- poll_anilist_activity (B.5.3) --------------------------------------
+
+
+def _configure_anilist_activity(monkeypatch, *, marker=None, feed=None, reconcile_entries=None):
+    config.set_current(config.Config(anilist_access_token="tok"))
+    monkeypatch.setattr(anilist_client, "fetch_viewer_id", lambda token: 24011)
+    monkeypatch.setattr(anilist_client, "fetch_latest_activity_marker", lambda token, uid: marker)
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_activity_feed",
+        lambda token, uid, since_id, since_created_at: feed or [],
+    )
+    monkeypatch.setattr(
+        anilist_client, "fetch_my_anime_list", lambda token: reconcile_entries or []
+    )
+
+
+def test_poll_anilist_activity_returns_zero_when_anilist_not_configured(conn):
+    result = watch_reconcile.poll_anilist_activity(conn)
+    assert result == {"activities_seen": 0, "reconcile_result": None}
+
+
+def test_poll_anilist_activity_first_call_seeds_checkpoint_without_reconciling(conn, monkeypatch):
+    """The real reason this exists — confirmed live 2026-08-13 that a
+    real account can carry 5000+ activities: a first-ever call must
+    never walk that whole history or trigger a reconcile over it."""
+    called_feed = []
+    _configure_anilist_activity(monkeypatch, marker=(999, 1700000000))
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_activity_feed",
+        lambda *a, **kw: called_feed.append(1) or [],
+    )
+
+    result = watch_reconcile.poll_anilist_activity(conn)
+
+    assert result == {"activities_seen": 0, "reconcile_result": None}
+    assert called_feed == []  # never even called on the seeding pass
+    row = conn.execute(
+        "SELECT last_activity_id, last_activity_created_at"
+        " FROM anilist_activity_checkpoint WHERE id = 1"
+    ).fetchone()
+    assert row["last_activity_id"] == 999
+    assert row["last_activity_created_at"] == 1700000000
+
+
+def test_poll_anilist_activity_first_call_with_no_prior_activity_seeds_zero(conn, monkeypatch):
+    _configure_anilist_activity(monkeypatch, marker=None)
+    result = watch_reconcile.poll_anilist_activity(conn)
+    assert result == {"activities_seen": 0, "reconcile_result": None}
+    row = conn.execute(
+        "SELECT last_activity_id, last_activity_created_at"
+        " FROM anilist_activity_checkpoint WHERE id = 1"
+    ).fetchone()
+    assert row["last_activity_id"] == 0
+    assert row["last_activity_created_at"] == 0
+
+
+def test_poll_anilist_activity_no_new_activity_does_not_reconcile(conn, monkeypatch):
+    conn.execute(
+        "INSERT INTO anilist_activity_checkpoint"
+        " (id, last_activity_id, last_activity_created_at, updated_at)"
+        " VALUES (1, 500, 1700000000, 'x')"
+    )
+    conn.commit()
+    _configure_anilist_activity(monkeypatch, feed=[])
+
+    result = watch_reconcile.poll_anilist_activity(conn)
+
+    assert result == {"activities_seen": 0, "reconcile_result": None}
+    row = conn.execute(
+        "SELECT last_activity_id FROM anilist_activity_checkpoint WHERE id = 1"
+    ).fetchone()
+    assert row["last_activity_id"] == 500  # untouched — nothing to advance to
+
+
+def test_poll_anilist_activity_new_activity_triggers_reconcile_and_advances_checkpoint(
+    conn, monkeypatch
+):
+    _show(conn, "s-pol001", status="planned")
+    _season(conn, "z-pol001", "s-pol001", season_number=1, anilist_id=100)
+    conn.execute(
+        "INSERT INTO anilist_activity_checkpoint"
+        " (id, last_activity_id, last_activity_created_at, updated_at)"
+        " VALUES (1, 500, 1700000000, 'x')"
+    )
+    conn.commit()
+    feed = [
+        {"id": 501, "created_at": 1700000100},
+        {"id": 502, "created_at": 1700000200},
+    ]
+    _configure_anilist_activity(
+        monkeypatch, feed=feed, reconcile_entries=[_entry(100, status="CURRENT", progress=0)]
+    )
+
+    result = watch_reconcile.poll_anilist_activity(conn)
+
+    assert result["activities_seen"] == 2
+    assert result["reconcile_result"] is not None
+    assert result["reconcile_result"]["shows_status_updated"] == 1  # planned -> watching, applied
+
+    row = conn.execute("SELECT status FROM show WHERE id = 's-pol001'").fetchone()
+    assert row["status"] == "watching"
+
+    checkpoint = conn.execute(
+        "SELECT last_activity_id, last_activity_created_at"
+        " FROM anilist_activity_checkpoint WHERE id = 1"
+    ).fetchone()
+    assert checkpoint["last_activity_id"] == 502  # advanced to the newest seen
+    assert checkpoint["last_activity_created_at"] == 1700000200

@@ -1492,6 +1492,19 @@ def resolve_reconcile_watch_progress(_, info):
     return watch_reconcile.reconcile_watch_progress(conn)
 
 
+@mutation.field("pollAnilistActivity")
+def resolve_poll_anilist_activity(_, info):
+    """B.5.3, 2026-08-13 — see watch_reconcile.py's own module-level
+    comment for the full design rationale. No require_client() — same
+    "bulk sweep, not a targeted human decision" reasoning
+    pollFileAvailability/reconcileWatchProgress already use; whatever
+    it triggers (reconcile_watch_progress) already stamps its own fixed
+    "anilist_reconcile" changed_by, unaffected by this mutation's own
+    caller."""
+    conn = db.get_connection()
+    return watch_reconcile.poll_anilist_activity(conn)
+
+
 @query.field("recommendedAvailabilityPollIntervalSeconds")
 def resolve_recommended_availability_poll_interval_seconds(_, info):
     conn = db.get_connection()

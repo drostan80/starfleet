@@ -377,3 +377,127 @@ def test_graphql_request_invokes_the_throttle(monkeypatch):
     fake = _FakeClient(response=_FakeResponse(payload={"data": {"Media": media}}))
     anilist_client.fetch_media(123, client=fake)
     assert called == [1]
+
+
+# --- fetch_latest_activity_marker / fetch_activity_feed (B.5.3) --------
+
+
+def test_fetch_latest_activity_marker_returns_id_and_created_at():
+    fake = _FakeClient(
+        response=_FakeResponse(
+            payload={"data": {"Page": {"activities": [{"id": 999, "createdAt": 1700000000}]}}}
+        )
+    )
+    result = anilist_client.fetch_latest_activity_marker("tok", 24011, client=fake)
+    assert result == (999, 1700000000)
+    assert fake.last_variables == {"userId": 24011}
+
+
+def test_fetch_latest_activity_marker_returns_none_for_an_empty_account():
+    fake = _FakeClient(response=_FakeResponse(payload={"data": {"Page": {"activities": []}}}))
+    result = anilist_client.fetch_latest_activity_marker("tok", 24011, client=fake)
+    assert result is None
+
+
+def test_fetch_activity_feed_returns_new_activities_oldest_first():
+    fake = _FakeClient(
+        response=_FakeResponse(
+            payload={
+                "data": {
+                    "Page": {
+                        "pageInfo": {"hasNextPage": False},
+                        "activities": [
+                            {"id": 101, "createdAt": 1700000100},
+                            {"id": 102, "createdAt": 1700000200},
+                        ],
+                    }
+                }
+            }
+        )
+    )
+    result = anilist_client.fetch_activity_feed(
+        "tok", 24011, since_id=0, since_created_at=0, client=fake
+    )
+    assert result == [
+        {"id": 101, "created_at": 1700000100},
+        {"id": 102, "created_at": 1700000200},
+    ]
+
+
+def test_fetch_activity_feed_filters_out_already_seen_ids_sharing_a_second():
+    """The real reason id, not just createdAt, is the cursor — confirmed
+    live: several real activities can share one createdAt second."""
+    fake = _FakeClient(
+        response=_FakeResponse(
+            payload={
+                "data": {
+                    "Page": {
+                        "pageInfo": {"hasNextPage": False},
+                        "activities": [
+                            {"id": 100, "createdAt": 1700000100},  # already seen
+                            {"id": 101, "createdAt": 1700000100},  # new, same second
+                        ],
+                    }
+                }
+            }
+        )
+    )
+    result = anilist_client.fetch_activity_feed(
+        "tok", 24011, since_id=100, since_created_at=1700000100, client=fake
+    )
+    assert result == [{"id": 101, "created_at": 1700000100}]
+
+
+def test_fetch_activity_feed_queries_a_one_second_safety_margin():
+    fake = _FakeClient(
+        response=_FakeResponse(
+            payload={"data": {"Page": {"pageInfo": {"hasNextPage": False}, "activities": []}}}
+        )
+    )
+    anilist_client.fetch_activity_feed(
+        "tok", 24011, since_id=100, since_created_at=1700000100, client=fake
+    )
+    assert fake.last_variables["since"] == 1700000099
+
+
+def test_fetch_activity_feed_never_queries_a_negative_since():
+    fake = _FakeClient(
+        response=_FakeResponse(
+            payload={"data": {"Page": {"pageInfo": {"hasNextPage": False}, "activities": []}}}
+        )
+    )
+    anilist_client.fetch_activity_feed("tok", 24011, since_id=0, since_created_at=0, client=fake)
+    assert fake.last_variables["since"] == 0
+
+
+def test_fetch_activity_feed_walks_every_page():
+    fake = _SequencedFakeClient(
+        [
+            _FakeResponse(
+                payload={
+                    "data": {
+                        "Page": {
+                            "pageInfo": {"hasNextPage": True},
+                            "activities": [{"id": 101, "createdAt": 1700000100}],
+                        }
+                    }
+                }
+            ),
+            _FakeResponse(
+                payload={
+                    "data": {
+                        "Page": {
+                            "pageInfo": {"hasNextPage": False},
+                            "activities": [{"id": 102, "createdAt": 1700000200}],
+                        }
+                    }
+                }
+            ),
+        ]
+    )
+    result = anilist_client.fetch_activity_feed(
+        "tok", 24011, since_id=0, since_created_at=0, client=fake
+    )
+    assert [a["id"] for a in result] == [101, 102]
+    assert fake.calls[0]["variables"]["page"] == 1
+    assert fake.calls[1]["variables"]["page"] == 2
