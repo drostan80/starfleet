@@ -4337,15 +4337,51 @@ this order because each step is provably independent of the next
     at both `POST /` and `GET /` alongside the new routes, the
     rollback-on-failure case above), all passing; full suite green (686
     passing), `ruff check`/`format --check` clean.
-  - **Not yet deployed, not yet confirmed live — this code has never
-    received a real Sonarr/Radarr payload.** `sonarr_webhook_secret`/
-    `radarr_webhook_secret` exist in `config.py` but production
-    `lcars.ini`/compose secrets aren't wired yet, and Sonarr/Radarr's
-    own webhook connections haven't been configured to point at LCARS.
-    Next: deploy, configure both services' webhook connections (custom
-    header, per-service secret), confirm live with a real grab/import,
-    only then consider
-    lengthening `pollFileAvailability`'s interval.
+  - **Deployed and configured 2026-08-13; still stays unchecked until
+    a real Sonarr/Radarr payload actually confirms it live** — same
+    standing rule, not relaxed just because the infrastructure side is
+    now done:
+    - `v0.1.9` tagged, built, deployed to `lcars`/`ops` on the
+      production host. First CI publish attempt hit a transient GHCR
+      `403` pushing a blob (unrelated to this change — tests had
+      already passed); a plain rerun of the failed job succeeded on
+      the second attempt.
+    - `sonarr_webhook_secret`/`radarr_webhook_secret` (independently
+      generated, `secrets.token_urlsafe(32)`) added to production
+      `lcars.ini` directly — not Docker `secrets:`, per this compose
+      file's own documented convention (`secrets:` is reserved for the
+      one value two *separate* containers, `lcars`/`ops`, both need in
+      sync; these two are `lcars`-only, so they follow the "everything
+      else lives in `lcars.ini`" default).
+    - Confirmed live, in order, before configuring Sonarr/Radarr (Test
+      would otherwise fail against a not-yet-updated LCARS): both
+      `/webhooks/*` routes reject an unauthenticated request (`401`),
+      then both accept a hand-built `Test`-shaped payload with the
+      real secret (`200`, `{"ok": true, ...}`) — proving the secret
+      actually loaded, not just that the route exists. Then confirmed
+      `lcars:8000` is reachable **by that exact hostname** from inside
+      the real `sonarr`/`radarr` containers (both on the same external
+      `arr_net` network LCARS already uses to reach them) — the one
+      thing most likely to silently break this (container-to-container
+      addressing, not the host's published port).
+    - Sonarr's and Radarr's own `Webhook` notification connections
+      configured via their REST APIs (`POST /api/v3/notification`,
+      schema fetched live from `GET /api/v3/notification/schema`
+      rather than assumed) — `onGrab`/`onDownload`/`onUpgrade` all
+      true (an upgrade is still a `Download` event this code should
+      apply), everything else false, secret carried via the
+      `headers` `keyValueList` field confirmed earlier in this design
+      pass. Each tested via `POST /api/v3/notification/test` (a real
+      end-to-end request against the deployed LCARS, matching what
+      clicking Sonarr/Radarr's own "Test" button would do) before
+      being saved for real; both saved, both confirmed present on
+      GET afterward.
+    - **Still open**: no real Sonarr/Radarr event has hit this code
+      yet — user expects one tonight or tomorrow via normal download
+      activity. Only once that's confirmed (check `episode`/`show`
+      rows update via a real grab/import, not another synthetic Test
+      payload) does this line get checked, and only then is
+      lengthening `pollFileAvailability`'s interval worth considering.
 - [ ] **B.5.2 — AniList request scheduler: the throttle becomes a
   priority queue.** Confirmed first, not assumed: every `anilist_client`
   reference in this codebase lives under `src/lcars/`; `src/ops/` only
