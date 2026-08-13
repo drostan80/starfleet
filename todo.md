@@ -97,7 +97,9 @@
 
 - [ ] in list view enter does nothing, info shos but the image show only half somehow this seems to not be an issue in calendar view info
 
-- [ ] File availability takes too long to show up (Sonarr import -> visible in Data). Current
+- [ ] File availability takes too long to show up (Sonarr import -> visible in Data). **Designed
+  2026-08-13, see `BUILD_PLAN.md` Phase B.5 (B.5.1) for the built-out plan** — kept here as the
+  original latency writeup. Current
   latency stack (not yet measured end-to-end): Ops's own `pollFileAvailability` sweep runs on
   an *adaptive* server-computed interval (`recommendedAvailabilityPollIntervalSeconds` —
   300s/900s/3600s tiers depending on how close to airing, `src/ops/lcars_client.py`), and
@@ -122,6 +124,9 @@
     live) — helps confirm how much this actually buys before investing the design work.
   - we are trying to save calls to anilist (and other 3rd party) API, local API (sonarr, radarr are fair game and webhook is an option
     - an idea is to keep the regular sweep hourly or so, maybe less even, but send changes as they come while batching them, to explain if I make a change (mark watch, add a score...) that need to be reflected on anilist, it should be sent to anilist after 60s or which ever is the cool down period for anilist api (let's check and discuss not apply this half research idea without checking) BUT if another action that needs reflecting on anilist is made within this time, then the countdown to write restarts, both changes are queued and will be written to anilist after the countdown end.
+    - **Designed 2026-08-13, see `BUILD_PLAN.md` Phase B.5 (B.5.2/B.5.3)** — the priority-queue
+      shape and the AniList activity-feed read-back this idea grew into. Kept here as the
+      original writeup.
 
 # Ideas / design
 

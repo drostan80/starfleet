@@ -4233,12 +4233,110 @@ background scheduler.
 
 ---
 
+## Phase B.5 — Webhooks + AniList request scheduling
+
+Designed 2026-08-13 in direct discussion with the user, prompted by
+that day's rate-limit incident and the two stale-calendar bugs (see
+`todo.md`). This is the design work the "Deliberately not on this
+plan" section's AniList/MAL drift-detection bullet said would get its
+own numbered phase once actually picked up — this is that. Builds in
+this order because each step is provably independent of the next
+(confirmed live, not assumed) before being started.
+
+- [ ] **B.5.1 — Sonarr/Radarr file-availability webhooks.** Local API,
+  no third-party rate budget — "fair game," per the user — so this can
+  be built and proven in complete isolation from the AniList work
+  below.
+  - LCARS's `server.py` currently mounts exactly one thing —
+    `GraphQL(schema, ...)` under one bearer-token
+    `BearerTokenMiddleware` covering the whole app. Needs its own
+    route(s) alongside the GraphQL mount (`/webhooks/sonarr`,
+    `/webhooks/radarr`).
+  - Auth: Sonarr/Radarr don't send a bearer token — their pattern is a
+    secret embedded in the callback URL path. That secret goes in
+    `/opt/appdata/lcars/secrets/` alongside the bearer token and the
+    rest, never in `starfleet.yml` in the clear (user confirmed
+    2026-08-13).
+  - Behavior: `Grab` → `DOWNLOADING` immediately; `Download`/import →
+    `AVAILABLE`, only once the file actually lands. A re-download
+    (upgrade) replays the same sequence — confirmed with the user this
+    is a feature (don't trust a file until Sonarr says it's actually
+    landed), not a bug to guard against.
+  - `pollFileAvailability` **stays permanently**, not removed once
+    webhooks land — webhook delivery is neither guaranteed nor
+    ordered (a missed/failed POST is just gone, no retry), so it
+    remains the reconciling safety net. User confirmed 2026-08-13 it's
+    cheap enough to keep running, just on a longer interval once
+    webhooks are doing the real-time work.
+- [ ] **B.5.2 — AniList request scheduler: the throttle becomes a
+  priority queue.** Confirmed first, not assumed: every `anilist_client`
+  reference in this codebase lives under `src/lcars/`; `src/ops/` only
+  ever calls LCARS's own GraphQL, never AniList directly (grep-checked
+  2026-08-13). So all AniList traffic already funnels through one
+  process — one in-process scheduler is sufficient, no cross-process
+  shared budget/DB-backed token bucket needed.
+  - The blocking min-interval gate shipped 2026-08-13 for the
+    rate-limit incident (`anilist_client._graphql_request`,
+    `_ANILIST_SECONDS_PER_CALL = 2.1`, plain `time.sleep`) is
+    first-come-first-served, not priority-ordered — incompatible with
+    what this step needs. It gets replaced by one worker draining a
+    priority queue; `_graphql_request` stops sleeping on its own.
+  - **Priority order, user's own, confirmed 2026-08-13**: (1) writes
+    LCARS→AniList (episode watch, show status update) — able to jump
+    to the front of the queue, not just FIFO within their own tier;
+    (2) AniList→LCARS read-back (B.5.3 below); (3) background bulk
+    metadata pull (the existing daily B.1/B.4/B.5 sweeps).
+  - User's own proposal, still to be detailed at build time, not
+    designed further here: move the heaviest bulk pulls to a
+    scheduled off-peak (night-time) window, with its own
+    don't-overwhelm-the-API pacing distinct from the queue's per-call
+    throttle.
+- [ ] **B.5.3 — AniList activity-feed read-back (entry-level
+  bidirectional sync).** Answers this plan's own earlier open
+  question ("Deliberately not on this plan," AniList/MAL drift
+  detection) with real facts checked live against AniList's API
+  2026-08-13, not assumed:
+  - No push mechanism exists on AniList's side at all — confirmed via
+    schema introspection, `__schema.subscriptionType` is `null`. Read-
+    back has to be a scheduled poll, watermarked by the last-seen
+    `createdAt`/activity id, same as every other AniList call —
+    competes for the same priority-queue budget as B.5.2, tier 2.
+  - The mechanism: `Page.activities(userId, type: MEDIA_LIST,
+    createdAt_greater: <watermark>, sort: ID_ASC)` — confirmed live
+    (tested against AniList's global feed, not the user's own account
+    yet) to return real, individual, timestamped status/progress
+    change events. This supersedes this plan's older assumption (that
+    `progress` has no usable timestamp at all) for *entry-level*
+    change detection specifically.
+  - **Known ceiling, unchanged**: entry-level only (per-show), never
+    per-episode or a real watch timestamp — same limitation already
+    on record here.
+  - **Open, unverified, flag before relying on this alone**: unclear
+    whether a score-only edit (no status/progress change) generates an
+    activity entry at all. If it doesn't, `MediaList.updatedAt`
+    (confirmed present, a per-entry Unix timestamp) is the backstop —
+    folds into the nightly bulk-pull tier (B.5.2) rather than needing
+    its own schedule.
+  - What this doesn't catch, the existing reconciliation sweep (B.15)
+    already covers — user confirmed 2026-08-13 existing shows in the
+    database are in scope for it already; its own scheduling may need
+    revisiting once this lands, expected and fine, not a blocker.
+- [ ] **B.5.4 — Prove B.5.1–B.5.3 stable in real use**, then proceed to
+  Phase C's existing **C.1** (drop Data's own Sonarr-polling/
+  AniList-polling/air-date-correction logic, i.e. remove AniList and
+  Sonarr from Data's purview entirely — user's own framing, 2026-08-13).
+  Not a new step, just the explicit dependency link so C.1 doesn't get
+  started before this phase is actually proven.
+
+---
+
 ## Phase C — Data as thin front-end + mpv/aninote bridge
 
 `SCOPE.md` §4 "Phase C".
 
 - [ ] **C.1 — Drop Data's own Sonarr-polling/AniList-polling/
-  air-date-correction logic entirely.**
+  air-date-correction logic entirely.** Depends on Phase B.5
+  (B.5.1–B.5.3) being built and proven first — see B.5.4.
 - [ ] **C.2 — Keep only**: calendar rendering (driven by LCARS reads),
   mpv IPC + aninote invocation (inherently local, never moves
   server-side — hard constraint), relaying user actions to LCARS.
@@ -4328,65 +4426,19 @@ changes first:
   *import* beyond the one-time historical imports in PC.2.
 - Any ongoing aniq↔Data sync during the build-out.
 - **AniList/MAL drift detection** (§3 principle 5, §6.9, §10.6 item
-  12) — not scheduled as a phase step yet, but unlike the items above
-  this one **is** intended to eventually get its own phase: pull
-  AniList/MAL list state back periodically and diff it against LCARS
-  to catch out-of-band edits made while Starfleet was down. Revisit
-  once Phase B's push-only sync (B.4–B.10) is proven stable in real
-  use — add a numbered phase to this document when that design work
-  actually happens, don't build it opportunistically before then.
-  - **Scope clarified 2026-08-11, still explicitly not designed or
-    scheduled yet — noted for whenever this phase actually gets
-    picked up**: this needs to be genuinely bidirectional, not just a
-    read-back of status/score. The concrete case that surfaced it: a
-    show marked watched directly on AniList while away from local
-    access (no LCARS/Data reachable) must still end up watched in
-    LCARS once reconnected — today nothing does this; LCARS only ever
-    reads AniList once, at show creation (`show_backfill.py`'s
-    `_seed_status_from_anilist`), never again on any recurring cadence.
-    Before this can be designed for real: (1) a review of the current
-    DB schema as it stands once Phase B actually finishes, not the
-    schema as it was when this bullet was first written; (2) a rethink
-    of what data is captured, when, and what actually needs syncing
-    and how — this was under-addressed so far, since the build-out so
-    far mostly optimized for one-time population, not the ongoing
-    day-to-day case. Only once both of those are done should LCARS
-    mutations/schema changes and Ops wiring for this be discussed —
-    not before. One data point for that future design, not a decision
-    made now: AniList's per-entry `progress` count has no per-episode
-    timestamp attached, so if nothing better turns up when this is
-    actually designed, the simplest fallback is to timestamp a
-    reconciled watch as of when LCARS received/detected it, not a
-    fabricated real watch time.
-  - **Reinforced 2026-08-12, still not designed or scheduled — two
-    more concrete data points for whenever this is picked up**, both
-    surfaced live using Data's `B` backlog screen (which stalls on
-    whatever AniList state it fetched at launch, never refreshed
-    mid-session — the immediate trigger for this note, not itself a
-    bug to fix):
-    - **Direction confirmed on Data's direct-to-AniList write**: the
-      user's own conclusion from watching this go stale live —
-      writing to AniList *from Data* (§6.8's permanent exception) is
-      convenient but keeps causing exactly this class of problem
-      (this note's existing scenario, plus B.15's real one-time
-      correction, plus the earlier `744c6ff`/`8b9abab`/`6d1baef`
-      bugs) — it fights the "LCARS is the source of truth, Ops is the
-      only thing that writes external services on LCARS's behalf"
-      principle rather than upholding it. Firmer than this plan's
-      earlier "(maybe) roll back Data's direct AniList write" —
-      when this phase is actually picked up, moving the AniList write
-      to LCARS/Ops and removing it from Data is the intended outcome,
-      not one option among several.
-    - **Data's own backlog view (the `B` screen) is in scope for a
-      rework once this lands, not just the sync mechanism itself**:
-      today it's anime-only, computed from Data's local AniList
-      cache. Intended future shape: one view covering anime *and*
-      movies *and* TV shows, all "downloaded, not yet watched",
-      likely with a per-type toggle (exact system not yet devised).
-      Marking watched from it would mark watched in LCARS, which
-      would then push to whichever external service(s) apply per
-      separate rules still to be devised (some already sketched in
-      `todo.md` — e.g. the AniList write-batching/cooldown idea, and
-      the "dropping a show should also update AniList status and
-      untrack Sonarr/Radarr" note) — not designed here, just flagged
-      as the same future work this bullet already tracks.
+  12) — **now scheduled, see Phase B.5 above** (designed 2026-08-13).
+  MAL itself is still out of scope for B.5 (AniList only) — revisit
+  separately once B.5 is proven. Kept here as history of how the scope
+  firmed up before it became numbered steps:
+  - 2026-08-11: needs to be genuinely bidirectional, not just a
+    read-back of status/score — surfaced by a show marked watched
+    directly on AniList while Starfleet was unreachable, which nothing
+    synced back. Schema review + a rethink of what's captured/synced
+    were flagged as needed before real design — both effectively done
+    as part of B.5's design pass.
+  - 2026-08-12: direction confirmed that Data's direct-to-AniList
+    write should move to LCARS/Ops (no longer "(maybe)"), and Data's
+    backlog (`B`) view is in scope for a rework once this lands — one
+    view covering anime + movies + TV, per-type toggle, mark-watched
+    flowing through LCARS. Neither built as part of B.5 itself; B.5 is
+    the read/write-scheduling foundation they depend on.
