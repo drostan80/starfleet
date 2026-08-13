@@ -4478,18 +4478,24 @@ this order because each step is provably independent of the next
   - **Known ceiling, unchanged**: entry-level only (per-show), never
     per-episode or a real watch timestamp — same limitation already on
     record here.
-  - **Not yet deployed, not yet called against production even once**
-    — next: deploy (this includes a real schema migration — back up
-    `lcars.db` first, confirmed prior `alembic downgrade` issues exist
-    against a database with real rows), then call `pollAnilistActivity`
-    by hand a few times: confirm the seeded watermark matches AniList's
-    real latest activity, watch an episode and confirm the next call
-    sees exactly that one activity and triggers a sane reconcile, and
-    record real numbers (calls per poll, how often non-empty, whether
-    pagination ever fires) — that's what actually sizes B.5.2's tiers
-    and Ops's own polling interval, not a guess. Deliberately NOT wired
-    into Ops's automatic loop yet, on purpose, until those numbers
-    exist.
+  - **Deployed 2026-08-13** (`v0.1.10`, `lcars.db` backed up first —
+    `lcars.db.bak-pre-b5.3-20260813-193314` — before the migration ran;
+    migration confirmed applied, both containers healthy). Called by
+    hand twice against production: first call seeded the checkpoint
+    (`activitiesSeen: 0`, no reconcile) — confirmed the seeded
+    `(last_activity_id, last_activity_created_at)` matches AniList's
+    own real latest activity exactly (`1134531665, 1786645107`,
+    queried directly, not inferred); second call stayed quiet
+    (`activitiesSeen: 0`) as expected with nothing new since. **Still
+    stays unchecked** — a quiet-poll confirmation isn't the same as a
+    real triggered reconcile: still need to watch an episode, call
+    again, and confirm it sees exactly that one activity and applies a
+    sane reconcile, then let it sit through real, varied usage
+    (multiple sessions, a status change, not just one watched episode)
+    before treating the resulting cadence numbers as real enough to
+    size B.5.2's tiers and Ops's own polling interval from. Deliberately
+    NOT wired into Ops's automatic loop yet, on purpose, until those
+    numbers exist — every call so far has been by hand.
 - [ ] **B.5.4 — Prove B.5.1–B.5.3 stable in real use**, then proceed to
   Phase C's existing **C.1** (drop Data's own Sonarr-polling/
   AniList-polling/air-date-correction logic, i.e. remove AniList and
