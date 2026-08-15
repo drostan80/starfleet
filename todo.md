@@ -32,6 +32,12 @@
   `pending_review` spike or anything else that looked wrong, but flagging the "why 7" reasoning
   here rather than asserting it with more confidence than actually checked.
 
+  **Checked directly afterward, not left as an inference**: exactly one real DB change
+  resulted — episode 9 of *From Overshadowed to Overpowered* (`s-65m1k1`) flipped to
+  `watched`, one `watch_event` row inserted. Zero `pending_review` rows opened, zero
+  `status_change` rows. A small, plausible, forward-only backfill for a show the user was
+  already actively discussing progress on tonight — not a red flag.
+
   B.5.2 (the AniList write-tier priority queue) not started yet — see the "Ideas / design" section
   below for what was found investigating LCARS's existing AniList write path
   (`_push_show_status`/`_push_show_score`/`_push_season_score` in `resolvers.py`) before designing
