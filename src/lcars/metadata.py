@@ -438,7 +438,7 @@ def _reconcile_air_dates(conn, show: dict) -> None:
 
         for node in result["nodes"]:
             episode_row = conn.execute(
-                "SELECT id, air_date_utc, air_date_source FROM episode"
+                "SELECT id, air_date_utc, air_date_source, available_via_sonarr FROM episode"
                 " WHERE show_id = ? AND season = ? AND episode = ?",
                 (show["id"], season["season_number"], node["episode"]),
             ).fetchone()
@@ -449,6 +449,45 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             new_air_date = util.unix_to_iso(node["airingAt"])
             if episode_row["air_date_utc"] == new_air_date:
                 continue
+
+            # 2026-08-15 — real, user-caught bug: "Draw This, Then Die!"
+            # episode 7. AniList's `airingSchedule` is one global value
+            # that can reflect an overseas-only delay while the real
+            # Japan broadcast (and Sonarr's own real download) landed on
+            # the original date — this function had no way to tell that
+            # case apart from an ordinary schedule correction, and
+            # always trusted AniList (§6.7's priority order), silently
+            # overwriting a date a real downloaded file had already
+            # proven correct. Distinct from Frontier Lord's own
+            # early-streaming case (AniList's date *earlier* than
+            # Sonarr's, correctly applied): this guard only fires when
+            # AniList proposes something *later* than a date Sonarr's
+            # own already-imported file backs up — the direction that
+            # can never be legitimate ("aired and downloaded" cannot
+            # later become "hasn't aired yet"). Flags instead of
+            # applying — a human decides, same §3 principle 1 shape
+            # every other genuine ambiguity in this codebase gets,
+            # rather than silently trusting a source that just proved
+            # itself wrong for this one episode.
+            if (
+                episode_row["air_date_source"] == "sonarr"
+                and episode_row["available_via_sonarr"] == "available"
+                and new_air_date > episode_row["air_date_utc"]
+            ):
+                pending_review.open_or_extend(
+                    conn,
+                    "episode",
+                    episode_row["id"],
+                    "air_date_utc",
+                    "anilist",
+                    episode_row["air_date_utc"],
+                    f"AniList proposes {new_air_date} (a delay past the current "
+                    f"{episode_row['air_date_utc']}) but a file is already downloaded at "
+                    "the current date — likely a region-scoped delay that doesn't apply to "
+                    "the real broadcast; not applied automatically, needs a human look",
+                )
+                continue
+
             pending_review.open_or_extend(
                 conn,
                 "episode",

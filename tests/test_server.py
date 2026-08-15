@@ -1743,6 +1743,164 @@ async def test_anilist_air_date_reconciliation_corrects_a_sonarr_seeded_date(cli
     assert reviews[0]["previousValue"] == "2020-01-01T00:00:00Z"
 
 
+async def test_anilist_air_date_reconciliation_does_not_overwrite_a_downloaded_episode_later(
+    client, monkeypatch
+):
+    """Real bug, user-caught 2026-08-15: "Draw This, Then Die!" episode
+    7. AniList's `airingSchedule` reflected an overseas-only delay while
+    the real Japan broadcast (and Sonarr's own real download) landed on
+    the original date — this function had no way to tell that apart
+    from an ordinary schedule correction and always trusted AniList,
+    silently overwriting a date a real downloaded file had already
+    proven correct. A later AniList date for an episode Sonarr already
+    has a file for is flagged, not applied."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {
+            "episodes": 12,
+            # 2026-08-21T14:30:00Z — later than the episode's own current
+            # (real, already-downloaded) date below.
+            "nodes": [{"episode": 1, "airingAt": 1787322600}],
+        },
+    )
+
+    def _ep(number):
+        return {
+            "seasonNumber": 1,
+            "episodeNumber": number,
+            "airDateUtc": "2026-08-14T14:30:00Z",
+            "runtime": 24,
+        }
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    # No anilistId on add_show — the whole point is controlling exactly
+    # when the *first* AniList reconciliation attempt happens, after
+    # availability is set, not racing add_show's own inline fetch.
+    show = await add_show(client, tvdbId=67890)
+    episode_id = (
+        await gql(
+            client,
+            "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    )["show"]["episodes"]["edges"][0]["node"]["id"]
+
+    # A real file already landed for this episode at its current date —
+    # same signal B.5.1's own webhook path/pollFileAvailability write.
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE episode SET available_via_sonarr = 'available' WHERE id = ?", (episode_id,)
+    )
+    conn.commit()
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setSeasonMapping(showId: $id, seasonNumber: 1, anilistId: 12345)"
+        " { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    data = await gql(
+        client,
+        "query($id: ID!) {"
+        " show(id: $id) { episodes { edges { node { airDateUtc airDateSource } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    ep = data["show"]["episodes"]["edges"][0]["node"]
+    assert ep["airDateUtc"] == "2026-08-14T14:30:00Z"  # unchanged — the real, downloaded date
+    assert ep["airDateSource"] == "SONARR"  # never flipped to ANILIST
+
+    reviews = [
+        r for r in await _pending_reviews_for(client, episode_id) if r["field"] == "air_date_utc"
+    ]
+    assert len(reviews) == 1
+    assert "region-scoped delay" in reviews[0]["proposedValueChain"][-1]
+
+
+async def test_anilist_air_date_reconciliation_still_applies_an_earlier_date_despite_a_download(
+    client, monkeypatch
+):
+    """The opposite direction — Frontier Lord's own real case (a show
+    streaming a full week early, AniList's date legitimately *earlier*
+    than Sonarr's) — must still apply normally. "Aired and downloaded"
+    can never legitimately become "hasn't aired yet" (the guard above),
+    but AniList correctly knowing about an earlier legitimate release
+    is exactly the case B.4 exists for; the guard must not block it."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {
+            "episodes": 12,
+            "nodes": [{"episode": 1, "airingAt": 1735689600}],  # 2025-01-01 — earlier
+        },
+    )
+
+    def _ep(number):
+        return {
+            "seasonNumber": 1,
+            "episodeNumber": number,
+            "airDateUtc": "2026-08-14T14:30:00Z",  # later than AniList's own date
+            "runtime": 24,
+        }
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, tvdbId=67890)
+    episode_id = (
+        await gql(
+            client,
+            "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    )["show"]["episodes"]["edges"][0]["node"]["id"]
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE episode SET available_via_sonarr = 'available' WHERE id = ?", (episode_id,)
+    )
+    conn.commit()
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setSeasonMapping(showId: $id, seasonNumber: 1, anilistId: 12345)"
+        " { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    data = await gql(
+        client,
+        "query($id: ID!) {"
+        " show(id: $id) { episodes { edges { node { airDateUtc airDateSource } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    ep = data["show"]["episodes"]["edges"][0]["node"]
+    assert ep["airDateUtc"] == "2025-01-01T00:00:00Z"  # AniList's earlier date applied normally
+    assert ep["airDateSource"] == "ANILIST"
+
+
 async def test_anilist_air_date_reconciliation_never_overwrites_a_manual_date(client, monkeypatch):
     """Revised 2026-08-09, directly on the user's own reasoning: only a
     genuine reschedule signal (animeschedule.net, B.5, not built yet)
