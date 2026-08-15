@@ -441,6 +441,16 @@
   mid-verification of something else. `s-hkyx20` (the one with the correct AniList link and watch
   state) is almost certainly the survivor; `s-vdphq9` the one to merge away — flagged here with
   that read, not applied.
+  **Merged the same night, user's own call ("low risk, one show, first season, no
+  dependencies")**: unlinked the stray `tvdb` id from `s-vdphq9` first (clears the overlap
+  `applyShowMerge`'s own guard would otherwise refuse on, since both sides held it), then
+  `applyShowMerge(winnerId: s-hkyx20, loserId: s-vdphq9, matchedOn: tvdb)` — reversible via
+  `reverseShowMerge`, same as every other B.14 merge. `s-vdphq9` now `tracked: false`. Re-ran
+  `refreshShowMetadata` on the winner immediately after — confirmed live: episodes 1–7 now
+  correctly `available` with real file paths (this same session's availability-capture fix
+  working end-to-end for the first time on a real multi-year-stale show), episodes 8–12 correctly
+  `unavailable` but genuinely checked (not aired yet), watch state (1–7 watched) untouched and
+  correct throughout.
 - [x] **34 pairs (68 season rows) of colliding `anilist_id` links found across the whole library**
   — surfaced 2026-08-13, the first time the new duplicate-detection hardening (`v0.1.11`) ran
   against the real, full account rather than a synthetic test. Started from one specific report
@@ -615,10 +625,11 @@
 
 - [ ] in list view enter does nothing, info shos but the image show only half somehow this seems to not be an issue in calendar view info
 
-- [ ] File availability takes too long to show up (Sonarr import -> visible in Data). **B.5.1
-  (webhooks) built, deployed (v0.1.9), and configured on both Sonarr and Radarr 2026-08-13 — see
-  `BUILD_PLAN.md` Phase B.5. Still open: no real grab/import has hit it yet, expected tonight or
-  tomorrow via normal download activity; this stays open until that's confirmed.** Kept here as
+- [x] File availability takes too long to show up (Sonarr import -> visible in Data). **B.5.1
+  (webhooks) built, deployed (v0.1.9), configured on both Sonarr and Radarr 2026-08-13. Confirmed
+  live 2026-08-15 (see `BUILD_PLAN.md`'s own B.5.1 entry): 36 real webhook hits over ~30 hours,
+  each cross-checked against the actual `episode`/`show` rows it should have updated — real
+  grabs/imports, not synthetic Test payloads. Closing this as resolved.** Kept here as
   the original latency writeup. Current
   latency stack (not yet measured end-to-end): Ops's own `pollFileAvailability` sweep runs on
   an *adaptive* server-computed interval (`recommendedAvailabilityPollIntervalSeconds` —
