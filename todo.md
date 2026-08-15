@@ -385,7 +385,7 @@
     instance (its own local Sonarr-sourced `self._episodes`/`self._series_by_id` state, or its
     own log output) — not visible from the server side alone. Queued for review, not
     investigated live tonight.
-- [ ] **Freshly-Sonarr-linked show shows every episode "missing" even when real files exist** —
+- [x] **Freshly-Sonarr-linked show shows every episode "missing" even when real files exist** —
   found 2026-08-13, directly caused by fixing "Otome Kaijuu Caraméliser"/"Kaiju Girl Caramelise"
   earlier tonight (linking its real Sonarr tvdb id, then `refreshShowMetadata`). Root cause
   precisely diagnosed, not guessed: `metadata.py`'s `_fetch_sonarr` (the episode-creation path)
@@ -411,6 +411,36 @@
   least prompting) a per-show availability reconciliation whenever it creates episode rows for a
   show that had none before — today it only ever creates the rows, never checks whether they're
   already actually available. Not designed in detail, not built.
+  **Fixed 2026-08-15, no second API call needed**: `client.episodes(..., include_episode_file=True)`
+  — already built for B.3b's `auditLocalFiles` (`local_audit.py`), same `hasFile`/`episodeFile`
+  derivation reused, not reinvented — embeds Sonarr's own *current* file state directly on the
+  exact same response `_fetch_sonarr` already fetches to create episode rows. Applied on insert
+  (both the plain path and the multi-show router built earlier tonight) and, for a pre-existing
+  row, backfilled only when `available_checked_at IS NULL` — never fights with the regular poller
+  or a real webhook (B.5.1), both more authoritative for a row they've already reached. Two new
+  tests cover both directions. 720 tests pass, deployed `v0.1.17`.
+  **Verifying it live surfaced a real, separate, previously-unflagged bug**: KAIJU GIRL CARAMELISE
+  (`s-vdphq9`, the show this bug was originally found on) *still* shows episodes 8–12 as never-
+  checked after a fresh `refreshShowMetadata` on `v0.1.17` — not a flaw in tonight's fix. Root
+  cause: this show and "Otome Kaijuu Caraméliser" (`s-hkyx20`) are genuine duplicates of the same
+  real show, both independently linked to **the same tvdb id** (`471878`) at different times
+  (`s-vdphq9` first, on 2026-08-11; `s-hkyx20` got the tvdb link added 2026-08-13, during the
+  earlier "Frontier Lord" investigation the same night — the two were never noticed as the same
+  show at that moment). `s-hkyx20` alone holds the real `anilist_id` (`204466`, matched) and its
+  watched state (episodes 1–7) is the one actually being kept in sync by `reconcile_watch_progress`
+  — `s-vdphq9`'s own season is `unmatched`, and its watched state (only episode 7) looks stale.
+  Sharing one tvdb id between two shows routes through tonight's own multi-show router
+  (`_fetch_sonarr_multi_show`), which — correctly, by design — only routes episodes carrying a
+  Sonarr `absoluteEpisodeNumber`; this show doesn't use absolute numbering at all (an ordinary
+  linear show, not a split-cour franchise), so every episode is silently excluded from that path,
+  and nothing (not just availability — season_id backfill too) gets applied to either show while
+  they both hold this link. **Not fixed here** — this is a genuine B.14 duplicate-show merge
+  candidate (no `pending_review`/`cross_service_merge` entry exists for this pair yet, B.14's own
+  sweep hasn't caught it), and merging real watch history/episode ownership is a big enough,
+  consequential enough decision to deserve its own dedicated look, not an ad hoc fix picked up
+  mid-verification of something else. `s-hkyx20` (the one with the correct AniList link and watch
+  state) is almost certainly the survivor; `s-vdphq9` the one to merge away — flagged here with
+  that read, not applied.
 - [x] **34 pairs (68 season rows) of colliding `anilist_id` links found across the whole library**
   — surfaced 2026-08-13, the first time the new duplicate-detection hardening (`v0.1.11`) ran
   against the real, full account rather than a synthetic test. Started from one specific report
