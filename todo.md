@@ -1,5 +1,54 @@
 # Bugs
 
+- [x] **Ascendance of a Bookworm's currently-airing part (S4/"Adopted Daughter of an Archduke")
+  invisible in Data — Sonarr-vs-AniList season-split mismatch, real data fixed, real durability
+  gap left open** (2026-08-15). User's report: Sonarr confirmed episode 18 (absolute ep 54) out
+  and available, nothing showed in Data — not yesterday, not today.
+
+  **Root cause**: Sonarr/TVDB tracks this whole franchise as **one series** (id 990, tvdb 366263)
+  with flat absolute numbering 1–60+, no season split at all. AniList splits it into **4 separate
+  media entries** (Part 1: 14 eps, Part 2: 12, Part 3: 10, Part 4 "Adopted Daughter of an
+  Archduke": 24 eps, ongoing). LCARS only ever linked the tvdb id to the first of the four `show`
+  rows (`s-2k4jb6`) — every Sonarr episode ever imported, all 60, landed under that one show,
+  which was also (wrongly) marked `completed`. The real currently-airing show (`s-fwxa7m`) had
+  **zero** episode rows and no Sonarr link at all. This is a concrete real-world instance of the
+  already-logged "hierarchical season subdivision" idea (see "Ideas / design" below) — TVDB
+  combining what AniList splits, the mirror image of the Mushoku Tensei/Fire Force case
+  (2026-08-15, same session) where AniList splits what TVDB/Sonarr combines.
+
+  Boundaries confirmed two independent ways (AniList's own episode counts *and* Sonarr's real
+  air-date gaps, e.g. a ~4-year real hiatus between abs ep 36 and 37, land on exactly the same
+  split): Part 1 abs 1–14, Part 2 abs 15–26, Part 3 abs 27–36, Part 4 abs 37–60 — ep 54 = Part 4's
+  own ep 18, exactly matching the report.
+
+  **Fixed, current-state data only** — snapshotted the DB
+  (`lcars.db.bak-20260815-bookworm-split`) first, then: moved/renumbered the 46 mis-filed episode
+  rows (abs 15–60) to their real shows (`s-mzb7jx` ep 1–12, `s-f732f2` ep 1–10, `s-fwxa7m` ep
+  1–24), inserted 39 new `watch_event` rows matching the user's own ground truth (Part 2 and
+  Part 3 fully watched; Part 4 watched through its own ep 17/abs 53, ep 18/abs 54 aired-not-
+  watched, ep 19–24/abs 55–60 not yet aired), fixed `s-fwxa7m`'s status `completed` → `watching`
+  (with a real `status_change` row, not a silent overwrite), added matching
+  `episode_numbering_mapping` rows to all three previously-unlinked shows. Verified twice — once
+  directly against the DB (per-show episode/watched counts matched exactly), once through the
+  real GraphQL API (`episodesInRange` for 2026-08-13–15 now correctly returns "Honzuki no
+  Gekokujou: Ryoushu no Youjo" S1E18, status WATCHING, tracked).
+
+  **Deliberately NOT fully closed — a real regression risk was caught and only partially
+  defused**: `metadata.py`'s `_fetch_sonarr` does an unconditional, unscoped pull of a linked
+  show's *entire* Sonarr series on every refresh — if any show's tvdb link had been left in
+  place (or moved to `s-fwxa7m`), the very next automatic metadata refresh (B.1, hourly-ish)
+  would have silently re-created all 46 moved episodes back under whichever show holds the link,
+  undoing this fix and potentially duplicating rows. To prevent that **tonight**, removed
+  `s-2k4jb6`'s `tvdb` `show_external_id` entirely (`unlinkShowExternalId`, confirmed gone) —
+  safe, since Part 1's own 14 episodes are finished/static and never need another Sonarr check.
+  **But no show now holds the tvdb link at all** — episodes 55–60 (and anything after) will
+  **not** be automatically picked up as they air; this exact bug will recur for ep 19 (abs 55,
+  due 2026-08-21) unless either (a) someone re-links `s-fwxa7m` to tvdb 366263 and manually
+  re-runs this same range-based split each time new episodes land, or (b) the real fix — Sonarr
+  episode-sync becomes season/range-aware per show, i.e. actually building the "hierarchical
+  season subdivision" idea — gets built. Not attempted tonight (a real feature, not a bug fix);
+  flagged in "Ideas / design" below with this concrete case as the worked example.
+
 - [x] **B.5.3 wired into a real Ops scheduler loop, B.5.1 confirmed live, both deployed
   (v0.1.12)** (2026-08-15). B.5.3 (AniList activity-feed poll) was code-complete and once-tested
   by hand since 2026-08-13 but had never run on any automatic cadence — zero references anywhere
@@ -620,6 +669,17 @@
   the season level, rather than picking a winner. Only path (a) exists today; path (b) is the new
   scope this note tracks. Explicitly parked for a later pros/cons discussion, not something to
   build off this note alone.
+  **Three concrete real-world cases now on record (2026-08-15), both directions**: Mushoku Tensei
+  S1/S2 and Fire Force S3 (AniList splits a cour LCARS/Sonarr track as one season — see the
+  "15 over-marked episodes" entry near the top of this file); Ascendance of a Bookworm's whole
+  4-part franchise (the mirror direction — Sonarr/TVDB tracks the entire thing as one flat
+  absolute-numbered series, AniList splits it into 4 separate media entries with their own
+  episode counts — see the entry right at the top of this file for the full data-fix writeup and
+  the durability gap it leaves open: episode sync isn't range-aware per show, so this specific
+  franchise can't safely hold a live Sonarr link on more than one of its four `show` rows today).
+  The Bookworm case is probably the clearest concrete spec for path (b) whenever this gets
+  designed for real: what's actually needed is per-show *absolute-episode-range* scoping on the
+  Sonarr sync side, not just a hierarchical season-number scheme.
 - [ ] A way to correct a schedule discrepancy (wrong air date, wrong episode-number alignment
   against AniList) *from Data itself* is needed — noted 2026-08-13 after having to fix "The
   Frontier Lord Begins with Zero Subjects" by hand: no client-facing way existed to do any of
