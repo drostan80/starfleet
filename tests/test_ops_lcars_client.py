@@ -222,6 +222,48 @@ async def test_poll_file_availability_sends_no_variables_and_returns_the_result(
     await client.aclose()
 
 
+async def test_poll_anilist_activity_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "pollAnilistActivity": {
+                        "activitiesSeen": 2,
+                        "reconcileResult": {
+                            "seasonsChecked": 40,
+                            "notMatchedOnAnilist": 0,
+                            "showsStatusUpdated": 1,
+                            "episodesBackfilled": 3,
+                            "ambiguousAnilistIdConflicts": 0,
+                        },
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    result = await client.poll_anilist_activity()
+    assert result["activitiesSeen"] == 2
+    assert result["reconcileResult"]["episodesBackfilled"] == 3
+    await client.aclose()
+
+
+async def test_poll_anilist_activity_returns_null_reconcile_result_on_a_quiet_poll():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"data": {"pollAnilistActivity": {"activitiesSeen": 0, "reconcileResult": None}}},
+        )
+
+    client = _client(handler)
+    result = await client.poll_anilist_activity()
+    assert result == {"activitiesSeen": 0, "reconcileResult": None}
+    await client.aclose()
+
+
 async def test_poll_anime_schedule_sends_no_variables_and_returns_the_result():
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read())

@@ -212,6 +212,32 @@ class LcarsClient:
         data = await self._query(query)
         return data["pollFileAvailability"]
 
+    async def poll_anilist_activity(self) -> dict:
+        """B.5.3 — the AniList activity-feed poll (pollAnilistActivity):
+        no per-item argument, one call covers the whole account
+        (LCARS's own checkpoint state, not Ops, keeps repeat calls
+        cheap) — same shape poll_file_availability() above already
+        uses. reconcileResult is null on a quiet poll (nothing new
+        since the checkpoint), populated only when activitiesSeen > 0,
+        so the caller (scheduler.py) can tell "checked, nothing new"
+        apart from "checked and fixed something" without a second call."""
+        query = """
+        mutation {
+          pollAnilistActivity {
+            activitiesSeen
+            reconcileResult {
+              seasonsChecked
+              notMatchedOnAnilist
+              showsStatusUpdated
+              episodesBackfilled
+              ambiguousAnilistIdConflicts
+            }
+          }
+        }
+        """
+        data = await self._query(query)
+        return data["pollAnilistActivity"]
+
     async def backfill_file_availability(self) -> dict:
         """§5.2/§6.7, B.3 — the manual, one-time counterpart to
         poll_file_availability() above: walks each configured service's

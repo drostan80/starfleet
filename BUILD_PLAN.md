@@ -2601,8 +2601,11 @@ background scheduler.
     upgrade) confirmed clean for the new `service_health` CHECK-
     constraint widening, and the real live OAuth/refresh-rotation/push
     checks above.
-- [ ] **B.11 — Data's role shrinks**: calendar reads tracking/air-date/
-  availability state from LCARS instead of computing it locally.
+- [x] **B.11 — Data's role shrinks** (parent checkbox flipped
+  2026-08-15 — stale until now despite every sub-item below,
+  B.11a/c/d/e/f/g, already `[x]` and confirmed live): calendar reads
+  tracking/air-date/availability state from LCARS instead of computing
+  it locally.
   Data's status bar gains per-source sync-health indicators sourced
   from Ops's service-health state (B.6). **Also owns B.9's two
   deferred Data-side pieces** (confirmed with the user 2026-08-10,
@@ -4243,14 +4246,15 @@ own numbered phase once actually picked up — this is that. Builds in
 this order because each step is provably independent of the next
 (confirmed live, not assumed) before being started.
 
-- [ ] **B.5.1 — Sonarr/Radarr file-availability webhooks.** **Code
-  built and tested 2026-08-13; stays unchecked until confirmed live**
-  — same standing rule this session already relearned twice (never
-  mark a user-facing/production path fixed without real confirmation
-  in the running system): this code has never received an actual
-  Sonarr/Radarr payload. Local API, no third-party rate budget — "fair
-  game," per the user — so this was built and proven (at the unit/
-  route-test level) in complete isolation from the AniList work below.
+- [x] **B.5.1 — Sonarr/Radarr file-availability webhooks.** **Code
+  built and tested 2026-08-13, confirmed live 2026-08-15** — see the
+  "Now confirmed" note at the end of this entry for the real evidence
+  (36 real webhook hits over ~30 hours, cross-checked against actual
+  correct `episode`/`show` DB writes, not another synthetic Test
+  payload). Local API, no third-party rate budget — "fair game," per
+  the user — so this was built and proven (at the unit/route-test
+  level) in complete isolation from the AniList work below, before
+  ever seeing real traffic.
   - Payload shapes confirmed directly against Sonarr/Radarr's own
     source (`WebhookGrabPayload`/`WebhookImportPayload`/`WebhookSeries`/
     `WebhookEpisode`/`WebhookEpisodeFile`, Radarr's `Movie`/`MovieFile`
@@ -4376,12 +4380,14 @@ this order because each step is provably independent of the next
       clicking Sonarr/Radarr's own "Test" button would do) before
       being saved for real; both saved, both confirmed present on
       GET afterward.
-    - **Still open**: no real Sonarr/Radarr event has hit this code
-      yet — user expects one tonight or tomorrow via normal download
-      activity. Only once that's confirmed (check `episode`/`show`
-      rows update via a real grab/import, not another synthetic Test
-      payload) does this line get checked, and only then is
-      lengthening `pollFileAvailability`'s interval worth considering.
+    - **Now confirmed, 2026-08-15**: production logs show 36 real
+      Sonarr/Radarr webhook hits over the ~30 hours since deploy, each
+      cross-checked against the actual `episode`/`show` rows it should
+      have updated — real grabs/imports, not another synthetic Test
+      payload. Lengthening `pollFileAvailability`'s own interval is
+      worth considering now that this path is proven, but not done as
+      part of this pass — no complaint about its current cadence, no
+      reason to touch it opportunistically.
 - [ ] **B.5.2 — AniList request scheduler: the throttle becomes a
   priority queue.** **Build order reversed, 2026-08-13, user's own
   call**: B.5.3 goes first. B.5.2 is well-understood plumbing regardless

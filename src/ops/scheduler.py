@@ -11,7 +11,10 @@ B.10 (proactive MAL refresh-token renewal, self-gating on its own
 (ongoing untracked-show sweep, also riding the hourly tick — a handful
 of global calls, not per-show), B.14 (cross-service show-duplicate
 merge sweep, riding the monthly tier alongside B.7's own catalog
-matching — same real N×M cost).
+matching — same real N×M cost), B.5.3 (AniList activity-feed
+poll, its own fourth loop at a much faster fixed interval — the
+whole point is catching a watch-status change sooner than the
+hourly tier would, wired 2026-08-15).
 
 Each `run_*_once()` is the real, testable unit — one full sweep,
 exercised directly by a test with no infinite loop or real sleep
@@ -248,6 +251,26 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     )
 
 
+async def run_anilist_activity_once(client: LcarsClient) -> int:
+    """B.5.3 — one AniList activity-feed check (pollAnilistActivity): no
+    per-item loop, the mutation itself covers the whole account in one
+    call, same shape run_availability_once/run_animeschedule_once above
+    already use. Its own loop/interval (run_forever below), not riding
+    the hourly tick — the whole point is catching a watch-status change
+    sooner than hourly, and a quiet poll is one cheap call (confirmed
+    live 2026-08-15 by reading watch_reconcile.poll_anilist_activity
+    and anilist_client.fetch_my_anime_list/fetch_activity_feed before
+    picking this shape, not assumed). Returns activitiesSeen — 0 on
+    every quiet tick, so the caller sees "checked, nothing new" in the
+    same "count real changes" shape every other tier's log line uses,
+    even though 0 here means "no-op" rather than "found nothing to
+    fix" (reconcileResult, richer but not summarized into this one int,
+    is still in the raw result LcarsClient.poll_anilist_activity()
+    returns for anyone who wants it)."""
+    result = await client.poll_anilist_activity()
+    return result["activitiesSeen"]
+
+
 async def _loop(coro_fn, client: LcarsClient, interval_seconds: int, label: str) -> None:
     """Shared while-loop shape for both timers below — never returns
     under normal operation. Catches bare Exception, not just LcarsError
@@ -290,9 +313,12 @@ async def _availability_loop(client: LcarsClient) -> None:
 
 
 async def run_forever(
-    client: LcarsClient, interval_seconds: int, monthly_interval_seconds: int
+    client: LcarsClient,
+    interval_seconds: int,
+    monthly_interval_seconds: int,
+    anilist_activity_interval_seconds: int = 240,
 ) -> None:
-    """Three concurrent loops, not one shared cadence — B.2's own
+    """Four concurrent loops, not one shared cadence — B.2's own
     weekly tier is self-gating (dueForSeasonReconciliation only ever
     returns a season once it's genuinely 7+ days stale, regardless of
     how often it's checked), so it rides the same cadence as B.1's daily
@@ -300,7 +326,7 @@ async def run_forever(
     rides that identical tick too — no per-item due-gating to be
     self-limiting about, it just needs "more often than daily" (its own
     module docstring has the rolling-window reasoning), and hourly
-    already satisfies that with no fourth loop needed. B.7's `local`
+    already satisfies that with no extra loop needed. B.7's `local`
     presence rollup rides it too — negligible SQL-only cost, no reason
     not to share. B.8b's episode_movie_link reconciliation shares it for
     the identical reason — no external HTTP call in that sweep either.
@@ -317,12 +343,21 @@ async def run_forever(
     matching shares *that* tier instead — real N×M cost, confirmed with
     the user, the same "unconditional sweep, the tier itself is the
     correctness boundary" shape B.2's own reconciliation already uses,
-    reused rather than adding a fourth interval. B.14's cross-service
+    reused rather than adding a new interval. B.14's cross-service
     show-merge sweep shares that same tier for the identical reason —
-    also real N×M cost, confirmed with the user, no fifth interval
-    added. B.3's availability loop is its own third, dynamic-interval
-    loop — it can't share either of the other two: faster than the
-    hourly one when urgent, but not on a fixed cadence at all."""
+    also real N×M cost, confirmed with the user, no extra interval
+    added for it either. B.3's availability loop is its own third,
+    dynamic-interval loop — it can't share either of the other two:
+    faster than the hourly one when urgent, but not on a fixed cadence
+    at all. B.5.3's AniList activity poll is its own fourth loop, own
+    fixed interval (default 240s/4min — ops/config.py's own
+    anilist_activity_poll_interval_seconds docstring has the real-cost
+    reasoning for why this can run far more often than the hourly
+    tier): it can't ride the hourly one either, for the opposite reason
+    B.3 can't — the whole point is catching a watch-status change
+    sooner than hourly would, not less urgently. Wired 2026-08-15 —
+    B.5.3 was code-complete and once-tested by hand since 2026-08-13
+    but had never run on any automatic cadence until this loop."""
     await asyncio.gather(
         _loop(
             run_daily_and_weekly_once,
@@ -338,4 +373,10 @@ async def run_forever(
             "monthly+catalog_presence+show_merge",
         ),
         _availability_loop(client),
+        _loop(
+            run_anilist_activity_once,
+            client,
+            anilist_activity_interval_seconds,
+            "anilist_activity",
+        ),
     )

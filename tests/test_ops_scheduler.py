@@ -15,6 +15,7 @@ from ops.scheduler import (
     _availability_loop,
     _loop,
     run_animeschedule_once,
+    run_anilist_activity_once,
     run_availability_once,
     run_catalog_presence_once,
     run_daily_and_weekly_once,
@@ -52,6 +53,7 @@ class _FakeClient:
         mal_token_refresh_result: dict | None = None,
         untracked_shows_result: dict | None = None,
         show_merge_result: dict | None = None,
+        anilist_activity_result: dict | None = None,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
@@ -82,6 +84,10 @@ class _FakeClient:
             "resolvedFindings": 0,
         }
         self._show_merge_result = show_merge_result or {"candidatesFound": 0, "reviewsOpened": 0}
+        self._anilist_activity_result = anilist_activity_result or {
+            "activitiesSeen": 0,
+            "reconcileResult": None,
+        }
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -137,6 +143,9 @@ class _FakeClient:
 
     async def poll_show_merges(self) -> dict:
         return self._show_merge_result
+
+    async def poll_anilist_activity(self) -> dict:
+        return self._anilist_activity_result
 
 
 # --- run_once (B.1) ---------------------------------------------------------
@@ -245,6 +254,30 @@ async def test_run_show_merge_once_returns_reviews_opened_count():
 async def test_run_show_merge_once_is_zero_with_nothing_to_review():
     client = _FakeClient()
     assert await run_show_merge_once(client) == 0
+
+
+# --- run_anilist_activity_once (B.5.3, its own fourth loop) -----------------
+
+
+async def test_run_anilist_activity_once_returns_activities_seen_count():
+    client = _FakeClient(
+        anilist_activity_result={
+            "activitiesSeen": 3,
+            "reconcileResult": {
+                "seasonsChecked": 40,
+                "notMatchedOnAnilist": 0,
+                "showsStatusUpdated": 1,
+                "episodesBackfilled": 2,
+                "ambiguousAnilistIdConflicts": 0,
+            },
+        }
+    )
+    assert await run_anilist_activity_once(client) == 3
+
+
+async def test_run_anilist_activity_once_is_zero_on_a_quiet_poll():
+    client = _FakeClient()
+    assert await run_anilist_activity_once(client) == 0
 
 
 # --- run_monthly_once (the unit run_forever's monthly loop calls) -----------
@@ -458,7 +491,7 @@ async def test_loop_survives_a_non_lcars_error_and_keeps_ticking(monkeypatch):
 # --- run_forever (wiring only — each loop's own behavior is covered above) --
 
 
-async def test_run_forever_wires_up_all_three_loops(monkeypatch):
+async def test_run_forever_wires_up_all_four_loops(monkeypatch):
     calls = []
 
     async def fake_loop(coro_fn, client, interval_seconds, label):
@@ -472,7 +505,12 @@ async def test_run_forever_wires_up_all_three_loops(monkeypatch):
     monkeypatch.setattr("ops.scheduler._loop", fake_loop)
     monkeypatch.setattr("ops.scheduler._availability_loop", fake_availability_loop)
     client = _FakeClient()
-    await run_forever(client, interval_seconds=3600, monthly_interval_seconds=2592000)
+    await run_forever(
+        client,
+        interval_seconds=3600,
+        monthly_interval_seconds=2592000,
+        anilist_activity_interval_seconds=240,
+    )
     assert set(calls) == {
         (
             "run_daily_and_weekly_once",
@@ -481,5 +519,22 @@ async def test_run_forever_wires_up_all_three_loops(monkeypatch):
             "+mal_token_refresh+untracked_shows",
         ),
         ("run_monthly_once", 2592000, "monthly+catalog_presence+show_merge"),
+        ("run_anilist_activity_once", 240, "anilist_activity"),
     }
     assert availability_calls == [client]
+
+
+async def test_run_forever_defaults_anilist_activity_interval_to_240s(monkeypatch):
+    calls = []
+
+    async def fake_loop(coro_fn, client, interval_seconds, label):
+        calls.append((coro_fn.__name__, interval_seconds, label))
+
+    async def fake_availability_loop(client):
+        pass
+
+    monkeypatch.setattr("ops.scheduler._loop", fake_loop)
+    monkeypatch.setattr("ops.scheduler._availability_loop", fake_availability_loop)
+    client = _FakeClient()
+    await run_forever(client, interval_seconds=3600, monthly_interval_seconds=2592000)
+    assert ("run_anilist_activity_once", 240, "anilist_activity") in calls

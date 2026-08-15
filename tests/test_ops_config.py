@@ -14,11 +14,13 @@ def test_defaults_with_no_config_file_or_env(tmp_path, monkeypatch):
     monkeypatch.delenv("OPS_LCARS_BEARER_TOKEN_FILE", raising=False)
     monkeypatch.delenv("OPS_POLL_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("OPS_MONTHLY_POLL_INTERVAL_SECONDS", raising=False)
+    monkeypatch.delenv("OPS_ANILIST_ACTIVITY_POLL_INTERVAL_SECONDS", raising=False)
     cfg = load_config(config_path=tmp_path / "does-not-exist.ini")
     assert cfg.lcars_url == "http://lcars:8000"
     assert cfg.lcars_bearer_token is None
     assert cfg.poll_interval_seconds == 3600
     assert cfg.monthly_poll_interval_seconds == 30 * 24 * 3600
+    assert cfg.anilist_activity_poll_interval_seconds == 240
 
 
 def test_loads_from_file(tmp_path):
@@ -74,3 +76,18 @@ def test_monthly_poll_interval_env_var_overrides_file(tmp_path, monkeypatch):
     monkeypatch.setenv("OPS_MONTHLY_POLL_INTERVAL_SECONDS", "43200")
     cfg = load_config(config_path=config_path)
     assert cfg.monthly_poll_interval_seconds == 43200
+
+
+def test_anilist_activity_poll_interval_loads_from_file(tmp_path):
+    config_path = tmp_path / "ops.ini"
+    config_path.write_text("[ops]\nanilist_activity_poll_interval_seconds = 300\n")
+    cfg = load_config(config_path=config_path)
+    assert cfg.anilist_activity_poll_interval_seconds == 300
+
+
+def test_anilist_activity_poll_interval_env_var_overrides_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "ops.ini"
+    config_path.write_text("[ops]\nanilist_activity_poll_interval_seconds = 300\n")
+    monkeypatch.setenv("OPS_ANILIST_ACTIVITY_POLL_INTERVAL_SECONDS", "180")
+    cfg = load_config(config_path=config_path)
+    assert cfg.anilist_activity_poll_interval_seconds == 180

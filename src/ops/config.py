@@ -46,6 +46,19 @@ class Config:
     # boundary — Ops's own timer, not a stored "due" ceiling. 30 days,
     # matching the cadence it's named for.
     monthly_poll_interval_seconds: int = 30 * 24 * 3600
+    # B.5.3 — pollAnilistActivity's own interval, its own fourth loop
+    # (scheduler.py's run_forever), not riding poll_interval_seconds'
+    # hourly tick: the whole point of the activity feed is to catch a
+    # watch-status change sooner than an hourly sweep would. A quiet
+    # poll is one cheap AniList call (fetch_activity_feed) almost every
+    # tick; only a genuinely new activity triggers the heavier
+    # reconcile_watch_progress (two more calls: fetch_viewer_id is
+    # cached, fetch_my_anime_list is one call) — confirmed live
+    # 2026-08-15 by reading both functions before picking this default,
+    # not assumed. 4 minutes: inside the 3-5 minute range discussed
+    # with the user, cheap enough at this real cost to run continuously
+    # rather than self-gate like B.10's does.
+    anilist_activity_poll_interval_seconds: int = 240
 
 
 def _resolve_secret(value: str | None, env_var: str) -> str | None:
@@ -77,6 +90,10 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.monthly_poll_interval_seconds = parser["ops"].getint(
                 "monthly_poll_interval_seconds", fallback=cfg.monthly_poll_interval_seconds
             )
+            cfg.anilist_activity_poll_interval_seconds = parser["ops"].getint(
+                "anilist_activity_poll_interval_seconds",
+                fallback=cfg.anilist_activity_poll_interval_seconds,
+            )
     cfg.lcars_url = os.environ.get("OPS_LCARS_URL", cfg.lcars_url)  # not a secret
     cfg.lcars_bearer_token = _resolve_secret(cfg.lcars_bearer_token, "OPS_LCARS_BEARER_TOKEN")
     env_interval = os.environ.get("OPS_POLL_INTERVAL_SECONDS")
@@ -85,4 +102,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     env_monthly_interval = os.environ.get("OPS_MONTHLY_POLL_INTERVAL_SECONDS")
     if env_monthly_interval is not None:
         cfg.monthly_poll_interval_seconds = int(env_monthly_interval)
+    env_anilist_activity_interval = os.environ.get("OPS_ANILIST_ACTIVITY_POLL_INTERVAL_SECONDS")
+    if env_anilist_activity_interval is not None:
+        cfg.anilist_activity_poll_interval_seconds = int(env_anilist_activity_interval)
     return cfg

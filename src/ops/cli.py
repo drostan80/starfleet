@@ -25,7 +25,12 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     async def _main() -> None:
         async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token) as client:
-            await run_forever(client, cfg.poll_interval_seconds, cfg.monthly_poll_interval_seconds)
+            await run_forever(
+                client,
+                cfg.poll_interval_seconds,
+                cfg.monthly_poll_interval_seconds,
+                cfg.anilist_activity_poll_interval_seconds,
+            )
 
     asyncio.run(_main())
 
