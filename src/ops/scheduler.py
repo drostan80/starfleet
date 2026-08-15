@@ -264,10 +264,26 @@ async def run_anilist_activity_once(client: LcarsClient) -> int:
     every quiet tick, so the caller sees "checked, nothing new" in the
     same "count real changes" shape every other tier's log line uses,
     even though 0 here means "no-op" rather than "found nothing to
-    fix" (reconcileResult, richer but not summarized into this one int,
-    is still in the raw result LcarsClient.poll_anilist_activity()
-    returns for anyone who wants it)."""
+    fix". Logs the reconcile breakdown itself (not just this int) when
+    one actually ran — B.5.4's own "prove B.5.1-B.5.3 stable" judgment
+    needs to be able to tell an ordinary backfill apart from something
+    that looks wrong from the log alone, without a manual DB check
+    every time (real gap found live 2026-08-15, first genuine tick:
+    _loop's own generic "processed %d item(s)" line alone couldn't
+    distinguish a harmless 7-activity poll from one that started
+    backfilling episodes incorrectly)."""
     result = await client.poll_anilist_activity()
+    reconcile = result["reconcileResult"]
+    if reconcile is not None:
+        logger.info(
+            "anilist_activity: reconcile ran — seasonsChecked=%d notMatchedOnAnilist=%d "
+            "showsStatusUpdated=%d episodesBackfilled=%d ambiguousAnilistIdConflicts=%d",
+            reconcile["seasonsChecked"],
+            reconcile["notMatchedOnAnilist"],
+            reconcile["showsStatusUpdated"],
+            reconcile["episodesBackfilled"],
+            reconcile["ambiguousAnilistIdConflicts"],
+        )
     return result["activitiesSeen"]
 
 

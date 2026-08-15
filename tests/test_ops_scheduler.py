@@ -280,6 +280,32 @@ async def test_run_anilist_activity_once_is_zero_on_a_quiet_poll():
     assert await run_anilist_activity_once(client) == 0
 
 
+async def test_run_anilist_activity_once_logs_the_reconcile_breakdown_when_one_ran(caplog):
+    client = _FakeClient(
+        anilist_activity_result={
+            "activitiesSeen": 3,
+            "reconcileResult": {
+                "seasonsChecked": 40,
+                "notMatchedOnAnilist": 0,
+                "showsStatusUpdated": 1,
+                "episodesBackfilled": 2,
+                "ambiguousAnilistIdConflicts": 0,
+            },
+        }
+    )
+    with caplog.at_level("INFO", logger="ops.scheduler"):
+        await run_anilist_activity_once(client)
+    assert any("reconcile ran" in r.message for r in caplog.records)
+    assert any("episodesBackfilled=2" in r.message for r in caplog.records)
+
+
+async def test_run_anilist_activity_once_logs_nothing_extra_on_a_quiet_poll(caplog):
+    client = _FakeClient()
+    with caplog.at_level("INFO", logger="ops.scheduler"):
+        await run_anilist_activity_once(client)
+    assert not any("reconcile ran" in r.message for r in caplog.records)
+
+
 # --- run_monthly_once (the unit run_forever's monthly loop calls) -----------
 
 
