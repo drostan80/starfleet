@@ -1,6 +1,68 @@
 # Bugs
 
-- [ ] **Two shows ("The World Is Dancing" ep7, "The Forsaken Saintess..." ep6, both Monday
+- [ ] **`resolvePendingReview` never actually applies anything — the 68-row `anilist_id_conflict`
+  batch has zero real fixes applied, despite 30 being marked "resolved."** Found 2026-08-15 while
+  double-checking the user's overnight review pass on the 68-row collision backlog (`f11ad93`).
+  Checked directly against production: **every one of the 68 seasons still holds its original
+  colliding `anilist_id` — including all 30 the user marked resolved.** Root cause, confirmed by
+  reading the resolver: `resolvePendingReview(id, resolutionNote)` (`resolvers.py`) only ever does
+  `UPDATE pending_review SET resolved_at, resolved_by_client, resolution_note` — pure bookkeeping,
+  generic across every `field` type this mechanism serves, on purpose (most other fields have their
+  own separate corrective mutation you're expected to call first). For `anilist_id_conflict`
+  specifically **no corrective mutation was ever called** — the real fix (`setSeasonMapping` with
+  the correct id) needs to happen as its own step; recording the right id as `resolutionNote` and
+  clicking resolve only writes it down as a note, it was never intended (nor built) to double as
+  "and also apply it." Not something Data's `V` screen did wrong either — it's calling the mutation
+  exactly as designed; the design just never included an apply step for this one field.
+  **A second, real finding underneath that one**: one `resolutionNote` value, `210199`, was used
+  for two completely different shows — The Fable season 2 (correct: AniList id 210199 actually is
+  "The Fable 2nd Season", confirmed live) and "0-saiji Start Dash Monogatari Season 2" / "HEAD
+  START AT BIRTH - Season 2" season 1 (wrong: that id has nothing to do with this show) — almost
+  certainly a copy-paste slip between two rows worked back-to-back, not a real proposal for Head
+  Start at Birth. Caught only because nothing had been applied yet; would have created a *new*
+  collision (both shows pointing at 210199) had `setSeasonMapping` been called on both as noted.
+  **Nothing applied and nothing broken tonight** — this is a "double-check before touching
+  anything" finding, not a live fix. Of the 30 resolved rows, all but 3 (DAN DA DAN season 3,
+  Frieren season 3, 100 Girlfriends season 3 — the cross-show pairs, still needing a real decision
+  on which side is the duplicate) have a `resolutionNote` distinct from the original id and could
+  be applied via `setSeasonMapping` as a mechanical next step once Head Start at Birth's real id is
+  confirmed. Not applied without the user's go-ahead — logged for the walkthrough instead.
+  **Worth a real design fix later**: either give `resolvePendingReview` a field-specific apply hook
+  for `anilist_id_conflict` (call `setSeasonMapping` with the note's id as part of the same
+  resolve), or make the review screen visibly two-step so a resolved-but-unapplied state can't look
+  identical to a resolved-and-fixed one. Not built — logged only.
+
+- [ ] **AniList's `airingSchedule` can reflect a region-scoped (overseas-only) delay while the real
+  Japan broadcast airs on the original date — B.4's reconciliation has no way to tell the
+  difference and picked the wrong one.** Reported 2026-08-15 for "Draw This, Then Die!" ("Kore
+  Kaite Shine", anilist id 188525) episode 7: user confirmed it actually released in Japan
+  yesterday (2026-08-14) on the show's original weekly schedule, despite an official delay to
+  2026-08-21 that (evidently) only ever applied overseas. Checked live: **AniList's own
+  `airingSchedule`/`nextAiringEpisode` still shows episode 7 at 2026-08-21T14:30:00Z right now** —
+  unchanged, not a staleness/polling problem on our side, AniList's own data genuinely doesn't
+  distinguish "Japan broadcast date" from "overseas simulcast date" in this field, it's one global
+  value. Sonarr/TVDB had the real date the whole time (`air_date_raw_sonarr = 2026-08-14`,
+  `available_via_sonarr = available` — a file really did land) but B.4's reconciliation
+  unconditionally prefers AniList's date over Sonarr's raw guess (the exact mechanism that
+  correctly fixed "The Frontier Lord" 's early-streaming case two days ago) — so it overwrote the
+  correct Sonarr date with AniList's wrong delayed one (`episode.air_date_utc` for ep7 is currently
+  `2026-08-21`, `air_date_source = anilist`). Same mechanism, opposite failure direction: AniList
+  right/Sonarr wrong for Frontier Lord, Sonarr right/AniList wrong here — B.4 as built can't tell
+  the two cases apart, it just always trusts AniList.
+  **Checked both monitored news sources, neither would have caught this**: LiveChart.me's
+  headlines RSS (investigated 2026-08-13, `bf67933`) — checked live, no mention of this show
+  anywhere in the current 50-item/Aug 4–15 window; it's industry PV/announcement news, not a
+  schedule-delay tracker, wouldn't carry this kind of item even in principle. animeschedule.net's
+  RSS feed — already a confirmed dead end (post-release-only, `bf67933`).
+  **A genuinely new, unexplored data source found while checking this**: animeschedule.net's own
+  per-show page (and a real public JSON REST API behind it, `animeschedule.net/api/v3`, no key
+  required — `GET /anime/{slug}` for a show's own per-episode raw/sub/dub times, `GET
+  /timetables/{airType}` for a week's schedule) currently shows episode 8 as "Upcoming" for this
+  show — i.e. it already considers episode 7 aired, matching the real Japan broadcast and
+  contradicting AniList's still-active delay. We've only ever looked at animeschedule.net's RSS
+  feed (a dead end); we've never queried its real schedule API at all. Worth a real look as a
+  second, independent schedule source to cross-check AniList against specifically for delay
+  disputes — not designed or built, just found and logged.
   8/10) show unwatched in Data despite being genuinely watched; marking them from Data appears
   to do nothing** — reported 2026-08-13, late in the same session as the B.11f calendar-staleness
   fix earlier tonight. Diagnosed as far as server-side data can go; the actual display bug needs
