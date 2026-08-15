@@ -774,6 +774,30 @@ def _resolve_and_store_tmdb_id(conn, show: dict, client: "tmdb_client.TmdbClient
 # --- Sonarr (media_shape = episodic) ----------------------------------------
 
 
+def _availability_from_sonarr_episode(ep: dict) -> tuple[str, str | None]:
+    """2026-08-15 — real bug found live: a freshly-Sonarr-linked show
+    whose real import history predates the link showed every episode
+    "missing" even with real files on disk. `_fetch_sonarr`'s own
+    `INSERT INTO episode` never touched `available_via_sonarr`/
+    `file_path_sonarr` at all, so they silently took the schema default
+    (`'unavailable'`) — and the regular availability poller
+    (`availability.py`'s `poll_file_availability`, checkpoint-based on
+    Sonarr's own `/history` log) can never retroactively discover an
+    import that happened before the show was linked at all, so nothing
+    ever self-healed it either.
+
+    The fix needs no second API call: `client.episodes(...,
+    include_episode_file=True)` (already built for B.3b's
+    `auditLocalFiles`, `local_audit.py` — same `hasFile`/`episodeFile`
+    derivation reused here, not reinvented) embeds Sonarr's own
+    *current* file state directly on the exact same response this
+    function already fetches to create the episode rows in the first
+    place."""
+    if ep.get("hasFile") and ep.get("episodeFile"):
+        return "available", ep["episodeFile"]["path"]
+    return "unavailable", None
+
+
 def _fetch_sonarr(conn, show: dict) -> None:
     tvdb_id_str = _external_id(conn, show["id"], "tvdb")
     if tvdb_id_str is None:
@@ -790,7 +814,7 @@ def _fetch_sonarr(conn, show: dict) -> None:
         with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
             series = client.series_by_tvdb_id(int(tvdb_id_str))
             if series is not None:
-                episodes = client.episodes(series["id"])
+                episodes = client.episodes(series["id"], include_episode_file=True)
     except sonarr_client.SonarrError as e:
         service_health.record_failure(conn, "sonarr", str(e))
         conn.commit()
@@ -866,6 +890,20 @@ def _fetch_sonarr(conn, show: dict) -> None:
                 "UPDATE episode SET season_id = ? WHERE id = ? AND season_id IS NULL",
                 (season_id, existing["id"]),
             )
+            # 2026-08-15 — same pure source-fact capture as season_id/
+            # absolute_number above, gated the same way: only ever fills
+            # a row that's never been checked at all (available_checked_at
+            # IS NULL), never overwrites state the regular checkpoint-
+            # based poller (availability.py) or a real webhook (B.5.1)
+            # has already established — those are more authoritative for
+            # an episode already being tracked, this is strictly for the
+            # gap where neither has ever run against this row yet.
+            availability_status, availability_path = _availability_from_sonarr_episode(ep)
+            conn.execute(
+                "UPDATE episode SET available_via_sonarr = ?, file_path_sonarr = ?,"
+                " available_checked_at = ? WHERE id = ? AND available_checked_at IS NULL",
+                (availability_status, availability_path, now, existing["id"]),
+            )
             if ep.get("absoluteEpisodeNumber") is not None:
                 # Overwrites NULL *and* any previously-synthesized value:
                 # §5.2 sources as-is whenever a source reports an official
@@ -883,12 +921,14 @@ def _fetch_sonarr(conn, show: dict) -> None:
                 )
             continue
         episode_id = ids.generate_id(conn, "e")
+        availability_status, availability_path = _availability_from_sonarr_episode(ep)
         conn.execute(
             "INSERT INTO episode"
             " (id, show_id, season, season_id, episode, kind, absolute_number,"
             "  air_date_utc, air_date_source, air_date_raw_sonarr, runtime_minutes,"
+            "  available_via_sonarr, file_path_sonarr, available_checked_at,"
             "  created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sonarr', ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sonarr', ?, ?, ?, ?, ?, ?, ?)",
             (
                 episode_id,
                 show["id"],
@@ -906,6 +946,16 @@ def _fetch_sonarr(conn, show: dict) -> None:
                 ep.get("airDateUtc"),
                 ep.get("airDateUtc"),
                 ep.get("runtime"),
+                availability_status,
+                availability_path,
+                # 2026-08-15 — real bug: an episode row created here with
+                # no availability check recorded at all left
+                # available_checked_at NULL forever unless some other
+                # poll happened to reach it, which is exactly the gap
+                # this whole fix closes. Stamped now precisely because a
+                # real check (this one) just happened, same as every
+                # other poll in this codebase already stamps it.
+                now,
                 now,
                 now,
             ),
@@ -1022,6 +1072,15 @@ def _fetch_sonarr_multi_show(conn, sibling_ids: list[str], episodes: list[dict])
                         "UPDATE episode SET season_id = ? WHERE id = ?",
                         (season_row["id"], existing["id"]),
                     )
+            # 2026-08-15 — same gap/fix as the single-show path's own
+            # existing-row backfill above: only ever fills a row that's
+            # never been checked at all.
+            availability_status, availability_path = _availability_from_sonarr_episode(ep)
+            conn.execute(
+                "UPDATE episode SET available_via_sonarr = ?, file_path_sonarr = ?,"
+                " available_checked_at = ? WHERE id = ? AND available_checked_at IS NULL",
+                (availability_status, availability_path, now, existing["id"]),
+            )
             touched_shows.add(existing["show_id"])
             continue
 
@@ -1076,12 +1135,14 @@ def _fetch_sonarr_multi_show(conn, sibling_ids: list[str], episodes: list[dict])
             (best_show_id, anchor["season"]),
         ).fetchone()
         episode_id = ids.generate_id(conn, "e")
+        availability_status, availability_path = _availability_from_sonarr_episode(ep)
         conn.execute(
             "INSERT INTO episode"
             " (id, show_id, season, season_id, episode, kind, absolute_number,"
             "  air_date_utc, air_date_source, air_date_raw_sonarr, runtime_minutes,"
+            "  available_via_sonarr, file_path_sonarr, available_checked_at,"
             "  created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, 'regular', ?, ?, 'sonarr', ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, 'regular', ?, ?, 'sonarr', ?, ?, ?, ?, ?, ?, ?)",
             (
                 episode_id,
                 best_show_id,
@@ -1092,6 +1153,9 @@ def _fetch_sonarr_multi_show(conn, sibling_ids: list[str], episodes: list[dict])
                 air_date,
                 air_date,
                 ep.get("runtime"),
+                availability_status,
+                availability_path,
+                now,
                 now,
                 now,
             ),

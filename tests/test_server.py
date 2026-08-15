@@ -305,7 +305,7 @@ class _FakeSonarrClient:
     def series_by_tvdb_id(self, tvdb_id):
         return self._series
 
-    def episodes(self, series_id):
+    def episodes(self, series_id, include_episode_file=False):
         return self._episodes
 
 
@@ -747,6 +747,124 @@ async def test_add_show_sonarr_fetch_creates_episodes(client, monkeypatch):
     assert len(episodes) == 2
     assert {e["node"]["episode"] for e in episodes} == {1, 2}
     assert episodes[0]["node"]["runtimeMinutes"] == 24
+
+
+async def test_add_show_sonarr_fetch_captures_availability_from_hasfile(client, monkeypatch):
+    """Real bug, found 2026-08-13: a freshly-Sonarr-linked show whose
+    real import history predates the link showed every episode
+    "missing" even with real files on disk — INSERT INTO episode never
+    touched available_via_sonarr/file_path_sonarr, and the regular
+    checkpoint-based poller can never retroactively discover an import
+    that happened before the link existed. Fixed by reading the exact
+    same hasFile/episodeFile Sonarr already returns on this same
+    response (include_episode_file=True, no second API call)."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+
+    def _ep(number, has_file):
+        ep = {
+            "seasonNumber": 1,
+            "episodeNumber": number,
+            "airDateUtc": "2026-01-01T00:00:00Z",
+            "runtime": 24,
+            "hasFile": has_file,
+        }
+        if has_file:
+            ep["episodeFile"] = {"path": f"/data/media/show/S01E{number:02d}.mkv"}
+        return ep
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1, True), _ep(2, False)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) {
+            episodes {
+              edges { node { episode availableViaSonarr filePathSonarr availableCheckedAt } }
+            }
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    by_episode = {e["node"]["episode"]: e["node"] for e in data["show"]["episodes"]["edges"]}
+    assert by_episode[1]["availableViaSonarr"] == "AVAILABLE"
+    assert by_episode[1]["filePathSonarr"] == "/data/media/show/S01E01.mkv"
+    assert by_episode[1]["availableCheckedAt"] is not None
+    assert by_episode[2]["availableViaSonarr"] == "UNAVAILABLE"
+    assert by_episode[2]["filePathSonarr"] is None
+    assert by_episode[2]["availableCheckedAt"] is not None  # checked, genuinely not available
+
+
+async def test_sonarr_fetch_backfills_availability_only_when_never_checked(client, monkeypatch):
+    """The existing-row half of the same fix: only ever fills a row
+    that's never been checked at all (available_checked_at IS NULL) —
+    never fights with the regular checkpoint-based poller or a real
+    webhook (B.5.1), both more authoritative for a row they've already
+    reached."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+
+    def _ep(has_file):
+        ep = {
+            "seasonNumber": 1,
+            "episodeNumber": 1,
+            "airDateUtc": "2026-01-01T00:00:00Z",
+            "runtime": 24,
+            "hasFile": has_file,
+        }
+        if has_file:
+            ep["episodeFile"] = {"path": "/data/media/show/S01E01.mkv"}
+        return ep
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(False)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+    episode_id = (
+        await gql(
+            client,
+            "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    )["show"]["episodes"]["edges"][0]["node"]["id"]
+
+    # Simulate the regular poller (or a real webhook) having already
+    # reached this row with its own, more authoritative state.
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE episode SET available_via_sonarr = 'available',"
+        " file_path_sonarr = '/real/path.mkv', available_checked_at = '2026-08-15T00:00:00Z'"
+        " WHERE id = ?",
+        (episode_id,),
+    )
+    conn.commit()
+
+    # A later Sonarr fetch disagrees (hasFile now false — e.g. a file
+    # was deleted between the poller's own check and this refresh).
+    fake._episodes = [_ep(False)]
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    data = await gql(
+        client,
+        "query($id: ID!) {"
+        " show(id: $id) { episodes { edges { node { availableViaSonarr filePathSonarr } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    ep = data["show"]["episodes"]["edges"][0]["node"]
+    # Untouched — already checked once, this fetch's job is filling a
+    # never-checked gap, not re-arbitrating against a more authoritative
+    # source.
+    assert ep["availableViaSonarr"] == "AVAILABLE"
+    assert ep["filePathSonarr"] == "/real/path.mkv"
 
 
 async def test_add_show_sonarr_fetch_creates_season_rows_and_sets_episode_season_id(
