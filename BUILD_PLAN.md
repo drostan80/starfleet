@@ -4616,12 +4616,28 @@ this order because each step is provably independent of the next
     grown enough that a full sweep per trigger stops being cheap — not
     needed today, genuinely useful later, logged here so it isn't
     forgotten or rebuilt from scratch when that day comes.
-- [ ] **B.5.4 — Prove B.5.1–B.5.3 stable in real use**, then proceed to
+- [x] **B.5.4 — Prove B.5.1–B.5.3 stable in real use**, then proceed to
   Phase C's existing **C.1** (drop Data's own Sonarr-polling/
   AniList-polling/air-date-correction logic, i.e. remove AniList and
   Sonarr from Data's purview entirely — user's own framing, 2026-08-13).
   Not a new step, just the explicit dependency link so C.1 doesn't get
   started before this phase is actually proven.
+
+  **Flipped 2026-08-15, the user's own call, on real (if young) live
+  evidence** — B.5.1: 36 real Sonarr/Radarr webhook hits over ~30
+  hours, each cross-checked against the actual `episode`/`show` rows
+  it should have updated. B.5.3: wired into a real scheduler loop the
+  same day (v0.1.12, then v0.1.13 for the reconcile-breakdown logging
+  fix), and every real tick since — 3 so far: a 7-activity backlog
+  catch-up on first run, then a live single-activity test (the user
+  marking HELL MODE S2E7 watched on AniList) — landed the exact
+  correct DB write within one poll cycle, verified directly against
+  the DB each time, not just trusted from the log line. Thin duration
+  (minutes, not days), but a clean 3-for-3 with zero
+  `ambiguousAnilistIdConflicts`/`pending_review` surprises across both
+  a backlog catch-up and a fresh live write — the user judged that
+  sufficient to move forward rather than waiting longer; noted here so
+  a future read of this line knows exactly what "proven" rested on.
 
 ---
 
