@@ -1,5 +1,56 @@
 # Bugs
 
+- [x] **HELL MODE S2 (and 14 others) showed watched episodes AniList never confirmed — a "double
+  check" pass across the whole library, all applied** (2026-08-15). User's report: HELL MODE
+  season 2 showed every episode watched in Data, contradicting AniList (the declared source of
+  truth for watch status). Compared every tracked season's LCARS-watched-count against real
+  AniList progress (GDPR export + live spot checks) — found **15 seasons over-marked** (LCARS
+  shows watched, AniList doesn't back it up) and, separately, 1,089 seasons *under*-marked — of
+  which **1,088 turned out to be the already-known "AniList-only show has zero episode rows"
+  architectural gap**, not a new bug, left untouched.
+  **10 of the 15 over-marked seasons shared one root cause, fixed identically**: HELL MODE S2 (12
+  watched vs. real progress 6) and You and I Are Polar Opposites S2 (12 vs. 6), plus 8 shows with
+  a single phantom "episode 1" wrongly watched on a season that hasn't aired at all (AniList
+  status PLANNING, progress 0): Makeine S2, The Weakest Tamer S2, The Unaware Atelier Meister S2,
+  The Fable S2, HOTEL INHUMANS S2, A Star Brighter Than the Sun S2, Jack-of-All-Trades S2, Tune In
+  to the Midnight Heart S2. All traced to the same 2026-08-12 one-time historical watch-import
+  (2,973 `watch_event` rows across 174 shows, one timestamp) — at that moment these season-2 rows
+  still held the *wrong* (season-1's) `anilist_id`, the exact same-show collision fixed earlier
+  tonight, so season 1's real progress got copied onto season 2 before the id was ever corrected.
+  Fixed via `deleteWatchEvent` on the specific stray rows (reverts `episode.state` to unwatched
+  automatically) — verified clean afterward.
+  **The other 5 needed the user's own ground truth, not a blind trust-AniList rule — and it
+  surfaced two genuinely different real bugs**:
+  - **Mushoku Tensei S1 (23/23 watched, AniList progress 11/11) and S2 (24/24, progress 13/13)**:
+    user confirmed fully watched through last week — **not a watch-status bug at all, a season-
+    mapping gap**. Checked AniList directly: the franchise splits each LCARS "season" across
+    *two separate AniList media entries* per cour (`108465`, 11 eps, mapped; `127720` "Part 2", 12
+    eps, **never linked in LCARS at all** — same again for season 2: `146065` mapped, `166873`
+    "Part 2" unmapped). LCARS's 23/24-episode season correctly spans both cours' real Sonarr
+    episodes, but only one cour's `anilist_id` is attached, so the progress comparison was
+    structurally comparing one cour's count against both cours' episodes. Nothing was wrong in the
+    watch data — left untouched. This is exactly the "hierarchical season subdivision" gap already
+    logged further down this file, now with a concrete real example, not fixed here (that's a real
+    feature, not a data patch).
+  - **Fire Force S3 (13/25 watched, AniList progress 12)**: same shape — confirmed via AniList
+    that "Season 3" (`149118`, 12 eps, mapped) and "Season 3 Part 2" (`179062`, 13 eps, **also
+    never linked**) are two entries LCARS treats as one 25-episode season. Unlike Mushoku Tensei,
+    user confirmed this one really is fully watched and the *episode data* (not just the mapping)
+    was actually incomplete — episodes 13–24 were genuinely still `unwatched` in LCARS. Fixed via
+    `markEpisodeRangeWatched(showId, season: 3, fromEpisode: 13, toEpisode: 24)`. Episode 25 was
+    already correctly watched.
+  - **Frontier Lord S1 (8/12 watched) and From Overshadowed to Overpowered S1 (9/12 watched)**:
+    user confirmed watched through episode 7 (last night) and episode 8 respectively — LCARS had
+    exactly one episode too many marked watched in both cases, and in both cases **the wrongly-
+    marked episode's `air_date_utc` is genuinely in the future** (Frontier Lord ep8: 2026-08-21;
+    Overshadowed ep9: 2026-08-20) — an episode that hasn't aired yet literally cannot have been
+    watched, an internal contradiction independent of AniList entirely. Both single stray
+    `watch_event` rows deleted.
+  **Final verified state, all 13 shows touched**: watched-episode counts now match either AniList's
+  real progress (HELL MODE, You and I Are Polar Opposites, the 8 phantom-episode shows) or the
+  user's own direct confirmation (Fire Force, Frontier Lord, Overshadowed to Overpowered) —
+  re-queried directly against the DB after each fix, not assumed.
+
 - [x] **Full `anilist_id`/`mal_id` duplicate cleanup completed for the whole library** (2026-08-15,
   supersedes the two partial-progress entries just below and the "34 pairs" entry further down —
   all now fully resolved, not just diagnosed). User's explicit instruction: "the database needs to
