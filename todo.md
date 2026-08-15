@@ -1,5 +1,43 @@
 # Bugs
 
+- [x] **B.5.3 wired into a real Ops scheduler loop, B.5.1 confirmed live, both deployed
+  (v0.1.12)** (2026-08-15). B.5.3 (AniList activity-feed poll) was code-complete and once-tested
+  by hand since 2026-08-13 but had never run on any automatic cadence — zero references anywhere
+  in `ops/scheduler.py`, confirmed via grep before touching anything. Added it as a real fourth
+  concurrent loop in `run_forever` (own fixed interval, default 240s/4min via a new
+  `anilist_activity_poll_interval_seconds` config knob, same file/env/`_FILE` precedence as every
+  other Ops setting) — checked the real cost first rather than assuming: a quiet poll is one
+  cheap AniList call, a poll that finds genuinely new activity triggers `reconcile_watch_progress`
+  (two more calls, not a per-season sweep — `fetch_viewer_id` is cached, `fetch_my_anime_list` is
+  one call regardless of list size), so 4 minutes is safe. New/updated tests in
+  `test_ops_scheduler.py`/`test_ops_lcars_client.py`/`test_ops_config.py`, 712 passed, `ruff
+  check` clean (a real miss on the first push — import ordering — caught by CI, fixed in a
+  follow-up commit before re-tagging).
+
+  Also flipped BUILD_PLAN.md's B.5.1 to `[x]`: production logs now show 36 real Sonarr/Radarr
+  webhook hits over ~30 hours, cross-checked against actual correct `episode`/`show` DB writes,
+  not another synthetic Test payload. And B.11's stale parent checkbox — every lettered sub-item
+  (a/c/d/e/f/g) was already `[x]` and confirmed live, the parent just never got flipped.
+
+  Tagged `v0.1.12`, GHCR build/publish confirmed green, deployed to the `tiny` host (`lcars` and
+  `ops` share one image) via `docker compose pull && up -d`. Both containers came back healthy;
+  `ops` briefly logged connection-refused on its very first tick of every loop (raced `lcars`'s
+  own startup by a few seconds, same broad-except/retry-next-interval shape every loop already
+  has for exactly this) then recovered clean on the next tick. First real `anilist_activity` tick
+  (09:29:57Z) found **7 new AniList activities** and ran a real reconcile — the checkpoint
+  (`anilist_activity_checkpoint`) advanced to match, confirmed directly in the DB, not just
+  trusted from the log line. This is almost certainly this session's own earlier backlog of real
+  AniList corrections (the 87-id cleanup, the 15-show watched-episode fixes) finally being picked
+  up automatically for the first time, rather than anything needing a second look — no
+  `pending_review` spike or anything else that looked wrong, but flagging the "why 7" reasoning
+  here rather than asserting it with more confidence than actually checked.
+
+  B.5.2 (the AniList write-tier priority queue) not started yet — see the "Ideas / design" section
+  below for what was found investigating LCARS's existing AniList write path
+  (`_push_show_status`/`_push_show_score`/`_push_season_score` in `resolvers.py`) before designing
+  it, and why building B.5.2 tonight against zero real B.5.3 cadence data was deliberately
+  deferred in favor of shipping B.5.3 first and letting it run.
+
 - [x] **HELL MODE S2 (and 14 others) showed watched episodes AniList never confirmed — a "double
   check" pass across the whole library, all applied** (2026-08-15). User's report: HELL MODE
   season 2 showed every episode watched in Data, contradicting AniList (the declared source of
@@ -500,6 +538,30 @@
       original writeup.
 
 # Ideas / design
+
+- [ ] **B.5.2's real scope, narrowed after reading LCARS's existing AniList write path**
+  (2026-08-15, before any B.5.2 code was written) — traced `setStatus`/`setScore`/
+  `setSeasonScore` in `resolvers.py`: each already calls `_push_show_status`/`_push_show_score`/
+  `_push_season_score` **synchronously, inline, today** — a real blocking `SaveMediaListEntry`
+  call to AniList (and a second one to MAL, `_push_mal_*`) per linked season, before the mutation
+  even returns to its caller. Episode-*watched* status is not part of this at all — grepped, no
+  call site pushes it — matches the standing §6.8 comment: episode-watch-status is Data's own
+  permanent direct-to-AniList exception, never routed through LCARS.
+  - So B.5.2's "Tier 1: writes" is smaller than originally sketched: score/status pushes only,
+    fired on explicit user action a handful of times a day, not a high-frequency path. With one
+    process and no real concurrency, tier-1 traffic essentially never contends with tier-2 (the
+    B.5.3 activity poll) at the shared 2.1s AniList throttle — the "priority queue" framing
+    overstates what's actually needed.
+  - The real, worth-having win is smaller and different: (1) resolvers currently block on N×2
+    real HTTP round-trips (AniList + MAL, per linked season) before returning — a multi-season
+    show's `setStatus` call is genuinely slow today; (2) rapid successive edits to the same
+    season each fire their own push rather than coalescing into one.
+  - If/when this gets built: the pending-write buffer **must be DB-backed**, not in-memory — an
+    in-memory queue silently loses a queued push on every container restart, a new silent-data-
+    loss path in the exact session that spent hours cleaning up silent data loss elsewhere.
+  - **Deliberately not built tonight** — B.5.3 was wired into a real scheduler loop instead (see
+    the "Bugs" section entry above) and deployed first, so this narrower design gets real B.5.3
+    cadence/contention data to build against instead of zero.
 
 - [ ] **LiveChart.me's headlines RSS as a possible forward-looking delay-announcement source** —
   raised 2026-08-13, prompted by wanting confirmation that animeschedule.net's RSS (B.5) could
