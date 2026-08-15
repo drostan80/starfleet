@@ -831,6 +831,13 @@
   gap, deliberately not closed during B.12 since LCARS's `addShow` always assumes an episodic
   show (Data has no Radarr/movie path), which would be wrong for anything `aa` adds that's
   actually a movie. Needs its own scoping, not a rushed fix. See BUILD_PLAN.md's B.12 entry.
+  **User's correction, 2026-08-15 — wrong framing, not a bridge to build**: `aa`
+  (`action_add_to_anilist_only`, `~/repos/data/src/data/app.py`) itself needs to go away, not
+  gain an LCARS-write step. LCARS is the single source of truth for every tracked show — a show
+  existing in LCARS with no Sonarr link is an ordinary, unremarkable state, not a special case
+  needing its own bypass pathway (AniList-only tracking existed as a distinct concept in aniq
+  because aniq itself had no single database — LCARS replaces that need directly). Not deleted
+  tonight — logged with the corrected understanding, actual removal not yet done.
 - [ ] move all secret and password to a safer place
 - [ ] make sure to design the ui for html client well
 - [ ] have html client a login /password thing keep safe
