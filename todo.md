@@ -311,7 +311,7 @@
   auto-touched — its own claim may still be contested, left for `reconcile_watch_progress`'s own
   next pass or a separate human look. 716 tests pass, deployed `v0.1.15`.
 
-- [ ] **AniList's `airingSchedule` can reflect a region-scoped (overseas-only) delay while the real
+- [x] **AniList's `airingSchedule` can reflect a region-scoped (overseas-only) delay while the real
   Japan broadcast airs on the original date — B.4's reconciliation has no way to tell the
   difference and picked the wrong one.** Reported 2026-08-15 for "Draw This, Then Die!" ("Kore
   Kaite Shine", anilist id 188525) episode 7: user confirmed it actually released in Japan
@@ -341,7 +341,18 @@
   contradicting AniList's still-active delay. We've only ever looked at animeschedule.net's RSS
   feed (a dead end); we've never queried its real schedule API at all. Worth a real look as a
   second, independent schedule source to cross-check AniList against specifically for delay
-  disputes — not designed or built, just found and logged.
+  disputes — not designed or built, just found and logged. Cross-referenced in "Ideas / design"
+  below as its own follow-up, not required for the fix that landed tonight.
+  **Fixed 2026-08-15, narrower than the animeschedule-API idea above and doesn't need it**:
+  `_reconcile_air_dates` (`metadata.py`) now refuses to let an AniList-sourced date overwrite an
+  episode with a *later* one when Sonarr already has a real file downloaded for it at the current
+  date — "aired and downloaded" can never legitimately become "hasn't aired yet," so that specific
+  direction is never trusted blindly, a `pending_review` opens instead. Checked against Frontier
+  Lord's own real case first (AniList *earlier* than Sonarr, correctly still applies) to make sure
+  the guard is direction-specific and doesn't regress the case B.4 exists for — two new tests cover
+  both directions explicitly. Draw This, Then Die! episode 7 itself corrected via
+  `setEpisodeAirDate` (source now `manual`, permanently protected, same resolution Frontier Lord
+  got). 718 tests pass, deployed `v0.1.16`.
   8/10) show unwatched in Data despite being genuinely watched; marking them from Data appears
   to do nothing** — reported 2026-08-13, late in the same session as the B.11f calendar-staleness
   fix earlier tonight. Diagnosed as far as server-side data can go; the actual display bug needs
@@ -608,6 +619,21 @@
       original writeup.
 
 # Ideas / design
+
+- [ ] **animeschedule.net's real per-show/timetable JSON API (`animeschedule.net/api/v3`, no key
+  required) as a second, independent schedule source** — found 2026-08-15 while diagnosing the
+  "Draw This, Then Die!" region-scoped-delay bug (see "Bugs" above). We've only ever looked at
+  animeschedule.net's *RSS* feed (a confirmed dead end, post-release-only, `bf67933`) — never its
+  real API, which (`GET /anime/{slug}`, `GET /timetables/{airType}`) already correctly showed
+  episode 8 as "Upcoming" for that show, i.e. already knew episode 7 had aired, while AniList's own
+  `airingSchedule` was still showing the stale overseas delay. The fix that actually landed
+  tonight (the "aired-and-downloaded can't un-air" guard in `_reconcile_air_dates`) is narrower and
+  didn't need this — it only protects an episode Sonarr's already downloaded. This API would go
+  further: a genuine second opinion *before* a file exists, potentially catching a delay dispute
+  (or confirming a real one) days earlier than a downloaded-file signal ever could. Not designed or
+  built — just found, and worth a real look given `§6.7`'s own priority order already ranks
+  animeschedule.net above AniList in principle, it just doesn't have a real schedule-API source
+  feeding that rank yet, only the RSS-derived per-episode-match path B.5 already built.
 
 - [ ] **B.5.2's real scope, narrowed after reading LCARS's existing AniList write path**
   (2026-08-15, before any B.5.2 code was written) — traced `setStatus`/`setScore`/
