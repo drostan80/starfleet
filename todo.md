@@ -749,6 +749,61 @@
     the "Bugs" section entry above) and deployed first, so this narrower design gets real B.5.3
     cadence/contention data to build against instead of zero.
 
+- [ ] **The complete LCARS→AniList write-mirror function set — user's own framing: "when we
+  will build this we will build all those functions first"** (2026-08-15, follow-on from the
+  B.5.2 scoping above). If LCARS is the source of truth and AniList is anime's mirror, LCARS
+  needs the *complete* set of functions to actually keep that mirror current, not just the two
+  that already happen to exist. Checked function-by-function against real code/real AniList data
+  before writing this list, not assumed:
+  - **Already working**: score changes (`setScore`/`setSeasonScore` → `_push_show_score`/
+    `_push_season_score`); status changes on an already-linked show (`setStatus` →
+    `_push_show_status`).
+  - **Missing, confirmed by reading the actual resolvers**:
+    1. **Status at creation** — `shows.create_show()` (what `addShow` calls) never pushes the
+       show's initial status; it sits LCARS-local until `setStatus` happens to be called again
+       with a value.
+    2. **Episode watched** — `markEpisodeRangeWatched` pushes nothing to AniList.
+    3. **Episode un-watched** — `deleteWatchEvent` pushes nothing either. Confirmed both
+       directions specifically, not just assumed symmetric.
+    4. **Delete from AniList's list** — LCARS already has the exact guarded flow this needs to
+       mirror (`requestHardDelete` → 24h delay → `confirmHardDelete` with retype-title-to-
+       confirm, or `cancelHardDelete`, `resolvers.py`) but `confirmHardDelete` is purely local
+       right now, no AniList call anywhere in it. Needs AniList's own `DeleteMediaListEntry`,
+       keyed by the *list entry's* id (not the media id) — a lookup step none of the other
+       pushes need. A split-cour show has multiple AniList entries (one per linked season) —
+       deletion has to loop every one, same shape `_push_show_status` already loops seasons for.
+  - **Rewatch (`REPEATING` status / AniList's own `repeat` count)** — user's call: build it
+    anyway, even though nothing uses it yet (no LCARS-side reverse-mirror exists to *read*
+    AniList's REPEATING back in) — "good to have" once built, not wasted work. Supersedes §6.8's
+    standing "rewatching never auto-pushes REPEATING" note — that note stands until this is
+    actually built, not deleted outright.
+  - **`startedAt`/`completedAt` — user's own call: a definite must-have, and a real LCARS write,
+    not a free side-effect of AniList's own behavior.** Checked directly against the user's real
+    AniList list before concluding anything (1,057 real completed entries, not assumed): several
+    fully-completed shows (24/24, 25/25, 13/13 episodes) have `startedAt: null` — AniList does
+    **not** reliably auto-fill it from progress reaching 1. Four completely unrelated shows share
+    the *exact same* `completedAt` (2023-01-09) — that's the date of whatever bulk write touched
+    them, not each show's real finish date; `completedAt` looks stamped with "whenever the API
+    call happened," not derived from real watch history. **Conclusion: the user's original
+    assumption (AniList auto-sets these) is wrong** — if LCARS doesn't explicitly push them,
+    they stay null or end up bulk-dated-wrong, the opposite of the point. Real design, per the
+    user's own spec:
+    - New `season` columns: `started_at`, `completed_at` (both nullable dates).
+    - Autofill rule: `started_at` = the date of that season's first-ever watched episode;
+      `completed_at` = the date the season's status became `completed`, or the date of its last
+      episode's watch event if that's more accurate — exact precedence not yet settled, decide
+      when building.
+    - **Historical backfill needed, not just go-forward capture**: every show watched before
+      LCARS existed has no local watch-event history to derive these from at all — those need to
+      be pulled *from* AniList (read, not written) as a one-time import, the reverse direction
+      from everything else in this list. Overlaps with `BUILD_PLAN.md`'s already-parked PC.2
+      ("One-time historical imports... AniList data") — same task, now with a concrete field
+      target, not just "import history" in the abstract.
+  Not designed in implementation detail (column types, exact push-trigger wiring, the
+  `DeleteMediaListEntry` lookup mechanics) and not built — this is the complete function
+  enumeration to build from, per the user's own explicit instruction, before any of B.5.2's write
+  path gets implemented.
+
 - [ ] **LiveChart.me's headlines RSS as a possible forward-looking delay-announcement source** —
   raised 2026-08-13, prompted by wanting confirmation that animeschedule.net's RSS (B.5) could
   eventually catch a schedule delay like "Draw This, Then Die!" episode 7's (a full week later

@@ -4390,7 +4390,13 @@ this order because each step is provably independent of the next
       reason to touch it opportunistically.
 - [ ] **B.5.2 — AniList request scheduler: the throttle becomes a
   priority queue.** **Build order reversed, 2026-08-13, user's own
-  call**: B.5.3 goes first. B.5.2 is well-understood plumbing regardless
+  call**: B.5.3 goes first. **2026-08-15 — before writing any of this
+  queue's own code, build the complete function set it will actually
+  carry: the full LCARS→AniList write-mirror spec (create-status,
+  episode-watched/un-watched, delete-from-list, rewatch, startedAt/
+  completedAt) is in `todo.md`'s "Ideas / design" section, right after
+  this same entry's own narrowed-scope note — user's own explicit
+  instruction, build all of those functions first.** B.5.2 is well-understood plumbing regardless
   of what feeds it; B.5.3's real API cost/cadence is the actual unknown,
   and sizing this queue's tiers around a guess about that would mean
   redesigning it once real numbers exist anyway. B.5.3 gets built first
