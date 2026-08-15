@@ -14,8 +14,8 @@ from ops.lcars_client import LcarsError
 from ops.scheduler import (
     _availability_loop,
     _loop,
-    run_animeschedule_once,
     run_anilist_activity_once,
+    run_animeschedule_once,
     run_availability_once,
     run_catalog_presence_once,
     run_daily_and_weekly_once,
