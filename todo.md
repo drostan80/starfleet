@@ -842,6 +842,19 @@
 - [ ] make sure to design the ui for html client well
 - [ ] have html client a login /password thing keep safe
 - [ ] does the html client use a html/browser player or local one? my thought is local first then browser base but is it feasible?
+  **Discussed 2026-08-15, options only, not designed — explicitly deferred**: four real options
+  surfaced — (1) native mpv launch (Data's own approach, only works when Holodeck's opened from
+  the media machine itself), (2) plain browser `<video>` streaming the raw file (fails on a lot
+  of the real library — HEVC/FLAC/AC3/soft ASS subs aren't natively browser-playable), (3) real
+  server-side transcoding, Jellyfin/Plex-shaped (a full media-server build from scratch), (4)
+  delegate to the `jellyfin`/`plex` containers already running on `tiny` (no player to build at
+  all — map an LCARS episode to its Jellyfin/Plex item id, deep-link or embed their existing web
+  player, which already solves transcoding/subtitles/remote access/mobile). **User's own
+  direction**: both, not either — local mpv when on a local machine (own CIF/media mount needed
+  per machine, or configured each time), Jellyfin (preferred over Plex) as the remote/tablet
+  path. Holodeck's UI should surface both explicitly — a Plex logo and an mpv/local-launch button
+  side by side, user picks per-session. Real design work (the id-crosswalk, detecting "am I
+  local," the actual UI) not started — revisit later.
 - [x] `pending_review` surface built in Data 2026-08-12 (B.17/B.18, BUILD_PLAN.md:
   `~/repos/starfleet` v0.1.6 `season(id:)` query + `~/repos/data` `a6cb001`'s status-bar badge
   and `V` review screen), used against production the same day (B.19/B.20: fixed a real
