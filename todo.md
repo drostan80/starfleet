@@ -256,7 +256,7 @@
   `210199` resolutionNote was a mistargeted copy-paste (that id is The Fable's, applied correctly
   there instead) and is now moot.
 
-- [ ] **`resolvePendingReview` never actually applies anything — the 68-row `anilist_id_conflict`
+- [x] **`resolvePendingReview` never actually applies anything — the 68-row `anilist_id_conflict`
   batch has zero real fixes applied, despite 30 being marked "resolved."** Found 2026-08-15 while
   double-checking the user's overnight review pass on the 68-row collision backlog (`f11ad93`).
   Checked directly against production: **every one of the 68 seasons still holds its original
@@ -295,6 +295,21 @@
   apply anything) is unchanged and will bite the same way the next time this field type gets a real
   conflict — the "worth a real design fix later" note above still stands, not closing this item for
   that reason.
+
+  **Real design fix landed 2026-08-15** — not `resolvePendingReview` itself (that mutation is
+  correctly a no-op-on-data for the 4-of-5 review categories that already apply-then-flag, e.g.
+  `episode.air_date_utc`/`season.anilist_id` (fribb) — checked every category live against
+  production before designing anything, not assumed: those already write the value at the moment
+  the review opens, so a follow-up "apply" step would be actively wrong for them). The one real
+  trap is `anilist_id_conflict` specifically: genuinely flag-only, a human must separately call
+  `setSeasonMapping` to fix it, and nothing tied that fix back to the review. Found the existing
+  precedent already in this codebase — `applyShowMerge` (B.14) already resolves its own
+  `cross_service_merge` review as part of the same call — and gave `setSeasonMapping` the identical
+  shape: it now requires `RESOLVING_CLIENTS` (same restriction `resolvePendingReview`/
+  `applyShowMerge` already have) and auto-resolves every open review on that exact season, any
+  field, in the same transaction. A sibling season flagged in the same conflict pair isn't
+  auto-touched — its own claim may still be contested, left for `reconcile_watch_progress`'s own
+  next pass or a separate human look. 716 tests pass, deployed `v0.1.15`.
 
 - [ ] **AniList's `airingSchedule` can reflect a region-scoped (overseas-only) delay while the real
   Japan broadcast airs on the original date — B.4's reconciliation has no way to tell the
