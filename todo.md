@@ -1,5 +1,48 @@
 # Bugs
 
+- [x] **Applied 7 of the 30 resolved `anilist_id_conflict` reviews for real** (2026-08-15,
+  following up on the `resolvePendingReview` no-op finding just above/below): Akane-banashi,
+  Gushing Over Magical Girls, Sentenced to Be a Hero, KILL BLUE, I Left my A-Rank Party, Witch Hat
+  Atelier, The Ramparts of Ice — each season 2 given its real, AniList-verified id via
+  `setSeasonMapping` (verified live against AniList first: each id really is that show's "2nd
+  Season" entry, not just numerically distinct from the old value). Confirmed clean afterward: none
+  of these 7 reappear in a fresh `reconcileWatchProgress` conflict list. mal_id was carried forward
+  unchanged for all of them — not verified against the new anilist_id, a related but separate risk,
+  not checked tonight.
+  **7 more of the 14 attempted went sideways and taught something important**: A Star Brighter Than
+  the Sun, HOTEL INHUMANS, Jack-of-All-Trades — Party of None, Makeine, The Fable, and Tune In to
+  the Midnight Heart all *immediately* surfaced a brand-new collision the instant the "correct" id
+  was written — every single one of those 6 ids was already held by a completely separate, fully
+  tracked LCARS show, e.g. `s-fdggnd` ("Taiyou yori mo Mabushii Hoshi 2"), `s-4q3kzf` ("The Fable
+  2nd Season") — all created 2026-08-11 (the same bulk-operation date as the whole 68-row batch),
+  all pure-romaji-titled, AniList-only stubs with **zero episodes**, no tvdb link. **Same pattern as
+  the Dandadan/Head Start at Birth case the user flagged live** — these aren't id mistakes at all,
+  they're the *other* half of a duplicate-show pair: the real "season 2" already exists in LCARS as
+  its own separate stray show, correctly linked, just never merged into its parent. Writing the
+  "correct" id onto the parent's own season-2 slot doesn't fix that — it just gives the collision a
+  second, more confusing shape. **Left as-is, not reverted** — the id itself is genuinely correct on
+  the parent side now, and the stray twin has nothing to lose (0 episodes) either way; what's
+  missing is a real show-merge, which needs the same "confirm which side is the duplicate" human
+  judgment as Dandadan, not a mechanical id write. Queued for the walkthrough alongside Dandadan and
+  Head Start.
+  **The 8th case, 100 Girlfriends, was a genuine mistake on my part and was reverted**: applied
+  `172258` to season 3 (`s-57pz37`) per the user's resolutionNote, but `172258` turned out to
+  already belong to *this same show's own season 2* (`z-ff5ttj`) — pre-existing, never flagged,
+  because nothing else claimed it until my write did. Created a fresh same-show duplicate that
+  didn't exist a minute earlier. Reverted season 3 back to its original `200637` (still
+  cross-show-flagged against `s-nq9tq0`, unresolved, in the walkthrough pile) — nothing left broken,
+  but a real miss: I verified every id was a real, correctly-named AniList entry before writing it,
+  but never checked whether *another LCARS season already held it* first — exactly the write-time
+  gap already logged below as a known, unaddressed risk, fallen into live while fixing this exact
+  class of bug. Worth remembering for any future batch apply of this kind: cross-check the full
+  current season table for the candidate id, not just AniList and not just the row's own prior
+  value.
+  **Head Start at Birth, clarified live by the user, applied nowhere (nothing to apply)**: `185462`
+  is correctly the real show's (`s-rhfh33`) own season 2 — the stray `s-dh193t` ("HEAD START AT
+  BIRTH - Season 2", its own separate show) is the duplicate here, same shape as the 6 above. Its
+  `210199` resolutionNote was a mistargeted copy-paste (that id is The Fable's, applied correctly
+  there instead) and is now moot.
+
 - [ ] **`resolvePendingReview` never actually applies anything — the 68-row `anilist_id_conflict`
   batch has zero real fixes applied, despite 30 being marked "resolved."** Found 2026-08-15 while
   double-checking the user's overnight review pass on the 68-row collision backlog (`f11ad93`).
@@ -21,12 +64,13 @@
   certainly a copy-paste slip between two rows worked back-to-back, not a real proposal for Head
   Start at Birth. Caught only because nothing had been applied yet; would have created a *new*
   collision (both shows pointing at 210199) had `setSeasonMapping` been called on both as noted.
-  **Nothing applied and nothing broken tonight** — this is a "double-check before touching
-  anything" finding, not a live fix. Of the 30 resolved rows, all but 3 (DAN DA DAN season 3,
-  Frieren season 3, 100 Girlfriends season 3 — the cross-show pairs, still needing a real decision
-  on which side is the duplicate) have a `resolutionNote` distinct from the original id and could
-  be applied via `setSeasonMapping` as a mechanical next step once Head Start at Birth's real id is
-  confirmed. Not applied without the user's go-ahead — logged for the walkthrough instead.
+  **Update, same night**: the user confirmed Head Start at Birth's real answer (`185462` is
+  correct, already on the real show; the note above was the mistargeted one) and asked for the 14
+  distinct-note rows to be applied — done, see the entry above this one for the full result: 7
+  applied clean, 6 surfaced a pre-existing stray-duplicate-show collision instead of resolving
+  (left as-is, queued for the walkthrough), 1 (100 Girlfriends) was a genuine mis-apply, reverted.
+  DAN DA DAN and Frieren (`resolutionNote` == the original id, no real answer given) still
+  untouched, still open.
   **Worth a real design fix later**: either give `resolvePendingReview` a field-specific apply hook
   for `anilist_id_conflict` (call `setSeasonMapping` with the note's id as part of the same
   resolve), or make the review screen visibly two-step so a resolved-but-unapplied state can't look
