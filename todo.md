@@ -613,8 +613,31 @@
   writing a real second entry to AniList itself. Fixed with a live LCARS search fallback
   (matched against the show's own tvdb id before trusting it) plus real user-facing messages
   on every failure path. `~/repos/data` commit `744c6ff`.
-- [ ] make sure that dropping a show in data writes to LCARS but also triggers to update status on anilist, and un track on sonarr/radarr...
-- [ ] above is not fully solved, tomb raider king, chainsmoker cat, maybe other, shows that were dropped are in data's calendar, and have been "undropped" (maybe) this needs to be checked, tho I may fix this by dropping shows from data's interface
+- [x] make sure that dropping a show in data writes to LCARS but also triggers to update status on anilist, and un track on sonarr/radarr...
+- [x] above is not fully solved, tomb raider king, chainsmoker cat, maybe other, shows that were dropped are in data's calendar, and have been "undropped" (maybe) this needs to be checked, tho I may fix this by dropping shows from data's interface
+  **Checked directly against production, 2026-08-15, both real questions answered with evidence,
+  not code-reading alone**:
+  - **Drop → LCARS/AniList/Sonarr propagation**: already correctly wired. `_move_episode_to`
+    (`~/repos/data/src/data/app.py`) queues an LCARS status push (§6.8 — LCARS owns status for
+    every show now, which itself synchronously pushes to AniList via `_push_show_status`,
+    `resolvers.py`) plus, for anime, Data's own direct AniList write — and for `dropped`
+    specifically, an *interactive* prompt to unmonitor the matching Sonarr season
+    (`_prompt_unmonitor`). Confirmed live for both named shows: `status_change` history shows
+    exactly one real transition each, `planned` → `dropped`, 2026-08-12, never reverted since —
+    and both are `monitored: false` at both the series and season level in Sonarr right now,
+    confirmed via a direct Sonarr API call, not assumed. The propagation this bullet asked about
+    already works, for these two real examples.
+  - **"Undropped" theory — checked and not what's happening at the data layer**: both shows are
+    still `status: dropped` in LCARS right now, single clean history each, Sonarr still correctly
+    unmonitored. Nothing server-side ever reverted either show. If Data's calendar is still
+    showing them, it's the exact same class of bug as the World Is Dancing/Forsaken Saintess
+    display issue logged above (LCARS genuinely correct, Data's own calendar not reflecting it) —
+    `_is_hidden_from_calendar`'s `lcarsStatus` correlation depends on `_patch_from_lcars` having
+    actually reached that show in some queried window since the last restart; fail-open (`status
+    is None` → don't hide) was designed for "not yet correlated on first load," not distinguished
+    from "never correlated at all." A plausible mechanism, not confirmed live — diagnosing further
+    needs Data's own running state the same way the World Is Dancing case did. Not a re-drop
+    failure at least — that part is now ruled out with real evidence, not just "maybe."
 - [x] hitting enter to watch a show: nothing happens, resolved path not found, same as before and
   I did warn you, since the path is on the remote server data need to know how to access it
   locally, the directory is mounted so path can be mapped this is what was done for aniq
