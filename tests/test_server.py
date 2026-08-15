@@ -1919,8 +1919,14 @@ async def test_season_split_guard_stays_quiet_once_the_same_mismatch_is_resolved
     # about not-reopening. Setting manual_override afterward (real
     # sequence: Tonbo!/Chitose were both fixed this exact way, live,
     # the same day) doesn't retroactively touch that already-open
-    # entry; a human still resolves it explicitly, same as any other
-    # pending_review.
+    # entry directly — but 2026-08-15: setSeasonMapping now
+    # auto-resolves any of *this season's own* open reviews as part of
+    # the same call (real gap found and fixed the same night —
+    # resolvePendingReview alone never applied anything, so a human
+    # calling it after fixing the mapping by hand was a separate,
+    # easy-to-forget step; see setSeasonMapping's own docstring), so
+    # this pre-existing review is resolved by the call below, not left
+    # for a later explicit resolvePendingReview.
     manual = await gql(
         client,
         "mutation($id: ID!) {"
@@ -1932,15 +1938,13 @@ async def test_season_split_guard_stays_quiet_once_the_same_mismatch_is_resolved
     assert manual["setSeasonMapping"]["manualOverride"] is True
 
     pre_existing = [
-        r for r in await _pending_reviews_for(client, season_id) if r["field"] == "anilist_id"
+        r
+        for r in await _pending_reviews_for(client, season_id, include_resolved=True)
+        if r["field"] == "anilist_id"
     ]
     assert len(pre_existing) == 1  # confirms the guard did fire once, pre-manual_override
-    await gql(
-        client,
-        "mutation($id: ID!) { resolvePendingReview(id: $id) { id } }",
-        {"id": pre_existing[0]["id"]},
-        headers=auth_headers("data"),
-    )
+    assert pre_existing[0]["resolvedAt"] is not None  # auto-resolved by setSeasonMapping itself
+    assert pre_existing[0]["resolvedByClient"] == "DATA"
 
     # Two more refreshes — same "doesn't reopen" shape as the manual/
     # animeschedule air-date tests above, not just a single check.
@@ -4650,18 +4654,22 @@ async def _link_tvdb(client, show_id, tvdb_id):
     )
 
 
-async def _pending_reviews_for(client, entity_id):
+async def _pending_reviews_for(client, entity_id, include_resolved=False):
     reviews = await gql(
         client,
         """
-        query {
-          pendingReviews {
+        query($includeResolved: Boolean!) {
+          pendingReviews(includeResolved: $includeResolved) {
             edges {
-              node { id entityType entityId field source previousValue proposedValueChain }
+              node {
+                id entityType entityId field source previousValue proposedValueChain
+                resolvedAt resolvedByClient resolutionNote
+              }
             }
           }
         }
         """,
+        {"includeResolved": include_resolved},
         headers=auth_headers(),
     )
     return [

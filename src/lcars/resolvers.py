@@ -2144,8 +2144,35 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
     multiple AniList/MAL entries, one per season, so this is keyed on
     (show_id, season_number) rather than show_id alone. Upserts, same
     as the mutation it replaces: no other mutation creates a season
-    row first (A.8's future on-demand fetch is what will, normally)."""
+    row first (A.8's future on-demand fetch is what will, normally).
+
+    **Auto-resolves this season's own open `pending_review` entries,
+    added 2026-08-15** — real, evidenced gap: this is *the* mutation a
+    human uses to act on a reviewed `season`-level discrepancy
+    (`anilist_id`/`anilist_id_conflict`/etc.), but it never touched
+    `pending_review` at all, so a corrected mapping and a "reviewed"
+    review were two entirely separate, easy-to-forget steps — real
+    confusion this same night, a batch of `anilist_id_conflict`
+    reviews got marked resolved via `resolvePendingReview` alone,
+    which (also confirmed this session, see that resolver's own
+    docstring) never applies anything, so the underlying data was
+    never actually fixed by that call. Requires `RESOLVING_CLIENTS`,
+    same restriction `resolvePendingReview`/`applyShowMerge` already
+    have (§5.6) — this genuinely is resolving a reviewed value, not a
+    routine automated write. Same "resolves as part of the same call"
+    shape `applyShowMerge` (B.14) already established for its own
+    review category — reused, not invented fresh. Only *this* season's
+    own reviews (whatever their `field`) — a sibling season that was
+    also flagged as part of the same `anilist_id_conflict` isn't
+    touched here (its own claim may or may not still be contested;
+    that's for `reconcile_watch_progress`'s own next pass, or a
+    separate human look, not assumed fixed by this call)."""
     conn = db.get_connection()
+    client = require_client(info)
+    if client not in RESOLVING_CLIENTS:
+        raise GraphQLError(
+            f"{client!r} cannot set a season mapping — only {sorted(RESOLVING_CLIENTS)} can (§5.6)"
+        )
     _require_show(conn, show_id)
     now = util.now_utc_iso()
     existing = conn.execute(
@@ -2170,6 +2197,13 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
             " VALUES (?, ?, ?, ?, ?, 'manual', 1, 1, ?, ?)",
             (season_id, show_id, season_number, anilist_id, mal_id, now, now),
         )
+    conn.execute(
+        "UPDATE pending_review"
+        " SET resolved_at = ?, resolved_by_client = ?,"
+        "     resolution_note = COALESCE(resolution_note, 'auto-resolved by setSeasonMapping')"
+        " WHERE entity_type = 'season' AND entity_id = ? AND resolved_at IS NULL",
+        (now, client, season_id),
+    )
     conn.commit()
     return season_mapping.get_season(conn, season_id)
 
