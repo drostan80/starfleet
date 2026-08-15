@@ -48,6 +48,7 @@ recorded.
 
 import json
 from collections.abc import Callable
+from datetime import datetime
 
 from lcars import (
     anilist_client,
@@ -760,6 +761,33 @@ def _fetch_sonarr(conn, show: dict) -> None:
     if series is None:
         return  # not (yet) in Sonarr's own library — not an error, §5.1
 
+    # 2026-08-15 — Ascendance of a Bookworm, real live bug, user-caught:
+    # Sonarr/TVDB tracks a whole multi-part franchise as one flat series
+    # while AniList splits it into a separate media entry (and therefore
+    # a separate LCARS show) per part. §3's "the internal database is
+    # the source of truth; AniList/Fribb/Sonarr... their classifications
+    # are mapped in, never authoritative over internal behavior" means
+    # this show's raw Sonarr numbering must never get dumped wholesale
+    # into whichever one show happens to hold this tvdb link the moment
+    # more than one LCARS show shares it — that's exactly what happened
+    # here before this fix: every episode, including the currently-
+    # airing part's, landed under the first (and by then long-finished)
+    # part, invisible in Data. See _fetch_sonarr_multi_show's own
+    # docstring for the full routing rule this delegates to instead. The
+    # overwhelmingly common case (exactly one show holds this tvdb id)
+    # falls straight through the unchanged path below — this check costs
+    # one indexed lookup and changes nothing else about it.
+    sibling_ids = [
+        row["show_id"]
+        for row in conn.execute(
+            "SELECT show_id FROM show_external_id WHERE service = 'tvdb' AND external_id = ?",
+            (tvdb_id_str,),
+        ).fetchall()
+    ]
+    if len(sibling_ids) > 1:
+        _fetch_sonarr_multi_show(conn, sibling_ids, episodes)
+        return
+
     # A.20 (2026-08-09 consolidation pass) — real gap found in the audit:
     # this function used to insert `episode` rows for whatever season
     # numbers Sonarr reported without ever creating the corresponding
@@ -851,6 +879,189 @@ def _fetch_sonarr(conn, show: dict) -> None:
     # else here — not a separate background pass.
     _derive_episode_numbering(conn, show["id"], series, episodes)
     _synthesize_absolute_numbers(conn, show["id"])
+
+
+_MULTI_SHOW_MAX_CONTINUATION_GAP_DAYS = 45
+
+
+def _fetch_sonarr_multi_show(conn, sibling_ids: list[str], episodes: list[dict]) -> None:
+    """2026-08-15 — one Sonarr/tvdb id shared by more than one LCARS
+    show (a franchise TVDB tracks as one flat series but AniList splits
+    into separate parts, one LCARS show per part — Ascendance of a
+    Bookworm's four parts, all sharing tvdb 366263, is the real case
+    that found this). §3's "the internal database is the source of
+    truth... mapped in, never authoritative" means each episode must
+    route to whichever sibling's own already-filed episode history it
+    actually continues — decided from LCARS's own data — never by
+    writing Sonarr's raw numbering into whichever show triggered this
+    fetch, which is the exact bug this function replaces.
+
+    Routing rule, per not-yet-filed regular episode: each sibling's own
+    most-recently-aired already-filed episode is that sibling's
+    "anchor". The new episode routes to whichever sibling has the
+    closest *preceding* anchor (`anchor_air_date <= this episode's
+    air_date`), provided the gap is within
+    `_MULTI_SHOW_MAX_CONTINUATION_GAP_DAYS` — comfortably above a
+    normal weekly-airing gap, comfortably below the real multi-month/
+    multi-year hiatuses this project has now seen between two parts of
+    the same franchise (Bookworm's own Part 3 -> Part 4 gap was ~4
+    years). A gap past that threshold, or no sibling with any anchor at
+    all yet (the very first time this franchise's split is discovered —
+    that split still has to be done by a human once, same as tonight's
+    real fix), is never guessed at: a `pending_review` opens instead
+    (§3 principle 1 — apply what's confident, flag what isn't, never
+    silently misfile). That review path is the one behavior change from
+    the old code, which had no threshold and no review path at all — it
+    just wrote everything into whichever show was being processed.
+
+    Requires `absoluteEpisodeNumber` on every episode this function
+    considers — the one stable, source-reported identity a split
+    franchise's episodes carry across LCARS's own per-show renumbering
+    (season+episode numbers restart at 1 in each sibling, so they can't
+    recognize "have I already filed this one" the way the single-show
+    path's own `existing` lookup does). An episode without one is left
+    alone entirely — same "genuinely can't do anything" no-op every
+    other branch in this module gives a show with no tvdb id at all.
+    Season 0 (specials) is excluded outright, same reasoning at a
+    different scale: no reliable per-episode continuity signal exists
+    for a special the way a regular episode's air date gives one — a
+    deliberate, documented scope boundary, not a silent gap.
+
+    Episodes already filed under some sibling (found by `absolute_number`
+    match) are treated like the single-show path's own `existing`
+    branch: `season_id` backfilled in place when missing, never
+    re-inserted, never moved."""
+    regular_episodes = sorted(
+        (
+            ep
+            for ep in episodes
+            if ep.get("seasonNumber") not in (None, 0)
+            and ep.get("episodeNumber") is not None
+            and ep.get("absoluteEpisodeNumber") is not None
+        ),
+        key=lambda ep: ep["absoluteEpisodeNumber"],
+    )
+
+    now = util.now_utc_iso()
+    touched_shows: set[str] = set()
+
+    def _anchors() -> dict:
+        # Recomputed fresh on every call rather than once up front — a
+        # new episode routed earlier in this same pass must extend its
+        # sibling's own anchor immediately, so a later new episode in
+        # the same fetch continues from it correctly instead of every
+        # new episode competing against the same stale anchor.
+        result = {}
+        for sid in sibling_ids:
+            row = conn.execute(
+                "SELECT season, episode, air_date_utc, absolute_number FROM episode"
+                " WHERE show_id = ? AND air_date_utc IS NOT NULL"
+                "   AND absolute_number IS NOT NULL"
+                " ORDER BY absolute_number DESC LIMIT 1",
+                (sid,),
+            ).fetchone()
+            if row is not None:
+                result[sid] = dict(row)
+        return result
+
+    placeholders = ",".join("?" for _ in sibling_ids)
+    for ep in regular_episodes:
+        abs_number = float(ep["absoluteEpisodeNumber"])
+        existing = conn.execute(
+            f"SELECT id, show_id, season_id FROM episode"
+            f" WHERE show_id IN ({placeholders}) AND absolute_number = ?",
+            (*sibling_ids, abs_number),
+        ).fetchone()
+        if existing is not None:
+            if existing["season_id"] is None:
+                season_row = conn.execute(
+                    "SELECT id FROM season WHERE show_id = ? AND season_number = ?",
+                    (existing["show_id"], ep["seasonNumber"]),
+                ).fetchone()
+                if season_row is not None:
+                    conn.execute(
+                        "UPDATE episode SET season_id = ? WHERE id = ?",
+                        (season_row["id"], existing["id"]),
+                    )
+            touched_shows.add(existing["show_id"])
+            continue
+
+        air_date = ep.get("airDateUtc")
+        if air_date is None:
+            pending_review.open_or_extend(
+                conn,
+                "show",
+                sibling_ids[0],
+                "sonarr_multi_show_routing",
+                "sonarr",
+                None,
+                f"absolute episode {abs_number}: no air date, cannot route across "
+                f"{len(sibling_ids)} sibling shows sharing one tvdb id",
+            )
+            continue
+
+        anchors = _anchors()
+        best_show_id = None
+        best_gap_days = None
+        for sid, anchor in anchors.items():
+            if anchor["air_date_utc"] > air_date:
+                continue
+            gap_days = (
+                datetime.fromisoformat(air_date) - datetime.fromisoformat(anchor["air_date_utc"])
+            ).total_seconds() / 86400.0
+            if gap_days > _MULTI_SHOW_MAX_CONTINUATION_GAP_DAYS:
+                continue
+            if best_gap_days is None or gap_days < best_gap_days:
+                best_gap_days = gap_days
+                best_show_id = sid
+
+        if best_show_id is None:
+            pending_review.open_or_extend(
+                conn,
+                "show",
+                sibling_ids[0],
+                "sonarr_multi_show_routing",
+                "sonarr",
+                None,
+                f"absolute episode {abs_number} ({air_date}) doesn't continue any of "
+                f"{len(sibling_ids)} sibling shows' own episode history within "
+                f"{_MULTI_SHOW_MAX_CONTINUATION_GAP_DAYS} days — possibly a new part with "
+                "no LCARS show yet, needs a human look",
+            )
+            continue
+
+        anchor = anchors[best_show_id]
+        new_episode_number = anchor["episode"] + 1
+        season_row = conn.execute(
+            "SELECT id FROM season WHERE show_id = ? AND season_number = ?",
+            (best_show_id, anchor["season"]),
+        ).fetchone()
+        episode_id = ids.generate_id(conn, "e")
+        conn.execute(
+            "INSERT INTO episode"
+            " (id, show_id, season, season_id, episode, kind, absolute_number,"
+            "  air_date_utc, air_date_source, air_date_raw_sonarr, runtime_minutes,"
+            "  created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, 'regular', ?, ?, 'sonarr', ?, ?, ?, ?)",
+            (
+                episode_id,
+                best_show_id,
+                anchor["season"],
+                season_row["id"] if season_row is not None else None,
+                new_episode_number,
+                abs_number,
+                air_date,
+                air_date,
+                ep.get("runtime"),
+                now,
+                now,
+            ),
+        )
+        touched_shows.add(best_show_id)
+
+    conn.commit()
+    for sid in touched_shows:
+        _synthesize_absolute_numbers(conn, sid)
 
 
 def _synthesize_absolute_numbers(conn, show_id: str) -> None:

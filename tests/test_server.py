@@ -1353,6 +1353,187 @@ async def test_sonarr_fetch_skips_season_zero_entirely(client, monkeypatch):
     assert season_reviews == [], f"season 0 should generate no review noise: {season_reviews}"
 
 
+# --- multi-show Sonarr routing (2026-08-15, Ascendance of a Bookworm) -------
+
+
+def _abs_ep(season, number, absolute, air_date):
+    return {
+        "seasonNumber": season,
+        "episodeNumber": number,
+        "absoluteEpisodeNumber": absolute,
+        "airDateUtc": air_date,
+        "runtime": 24,
+    }
+
+
+async def test_sonarr_fetch_routes_new_episode_to_the_sibling_it_continues_not_the_trigger(
+    client, monkeypatch
+):
+    """The real bug, reproduced: two LCARS shows share one tvdb id.
+    Refreshing via the *second* show must still route a continuing
+    episode to the *first* show's own stream, by air-date continuity —
+    never dump it into whichever show happened to trigger the fetch."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+
+    show_a = await add_show(client, titleRomaji="Part 1", trackingSpace="TV")
+    show_b = await add_show(client, titleRomaji="Part 2", trackingSpace="TV")
+
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show_a["id"], "externalId": "9001", "url": "https://x"},
+        headers=auth_headers(),
+    )
+    fake = _FakeSonarrClient(
+        series={"id": 42},
+        episodes=[_abs_ep(1, 1, 1, "2020-01-01T00:00:00Z")],
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show_a["id"]},
+        headers=auth_headers(),
+    )
+    # Show A alone holds the tvdb id so far — single-show path, establishes
+    # its own real anchor (absolute 1, 2020-01-01).
+
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show_b["id"], "externalId": "9001", "url": "https://x"},
+        headers=auth_headers(),
+    )
+    fake2 = _FakeSonarrClient(
+        series={"id": 42},
+        episodes=[
+            _abs_ep(1, 1, 1, "2020-01-01T00:00:00Z"),  # already filed under A
+            _abs_ep(1, 2, 2, "2020-01-08T00:00:00Z"),  # 7 days later — continues A
+        ],
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake2)
+    # Triggered via B, the sibling with *no* anchor at all — proves
+    # routing isn't "whoever triggered the fetch wins".
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show_b["id"]},
+        headers=auth_headers(),
+    )
+
+    data = await gql(
+        client,
+        """
+        query($a: ID!, $b: ID!) {
+          a: show(id: $a) { episodes { edges { node { episode absoluteNumber } } } }
+          b: show(id: $b) { episodes { edges { node { episode absoluteNumber } } } }
+        }
+        """,
+        {"a": show_a["id"], "b": show_b["id"]},
+        headers=auth_headers(),
+    )
+    a_episodes = sorted(e["node"]["episode"] for e in data["a"]["episodes"]["edges"])
+    assert a_episodes == [1, 2], "the new episode should land on A, which it continues"
+    assert data["b"]["episodes"]["edges"] == [], "B has no anchor yet — nothing routes to it"
+
+    # Re-running the identical fetch must not duplicate anything.
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show_b["id"]},
+        headers=auth_headers(),
+    )
+    data2 = await gql(
+        client,
+        "query($a: ID!) { show(id: $a) { episodes { edges { node { episode } } } } }",
+        {"a": show_a["id"]},
+        headers=auth_headers(),
+    )
+    assert sorted(e["node"]["episode"] for e in data2["show"]["episodes"]["edges"]) == [1, 2]
+
+
+async def test_sonarr_fetch_does_not_misfile_an_episode_beyond_the_continuation_gap(
+    client, monkeypatch
+):
+    """A gap far past any sibling's own cadence (a plausible new,
+    not-yet-added part, or genuine ambiguity) must never be guessed at
+    — no episode row gets written, and a pending_review opens instead."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+
+    show_a = await add_show(client, titleRomaji="Part 1", trackingSpace="TV")
+    show_b = await add_show(client, titleRomaji="Part 2", trackingSpace="TV")
+
+    # Establish A's own real anchor first, single-show path (only A holds
+    # the tvdb id at this point) — same shape as the previous test.
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show_a["id"], "externalId": "9002", "url": "https://x"},
+        headers=auth_headers(),
+    )
+    fake = _FakeSonarrClient(
+        series={"id": 43}, episodes=[_abs_ep(1, 1, 1, "2020-01-01T00:00:00Z")]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show_a["id"]},
+        headers=auth_headers(),
+    )
+
+    # Now B joins the same tvdb id, and a genuinely new episode with a
+    # ~6-year gap from A's own anchor (and no anchor of its own) shows up.
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show_b["id"], "externalId": "9002", "url": "https://x"},
+        headers=auth_headers(),
+    )
+    fake2 = _FakeSonarrClient(
+        series={"id": 43},
+        episodes=[
+            _abs_ep(1, 1, 1, "2020-01-01T00:00:00Z"),  # already filed under A
+            _abs_ep(1, 2, 2, "2026-06-01T00:00:00Z"),  # ~6 years later — no anchor to continue
+        ],
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake2)
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show_b["id"]},
+        headers=auth_headers(),
+    )
+
+    data = await gql(
+        client,
+        """
+        query($a: ID!, $b: ID!) {
+          a: show(id: $a) { episodes { edges { node { episode } } } }
+          b: show(id: $b) { episodes { edges { node { episode } } } }
+        }
+        """,
+        {"a": show_a["id"], "b": show_b["id"]},
+        headers=auth_headers(),
+    )
+    assert [e["node"]["episode"] for e in data["a"]["episodes"]["edges"]] == [1]
+    assert data["b"]["episodes"]["edges"] == []
+
+    reviews = await gql(
+        client,
+        "query { pendingReviews { edges { node { field source resolutionNote } } } }",
+        headers=auth_headers(),
+    )
+    routing_reviews = [
+        e["node"]
+        for e in reviews["pendingReviews"]["edges"]
+        if e["node"]["field"] == "sonarr_multi_show_routing"
+    ]
+    assert len(routing_reviews) == 1
+
+
 async def test_add_show_sonarr_fetch_no_op_when_not_in_sonarr_library(client, monkeypatch):
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     fake = _FakeSonarrClient(series=None)
@@ -4142,6 +4323,14 @@ async def test_set_episode_runtime_override(client, migrated_db):
 LINK_SHOW_EXTERNAL_ID = """
     mutation($id: ID!, $externalId: String!, $url: String!) {
       linkShowExternalId(showId: $id, service: "tmdb", externalId: $externalId, url: $url) {
+        service externalId url
+      }
+    }
+"""
+
+LINK_SHOW_EXTERNAL_ID_TVDB = """
+    mutation($id: ID!, $externalId: String!, $url: String!) {
+      linkShowExternalId(showId: $id, service: "tvdb", externalId: $externalId, url: $url) {
         service externalId url
       }
     }
