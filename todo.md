@@ -646,7 +646,24 @@
   aniq's own config.ini) to ~/.config/starfleet/data/config.ini. No code change needed.
   Confirmed working live.
 
-- [ ] in list view enter does nothing, info shos but the image show only half somehow this seems to not be an issue in calendar view info
+- [x] in list view enter does nothing, info shos but the image show only half somehow this seems to not be an issue in calendar view info
+  **Two separate things, split 2026-08-15**:
+  - **Half-rendered image — real bug, fixed**: `#info-pane-image` (`~/repos/data/src/data/
+    list_screen.py`) was missing `width: 1fr`/`content-align: center middle` — both present on
+    the calendar's own working `#detail-pane-image` (`app.py`, same widget) but never copied over
+    when this pane's image support was added. Without an explicit width, textual-image computes
+    the proportional `height: auto` from whatever narrower default width the widget happened to
+    get, cropping/half-rendering it. Matched exactly against the working pane, not guessed.
+    27/27 list-screen tests pass, full suite clean otherwise (one pre-existing, unrelated,
+    date-dependent failure confirmed to exist with or without this change). Committed and pushed
+    (`~/repos/data`, `b4c08da`).
+  - **Enter does nothing — confirmed, but a feature gap, not a bug**: `list_screen.py` has zero
+    Enter binding and no `OptionList.OptionSelected` handler at all, so Textual's own default
+    select event fires and nothing's listening — confirmed via code read, not guessed. Asked the
+    user what Enter should actually do before building anything (couldn't test-drive the TUI
+    myself to catch a wrong guess); **their answer: it should open an episode list/picker for the
+    selected show, showing local availability per episode — a real future feature, not tonight's
+    scope, not a bug to fix now.** Moved to "Ideas / design" below.
 
 - [x] File availability takes too long to show up (Sonarr import -> visible in Data). **B.5.1
   (webhooks) built, deployed (v0.1.9), configured on both Sonarr and Radarr 2026-08-13. Confirmed
@@ -683,6 +700,15 @@
       original writeup.
 
 # Ideas / design
+
+- [ ] **List-view Enter should open an episode list/picker for the selected show, showing local
+  availability per episode** — raised 2026-08-15, `~/repos/data`'s `list_screen.py`
+  (`ListBrowserScreen`) lists shows, not episodes; Enter currently does nothing at all (real gap,
+  confirmed via code read — no binding, no `OptionList.OptionSelected` handler). User's own
+  framing: expand into a per-episode view scoped to the selected show, each episode showing
+  whether it's available locally (same `hasFile`/availability signal the calendar's own rows
+  already use) — not simply "play the next episode," a real second-level list/picker screen.
+  Explicitly a future feature, not a bug — not designed or built.
 
 - [ ] **animeschedule.net's real per-show/timetable JSON API (`animeschedule.net/api/v3`, no key
   required) as a second, independent schedule source** — found 2026-08-15 while diagnosing the
