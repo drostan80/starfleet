@@ -201,9 +201,12 @@ _STATUS_TO_ANILIST = {
     "paused": "PAUSED",
     "completed": "COMPLETED",
     "dropped": "DROPPED",
-    # deliberately no REPEATING mapping — §6.8/§6.9: rewatching never
-    # auto-pushes AniList's REPEATING status, and LCARS's own 5-value
-    # status enum has no rewatch-specific value to map from anyway.
+    # deliberately no REPEATING mapping — §6.8/§6.9: setStatus/_push_show_status
+    # still never auto-pushes AniList's REPEATING status (LCARS's own 5-value
+    # status enum has no rewatch-specific value to map from anyway), and that
+    # stays true even after markSeasonRewatch (2026-08-16, todo.md) — that's
+    # a separate, explicit, caller-supplied-count mutation, not something
+    # this automatic status-change push ever infers on its own.
 }
 
 
@@ -263,6 +266,34 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
             pending_review.open_or_extend(
                 conn, "season", season["id"], "anilist_push", "anilist", None, str(e)
             )
+
+
+def _push_season_rewatch(conn, season: dict, repeat_count: int) -> None:
+    """Write-mirror function set, todo.md (2026-08-16) — the "build it
+    anyway" rewatch function: pushes AniList's REPEATING status plus
+    `repeat` for this one season's own AniList entry. Purely a push,
+    given an explicit count by its caller — LCARS has no local
+    rewatch-count column of its own yet to derive this from. Checked
+    what the read side does with REPEATING before shipping this, not
+    assumed: `_ANILIST_TO_STATUS` (watch_reconcile.py) maps it to
+    `watching`, so `reconcile_watch_progress`'s next poll harmlessly
+    confirms the show as watching (correct — a rewatch genuinely is
+    active watching), never drops/loses the status. Same
+    no-op-before-login/no-op-unlinked and best-effort/
+    pending_review-on-failure shape as _push_season_score."""
+    if season["anilist_id"] is None:
+        return
+    cfg = config.get_current()
+    if not cfg.anilist_access_token:
+        return
+    try:
+        anilist_client.save_media_list_entry(
+            cfg.anilist_access_token, season["anilist_id"], status="REPEATING", repeat=repeat_count
+        )
+    except anilist_client.AniListError as e:
+        pending_review.open_or_extend(
+            conn, "season", season["id"], "anilist_push", "anilist", None, str(e)
+        )
 
 
 def _compute_season_episode_progress(conn, show_id: str, season_number: int) -> int:
@@ -1686,6 +1717,20 @@ def resolve_set_season_score(_, info, season_id, score):
     return season_mapping.get_season(conn, season_id)
 
 
+@mutation.field("markSeasonRewatch")
+def resolve_mark_season_rewatch(_, info, season_id, repeat_count):
+    """Write-mirror function set, todo.md (2026-08-16) — pure push, no
+    local column to update (see _push_season_rewatch's own docstring
+    for why); the season row itself is returned unchanged."""
+    conn = db.get_connection()
+    season = season_mapping.get_season(conn, season_id)
+    if season is None:
+        raise GraphQLError(f"no such season: {season_id}")
+    _push_season_rewatch(conn, season, repeat_count)
+    conn.commit()
+    return season_mapping.get_season(conn, season_id)
+
+
 @mutation.field("setTracked")
 def resolve_set_tracked(_, info, show_id, tracked):
     conn = db.get_connection()
@@ -1849,6 +1894,42 @@ def resolve_cancel_hard_delete(_, info, show_id):
     return _get_show(conn, show_id)
 
 
+def _delete_from_anilist_before_purge(conn, show_id: str) -> None:
+    """Write-mirror gap #4, todo.md — every one of this show's linked
+    seasons gets its own AniList list entry removed, looped the same
+    shape _push_show_status already loops seasons in (a split-cour show
+    has one AniList entry per linked season, not one per show — tested
+    explicitly, not just assumed from the loop shape being familiar).
+    No-ops entirely (silently, not even a call attempted) when there's
+    no token configured — same "not linked/not logged in" convention
+    every push in this file already uses, not a new one. Raises
+    GraphQLError on the *first* failure (unreachable AniList, or any
+    other AniListError) rather than continuing through the rest of the
+    seasons — resolve_confirm_hard_delete's own docstring has the "why
+    not best-effort" reasoning; nothing before this point has committed
+    anything, so an abort here leaves the DB exactly as it was."""
+    cfg = config.get_current()
+    if not cfg.anilist_access_token:
+        return
+    seasons = conn.execute(
+        "SELECT id, anilist_id FROM season WHERE show_id = ? AND anilist_id IS NOT NULL",
+        (show_id,),
+    ).fetchall()
+    for season in seasons:
+        try:
+            entry_id = anilist_client.fetch_my_list_entry_id(
+                cfg.anilist_access_token, season["anilist_id"]
+            )
+            if entry_id is not None:
+                anilist_client.delete_media_list_entry(cfg.anilist_access_token, entry_id)
+        except anilist_client.AniListError as e:
+            raise GraphQLError(
+                f"couldn't remove season {season['id']} (anilist {season['anilist_id']}) from"
+                f" AniList, aborting the hard delete entirely so nothing is left inconsistent:"
+                f" {e}"
+            ) from e
+
+
 @mutation.field("confirmHardDelete")
 def resolve_confirm_hard_delete(_, info, show_id, retyped_title):
     """The actual purge (§6.11) — succeeds only once the 24-hour delay
@@ -1872,6 +1953,20 @@ def resolve_confirm_hard_delete(_, info, show_id, retyped_title):
     frames a show's hard delete as the one case (alongside
     watch_event) with deliberately no audit trail afterward — the row
     and everything about it are gone, by design.
+
+    **Mirrors the delete to AniList too, 2026-08-16 (write-mirror gap
+    #4, todo.md) — user's own framing: "as guarded as the delete from
+    lcars."** Unlike every score/status/progress push in this file
+    (best-effort, never blocks the local write on failure), this one
+    raises and aborts *before* any local `DELETE` runs if any linked
+    season's AniList removal fails — deliberately not best-effort,
+    since confirmHardDelete is retry-safe by construction (the 24h
+    delay's already elapsed, the retyped title still matches — a
+    failed attempt costs one repeated call, nothing lost) in a way
+    setStatus/addWatchEvent aren't (blocking those on a network blip
+    would lose real, unretryable user input). See
+    _delete_from_anilist_before_purge's own docstring for the
+    per-season loop/lookup mechanics.
     """
     conn = db.get_connection()
     show = _require_show(conn, show_id)
@@ -1883,6 +1978,8 @@ def resolve_confirm_hard_delete(_, info, show_id, retyped_title):
     display_title = show[f"title_{show['primary_title']}"]
     if retyped_title != display_title:
         raise GraphQLError("retypedTitle doesn't match this show's current display title")
+
+    _delete_from_anilist_before_purge(conn, show_id)
 
     season_ids = [
         row["id"] for row in conn.execute("SELECT id FROM season WHERE show_id = ?", (show_id,))

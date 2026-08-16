@@ -325,6 +325,67 @@ def test_save_media_list_entry_raises_ani_list_auth_error_on_401():
         anilist_client.save_media_list_entry("bad-tok", 123, score=17.0, client=fake)
 
 
+def test_save_media_list_entry_progress_only_omits_other_variables():
+    fake = _FakeClient(
+        response=_FakeResponse(payload={"data": {"SaveMediaListEntry": {"progress": 3}}})
+    )
+    anilist_client.save_media_list_entry("tok", 123, progress=3, client=fake)
+    assert fake.last_variables == {"mediaId": 123, "progress": 3}
+
+
+def test_save_media_list_entry_sends_repeat_and_status_for_rewatch():
+    fake = _FakeClient(
+        response=_FakeResponse(
+            payload={"data": {"SaveMediaListEntry": {"status": "REPEATING", "repeat": 2}}}
+        )
+    )
+    anilist_client.save_media_list_entry("tok", 123, status="REPEATING", repeat=2, client=fake)
+    assert fake.last_variables == {"mediaId": 123, "status": "REPEATING", "repeat": 2}
+
+
+# --- fetch_my_list_entry_id / delete_media_list_entry (write-mirror gap #4) ---
+
+
+def test_fetch_my_list_entry_id_returns_the_real_entry_id():
+    fake = _FakeClient(
+        response=_FakeResponse(
+            payload={"data": {"Media": {"mediaListEntry": {"id": 5001}}}}
+        )
+    )
+    result = anilist_client.fetch_my_list_entry_id("tok", 123, client=fake)
+    assert result == 5001
+    assert fake.last_variables == {"mediaId": 123}
+
+
+def test_fetch_my_list_entry_id_none_when_never_added():
+    fake = _FakeClient(
+        response=_FakeResponse(payload={"data": {"Media": {"mediaListEntry": None}}})
+    )
+    assert anilist_client.fetch_my_list_entry_id("tok", 123, client=fake) is None
+
+
+def test_fetch_my_list_entry_id_none_when_media_missing():
+    fake = _FakeClient(response=_FakeResponse(payload={"data": {"Media": None}}))
+    assert anilist_client.fetch_my_list_entry_id("tok", 123, client=fake) is None
+
+
+def test_delete_media_list_entry_sends_the_entry_id_not_the_media_id():
+    fake = _FakeClient(
+        response=_FakeResponse(payload={"data": {"DeleteMediaListEntry": {"deleted": True}}})
+    )
+    result = anilist_client.delete_media_list_entry("tok", 5001, client=fake)
+    assert result is True
+    assert fake.last_variables == {"id": 5001}
+
+
+def test_delete_media_list_entry_raises_ani_list_auth_error_on_401():
+    fake = _FakeClient(
+        response=_FakeResponse(status_code=401, payload={"errors": [{"message": "Invalid token"}]})
+    )
+    with pytest.raises(anilist_client.AniListAuthError, match="anilist-login"):
+        anilist_client.delete_media_list_entry("bad-tok", 5001, client=fake)
+
+
 # --- _throttle_anilist_call (2026-08-13, the "Too many requests" fix) -------
 # The repo-wide `tests/conftest.py` autouse fixture neuters the real
 # `time.sleep` for every other test in this file (and everywhere else);

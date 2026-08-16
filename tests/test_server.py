@@ -4212,6 +4212,208 @@ async def test_confirm_hard_delete_cascades_across_every_related_table(client, m
     assert conn.execute("SELECT 1 FROM franchise WHERE id = 'f-hdtest'").fetchone() is not None
 
 
+# --- AniList delete-from-list mirror (write-mirror gap #4, todo.md 2026-08-16) ---
+#
+# Same "no token configured -> silent no-op" default as the score/status/progress
+# push tests above — these explicitly configure one and mock both
+# anilist_client.fetch_my_list_entry_id and anilist_client.delete_media_list_entry.
+
+
+async def test_confirm_hard_delete_removes_every_linked_season_from_anilist(
+    client, migrated_db, monkeypatch
+):
+    config.set_current(_authenticated_config())
+    entry_ids_by_media = {111: 5001, 222: 5002}
+    lookups, deletes = [], []
+    def _entry_id(token, anilist_id, **kw):
+        lookups.append(anilist_id)
+        return entry_ids_by_media[anilist_id]
+
+    monkeypatch.setattr(anilist_client, "fetch_my_list_entry_id", _entry_id)
+    monkeypatch.setattr(
+        anilist_client,
+        "delete_media_list_entry",
+        lambda token, entry_id, **kw: deletes.append(entry_id) or True,
+    )
+    show = await add_show(client, titleRomaji="Split Cour Show")
+    await _link_season_anilist(client, show["id"], 1, 111)
+    await _link_season_anilist(client, show["id"], 2, 222)
+    await _soft_delete_request_and_backdate(client, migrated_db, show["id"])
+
+    result = await gql(
+        client,
+        "mutation($id: ID!, $t: String!) { confirmHardDelete(showId: $id, retypedTitle: $t) }",
+        {"id": show["id"], "t": "Split Cour Show"},
+        headers=auth_headers(),
+    )
+    assert result["confirmHardDelete"] is True
+    assert sorted(lookups) == [111, 222]
+    assert sorted(deletes) == [5001, 5002]
+    assert db.get_connection().execute(
+        "SELECT 1 FROM show WHERE id = ?", (show["id"],)
+    ).fetchone() is None
+
+
+async def test_confirm_hard_delete_aborts_before_purge_on_anilist_failure(
+    client, migrated_db, monkeypatch
+):
+    """Two linked seasons, first delete succeeds, second raises — the show
+    must still exist afterward and nothing should have been purged, unlike
+    every other push in this file (best-effort, never blocks the local
+    write): confirmHardDelete is retry-safe, so it aborts wholesale instead."""
+    config.set_current(_authenticated_config())
+    calls = []
+
+    def _entry_id(token, anilist_id, **kw):
+        return 111 if anilist_id == 111 else 222
+
+    def _delete(token, entry_id, **kw):
+        calls.append(entry_id)
+        if entry_id == 222:
+            raise anilist_client.AniListError("AniList unreachable")
+        return True
+
+    monkeypatch.setattr(anilist_client, "fetch_my_list_entry_id", _entry_id)
+    monkeypatch.setattr(anilist_client, "delete_media_list_entry", _delete)
+    show = await add_show(client, titleRomaji="Partial Failure Show")
+    await _link_season_anilist(client, show["id"], 1, 111)
+    await _link_season_anilist(client, show["id"], 2, 222)
+    await _soft_delete_request_and_backdate(client, migrated_db, show["id"])
+
+    resp = await client.post(
+        "/",
+        json={
+            "query": (
+                "mutation($id: ID!, $t: String!) "
+                "{ confirmHardDelete(showId: $id, retypedTitle: $t) }"
+            ),
+            "variables": {"id": show["id"], "t": "Partial Failure Show"},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert len(calls) == 2  # both were attempted; the second is the one that failed
+    conn = db.get_connection()
+    assert conn.execute("SELECT 1 FROM show WHERE id = ?", (show["id"],)).fetchone() is not None
+    remaining = conn.execute(
+        "SELECT COUNT(*) AS n FROM season WHERE show_id = ?", (show["id"],)
+    ).fetchone()
+    assert remaining["n"] == 2
+
+
+async def test_confirm_hard_delete_skips_season_with_no_anilist_list_entry(
+    client, migrated_db, monkeypatch
+):
+    """fetch_my_list_entry_id returning None (linked on AniList's media id but
+    never actually added to the viewer's own list) is a no-op, not an error —
+    nothing to delete."""
+    config.set_current(_authenticated_config())
+    deletes = []
+    monkeypatch.setattr(anilist_client, "fetch_my_list_entry_id", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        anilist_client, "delete_media_list_entry", lambda *a, **kw: deletes.append(True)
+    )
+    show = await add_show(client, titleRomaji="Never Added Show")
+    await _link_season_anilist(client, show["id"], 1, 111)
+    await _soft_delete_request_and_backdate(client, migrated_db, show["id"])
+
+    result = await gql(
+        client,
+        "mutation($id: ID!, $t: String!) { confirmHardDelete(showId: $id, retypedTitle: $t) }",
+        {"id": show["id"], "t": "Never Added Show"},
+        headers=auth_headers(),
+    )
+    assert result["confirmHardDelete"] is True
+    assert deletes == []
+
+
+async def test_confirm_hard_delete_no_anilist_call_without_token(client, migrated_db, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        anilist_client, "fetch_my_list_entry_id", lambda *a, **kw: called.append(True)
+    )
+    show = await add_show(client, titleRomaji="No Token Show")
+    await _link_season_anilist(client, show["id"], 1, 111)
+    await _soft_delete_request_and_backdate(client, migrated_db, show["id"])
+
+    result = await gql(
+        client,
+        "mutation($id: ID!, $t: String!) { confirmHardDelete(showId: $id, retypedTitle: $t) }",
+        {"id": show["id"], "t": "No Token Show"},
+        headers=auth_headers(),
+    )
+    assert result["confirmHardDelete"] is True
+    assert called == []
+
+
+# --- AniList rewatch/REPEATING push (write-mirror function set, todo.md 2026-08-16) ---
+
+
+async def test_mark_season_rewatch_pushes_repeating_status_and_count(client, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    season_id = await _link_season_anilist(client, show["id"], 1, 111)
+
+    data = await gql(
+        client,
+        "mutation($id: ID!, $n: Int!) { markSeasonRewatch(seasonId: $id, repeatCount: $n) { id } }",
+        {"id": season_id, "n": 2},
+        headers=auth_headers(),
+    )
+    assert data["markSeasonRewatch"]["id"] == season_id
+    assert calls == [(111, {"status": "REPEATING", "repeat": 2})]
+
+
+async def test_mark_season_rewatch_no_push_when_unlinked(client, monkeypatch):
+    config.set_current(_authenticated_config())
+    called = []
+    monkeypatch.setattr(
+        anilist_client, "save_media_list_entry", lambda *a, **kw: called.append(True)
+    )
+    show = await add_show(client)
+    season_id = await _link_season_anilist(client, show["id"], 1, 111)
+    # unlink it again — setSeasonMapping with null anilistId clears the link
+    await gql(
+        client,
+        "mutation($id: ID!, $s: Int!) { setSeasonMapping(showId: $id, seasonNumber: $s) { id } }",
+        {"id": show["id"], "s": 1},
+        headers=auth_headers(),
+    )
+    called.clear()
+
+    await gql(
+        client,
+        "mutation($id: ID!, $n: Int!) { markSeasonRewatch(seasonId: $id, repeatCount: $n) { id } }",
+        {"id": season_id, "n": 1},
+        headers=auth_headers(),
+    )
+    assert called == []
+
+
+async def test_mark_season_rewatch_no_push_without_token(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        anilist_client, "save_media_list_entry", lambda *a, **kw: called.append(True)
+    )
+    show = await add_show(client)
+    season_id = await _link_season_anilist(client, show["id"], 1, 111)
+
+    await gql(
+        client,
+        "mutation($id: ID!, $n: Int!) { markSeasonRewatch(seasonId: $id, repeatCount: $n) { id } }",
+        {"id": season_id, "n": 1},
+        headers=auth_headers(),
+    )
+    assert called == []
+
+
 # --- data export/import (§6.12, A.15) ----------------------------------------
 #
 # The actual data-movement logic (24-table round trip, dependency ordering,

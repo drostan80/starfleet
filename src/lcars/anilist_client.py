@@ -505,20 +505,27 @@ def save_media_list_entry(
     status: str | None = None,
     score: float | None = None,
     progress: int | None = None,
+    repeat: int | None = None,
     client: httpx.Client | None = None,
 ) -> dict:
     """§6.1/§6.8, extended for the LCARS->AniList write-mirror (see
     todo.md's full function enumeration): the actual push.
-    `status`/`score`/`progress` are each omitted from the mutation's
-    variables (not just passed as null) unless explicitly given — same
-    reasoning as Data's own save_media_list_entry(): GraphQL treats an
-    explicit null for an optional argument as "unset this", not "leave
-    it alone", so e.g. a progress-only push must never accidentally
-    reset score/status (and vice versa). `SaveMediaListEntry` keys on
-    `mediaId` alone (AniList upserts the viewer's own list entry for
-    that media, no entry id needed here — DeleteMediaListEntry is the
-    one call in this family that needs the entry's own id instead, see
-    that function below)."""
+    `status`/`score`/`progress`/`repeat` are each omitted from the
+    mutation's variables (not just passed as null) unless explicitly
+    given — same reasoning as Data's own save_media_list_entry():
+    GraphQL treats an explicit null for an optional argument as "unset
+    this", not "leave it alone", so e.g. a progress-only push must
+    never accidentally reset score/status (and vice versa).
+    `SaveMediaListEntry` keys on `mediaId` alone (AniList upserts the
+    viewer's own list entry for that media, no entry id needed here —
+    DeleteMediaListEntry is the one call in this family that needs the
+    entry's own id instead, see that function and
+    fetch_my_list_entry_id below). `id` is always requested in the
+    return selection — free (already confirmed on `MediaList` via
+    schema introspection) and occasionally useful to a caller, though
+    no caller relies on it for delete lookups: a delete can't assume a
+    save happened earlier in the same process, so it always looks the
+    id up fresh instead."""
     fields = []
     variables: dict[str, object] = {"mediaId": anilist_id}
     if status is not None:
@@ -530,21 +537,77 @@ def save_media_list_entry(
     if progress is not None:
         fields.append("$progress: Int")
         variables["progress"] = progress
+    if repeat is not None:
+        fields.append("$repeat: Int")
+        variables["repeat"] = repeat
     var_defs = ", ".join(["$mediaId: Int", *fields])
     args = ", ".join(
         ["mediaId: $mediaId"]
         + (["status: $status"] if status is not None else [])
         + (["score: $score"] if score is not None else [])
         + (["progress: $progress"] if progress is not None else [])
+        + (["repeat: $repeat"] if repeat is not None else [])
     )
     mutation = f"""
     mutation ({var_defs}) {{
       SaveMediaListEntry({args}) {{
+        id
         status
         score
         progress
+        repeat
       }}
     }}
     """
     data = _graphql_request(mutation, variables, token=token, client=client)
     return data["SaveMediaListEntry"]
+
+
+_MY_LIST_ENTRY_ID_QUERY = """
+query ($mediaId: Int) {
+  Media(id: $mediaId) {
+    mediaListEntry { id }
+  }
+}
+"""
+
+
+def fetch_my_list_entry_id(
+    token: str, anilist_id: int, client: httpx.Client | None = None
+) -> int | None:
+    """confirmHardDelete's own lookup step, mirroring
+    fetch_my_list_status's shape exactly (same query, `id` instead of
+    `status`) — DeleteMediaListEntry is keyed on the list *entry's* own
+    id, not the media id every other call in this file uses, so a
+    delete always resolves it fresh here first rather than trusting a
+    save_media_list_entry return from earlier in the same process (no
+    caller keeps that around). Returns None if the viewer has no list
+    entry for this media at all (nothing to delete — a no-op the
+    caller should treat as success, not an error)."""
+    data = _graphql_request(
+        _MY_LIST_ENTRY_ID_QUERY, {"mediaId": anilist_id}, token=token, client=client
+    )
+    media = data["Media"]
+    if media is None:
+        return None
+    entry = media.get("mediaListEntry")
+    return entry["id"] if entry else None
+
+
+_DELETE_MEDIA_LIST_ENTRY_MUTATION = """
+mutation ($id: Int!) {
+  DeleteMediaListEntry(id: $id) {
+    deleted
+  }
+}
+"""
+
+
+def delete_media_list_entry(token: str, entry_id: int, client: httpx.Client | None = None) -> bool:
+    """§6.11's mirror counterpart — confirmHardDelete's own guarded
+    purge, extended to AniList. Takes the list *entry's* id
+    (fetch_my_list_entry_id above), not a media id."""
+    data = _graphql_request(
+        _DELETE_MEDIA_LIST_ENTRY_MUTATION, {"id": entry_id}, token=token, client=client
+    )
+    return bool(data["DeleteMediaListEntry"]["deleted"])

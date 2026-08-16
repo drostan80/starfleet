@@ -849,13 +849,53 @@
     noted inline in `resolvers.py` so the asymmetry reads as a scope decision, not a miss.
   - 9 new tests (furthest-watched push, gap handling, skip-counts, unlinked-season no-op, delete
     reduces progress, status-at-creation, no-push-without-link), full suite green.
-  - **Still open, in the order advisor review recommended (each its own commit, not folded in)**:
-    gap #4 (`DeleteMediaListEntry`, needs the list-entry-id lookup), rewatch/`repeat`,
-    `startedAt`/`completedAt` (needs a schema migration + the historical AniList backfill read,
-    genuinely separate scope).
   - **Not deployed yet** — this changes live write behavior (every real `w` press in Data now
     pushes to the user's real AniList account), flagged for explicit go-ahead before shipping
     rather than following the bug-fix batch's auto-deploy pattern.
+
+  **Gaps #4 and rewatch closed, same day, 2026-08-16, user's "add and test all the functions."**
+  - **Gap #4 (delete from AniList's list)**: `confirmHardDelete` now removes every one of the
+    show's linked seasons' AniList list entries before any local `DELETE` runs — new
+    `anilist_client.fetch_my_list_entry_id` (the lookup step the original spec flagged;
+    `DeleteMediaListEntry` keys on the list *entry's* own id, not the media id every other push in
+    this file uses) plus `delete_media_list_entry`. **Deliberately not best-effort, unlike every
+    other push in this file** — raises and aborts the whole hard delete if any season's AniList
+    removal fails, before anything commits. Reasoned explicitly, not just inconsistent:
+    `confirmHardDelete` is retry-safe by construction (24h delay already elapsed, retyped title
+    still matches — a failed attempt costs one repeated call, nothing lost), unlike `setStatus`/
+    `addWatchEvent`, where blocking on a network blip would lose real, unretryable user input.
+    Looped per linked season (a split-cour show has one AniList entry per season, not one per
+    show) — tested explicitly with two distinct entry ids, not assumed from the loop shape.
+    Partial-failure tested too: first season's delete succeeds, second raises — show and both
+    seasons confirmed still present afterward, nothing purged.
+  - **Rewatch**: new `markSeasonRewatch(seasonId, repeatCount)` mutation — pushes AniList's
+    REPEATING status + `repeat` count for one season. Pure push, no local rewatch-count column
+    exists yet to derive it from automatically (still true: "until I build a mirror to lcars it
+    won't be used," user's own words) — this is the callable, tested, working half, given an
+    explicit count. Checked the read-back side before shipping, not assumed: `_ANILIST_TO_STATUS`
+    (watch_reconcile.py) already maps `REPEATING` → `watching`, so `reconcile_watch_progress`'s
+    next poll after this push harmlessly confirms the show as watching (correct — a rewatch is
+    genuinely active watching), never mishandles or drops the status. `_STATUS_TO_ANILIST`'s own
+    "no REPEATING mapping" comment (the automatic setStatus→AniList path) updated to note this new,
+    separate, explicit-count-required mutation exists without contradicting its own claim — that
+    automatic path still never infers REPEATING on its own.
+  - `save_media_list_entry` gained a `repeat` param alongside `progress`; its return selection now
+    always includes `id` too (schema-confirmed harmless/free via introspection, though no caller
+    relies on it — a delete always re-resolves the entry id fresh via `fetch_my_list_entry_id`
+    rather than trusting an earlier save's return in the same process).
+  - 14 new tests (7 in `test_server.py`: multi-season delete, partial-failure abort, no-entry
+    no-op, no-token no-op, rewatch push, unlinked no-op, no-token no-op; 7 in
+    `test_anilist_client.py`: progress/repeat variable omission, entry-id lookup + both its
+    no-entry/no-media shapes, delete's own id-not-media-id + 401 handling). Full suite 742 passed,
+    ruff clean.
+  - **Still open**: `startedAt`/`completedAt` — blocked on one real precedence decision the
+    original spec left unsettled ("decide when building"), asking the user before writing the
+    schema migration rather than guessing; then the historical AniList backfill *read* for
+    pre-LCARS shows is its own separate scope, not folded into the same commit (overlaps
+    `BUILD_PLAN.md`'s parked PC.2).
+  - **Not deployed yet**, same reasoning as the first two gaps above — real write behavior against
+    the user's actual AniList account (and now a real delete, the highest-stakes one), flagged for
+    explicit go-ahead.
 
 - [ ] **Data-as-thin-client audit (point 2 of the staged plan) — every direct AniList/Sonarr call
   site in `~/repos/data`, checked against what LCARS already covers.** 2026-08-16.

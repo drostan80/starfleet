@@ -1277,6 +1277,15 @@ type Mutation {
   setScore(showId: ID!, score: Float!): Show!
   "A.9, §6.1/§5.5 addendum — same push as setScore, scoped to one season and its own AniList entry only."
   setSeasonScore(seasonId: ID!, score: Float!): Season!
+  """
+  Write-mirror function set, todo.md (2026-08-16) — pushes AniList's REPEATING status plus
+  `repeatCount` (its own `repeat` field) for this one season's AniList entry. LCARS has no local
+  rewatch-count column of its own yet (no read-back mirror exists to consume it either) — this is
+  purely the push half, callable explicitly any time a caller already knows the count, same
+  best-effort policy as setScore/setSeasonScore (no token configured, or an unreachable AniList,
+  never blocks — opens a pending_review instead). Does not change season.score or show.status.
+  """
+  markSeasonRewatch(seasonId: ID!, repeatCount: Int!): Season!
   "§6.8, A.9 — also pushes to AniList (MediaListStatus) on every season the show has a link for; same best-effort policy as setScore."
   setStatus(showId: ID!, status: ShowStatus!): Show!
   setTracked(showId: ID!, tracked: Boolean!): Show!
