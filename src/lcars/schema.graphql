@@ -1290,8 +1290,11 @@ type Mutation {
   never blocks — opens a pending_review instead). Does not change season.score or show.status.
   """
   markSeasonRewatch(seasonId: ID!, repeatCount: Int!): Season!
-  "§6.8, A.9 — also pushes to AniList (MediaListStatus) on every season the show has a link for; same best-effort policy as setScore."
-  setStatus(showId: ID!, status: ShowStatus!): Show!
+  """
+  §6.8, A.9 — also pushes to AniList (MediaListStatus) on every season the show has a link for; same best-effort policy as setScore.
+  Auto-sync, todo.md (2026-08-16) — setting status to COMPLETED on a show that's still airing (an episode with no known air date, or one that hasn't aired yet) fails with a GraphQLError unless `confirmed: true` is also passed; a client (Data) should surface that error text as a y/n prompt and retry with confirmed: true on "y". Confirming only unblocks the status change itself — every currently-unwatched-but-aired episode also gets marked watched (never an unaired one, regardless of confirmation).
+  """
+  setStatus(showId: ID!, status: ShowStatus!, confirmed: Boolean = false): Show!
   setTracked(showId: ID!, tracked: Boolean!): Show!
 
   # -- §6.2 paced/catch-up mode (A.10) ---------------------------------------

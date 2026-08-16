@@ -4594,6 +4594,348 @@ async def test_completed_at_never_moves_once_set(client):
     assert (await _season_dates(client, season1))["completedAt"] == "2020-01-01T00:00:00Z"
 
 
+# --- bidirectional completion auto-sync (write-mirror, todo.md 2026-08-16) ---
+#
+# User's own rule, verbatim: "season are marked complete when all episodes are
+# watched, same for show, complete when all seasons are marked watched, if a
+# new season is added then move back to watching" / skip counts as watched
+# for this purpose / a still-airing show gets a warning, not a silent block.
+
+
+async def _insert_aired_episode_range(
+    migrated_db,
+    show_id: str,
+    season: int,
+    episodes: range,
+    air_date_utc: str = "2020-01-01T00:00:00Z",
+) -> None:
+    """Like _insert_episode_range, but with a real *past* air date on every
+    episode — required for any completion test: NULL air_date_utc reads as
+    "still airing" (_show_is_airing's own predicate), so a plain
+    _insert_episode_range episode can never legitimately complete."""
+    conn = db.get_connection()
+    for n in episodes:
+        conn.execute(
+            """
+            INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, state,
+                created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'regular', ?, 'unwatched', '2026-08-08T00:00:00Z',
+                '2026-08-08T00:00:00Z')
+            """,
+            (f"e-s{season}e{n:03d}", show_id, season, n, air_date_utc),
+        )
+    conn.commit()
+
+
+async def _show_status(client, show_id: str) -> str:
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { status } }",
+        {"id": show_id},
+        headers=auth_headers(),
+    )
+    return data["show"]["status"]
+
+
+async def test_last_episode_watched_auto_completes_season_and_show(client, migrated_db):
+    show = await add_show(client)
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 4))
+    season_id = await _create_season(client, show["id"], 1)
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          markEpisodeRangeWatched(
+            showId: $id, season: 1, fromEpisode: 1, toEpisode: 2, watchedAt: $t
+          ) {
+            episode
+          }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season_id))["completedAt"] is None
+    assert (await _show_status(client, show["id"])) == "PLANNED"
+
+    await gql(
+        client,
+        "mutation($id: ID!, $t: DateTime!) {"
+        " addWatchEvent(showId: $id, season: 1, episode: 3, watchedAt: $t) { id } }",
+        {"id": show["id"], "t": "2026-08-16T10:00:00Z"},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season_id))["completedAt"] == "2026-08-16T10:00:00Z"
+    assert (await _show_status(client, show["id"])) == "COMPLETED"
+
+    change = db.get_connection().execute(
+        "SELECT changed_by, previous_status, new_status FROM status_change"
+        " WHERE show_id = ? ORDER BY rowid DESC LIMIT 1",
+        (show["id"],),
+    ).fetchone()
+    assert dict(change) == {
+        "changed_by": "auto_complete",
+        "previous_status": "planned",
+        "new_status": "completed",
+    }
+
+
+async def test_auto_complete_does_not_fire_while_still_airing(client, migrated_db):
+    show = await add_show(client)
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
+    # episode 3 has no air date at all — "still airing" per _show_is_airing
+    db.get_connection().execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)"
+        " VALUES ('e-s1e003', ?, 1, 3, 'regular', 'unwatched', 'x', 'x')",
+        (show["id"],),
+    )
+    db.get_connection().commit()
+    season_id = await _create_season(client, show["id"], 1)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { markSeasonWatched(showId: $id, season: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    # episode 3 got marked watched too (markSeasonWatched marks every
+    # episode row regardless of air date, same as it always has) — but
+    # completion still shouldn't fire, since _season_still_airing only
+    # cares about whether more content is *expected*, not what's watched.
+    assert (await _season_dates(client, season_id))["completedAt"] is None
+    assert (await _show_status(client, show["id"])) == "PLANNED"
+
+
+async def test_skipped_episode_counts_toward_auto_completion_but_stays_skipped(client, migrated_db):
+    show = await add_show(client)
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
+    season_id = await _create_season(client, show["id"], 1)
+    await gql(
+        client,
+        "mutation($id: ID!, $t: DateTime!) {"
+        " addWatchEvent(showId: $id, season: 1, episode: 1, watchedAt: $t) { id } }",
+        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        "mutation($id: ID!) { markEpisodeSkipped(episodeId: $id) { state } }",
+        {"id": "e-s1e002"},
+        headers=auth_headers(),
+    )
+    assert data["markEpisodeSkipped"]["state"] == "SKIPPED"
+    assert (await _season_dates(client, season_id))["completedAt"] is not None
+    assert (await _show_status(client, show["id"])) == "COMPLETED"
+    ep2 = db.get_connection().execute(
+        "SELECT state FROM episode WHERE id = 'e-s1e002'"
+    ).fetchone()
+    assert ep2["state"] == "skipped"  # never rewritten to 'watched'
+
+
+async def test_multi_season_show_only_completes_once_every_season_is_done(client, migrated_db):
+    show = await add_show(client)
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
+    await _insert_aired_episode_range(migrated_db, show["id"], 2, range(1, 3))
+    season1 = await _create_season(client, show["id"], 1)
+    season2 = await _create_season(client, show["id"], 2)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { markSeasonWatched(showId: $id, season: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season1))["completedAt"] is not None
+    assert (await _show_status(client, show["id"])) == "PLANNED"  # season 2 still unwatched
+
+    await gql(
+        client,
+        "mutation($id: ID!) { markSeasonWatched(showId: $id, season: 2) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season2))["completedAt"] is not None
+    assert (await _show_status(client, show["id"])) == "COMPLETED"
+
+
+async def test_delete_watch_event_does_not_reverse_auto_completion(client, migrated_db):
+    """Simplest defensible answer, per design: unwatching one episode of an
+    already-completed show doesn't un-stamp completed_at or flip status back
+    — same never-moves-once-set posture completed_at already has."""
+    show = await add_show(client)
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 2))
+    season_id = await _create_season(client, show["id"], 1)
+    added = await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _show_status(client, show["id"])) == "COMPLETED"
+
+    await gql(
+        client,
+        "mutation($id: ID!) { deleteWatchEvent(watchEventId: $id) }",
+        {"id": added["addWatchEvent"]["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _show_status(client, show["id"])) == "COMPLETED"
+    assert (await _season_dates(client, season_id))["completedAt"] is not None
+
+
+async def test_set_status_completed_warns_when_still_airing_without_confirmation(
+    client, migrated_db
+):
+    show = await add_show(client)
+    db.get_connection().execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)"
+        " VALUES ('e-wrn001', ?, 1, 1, 'regular', 'unwatched', 'x', 'x')",
+        (show["id"],),
+    )
+    db.get_connection().commit()
+
+    resp = await client.post(
+        "/",
+        json={
+            "query": (
+                "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { status } }"
+            ),
+            "variables": {"id": show["id"]},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "confirmed" in body["errors"][0]["message"]
+    assert (await _show_status(client, show["id"])) == "PLANNED"  # unchanged
+
+
+async def test_set_status_completed_confirmed_bulk_marks_aired_episodes_only(client, migrated_db):
+    show = await add_show(client)
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))  # aired, past
+    db.get_connection().execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)"
+        " VALUES ('e-noair1', ?, 1, 3, 'regular', 'unwatched', 'x', 'x')",  # no air date
+        (show["id"],),
+    )
+    db.get_connection().commit()
+
+    await gql(
+        client,
+        "mutation($id: ID!) {"
+        " setStatus(showId: $id, status: COMPLETED, confirmed: true) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    conn = db.get_connection()
+    ep1 = conn.execute("SELECT state FROM episode WHERE id = 'e-s1e001'").fetchone()
+    ep2 = conn.execute("SELECT state FROM episode WHERE id = 'e-s1e002'").fetchone()
+    assert ep1["state"] == "watched"
+    assert ep2["state"] == "watched"
+    assert conn.execute("SELECT state FROM episode WHERE id = 'e-noair1'").fetchone()["state"] == (
+        "unwatched"
+    )
+
+
+async def test_set_status_completed_confirmed_never_overwrites_a_skipped_episode(
+    client, migrated_db
+):
+    show = await add_show(client)
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 2))
+    await gql(
+        client,
+        "mutation($id: ID!) { markEpisodeSkipped(episodeId: $id) { state } }",
+        {"id": "e-s1e001"},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) {"
+        " setStatus(showId: $id, status: COMPLETED, confirmed: true) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    state = db.get_connection().execute(
+        "SELECT state FROM episode WHERE id = 'e-s1e001'"
+    ).fetchone()
+    assert state["state"] == "skipped"
+
+
+async def test_set_season_mapping_new_season_reopens_a_completed_show(client, migrated_db):
+    show = await add_show(client)
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _show_status(client, show["id"])) == "COMPLETED"
+
+    await _create_season(client, show["id"], 2)  # a genuinely new season row
+    assert (await _show_status(client, show["id"])) == "WATCHING"
+
+    change = db.get_connection().execute(
+        "SELECT previous_status, new_status FROM status_change"
+        " WHERE show_id = ? ORDER BY rowid DESC LIMIT 1",
+        (show["id"],),
+    ).fetchone()
+    assert dict(change) == {"previous_status": "completed", "new_status": "watching"}
+
+
+async def test_set_season_mapping_update_of_existing_season_does_not_reopen(client, migrated_db):
+    show = await add_show(client)
+    await _create_season(client, show["id"], 1)
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _show_status(client, show["id"])) == "COMPLETED"
+
+    await gql(
+        client,
+        "mutation($id: ID!, $s: Int!, $a: Int!) {"
+        " setSeasonMapping(showId: $id, seasonNumber: $s, anilistId: $a) { id } }",
+        {"id": show["id"], "s": 1, "a": 999},
+        headers=auth_headers(),
+    )
+    assert (await _show_status(client, show["id"])) == "COMPLETED"  # unchanged — not a new season
+
+
+async def test_reconcile_watch_progress_is_a_no_op_right_after_auto_completing(
+    client, migrated_db, monkeypatch
+):
+    """Advisor-flagged feedback loop: auto-complete pushes COMPLETED (and
+    the real progress high-water mark) to AniList; B.5.3's poll reads both
+    back via reconcile_watch_progress. Confirms that round-trip is a genuine
+    no-op when LCARS and AniList already agree — not a hypothetical."""
+    config.set_current(_authenticated_config())
+    monkeypatch.setattr(anilist_client, "save_media_list_entry", lambda *a, **kw: {"id": 1})
+    show = await add_show(client)
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
+    await _link_season_anilist(client, show["id"], 1, 777)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { markSeasonWatched(showId: $id, season: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _show_status(client, show["id"])) == "COMPLETED"
+
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_my_anime_list",
+        lambda token: [
+            {"anilist_id": 777, "status": "COMPLETED", "progress": 2, "format": "TV", "title": "x"}
+        ],
+    )
+    data = await gql(client, RECONCILE_WATCH_PROGRESS, headers=auth_headers())
+    assert data["reconcileWatchProgress"]["showsStatusUpdated"] == 0
+    assert data["reconcileWatchProgress"]["episodesBackfilled"] == 0
+
+
 # --- data export/import (§6.12, A.15) ----------------------------------------
 #
 # The actual data-movement logic (24-table round trip, dependency ordering,
@@ -7475,9 +7817,22 @@ async def test_reconcile_watch_progress_backfills_and_corrects_status_through_re
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    await _link_season_anilist(client, show["id"], 1, 555)
-
+    # Season inserted directly (not via setSeasonMapping/_link_season_anilist)
+    # deliberately — setSeasonMapping's own new-season branch now runs the
+    # auto-sync "new season added -> reopen a completed show" rule
+    # (todo.md, 2026-08-16), which would flip status back to WATCHING right
+    # here and make this test's own reconcileWatchProgress call redundant
+    # for the status half. This test is specifically about
+    # reconcileWatchProgress's own status-correction path, so its setup
+    # stays isolated from that other mechanism.
     conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO season"
+        " (id, show_id, season_number, anilist_id, source, matched, manual_override,"
+        "  created_at, updated_at)"
+        " VALUES ('z-recon1', ?, 1, 555, 'manual', 1, 1, 'x', 'x')",
+        (show["id"],),
+    )
     for ep in (1, 2, 3):
         conn.execute(
             "INSERT INTO episode (id, show_id, season, episode, kind, created_at, updated_at)"

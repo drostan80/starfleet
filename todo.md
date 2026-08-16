@@ -956,6 +956,65 @@
   user next marks something watched or completes a show, to confirm the AniList push actually lands
   as designed, not just that the code loaded without error.
 
+  **Bidirectional completion auto-sync built, same day, 2026-08-16 — the item logged above as
+  deliberately deferred is now built, user's own three answers resolving each open question.**
+  User's rule, verbatim: "1 yes can stay skipped in database but count as watched for this
+  exercise / 2 season are marked complete when all episodes are watched, same for show, complete
+  when all seasons are marked watched, if a new season is added then move back to watching / 3
+  just a warning/ this show is still airing, are you sure? y/n."
+  - **Forward (episode watched/skipped → season complete → show complete)**: `_try_complete_season`
+    stamps a season's `completed_at` once every one of its episodes is `watched`/`skipped` (skip
+    counts as done, stays `skipped` in the DB, per rule 1), it has at least one episode row, and
+    it isn't still airing — a new `_season_still_airing` helper, scoped to that one season
+    (`_show_is_airing` itself is whole-show, which would wrongly block a finished early season
+    just because a later season is still airing under the same show). `_try_complete_show` then
+    checks the whole show: no episode anywhere is `unwatched`, at least one episode exists, not
+    `_show_is_airing` — promotes `show.status` to `completed` with its own real `status_change`
+    row (`changed_by = 'auto_complete'`) and AniList/MAL push. Wired into every mutation that
+    changes `episode.state` (`addWatchEvent`, `markSeasonWatched`, `markEpisodeRangeWatched`,
+    `markEpisodeSkipped`) — tested explicitly via the bulk paths too, not just single-episode
+    `addWatchEvent`.
+  - **Reverse (show set completed → mark all episodes watched)**: `setStatus` gained a
+    `confirmed: Boolean = false` argument — rule 3's "y/n": setting `COMPLETED` while
+    `_show_is_airing` is true refuses with a `GraphQLError` unless `confirmed: true` is passed; a
+    stateless API has no real interactive prompt, so refuse-then-retry-with-confirmed *is* the
+    y/n, and Data's own UI is expected to surface the error text as that prompt. Confirming only
+    unblocks the status change — `_bulk_mark_all_aired_episodes_watched` never marks an episode
+    with no air date or a future one, regardless of confirmation (marking something watched that
+    hasn't aired would be false no matter how the prompt was answered); never touches an
+    already-`skipped` episode either (tested explicitly). Every newly-marked season also gets its
+    progress pushed and `started_at` captured, same as any other real watch mutation, so an
+    auto-completed show's AniList entry doesn't show stale progress next to a `COMPLETED` status.
+  - **"New season added → reopen"**: wired into `setSeasonMapping`'s own new-season-row branch
+    only (of five real `INSERT INTO season` call sites in the codebase) — the other four are
+    automated Sonarr/Fribb season-discovery paths (`season_mapping.py`×2, `metadata.py`×2), and an
+    unattended background sweep silently flipping `show.status` and pushing to AniList is a
+    materially riskier class of write than anything else in this whole write-mirror; left
+    un-hooked on purpose, logged as a known boundary (same treatment as `started_at`'s own
+    `watch_reconcile.py` boundary). Confirmed the distinction with a test: updating an *existing*
+    season's mapping doesn't reopen anything, only a genuine new season row does.
+  - **A real existing test broke and was fixed, not just made to pass**:
+    `test_reconcile_watch_progress_backfills_and_corrects_status_through_real_graphql` used
+    `setSeasonMapping` as internal test setup to link a season on an already-completed show — the
+    new "new season reopens" rule fired as a side effect and un-completed the show *before* the
+    test's own `reconcileWatchProgress` call, so `showsStatusUpdated` genuinely became 0 instead
+    of 1 (reconcile had nothing left to fix). Fixed by inserting that test's season row directly
+    via SQL instead, keeping it a clean, isolated test of `reconcileWatchProgress`'s own
+    status-correction path — not a case of loosening an assertion to match a regression.
+  - **Feedback-loop checked, not assumed**: a new test confirms auto-completing a show, then
+    running `reconcileWatchProgress` against a mocked AniList response that already agrees
+    (`COMPLETED`, matching progress), is a genuine no-op (`showsStatusUpdated: 0`,
+    `episodesBackfilled: 0`) — the real risk advisor review flagged (progress is now the
+    non-contiguous high-water mark; an auto-completed show with a real gap could otherwise get
+    that gap silently backfilled as watched on the very next B.5.3 poll).
+  - **`deleteWatchEvent` un-watching an episode of an already-completed show deliberately doesn't
+    reverse anything** — no un-stamp, no status flip back — same never-moves-once-set posture
+    `completed_at` already had, tested explicitly, documented rather than left undefined.
+  - 11 new tests, full suite 761 passed, ruff clean.
+  - **Not deployed yet** — same reasoning as every other write-mirror piece, and arguably the
+    highest-stakes one so far: this is the first piece that writes real `watch_event` rows and
+    flips real `show.status` automatically, with no human action beyond the original watch/skip.
+
 - [ ] **Data-as-thin-client audit (point 2 of the staged plan) — every direct AniList/Sonarr call
   site in `~/repos/data`, checked against what LCARS already covers.** 2026-08-16.
   **Direct-to-AniList reads** (`self._anilist_client.*` in `app.py`), all local-cache-only, no
