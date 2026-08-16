@@ -4668,11 +4668,13 @@ this order because each step is provably independent of the next
 - [ ] **C.2 — Keep only**: calendar rendering (driven by LCARS reads),
   mpv IPC + aninote invocation (inherently local, never moves
   server-side — hard constraint), relaying user actions to LCARS.
-- [ ] **C.3 — Keep the one permanent exception**: Data's direct
-  write path straight to AniList for episode watch-status only (§6.8)
-  — writes to AniList and LCARS simultaneously, no timer wait. Data
-  retains its own AniList OAuth credentials indefinitely for this one
-  path — this is not something Phase C removes.
+- [x] **C.3 — Retired 2026-08-16, not kept.** SCOPE.md §6.8's own "permanent exception" text is
+  now struck through — LCARS's write-mirror (B.5.2/B.21) makes the direct-write path's original
+  rationale (a round trip through LCARS being too slow/unreliable for a watch mark) obsolete: LCARS
+  pushes to AniList itself, synchronously, in the same request. User's own restatement, verbatim:
+  "EVERYTHING IS MOVED TO LCARS WHICH IS THE SOURCE OF TRUTH DATA IS A THIN CLIENT SO IT JUST READS
+  LCARS." Data keeps **no** AniList credentials once the swap (`~/repos/data/DATA_THIN_CLIENT_PLAN.md`)
+  completes — every write goes through LCARS.
 - [ ] **C.4 — Confirm**: by the end of this phase, Data is
   functionally what aniq's own Phase C drawdown would have looked
   like — the real aniq is still untouched, sitting exactly as it was

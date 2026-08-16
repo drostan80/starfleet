@@ -2081,24 +2081,39 @@ as AniList/Sonarr/Radarr.
   surfaces here too — `present` flips to `false` on the next poll, no
   `pending_review` entry for this specifically, purely informational.
 
-### 6.8 AniList write ownership — hybrid (Phase A concept, Phase C endpoint)
+### 6.8 AniList write ownership — LCARS-exclusive (retired the Data direct-path exception, 2026-08-16)
 
-- Data keeps a **permanent, narrow direct-to-AniList write path** for
-  episode watch-status only — writes to AniList and LCARS
-  simultaneously, no timer wait. Data retains its own AniList OAuth
-  credentials indefinitely for this one path.
-- Everything else (status, score, retrying any failed watch-status
-  write) is LCARS's job server-side; LCARS remains unconditionally
-  authoritative regardless of which path wrote first.
+**Superseded 2026-08-16 — the "permanent" exception below never survived contact with the actual
+end state.** This section originally carved out a narrow, permanent direct-to-AniList write path
+for Data (episode watch-status only), on the reasoning that a round trip through LCARS was too
+slow/unreliable for something as frequent as a watch mark. That reasoning is gone: LCARS's own
+write-mirror (`todo.md`, B.5.2/B.21, shipped `bafcffe` and after) now pushes every watch/status/
+score change to AniList itself, server-side, synchronously, inside the same request a thin client
+would already be making — there's no longer a second parallel path for Data to own. Restated
+directly by the user, in exactly these terms, closing any ambiguity: "lcars does everything, data
+reads it, that's what a thin client is... EVERYTHING IS MOVED TO LCARS WHICH IS THE SOURCE OF
+TRUTH DATA IS A THIN CLIENT SO IT JUST READS LCARS." No exception, for any field, ever. The
+original text is kept below, struck through in spirit, for history — implementation is tracked in
+`~/repos/data`'s `DATA_THIN_CLIENT_PLAN.md`.
+
+- ~~Data keeps a **permanent, narrow direct-to-AniList write path** for episode watch-status
+  only — writes to AniList and LCARS simultaneously, no timer wait. Data retains its own AniList
+  OAuth credentials indefinitely for this one path.~~ **Retired** — Data has no AniList
+  credentials, ever, once the thin-client swap completes. Every write (episode watch/un-watch,
+  status, score) goes through LCARS's own mutations, which push to AniList themselves.
+- Everything (status, score, episode watch-status, retrying any failed write) is LCARS's job
+  server-side; LCARS remains unconditionally authoritative regardless of which client requested
+  the change.
 - **Rewatching never auto-pushes AniList's `REPEATING` status.**
   Consistent with §5.3's rewatch/status independence: a new
   `watch_event` on an already-`completed` show never changes what
   LCARS pushes for status, on AniList or anywhere else. AniList shows
   `COMPLETED` throughout a rewatch unless the user explicitly sets a
-  different local status.
-- Interactive add-show/id-remap flows do **not** get the same direct
-  fast-path — they proxy through LCARS so its reconciliation logic
-  applies consistently.
+  different local status. (`markSeasonRewatch` is a separate, explicit,
+  caller-supplied-count mutation — see `todo.md`, B.21-adjacent write-mirror entries.)
+- Interactive add-show/id-remap flows do **not** get a direct fast-path — they proxy through
+  LCARS so its reconciliation logic applies consistently. (Unchanged by the retirement above —
+  this was always the rule for these flows, not part of the exception being removed.)
 
 ### 6.9 MAL integration (verified — §10.1 research pass)
 
