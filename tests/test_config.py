@@ -71,6 +71,48 @@ def test_sonarr_env_vars_override_file(tmp_path, monkeypatch):
     assert cfg.sonarr_url == "http://from-env:8989"
 
 
+def test_arr_add_defaults_default_to_none(tmp_path, monkeypatch):
+    cfg = load_config(config_path=tmp_path / "does-not-exist.ini")
+    assert cfg.sonarr_anime_root_folder is None
+    assert cfg.sonarr_tv_root_folder is None
+    assert cfg.sonarr_anime_quality_profile_id is None
+    assert cfg.sonarr_tv_quality_profile_id is None
+    assert cfg.radarr_root_folder is None
+    assert cfg.radarr_quality_profile_id is None
+
+
+def test_arr_add_defaults_load_from_file(tmp_path):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text(
+        "[lcars]\n"
+        "sonarr_anime_root_folder = /data/media/anime\n"
+        "sonarr_tv_root_folder = /data/media/Series\n"
+        "sonarr_anime_quality_profile_id = 9\n"
+        "sonarr_tv_quality_profile_id = 4\n"
+        "radarr_root_folder = /data/media/movies\n"
+        "radarr_quality_profile_id = 7\n"
+    )
+    cfg = load_config(config_path=config_path)
+    assert cfg.sonarr_anime_root_folder == "/data/media/anime"
+    assert cfg.sonarr_tv_root_folder == "/data/media/Series"
+    assert cfg.sonarr_anime_quality_profile_id == 9
+    assert cfg.sonarr_tv_quality_profile_id == 4
+    assert cfg.radarr_root_folder == "/data/media/movies"
+    assert cfg.radarr_quality_profile_id == 7
+
+
+def test_arr_add_defaults_env_vars_override_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text(
+        "[lcars]\nsonarr_anime_root_folder = /from-file\nsonarr_anime_quality_profile_id = 1\n"
+    )
+    monkeypatch.setenv("LCARS_SONARR_ANIME_ROOT_FOLDER", "/from-env")
+    monkeypatch.setenv("LCARS_SONARR_ANIME_QUALITY_PROFILE_ID", "9")
+    cfg = load_config(config_path=config_path)
+    assert cfg.sonarr_anime_root_folder == "/from-env"
+    assert cfg.sonarr_anime_quality_profile_id == 9
+
+
 def test_anilist_oauth_fields_load_from_file(tmp_path):
     config_path = tmp_path / "lcars.ini"
     config_path.write_text(

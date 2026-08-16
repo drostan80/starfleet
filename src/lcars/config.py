@@ -96,6 +96,31 @@ class Config:
     sonarr_api_key: str | None = None
     radarr_url: str | None = None
     radarr_api_key: str | None = None
+    # B.21 — LCARS-configured defaults for addShowWithArr's own
+    # search-and-add flow: "for now" caller-supplied root folder/quality
+    # profile picking was rejected in favor of these fixed values (user's
+    # own call) — a true thin client shouldn't need Sonarr/Radarr-shaped
+    # domain knowledge just to add a show. Not secrets (a path and an
+    # integer id, not credentials) — same plain env-var-override
+    # treatment sonarr_url gets, not _resolve_secret's file/_FILE
+    # machinery. Split anime vs. tv for Sonarr, matching the real,
+    # live-confirmed root-folder/quality-profile split already on this
+    # deployment's own Sonarr instance (/data/media/anime vs
+    # /data/media/Series, a distinct "[Anime] Remux-1080p" profile) — the
+    # same split Data's own now-retired _pick_sonarr_defaults() heuristic
+    # discovered at runtime, now a fixed value instead of a per-add pick.
+    # One pair for Radarr (v1 scope — this deployment's own Radarr only
+    # has one root folder today; a second anime-movie-specific pair is
+    # one more field + one branch if that's ever needed). All optional:
+    # not configured means the arr-add half of addShowWithArr is skipped
+    # (same "not configured = same as not linked" treatment sonarr_url/
+    # radarr_url already get), never a hard failure.
+    sonarr_anime_root_folder: str | None = None
+    sonarr_tv_root_folder: str | None = None
+    sonarr_anime_quality_profile_id: int | None = None
+    sonarr_tv_quality_profile_id: int | None = None
+    radarr_root_folder: str | None = None
+    radarr_quality_profile_id: int | None = None
     # A.9 — client_id/secret are Data/aniq's existing registered AniList
     # app's credentials (reused, confirmed, not a new registration);
     # access_token is LCARS's own, obtained via `lcars anilist-login`
@@ -185,6 +210,20 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.sonarr_api_key = parser["lcars"].get("sonarr_api_key", fallback=None)
             cfg.radarr_url = parser["lcars"].get("radarr_url", fallback=None)
             cfg.radarr_api_key = parser["lcars"].get("radarr_api_key", fallback=None)
+            cfg.sonarr_anime_root_folder = parser["lcars"].get(
+                "sonarr_anime_root_folder", fallback=None
+            )
+            cfg.sonarr_tv_root_folder = parser["lcars"].get("sonarr_tv_root_folder", fallback=None)
+            cfg.sonarr_anime_quality_profile_id = parser["lcars"].getint(
+                "sonarr_anime_quality_profile_id", fallback=None
+            )
+            cfg.sonarr_tv_quality_profile_id = parser["lcars"].getint(
+                "sonarr_tv_quality_profile_id", fallback=None
+            )
+            cfg.radarr_root_folder = parser["lcars"].get("radarr_root_folder", fallback=None)
+            cfg.radarr_quality_profile_id = parser["lcars"].getint(
+                "radarr_quality_profile_id", fallback=None
+            )
             cfg.anilist_client_id = parser["lcars"].get("anilist_client_id", fallback=None)
             cfg.anilist_client_secret = parser["lcars"].get("anilist_client_secret", fallback=None)
             cfg.anilist_access_token = parser["lcars"].get("anilist_access_token", fallback=None)
@@ -207,6 +246,24 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     cfg.sonarr_api_key = _resolve_secret(cfg.sonarr_api_key, "LCARS_SONARR_API_KEY")
     cfg.radarr_url = os.environ.get("LCARS_RADARR_URL", cfg.radarr_url)  # not a secret
     cfg.radarr_api_key = _resolve_secret(cfg.radarr_api_key, "LCARS_RADARR_API_KEY")
+    # B.21 — none of these six are secrets (paths and integer ids), same
+    # plain-env-var-override treatment as sonarr_url/radarr_url above.
+    cfg.sonarr_anime_root_folder = os.environ.get(
+        "LCARS_SONARR_ANIME_ROOT_FOLDER", cfg.sonarr_anime_root_folder
+    )
+    cfg.sonarr_tv_root_folder = os.environ.get(
+        "LCARS_SONARR_TV_ROOT_FOLDER", cfg.sonarr_tv_root_folder
+    )
+    env_sonarr_anime_qp = os.environ.get("LCARS_SONARR_ANIME_QUALITY_PROFILE_ID")
+    if env_sonarr_anime_qp is not None:
+        cfg.sonarr_anime_quality_profile_id = int(env_sonarr_anime_qp)
+    env_sonarr_tv_qp = os.environ.get("LCARS_SONARR_TV_QUALITY_PROFILE_ID")
+    if env_sonarr_tv_qp is not None:
+        cfg.sonarr_tv_quality_profile_id = int(env_sonarr_tv_qp)
+    cfg.radarr_root_folder = os.environ.get("LCARS_RADARR_ROOT_FOLDER", cfg.radarr_root_folder)
+    env_radarr_qp = os.environ.get("LCARS_RADARR_QUALITY_PROFILE_ID")
+    if env_radarr_qp is not None:
+        cfg.radarr_quality_profile_id = int(env_radarr_qp)
     cfg.anilist_client_id = _resolve_secret(cfg.anilist_client_id, "LCARS_ANILIST_CLIENT_ID")
     cfg.anilist_client_secret = _resolve_secret(
         cfg.anilist_client_secret, "LCARS_ANILIST_CLIENT_SECRET"
