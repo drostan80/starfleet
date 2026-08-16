@@ -1,5 +1,43 @@
 # Bugs
 
+- [ ] **B.21 — LCARS gets real Sonarr+Radarr write capability, in progress.** 2026-08-16, planned
+  in a dedicated plan-mode session (`/home/drostan/.claude/plans/gentle-jingling-snail.md`) before
+  the Data-thin-client swap starts as its own future session. Full design: LCARS-configured
+  root-folder/quality-profile defaults (not caller-supplied, "for now"), auto-unmonitor-on-drop
+  (automatic), a new combined `addShowWithArr` mutation (search+create-in-Sonarr/Radarr+track-in-
+  LCARS in one call) — see the plan file for the complete rationale and open risks.
+  **Part A (read coverage) — confirmed sufficient, no new LCARS work needed.** Cross-checked every
+  direct AniList read Data performs today against LCARS's existing fields: all already covered
+  (`totalEpisodes`, `posterUrl`/`bannerUrl`/`studioCredits`/titles, air dates already reconciled
+  server-side via B.4, Sonarr's `queue()` already covered by the existing `DOWNLOADING`
+  availability state, `episode_files()` already covered by `filePathSonarr`). One minor gap
+  deliberately deferred: AniList's `synonyms` field (Data's aninote note-matching only).
+  **Slice 1+2 shipped (`dcc6110`)**: `_post`/`_put` + `lookup_series`/`root_folders`/
+  `quality_profiles`/`add_series`/`update_series` on `SonarrClient`, same shape on `RadarrClient` —
+  live-verified against the real production Radarr instance first (a not-yet-owned
+  `movie/lookup` candidate has no `id`/`path` key, `qualityProfileId: 0`, `monitored: false`).
+  No callers yet.
+  **Slice 3 shipped (`e7f656f`)**: six new config fields (`sonarr_anime_root_folder`/
+  `sonarr_tv_root_folder`/`sonarr_anime_quality_profile_id`/`sonarr_tv_quality_profile_id`/
+  `radarr_root_folder`/`radarr_quality_profile_id`), matching the real, live-confirmed split
+  already on this deployment's own Sonarr instance.
+  **Slice 4 shipped and deployed (`0ec8f52`, `v0.1.20`)**: auto-unmonitor-on-drop — a shared
+  `_unmonitor_in_arr_on_drop`, wired into `setTracked(false)`/`softDeleteShow` (only on a real
+  `1→0` transition), best-effort (matches `_push_show_status`'s shape, not `confirmHardDelete`'s
+  abort-before-commit one — the local write already committed by the time this runs). Sonarr
+  unmonitors at both series and season level in one PUT (grounded in this same investigation's own
+  earlier live-checked note on what Data's `_prompt_unmonitor` actually produced); Radarr,
+  movie-level only. `setTracked(true)` deliberately does not re-monitor. 8 new tests, 792 passed.
+  **Deployed 2026-08-16, `v0.1.20`** — DB snapshotted first (`lcars.db.bak-20260816-arr-write-v0.1.20`).
+  No migration (none of this round needs one). Both containers healthy, `ops` hit the same one-time
+  startup race every deploy shows and recovered clean. Verified live via schema introspection;
+  `pending_review` count unchanged (0) post-deploy. **Not yet exercised against a real drop** — the
+  8 new tests cover the logic thoroughly, but no real show has actually been dropped against this
+  version yet to confirm the real Sonarr/Radarr PUT lands as designed; deliberately not tested by
+  dropping a real production show without asking first.
+  **Still to build**: the combined `addShowWithArr` mutation (slice 5, the larger remaining piece),
+  `BUILD_PLAN.md`'s own `B.21` entry, then Part C (delete the `aa` chord in `~/repos/data`).
+
 - [x] **Ascendance of a Bookworm's currently-airing part (S4/"Adopted Daughter of an Archduke")
   invisible in Data — Sonarr-vs-AniList season-split mismatch, real data fixed, real durability
   gap left open** (2026-08-15). User's report: Sonarr confirmed episode 18 (absolute ep 54) out
