@@ -35,8 +35,31 @@
   8 new tests cover the logic thoroughly, but no real show has actually been dropped against this
   version yet to confirm the real Sonarr/Radarr PUT lands as designed; deliberately not tested by
   dropping a real production show without asking first.
-  **Still to build**: the combined `addShowWithArr` mutation (slice 5, the larger remaining piece),
-  `BUILD_PLAN.md`'s own `B.21` entry, then Part C (delete the `aa` chord in `~/repos/data`).
+  **Slice 5 shipped and deployed (`511c241`, `v0.1.21`)**: `addShowWithArr` — the combined
+  search-Sonarr/Radarr-then-track-in-LCARS mutation. `shows.create_show_with_arr_add()`
+  pre-validates locally first, then re-validates a *second* time once the real tvdb/tmdb id is
+  resolved, before ever writing to Sonarr/Radarr — a title-only add's resolved id could belong to
+  a different, already-tracked LCARS show. Deliberately not best-effort (raises and aborts before
+  anything is written anywhere on a Sonarr/Radarr failure) — an orphan series in Sonarr on a failed
+  local write is worse than a blocked add.
+  **A real bug caught by the new tests before it ever shipped**: the resolver's first draft
+  returned `AddShowResult` fields with camelCase dict keys (`sonarrSeriesCreated`, etc.) —
+  `convert_names_case=True` expects snake_case, so every successful call would have returned null
+  on every non-nullable field and errored, live, on the very first real use. Caught by the tests
+  themselves (a real `GraphQLError: Cannot return null for non-nullable field` failure), fixed
+  before it ever reached production — exactly the value of writing the tests before deploying.
+  8 new tests, 800 passed.
+  **Deployed 2026-08-16, `v0.1.21`** — DB snapshotted first (`lcars.db.bak-20260816-addshowwitharr-v0.1.21`).
+  Production `lcars.ini` also snapshotted (`lcars.ini.bak-20260816-pre-arr-defaults`) before adding
+  the six new config values with the real, live-confirmed defaults: `sonarr_anime_root_folder=/data/media/anime`
+  (quality profile 9), `sonarr_tv_root_folder=/data/media/Series` (quality profile 4),
+  `radarr_root_folder=/data/media/movies` (quality profile 7). No migration. Both containers
+  healthy, `ops` hit the same one-time startup race and recovered clean. Verified live: schema
+  introspection confirms `addShowWithArr` resolves; `pending_review` count unchanged (0)
+  post-deploy. **Not yet exercised against a real add** — same "strong test coverage, no live
+  production write performed without asking first" posture as slice 4's own deploy note.
+  **B.21 code-complete.** `BUILD_PLAN.md` gets its own B.21 entry next, then Part C of the plan
+  (delete the `aa` chord in `~/repos/data`).
 
 - [x] **Ascendance of a Bookworm's currently-airing part (S4/"Adopted Daughter of an Archduke")
   invisible in Data — Sonarr-vs-AniList season-split mismatch, real data fixed, real durability

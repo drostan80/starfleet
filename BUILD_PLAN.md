@@ -4719,6 +4719,40 @@ complete before full rollout.
   AniList data, MAL legacy scores (§9/§6.1) if they are unique to MAL, score should be taken first and primarily from Anilist. — the only time data flows
   *into* LCARS from these sources rather than out for now, a future way to check on discrepency between outside trackers and personal database and reconciliation shouuld be build at a later status_change
 
+- [x] **B.21 — LCARS gets real Sonarr+Radarr write capability.** 2026-08-16, planned in a dedicated
+  plan-mode session (`/home/drostan/.claude/plans/gentle-jingling-snail.md`) as the prerequisite
+  for the Data-thin-client swap (a separate future session, deliberately scoped out of this one) —
+  Data can't stop calling Sonarr/Radarr directly until LCARS itself can do everything Data
+  currently does. Full design, decisions, and open risks in the plan file; summary here.
+  **Part A (read coverage)**: confirmed sufficient, no new LCARS query/field work needed — every
+  direct AniList read Data performs today (episode totals, cover/studio/titles, air-date
+  reconciliation, Sonarr's `queue()`/`episode_files()`) already has an LCARS equivalent. One minor
+  gap deliberately deferred: AniList's `synonyms` field (Data's aninote feature only).
+  **Part B (write capability), 5 slices, all shipped and deployed**:
+  1. `_post`/`_put` + `lookup_series`/`root_folders`/`quality_profiles`/`add_series`/
+     `update_series` on `sonarr_client.py`, same shape on `radarr_client.py` — live-verified
+     against the real production Radarr instance first (`v0.1.20`'s own commit, `dcc6110`).
+  2. Six new config fields — LCARS-configured root-folder/quality-profile defaults (user's own
+     call: not caller-supplied, "for now"), anime/tv split for Sonarr matching the real, live split
+     on this deployment's own instance (`e7f656f`).
+  3. Auto-unmonitor-on-drop — `_unmonitor_in_arr_on_drop`, wired into `setTracked(false)`/
+     `softDeleteShow` (real `1→0` transition only), best-effort, Sonarr unmonitors at both series
+     and season level in one PUT, Radarr movie-level only, `setTracked(true)` deliberately doesn't
+     re-monitor. First slice to actually write to Sonarr/Radarr in production (`0ec8f52`, `v0.1.20`).
+  4. `addShowWithArr` — the combined search-Sonarr/Radarr-then-track-in-LCARS mutation, one round
+     trip. Pre-validates locally twice (before and after the real tvdb/tmdb id resolves) so the one
+     real outbound write never fires on a request that was always going to be rejected locally —
+     deliberately not best-effort, raises and aborts before writing anywhere on failure, to avoid
+     ever orphaning a Sonarr/Radarr entry with no matching LCARS show (`511c241`, `v0.1.21`). A real
+     bug (camelCase vs. snake_case dict keys breaking every non-nullable field on the response) was
+     caught by the new tests before it ever reached production.
+  Every slice deployed with a DB snapshot first, verified live via schema introspection, and
+  `pending_review`/`status_change`/`watch_event` counts checked unchanged post-deploy. **None of
+  the five slices has been exercised against a real Sonarr/Radarr write yet** (add or unmonitor) —
+  strong test coverage throughout, but deliberately not tested against production by performing a
+  real add/drop without asking first. Next real step, per the plan: Part C (delete the `aa` chord
+  in `~/repos/data`), then the Data-thin-client swap itself as its own future session.
+
 ---
 
 ## Cutover
