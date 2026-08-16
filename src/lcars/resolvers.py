@@ -38,12 +38,14 @@ from lcars import (
     metadata,
     pagination,
     pending_review,
+    radarr_client,
     season_mapping,
     service_health,
     service_presence,
     show_backfill,
     show_merge,
     shows,
+    sonarr_client,
     untracked_sweep,
     util,
     watch_reconcile,
@@ -1997,6 +1999,76 @@ def resolve_mark_season_rewatch(_, info, season_id, repeat_count):
     return season_mapping.get_season(conn, season_id)
 
 
+def _unmonitor_in_arr_on_drop(conn, show_id: str) -> None:
+    """B.21, auto-sync — the missing half of what Data's own (now-being-
+    deleted) `_prompt_unmonitor` used to do interactively: unmonitoring
+    a dropped show in Sonarr/Radarr, now server-side and automatic, no
+    prompt. Called from both `setTracked(false)` and `softDeleteShow`,
+    only on a real `1 -> 0` tracked transition (each caller's own guard).
+
+    Best-effort — same "push as a side effect of the state change,
+    never blocks the local write" shape `_push_show_status` already has
+    for `setStatus`, NOT `confirmHardDelete`'s abort-before-commit
+    treatment: the local `tracked = 0` write has already committed by
+    the time this runs (called after `conn.commit()` in both callers),
+    so an unreachable Sonarr/Radarr here shouldn't block the user from
+    dropping a show they already dropped locally. A failure opens a
+    `pending_review` (field `sonarr_unmonitor`/`radarr_unmonitor`)
+    rather than silently vanishing.
+
+    Sonarr: unmonitor at *both* the series level and every entry in
+    `series["seasons"]`, in one `PUT` — grounded directly in todo.md's
+    own live-checked note from this same investigation (both levels
+    `monitored: false` is the real, confirmed state Data's interactive
+    prompt used to produce for two real shows). Radarr: movie-level
+    `monitored: false` only, no season concept for a movie.
+
+    `setTracked(true)` deliberately does NOT re-monitor — symmetric
+    with `cancelHardDelete`'s own "doesn't re-track, a separate call
+    does that if wanted" precedent; re-tracking in LCARS is not the
+    same decision as wanting Sonarr/Radarr to resume actively grabbing
+    it. Not a gap, an explicit non-behavior."""
+    cfg = config.get_current()
+    tvdb_row = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'tvdb'",
+        (show_id,),
+    ).fetchone()
+    if tvdb_row and cfg.sonarr_url and cfg.sonarr_api_key:
+        try:
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                series = client.series_by_tvdb_id(int(tvdb_row["external_id"]))
+                if series is not None:
+                    series["monitored"] = False
+                    for season_entry in series.get("seasons", []):
+                        season_entry["monitored"] = False
+                    client.update_series(series)
+            service_health.record_success(conn, "sonarr")
+        except sonarr_client.SonarrError as e:
+            service_health.record_failure(conn, "sonarr", str(e))
+            pending_review.open_or_extend(
+                conn, "show", show_id, "sonarr_unmonitor", "sonarr", None, str(e)
+            )
+    tmdb_row = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'tmdb'",
+        (show_id,),
+    ).fetchone()
+    if tmdb_row and cfg.radarr_url and cfg.radarr_api_key:
+        try:
+            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                movie = client.movie_by_tmdb_id(int(tmdb_row["external_id"]))
+                if movie is not None:
+                    movie["monitored"] = False
+                    client.update_movie(movie)
+            service_health.record_success(conn, "radarr")
+        except radarr_client.RadarrError as e:
+            service_health.record_failure(conn, "radarr", str(e))
+            pending_review.open_or_extend(
+                conn, "show", show_id, "radarr_unmonitor", "radarr", None, str(e)
+            )
+    conn.commit()  # this function's own writes (service_health/pending_review) — called
+    # after the caller's own tracked=0 commit, so it commits its own side effects itself
+
+
 @mutation.field("setTracked")
 def resolve_set_tracked(_, info, show_id, tracked):
     conn = db.get_connection()
@@ -2005,6 +2077,7 @@ def resolve_set_tracked(_, info, show_id, tracked):
     if row is None:
         raise GraphQLError(f"no such show: {show_id}")
     now = util.now_utc_iso()
+    was_tracked = bool(row["tracked"])
     conn.execute(
         "UPDATE show SET tracked = ?, updated_at = ? WHERE id = ?", (int(tracked), now, show_id)
     )
@@ -2015,6 +2088,8 @@ def resolve_set_tracked(_, info, show_id, tracked):
         (ids.generate_id(conn, "k"), show_id, row["tracked"], int(tracked), now, client),
     )
     conn.commit()
+    if was_tracked and not tracked:
+        _unmonitor_in_arr_on_drop(conn, show_id)  # B.21, auto-sync — best-effort
     return _get_show(conn, show_id)
 
 
@@ -2113,6 +2188,8 @@ def resolve_soft_delete_show(_, info, show_id):
         (ids.generate_id(conn, "k"), show_id, row["tracked"], now, client),
     )
     conn.commit()
+    if row["tracked"]:
+        _unmonitor_in_arr_on_drop(conn, show_id)  # B.21, auto-sync — best-effort
     return _get_show(conn, show_id)
 
 

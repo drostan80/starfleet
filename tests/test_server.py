@@ -292,9 +292,11 @@ SHOW_METADATA_QUERY = """
 
 
 class _FakeSonarrClient:
-    def __init__(self, series=None, episodes=None):
+    def __init__(self, series=None, episodes=None, error=None):
         self._series = series
         self._episodes = episodes or []
+        self._error = error
+        self.calls = []
 
     def __enter__(self):
         return self
@@ -303,10 +305,18 @@ class _FakeSonarrClient:
         pass
 
     def series_by_tvdb_id(self, tvdb_id):
+        self.calls.append(("series_by_tvdb_id", tvdb_id))
         return self._series
 
     def episodes(self, series_id, include_episode_file=False):
         return self._episodes
+
+    def update_series(self, series):
+        """B.21 — auto-unmonitor-on-drop's own write."""
+        self.calls.append(("update_series", series))
+        if self._error is not None:
+            raise self._error
+        return series
 
 
 class _FakeTmdbClient:
@@ -343,8 +353,10 @@ class _FakeTmdbClient:
 
 
 class _FakeRadarrClient:
-    def __init__(self, movie=None):
+    def __init__(self, movie=None, error=None):
         self._movie = movie
+        self._error = error
+        self.calls = []
 
     def __enter__(self):
         return self
@@ -353,7 +365,15 @@ class _FakeRadarrClient:
         pass
 
     def movie_by_tmdb_id(self, tmdb_id):
+        self.calls.append(("movie_by_tmdb_id", tmdb_id))
         return self._movie
+
+    def update_movie(self, movie):
+        """B.21 — auto-unmonitor-on-drop's own write."""
+        self.calls.append(("update_movie", movie))
+        if self._error is not None:
+            raise self._error
+        return movie
 
 
 async def test_add_show_anilist_fetch_populates_metadata_season_and_cast(client, monkeypatch):
@@ -5014,6 +5034,197 @@ async def test_set_tracked_records_history(client):
     assert entries[0]["node"]["newTracked"] is False
     # TrackedChange.show found unbound in the same audit pass as StatusChange.show.
     assert entries[0]["node"]["show"]["id"] == show["id"]
+
+
+# --- B.21 — auto-unmonitor-on-drop -------------------------------------------
+
+
+async def test_set_tracked_false_unmonitors_in_sonarr_at_both_levels(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    show = await add_show(client)
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show["id"], "externalId": "421855", "url": "https://thetvdb.com/x"},
+        headers=auth_headers(),
+    )
+    seasons = [
+        {"seasonNumber": 1, "monitored": True},
+        {"seasonNumber": 2, "monitored": True},
+    ]
+    fake = _FakeSonarrClient(series={"id": 4, "monitored": True, "seasons": seasons})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setTracked(showId: $id, tracked: false) { tracked } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    update_calls = [c for c in fake.calls if c[0] == "update_series"]
+    assert len(update_calls) == 1
+    updated_series = update_calls[0][1]
+    assert updated_series["monitored"] is False
+    assert all(s["monitored"] is False for s in updated_series["seasons"])
+
+
+async def test_soft_delete_show_unmonitors_in_sonarr(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    show = await add_show(client)
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show["id"], "externalId": "421855", "url": "https://thetvdb.com/x"},
+        headers=auth_headers(),
+    )
+    fake = _FakeSonarrClient(series={"id": 4, "monitored": True, "seasons": []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { softDeleteShow(showId: $id) { tracked } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    update_calls = [c for c in fake.calls if c[0] == "update_series"]
+    assert len(update_calls) == 1
+    assert update_calls[0][1]["monitored"] is False
+
+
+async def test_set_tracked_false_unmonitors_in_radarr(client, monkeypatch):
+    config.set_current(config.Config(radarr_url="http://radarr:7878", radarr_api_key="key"))
+    show = await add_show(client, mediaShape="MOVIE", titleRomaji="A Movie", primaryTitle="ROMAJI")
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID,
+        {"id": show["id"], "externalId": "9323", "url": "https://themoviedb.org/x"},
+        headers=auth_headers(),
+    )
+    fake = _FakeRadarrClient(movie={"id": 4, "monitored": True})
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setTracked(showId: $id, tracked: false) { tracked } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    update_calls = [c for c in fake.calls if c[0] == "update_movie"]
+    assert len(update_calls) == 1
+    assert update_calls[0][1]["monitored"] is False
+
+
+async def test_set_tracked_false_does_not_re_put_on_a_repeat_call(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    show = await add_show(client)
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show["id"], "externalId": "421855", "url": "https://thetvdb.com/x"},
+        headers=auth_headers(),
+    )
+    fake = _FakeSonarrClient(series={"id": 4, "monitored": True, "seasons": []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    for _ in range(2):
+        await gql(
+            client,
+            "mutation($id: ID!) { setTracked(showId: $id, tracked: false) { tracked } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    assert len([c for c in fake.calls if c[0] == "update_series"]) == 1
+
+
+async def test_set_tracked_true_does_not_remonitor(client, monkeypatch):
+    """setTracked(true) deliberately does not re-monitor — a separate,
+    explicit decision, not inferred from re-tracking."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    show = await add_show(client)
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show["id"], "externalId": "421855", "url": "https://thetvdb.com/x"},
+        headers=auth_headers(),
+    )
+    fake = _FakeSonarrClient(series={"id": 4, "monitored": False, "seasons": []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setTracked(showId: $id, tracked: true) { tracked } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert fake.calls == []
+
+
+async def test_set_tracked_false_unmonitor_failure_is_best_effort(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    show = await add_show(client)
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show["id"], "externalId": "421855", "url": "https://thetvdb.com/x"},
+        headers=auth_headers(),
+    )
+    fake = _FakeSonarrClient(
+        series={"id": 4, "monitored": True, "seasons": []},
+        error=sonarr_client.SonarrError("boom"),
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        "mutation($id: ID!) { setTracked(showId: $id, tracked: false) { tracked } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["setTracked"]["tracked"] is False  # the drop itself still succeeded
+
+    reviews = await _pending_reviews_for(client, show["id"])
+    unmonitor_reviews = [r for r in reviews if r["field"] == "sonarr_unmonitor"]
+    assert len(unmonitor_reviews) == 1
+    assert unmonitor_reviews[0]["source"] == "sonarr"
+
+
+async def test_set_tracked_false_no_arr_call_when_not_linked(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    show = await add_show(client)  # no tvdb link at all
+    called = []
+    monkeypatch.setattr(
+        sonarr_client, "SonarrClient", lambda *a, **kw: called.append(True) or _FakeSonarrClient()
+    )
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setTracked(showId: $id, tracked: false) { tracked } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert called == []
+
+
+async def test_set_tracked_false_no_arr_call_when_not_configured(client, monkeypatch):
+    show = await add_show(client)
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show["id"], "externalId": "421855", "url": "https://thetvdb.com/x"},
+        headers=auth_headers(),
+    )
+    called = []
+    monkeypatch.setattr(
+        sonarr_client, "SonarrClient", lambda *a, **kw: called.append(True) or _FakeSonarrClient()
+    )
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setTracked(showId: $id, tracked: false) { tracked } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert called == []
 
 
 async def test_score_history_includes_show(client):
