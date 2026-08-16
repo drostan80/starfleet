@@ -804,6 +804,68 @@
   enumeration to build from, per the user's own explicit instruction, before any of B.5.2's write
   path gets implemented.
 
+  **Build started 2026-08-16, first two of five gaps closed** (part of the "Data becomes a real
+  thin client" push — see the new BUILD_PLAN.md section for the full staged plan this sits under).
+  Checked live against AniList's own schema first (introspection, no auth needed):
+  `SaveMediaListEntry` takes `progress`/`repeat`/`startedAt`/`completedAt` directly, keyed on
+  `mediaId` alone (upserts the viewer's own entry, no lookup needed to *write*);
+  `DeleteMediaListEntry` is the one call in the family keyed on the list *entry's* id instead,
+  confirming the spec's original note.
+  - **Gaps #2/#3 (episode watched / un-watched) closed as one function, not two**: AniList's
+    `progress` is a single high-water-mark scalar, not a set of episodes, so both directions
+    recompute-and-push the same value — `_push_show_episode_progress` (`resolvers.py`), wired into
+    every mutation that changes `episode.state` (`addWatchEvent`, `deleteWatchEvent`,
+    `markSeasonWatched`, `markEpisodeRangeWatched`, `markEpisodeSkipped` — the first two are the
+    only ones Data itself currently calls, confirmed by grepping `~/repos/data`; all five wired for
+    correctness regardless of caller). Progress is the **highest contiguous watched-or-skipped run
+    from episode 1**, not a raw count — a gap (e.g. 1,2 watched, 3 not, 4 watched) reports 2, never
+    4, because `reconcile_watch_progress` reads this same field back and an inflated push would
+    wrongly mark the gap watched in LCARS on the next AniList sync. Skipped counts as passed (not
+    watched) so an intentionally-skipped episode doesn't stall progress forever — matches
+    `watch_reconcile.py`'s own existing "not the same as never watched" read-side distinction.
+    Assumes the same one-LCARS-season-maps-to-one-AniList-media shape the read side already
+    assumes uncritically — not a new gap, the same already-logged "hierarchical season
+    subdivision" one (Bookworm/Mushoku Tensei cases above).
+  - **Gap #1 (status at creation) closed**: `addShow` now pushes the show's real post-creation
+    status (always `planned` today — `AddShowInput` has no status field — but read back rather
+    than hardcoded, so nothing here needs touching if that ever changes) once `fetch_and_populate`
+    has had its chance to attach an `anilist_id` via Fribb. Deliberately *not* added to
+    `shows.create_show()` itself — `show_backfill.py` calls that directly for a genuinely different
+    reason (reading an *existing* AniList status in via `_seed_status_from_anilist`, never
+    pushing), so the push lives in the `addShow` resolver only.
+  - MAL given no equivalent push (score/status already have one) — user's request was AniList-only;
+    noted inline in `resolvers.py` so the asymmetry reads as a scope decision, not a miss.
+  - 9 new tests (contiguous-run push, gap handling, skip-counts, unlinked-season no-op, delete
+    reduces progress, status-at-creation, no-push-without-link), full suite green.
+  - **Still open, in the order advisor review recommended (each its own commit, not folded in)**:
+    gap #4 (`DeleteMediaListEntry`, needs the list-entry-id lookup), rewatch/`repeat`,
+    `startedAt`/`completedAt` (needs a schema migration + the historical AniList backfill read,
+    genuinely separate scope).
+  - **Not deployed yet** — this changes live write behavior (every real `w` press in Data now
+    pushes to the user's real AniList account), flagged for explicit go-ahead before shipping
+    rather than following the bug-fix batch's auto-deploy pattern.
+
+- [ ] **Data-as-thin-client audit (point 2 of the staged plan) — every direct AniList/Sonarr call
+  site in `~/repos/data`, checked against what LCARS already covers.** 2026-08-16.
+  **Direct-to-AniList reads** (`self._anilist_client.*` in `app.py`), all local-cache-only, no
+  LCARS equivalent exists for any of them yet: `media_list_entries` (bulk progress/status/score for
+  the visible calendar window), `media_episode_totals`, `airing_schedules`, `media_title`,
+  `media_cover_and_studio`.
+  **Direct-to-AniList writes, bypassing LCARS entirely — the real gap**: `save_media_list_entry`
+  called from two places, both `progress: 0, status: CURRENT` — `_search_and_write_anilist_entry`
+  (the `aa` action, already flagged for deletion above) and `_link_to_anilist_interactive`'s search
+  fallback (the normal "add show" flow's own AniList linking, not just `aa`). Both then best-effort
+  bridge the new link back to LCARS afterward (`_bridge_anilist_link_to_lcars`) — LCARS finds out
+  second-hand, the opposite of source-of-truth.
+  **Direct-to-Sonarr** (`self._sonarr_client.*`): reads driving most of Data's own calendar/episode
+  display (`series`, `episodes_for_series`, `queue`, `episode_files`) plus two writes —
+  `update_series` (the drop→unmonitor flow) and `add_series` (adding a new show).
+  **Conclusion**: point 1's write-mirror function set covers what LCARS needs to *receive* from
+  Data; it doesn't yet cover replacing Data's own direct AniList/Sonarr reads with LCARS queries,
+  or moving `_link_to_anilist_interactive`'s write path through LCARS's `addShow`/`setSeasonMapping`
+  instead of `save_media_list_entry` directly. Full swap-over plan (stage 3+ of the earlier
+  bullet-point list) not started — this is the audit stage 3 needs, not the swap itself.
+
 - [ ] **LiveChart.me's headlines RSS as a possible forward-looking delay-announcement source** —
   raised 2026-08-13, prompted by wanting confirmation that animeschedule.net's RSS (B.5) could
   eventually catch a schedule delay like "Draw This, Then Die!" episode 7's (a full week later

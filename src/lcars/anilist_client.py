@@ -504,15 +504,21 @@ def save_media_list_entry(
     anilist_id: int,
     status: str | None = None,
     score: float | None = None,
+    progress: int | None = None,
     client: httpx.Client | None = None,
 ) -> dict:
-    """§6.1/§6.8 — the actual push. `status`/`score` are each omitted
-    from the mutation's variables (not just passed as null) unless
-    explicitly given — same reasoning as Data's own
-    save_media_list_entry(): GraphQL treats an explicit null for an
-    optional argument as "unset this", not "leave it alone", so a
-    score-only push must never accidentally reset status (and vice
-    versa)."""
+    """§6.1/§6.8, extended for the LCARS->AniList write-mirror (see
+    todo.md's full function enumeration): the actual push.
+    `status`/`score`/`progress` are each omitted from the mutation's
+    variables (not just passed as null) unless explicitly given — same
+    reasoning as Data's own save_media_list_entry(): GraphQL treats an
+    explicit null for an optional argument as "unset this", not "leave
+    it alone", so e.g. a progress-only push must never accidentally
+    reset score/status (and vice versa). `SaveMediaListEntry` keys on
+    `mediaId` alone (AniList upserts the viewer's own list entry for
+    that media, no entry id needed here — DeleteMediaListEntry is the
+    one call in this family that needs the entry's own id instead, see
+    that function below)."""
     fields = []
     variables: dict[str, object] = {"mediaId": anilist_id}
     if status is not None:
@@ -521,17 +527,22 @@ def save_media_list_entry(
     if score is not None:
         fields.append("$score: Float")
         variables["score"] = score
+    if progress is not None:
+        fields.append("$progress: Int")
+        variables["progress"] = progress
     var_defs = ", ".join(["$mediaId: Int", *fields])
     args = ", ".join(
         ["mediaId: $mediaId"]
         + (["status: $status"] if status is not None else [])
         + (["score: $score"] if score is not None else [])
+        + (["progress: $progress"] if progress is not None else [])
     )
     mutation = f"""
     mutation ({var_defs}) {{
       SaveMediaListEntry({args}) {{
         status
         score
+        progress
       }}
     }}
     """

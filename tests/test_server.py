@@ -4518,6 +4518,199 @@ async def test_mark_episode_range_watched(client, migrated_db):
     assert states == {1: "unwatched", 2: "watched", 3: "watched", 4: "watched", 5: "unwatched"}
 
 
+# --- AniList episode-progress push (write-mirror gaps #2/#3, todo.md 2026-08-15/16) -----
+#
+# Same "no token configured -> silent no-op" default as the score/status push tests
+# further up — these explicitly configure one and mock anilist_client.save_media_list_entry.
+
+
+async def test_add_watch_event_pushes_contiguous_progress(client, migrated_db, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 6))
+    await _link_season_anilist(client, show["id"], 1, 111)
+    calls.clear()  # setSeasonMapping's own resolve pass doesn't push; clear defensively anyway
+
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert calls == [(111, {"progress": 1})]
+
+
+async def test_progress_push_stops_at_a_gap_not_a_count(client, migrated_db, monkeypatch):
+    """Episodes 1 and 3 watched, 2 still unwatched — AniList's progress must
+    report 1 (highest contiguous run from episode 1), never 2 (a plain count),
+    since reconcile_watch_progress reads progress back and would otherwise
+    incorrectly mark episode 2 watched in LCARS on the next AniList sync."""
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 4))
+    await _link_season_anilist(client, show["id"], 1, 111)
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    calls.clear()
+
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 3) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert calls == [(111, {"progress": 1})]
+
+
+async def test_delete_watch_event_pushes_reduced_progress(client, migrated_db, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 3))
+    await _link_season_anilist(client, show["id"], 1, 111)
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    second = await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 2) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    calls.clear()
+
+    await gql(
+        client,
+        "mutation($id: ID!) { deleteWatchEvent(watchEventId: $id) }",
+        {"id": second["addWatchEvent"]["id"]},
+        headers=auth_headers(),
+    )
+    assert calls == [(111, {"progress": 1})]
+
+
+async def test_mark_episode_range_watched_pushes_progress(client, migrated_db, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 6))
+    await _link_season_anilist(client, show["id"], 1, 111)
+    calls.clear()
+
+    await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          markEpisodeRangeWatched(showId: $id, season: 1, fromEpisode: 1, toEpisode: 3) {
+            episode
+          }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert calls == [(111, {"progress": 3})]
+
+
+async def test_mark_episode_skipped_counts_toward_progress(client, migrated_db, monkeypatch):
+    """A skip counts as passed for progress purposes even though it never
+    creates a watch_event or flips episode.state to 'watched' — same
+    "not the same thing as never watched" distinction watch_reconcile.py's
+    own read side already draws."""
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 3))
+    await _link_season_anilist(client, show["id"], 1, 111)
+    calls.clear()
+
+    await gql(
+        client,
+        "mutation($id: ID!) { markEpisodeSkipped(episodeId: $id) { state } }",
+        {"id": "e-s1e001"},
+        headers=auth_headers(),
+    )
+    assert calls == [(111, {"progress": 1})]
+
+
+async def test_add_watch_event_no_push_for_unlinked_season(client, migrated_db, monkeypatch):
+    config.set_current(_authenticated_config())
+    called = []
+    monkeypatch.setattr(
+        anilist_client, "save_media_list_entry", lambda *a, **kw: called.append(True)
+    )
+    show = await add_show(client)
+    await _insert_episode(migrated_db, show["id"])  # season 1 never linked to AniList
+
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert called == []
+
+
+async def test_add_show_pushes_status_at_creation(client, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    # The `client` fixture stubs fetch_media to a no-op (None) by default, so
+    # the inline A.8 fetch would never attach season 1's own anilist_id —
+    # override it here, same pattern the on-demand-fetch test section uses.
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    show = await add_show(client, anilistId=999)
+    assert show["status"] == "PLANNED"  # LCARS's own enum value
+    assert calls == [(999, {"status": "PLANNING"})]  # AniList's own enum value
+
+
+async def test_add_show_no_status_push_without_anilist_link(client, monkeypatch):
+    config.set_current(_authenticated_config())
+    called = []
+    monkeypatch.setattr(
+        anilist_client, "save_media_list_entry", lambda *a, **kw: called.append(True)
+    )
+    await add_show(client)  # no anilistId at all
+    assert called == []
+
+
 # --- episode field overrides (§5.2) -----------------------------------------
 
 

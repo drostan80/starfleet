@@ -265,6 +265,81 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
             )
 
 
+def _compute_season_episode_progress(conn, show_id: str, season_number: int) -> int:
+    """AniList's `progress` is one scalar high-water mark, not a set of
+    episodes — derive the highest episode N such that every episode
+    1..N is 'watched' or 'skipped' (a skip counts as passed, not
+    watched, matching watch_reconcile.py's own read-side "not the same
+    thing as never watched" distinction — applied here on the write
+    side so an intentionally-skipped episode doesn't stall progress
+    behind it forever). A numbering gap or an unwatched episode stops
+    the count outright — never report a gap as progress, since
+    reconcile_watch_progress reads this same field back and would
+    incorrectly mark the gap watched in LCARS on the next AniList
+    sync."""
+    episodes = conn.execute(
+        "SELECT episode, state FROM episode WHERE show_id = ? AND season = ? ORDER BY episode",
+        (show_id, season_number),
+    ).fetchall()
+    progress = 0
+    for row in episodes:
+        if row["episode"] != progress + 1 or row["state"] not in ("watched", "skipped"):
+            break
+        progress = row["episode"]
+    return progress
+
+
+def _push_season_progress(conn, season: dict) -> None:
+    """Recomputes and pushes this one season's own episode-watched
+    high-water mark to AniList — same recompute-then-push shape
+    _push_season_score already uses, not a delta (a delta would need
+    AniList's own prior progress value and this season's real episode
+    count, neither reliably available locally today — see
+    _compute_season_episode_progress's own docstring). No per-season
+    AniList episode-count guard: this assumes the same one-LCARS-
+    season-maps-to-one-AniList-media 1:1 shape watch_reconcile.py's own
+    read side already assumes uncritically — a real, already-logged
+    architectural gap (see todo.md's "hierarchical season subdivision"
+    idea) for split-cour shows, not newly introduced here."""
+    if season["anilist_id"] is None:
+        return
+    cfg = config.get_current()
+    if not cfg.anilist_access_token:
+        return
+    progress = _compute_season_episode_progress(conn, season["show_id"], season["season_number"])
+    try:
+        anilist_client.save_media_list_entry(
+            cfg.anilist_access_token, season["anilist_id"], progress=progress
+        )
+    except anilist_client.AniListError as e:
+        pending_review.open_or_extend(
+            conn, "season", season["id"], "anilist_push", "anilist", None, str(e)
+        )
+
+
+def _push_show_episode_progress(conn, show_id: str, season_number: int) -> None:
+    """Looks up the one season row for this show+season_number and
+    pushes its recomputed progress — the shared entry point every
+    watch/unwatch/skip mutation below calls (addWatchEvent,
+    deleteWatchEvent, markSeasonWatched, markEpisodeRangeWatched,
+    markEpisodeSkipped): "episode watched"/"episode un-watched" are the
+    same push operation, not two, since progress is always recomputed
+    fresh from current episode.state rather than incremented/
+    decremented (todo.md's write-mirror enumeration originally listed
+    them as two separate gaps; they collapse into one function here).
+    No-ops silently if this show has no season row at all (e.g. a
+    movie's watch event, season is None)."""
+    if season_number is None:
+        return
+    season = conn.execute(
+        "SELECT * FROM season WHERE show_id = ? AND season_number = ?",
+        (show_id, season_number),
+    ).fetchone()
+    if season is None:
+        return
+    _push_season_progress(conn, dict(season))
+
+
 # -- MAL push (§6.1/§6.9, B.10) ----------------------------------------------
 #
 # Same best-effort/pending_review-on-failure shape as the AniList push section
@@ -273,6 +348,11 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
 # anilist_id pair and get called from the same three resolvers below, but
 # have genuinely different score scales (÷2 integer vs ×5 float) and status
 # enums, so a shared function would need to branch on service anyway.
+#
+# Deliberately has no episode-progress counterpart to _push_show_episode_
+# progress above — the user's write-mirror request (2026-08-15/16) was
+# scoped to AniList specifically, not MAL. Noted explicitly so the
+# asymmetry reads as a scope decision, not an oversight.
 
 _STATUS_TO_MAL = {
     # Exhaustive against show.status's own CHECK constraint (checked directly,
@@ -1183,13 +1263,27 @@ def resolve_add_show(_, info, input):
     the inline A.8 metadata fetch) now lives in shows.create_show(),
     extracted so show_backfill.py can call it directly without a
     GraphQL request context — this resolver is a thin wrapper,
-    unchanged behavior/shape."""
+    unchanged behavior/shape.
+
+    Write-mirror gap #1 (todo.md, 2026-08-15/16) closed here, not in
+    shows.create_show() itself: status-at-creation is a client-facing
+    "I just added this show" event, distinct from show_backfill.py's
+    own _seed_status_from_anilist (that path *reads* an existing
+    AniList status in, deliberately never pushes). create_show()'s own
+    fetch_and_populate may attach an anilist_id via Fribb during
+    creation, so the push happens after, against the show's real final
+    status (always 'planned' today — AddShowInput has no status field
+    — but this reads it back rather than hardcoding, so a future status
+    field/_promote_stub's own pre-existing status both push correctly
+    without any change here)."""
     conn = db.get_connection()
     try:
         show_id = shows.create_show(conn, input)
     except shows.ShowInputError as e:
         raise GraphQLError(str(e)) from e
-    return _get_show(conn, show_id)
+    show = _get_show(conn, show_id)
+    _push_show_status(conn, show_id, show["status"])
+    return show
 
 
 @mutation.field("refreshShowMetadata")
@@ -1856,6 +1950,7 @@ def resolve_add_watch_event(
             (now, show_id, season, episode),
         )
     conn.commit()
+    _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     row = conn.execute("SELECT rowid, * FROM watch_event WHERE id = ?", (watch_id,)).fetchone()
     return dict(row)
 
@@ -1890,6 +1985,7 @@ def resolve_delete_watch_event(_, info, watch_event_id):
                 (util.now_utc_iso(), show_id, season, episode),
             )
     conn.commit()
+    _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #3, todo.md
     return True
 
 
@@ -1920,6 +2016,7 @@ def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
         (now, show_id, season),
     )
     conn.commit()
+    _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     return [
         dict(conn.execute("SELECT rowid, * FROM watch_event WHERE id = ?", (wid,)).fetchone())
         for wid in created_ids
@@ -1954,6 +2051,7 @@ def resolve_mark_episode_range_watched(
         (now, show_id, season, from_episode, to_episode),
     )
     conn.commit()
+    _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     return [
         dict(conn.execute("SELECT rowid, * FROM watch_event WHERE id = ?", (wid,)).fetchone())
         for wid in created_ids
@@ -1964,12 +2062,19 @@ def resolve_mark_episode_range_watched(
 def resolve_mark_episode_skipped(_, info, episode_id):
     conn = db.get_connection()
     now = util.now_utc_iso()
-    cur = conn.execute(
+    row = conn.execute(
+        "SELECT show_id, season FROM episode WHERE id = ?", (episode_id,)
+    ).fetchone()
+    if row is None:
+        raise GraphQLError(f"no such episode: {episode_id}")
+    conn.execute(
         "UPDATE episode SET state = 'skipped', updated_at = ? WHERE id = ?", (now, episode_id)
     )
-    if cur.rowcount == 0:
-        raise GraphQLError(f"no such episode: {episode_id}")
     conn.commit()
+    # write-mirror gap #2, todo.md — a skip can complete a previously-gapped
+    # contiguous run (_compute_season_episode_progress counts skipped as
+    # passed), so this needs the same push every real watch mutation gets.
+    _push_show_episode_progress(conn, row["show_id"], row["season"])
     return _get_episode(conn, episode_id)
 
 
