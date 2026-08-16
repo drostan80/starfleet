@@ -1,15 +1,18 @@
-"""Sonarr metadata fetch — SCOPE.md §5.1/§5.2, BUILD_PLAN.md A.8.
+"""Sonarr metadata fetch (+ write, B.21) — SCOPE.md §5.1/§5.2, BUILD_PLAN.md A.8/B.21.
 
 A close port of Data's own real, working `SonarrClient`
 (~/repos/data/src/data/sonarr.py) — same error-handling shape
-(SonarrError, 401-specific message, connect/timeout distinction) —
-narrowed to just the two calls A.8 actually needs (find an
-already-in-Sonarr-library series by tvdb id, and its episode list).
-Adapted to LCARS's own sync execution model (§11.2) — a sync
-`httpx.Client`, not Data's `httpx.AsyncClient`. A show being tracked in
-LCARS does not imply it's in Sonarr's own library (§5.1: "tv's Sonarr
-link is optional") — `series_by_tvdb_id` returning `None` means
-exactly that, not an error.
+(SonarrError, 401-specific message, connect/timeout distinction).
+Originally narrowed to just the two read calls A.8 needed (find an
+already-in-Sonarr-library series by tvdb id, and its episode list);
+B.21 ports the rest of Data's own real client — the search/add/update
+methods — so LCARS itself can add a show to Sonarr and unmonitor one on
+drop, rather than that being something only Data can do (see
+BUILD_PLAN.md B.21 for the full design). Adapted to LCARS's own sync
+execution model (§11.2) — a sync `httpx.Client`, not Data's
+`httpx.AsyncClient`. A show being tracked in LCARS does not imply it's
+in Sonarr's own library (§5.1: "tv's Sonarr link is optional") —
+`series_by_tvdb_id` returning `None` means exactly that, not an error.
 """
 
 import httpx
@@ -58,6 +61,60 @@ class SonarrClient:
             raise SonarrError(f"Timed out talking to Sonarr at {self.base_url}") from e
         return response.json()
 
+    def _post(self, path: str, json: dict) -> object:
+        """B.21 — the write half, close port of Data's own real, already-
+        shipping `SonarrClient._post` (~/repos/data/src/data/sonarr.py).
+        Same error shape as `_get`, plus Sonarr's own validation-failure
+        body: a 400 on a bad add (duplicate series, bad root folder path,
+        etc.) comes back as a JSON array of `{propertyName, errorMessage}`
+        objects, not a single message — worth surfacing directly."""
+        try:
+            response = self._client.post(path, json=json)
+            response.raise_for_status()
+        except httpx.ConnectError as e:
+            raise SonarrError(f"Could not connect to Sonarr at {self.base_url}") from e
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status == 401:
+                raise SonarrError("Sonarr rejected the API key (401 Unauthorized)") from e
+            detail = None
+            try:
+                body = e.response.json()
+                if isinstance(body, list):
+                    detail = "; ".join(
+                        item.get("errorMessage", "") for item in body if item.get("errorMessage")
+                    )
+                elif isinstance(body, dict):
+                    detail = body.get("message")
+            except ValueError:
+                pass
+            if detail:
+                raise SonarrError(f"Sonarr rejected the request: {detail}") from e
+            raise SonarrError(f"Sonarr returned an error: HTTP {status}") from e
+        except httpx.TimeoutException as e:
+            raise SonarrError(f"Timed out talking to Sonarr at {self.base_url}") from e
+        return response.json()
+
+    def _put(self, path: str, json: dict) -> object:
+        """B.21 — same shape as `_get`; Sonarr's update endpoint doesn't
+        document the same validation-error body `_post`'s add endpoint
+        does, so no detail-extraction here (matches Data's own real
+        client, which doesn't do it for `_put` either) — a real 400 still
+        surfaces as `Sonarr returned an error: HTTP 400`, not lost."""
+        try:
+            response = self._client.put(path, json=json)
+            response.raise_for_status()
+        except httpx.ConnectError as e:
+            raise SonarrError(f"Could not connect to Sonarr at {self.base_url}") from e
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status == 401:
+                raise SonarrError("Sonarr rejected the API key (401 Unauthorized)") from e
+            raise SonarrError(f"Sonarr returned an error: HTTP {status}") from e
+        except httpx.TimeoutException as e:
+            raise SonarrError(f"Timed out talking to Sonarr at {self.base_url}") from e
+        return response.json()
+
     def series_by_tvdb_id(self, tvdb_id: int) -> dict | None:
         """The matching series already in Sonarr's own library, or None
         if this tvdb_id isn't tracked there at all — not an error."""
@@ -84,6 +141,42 @@ class SonarrClient:
         if include_episode_file:
             params["includeEpisodeFile"] = "true"
         return self._get("episode", params=params)
+
+    def lookup_series(self, term: str) -> list[dict]:
+        """B.21 — Sonarr's own "add new show" search, already TVDB-backed
+        and pre-shaped for `add_series()`. `term` can be a plain title
+        (free-text search, ranked by relevance) or `"tvdb:{id}"` for an
+        exact-id lookup — confirmed live against the real deployment: an
+        id-form term returns exactly one candidate."""
+        return self._get("series/lookup", params={"term": term})
+
+    def root_folders(self) -> list[dict]:
+        """B.21 — not used on the add path itself (LCARS uses its own
+        configured default root folder, see config.py's
+        sonarr_anime_root_folder/sonarr_tv_root_folder) — this exists for
+        a config-validation check (confirm the configured path is real),
+        not a per-add runtime lookup."""
+        return self._get("rootfolder")
+
+    def quality_profiles(self) -> list[dict]:
+        """B.21 — same "config validation only" reasoning as
+        root_folders() above, not called on the add path itself."""
+        return self._get("qualityprofile")
+
+    def add_series(self, payload: dict) -> dict:
+        """B.21 — the actual write. Caller builds `payload` from a
+        lookup_series() candidate plus LCARS's own configured root
+        folder/quality profile defaults — see resolvers.py's
+        addShowWithArr for the real shape."""
+        return self._post("series", json=payload)
+
+    def update_series(self, series: dict) -> dict:
+        """B.21 — PUT the full series object back; Sonarr's update
+        endpoint wants the whole thing, not a partial patch. Caller
+        mutates `series` (e.g. `series["monitored"]`, an entry in
+        `series["seasons"]`) before calling — used for the
+        auto-unmonitor-on-drop path (resolvers.py)."""
+        return self._put(f"series/{series['id']}", json=series)
 
     def history_page(self, page: int, page_size: int = 250) -> dict:
         """§5.2/§6.7, B.3 — one page of Sonarr's own grab/import event
