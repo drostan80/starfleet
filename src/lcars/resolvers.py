@@ -1568,6 +1568,39 @@ def resolve_add_show(_, info, input):
     return show
 
 
+@mutation.field("addShowWithArr")
+def resolve_add_show_with_arr(_, info, input):
+    """B.21 — thin wrapper around shows.create_show_with_arr_add(), same
+    shape as resolve_add_show above (including the same status-at-
+    creation push) plus the richer AddShowResult. See schema.graphql's
+    own addShowWithArr docstring and shows.py's B.21 section docstring
+    for the full design — in particular, why a Sonarr/Radarr-side
+    failure here raises (ShowInputError -> GraphQLError) rather than
+    following every AniList push's own best-effort/pending_review
+    shape."""
+    conn = db.get_connection()
+    try:
+        show_id, arr_result = shows.create_show_with_arr_add(conn, input)
+    except shows.ShowInputError as e:
+        raise GraphQLError(str(e)) from e
+    show = _get_show(conn, show_id)
+    _push_show_status(conn, show_id, show["status"])
+    return {
+        "show": show,
+        # snake_case keys — convert_names_case=True (server.py) maps these to
+        # AddShowResult's camelCase fields automatically, same as every plain
+        # dict-of-DB-row return elsewhere in this file; a camelCase key here
+        # would silently resolve to null on every field (caught by the real
+        # non-nullable-field GraphQL error test_add_show_with_arr's own tests
+        # surfaced, not assumed correct).
+        "sonarr_series_created": arr_result["sonarr_created"],
+        "radarr_movie_created": arr_result["radarr_created"],
+        "matched_title": arr_result["matched_title"],
+        "matched_tvdb_id": arr_result["matched_tvdb_id"],
+        "matched_tmdb_id": arr_result["matched_tmdb_id"],
+    }
+
+
 @mutation.field("refreshShowMetadata")
 def resolve_refresh_show_metadata(_, info, show_id):
     """A.8 — the manual-retry half of the "best effort and system to

@@ -292,10 +292,14 @@ SHOW_METADATA_QUERY = """
 
 
 class _FakeSonarrClient:
-    def __init__(self, series=None, episodes=None, error=None):
+    def __init__(
+        self, series=None, episodes=None, error=None, lookup_results=None, add_series_result=None
+    ):
         self._series = series
         self._episodes = episodes or []
         self._error = error
+        self._lookup_results = lookup_results if lookup_results is not None else []
+        self._add_series_result = add_series_result
         self.calls = []
 
     def __enter__(self):
@@ -317,6 +321,20 @@ class _FakeSonarrClient:
         if self._error is not None:
             raise self._error
         return series
+
+    def lookup_series(self, term):
+        """B.21 — addShowWithArr's own search."""
+        self.calls.append(("lookup_series", term))
+        if self._error is not None:
+            raise self._error
+        return self._lookup_results
+
+    def add_series(self, payload):
+        """B.21 — addShowWithArr's own write."""
+        self.calls.append(("add_series", payload))
+        if self._error is not None:
+            raise self._error
+        return self._add_series_result
 
 
 class _FakeTmdbClient:
@@ -353,9 +371,13 @@ class _FakeTmdbClient:
 
 
 class _FakeRadarrClient:
-    def __init__(self, movie=None, error=None):
+    def __init__(
+        self, movie=None, error=None, lookup_results=None, add_movie_result=None
+    ):
         self._movie = movie
         self._error = error
+        self._lookup_results = lookup_results if lookup_results is not None else []
+        self._add_movie_result = add_movie_result
         self.calls = []
 
     def __enter__(self):
@@ -374,6 +396,20 @@ class _FakeRadarrClient:
         if self._error is not None:
             raise self._error
         return movie
+
+    def lookup_movie(self, term):
+        """B.21 — addShowWithArr's own search."""
+        self.calls.append(("lookup_movie", term))
+        if self._error is not None:
+            raise self._error
+        return self._lookup_results
+
+    def add_movie(self, payload):
+        """B.21 — addShowWithArr's own write."""
+        self.calls.append(("add_movie", payload))
+        if self._error is not None:
+            raise self._error
+        return self._add_movie_result
 
 
 async def test_add_show_anilist_fetch_populates_metadata_season_and_cast(client, monkeypatch):
@@ -1061,6 +1097,297 @@ async def test_add_show_sonarr_fetch_fribb_failure_still_creates_season_and_open
         r["field"] == "anilist_id" and "dataset unreachable" in r["proposedValueChain"][-1]
         for r in reviews
     )
+
+
+# --- addShowWithArr (B.21) --------------------------------------------------
+
+ADD_SHOW_WITH_ARR = """
+mutation($input: AddShowWithArrInput!) {
+  addShowWithArr(input: $input) {
+    show { id status tracked mediaShape trackingSpace }
+    sonarrSeriesCreated radarrMovieCreated matchedTitle matchedTvdbId matchedTmdbId
+  }
+}
+"""
+
+
+def _sonarr_configured_config(**overrides):
+    defaults = dict(
+        sonarr_url="http://sonarr:8989",
+        sonarr_api_key="key",
+        sonarr_anime_root_folder="/data/media/anime",
+        sonarr_anime_quality_profile_id=9,
+        sonarr_tv_root_folder="/data/media/Series",
+        sonarr_tv_quality_profile_id=4,
+    )
+    defaults.update(overrides)
+    return config.Config(**defaults)
+
+
+def _radarr_configured_config(**overrides):
+    defaults = dict(
+        radarr_url="http://radarr:7878",
+        radarr_api_key="key",
+        radarr_root_folder="/data/media/movies",
+        radarr_quality_profile_id=7,
+    )
+    defaults.update(overrides)
+    return config.Config(**defaults)
+
+
+async def test_add_show_with_arr_creates_new_sonarr_series(client, monkeypatch):
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(
+        series=None,  # not yet in Sonarr's library
+        lookup_results=[{"tvdbId": 421855, "title": "Shangri-La Frontier", "titleSlug": "x"}],
+        add_series_result={"id": 4, "tvdbId": 421855, "title": "Shangri-La Frontier"},
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "EPISODIC",
+                "trackingSpace": "ANIME",
+                "titleRomaji": "Shangri-La Frontier",
+                "primaryTitle": "ROMAJI",
+            }
+        },
+        headers=auth_headers(),
+    )
+    result = data["addShowWithArr"]
+    assert result["sonarrSeriesCreated"] is True
+    assert result["matchedTvdbId"] == 421855
+    assert result["matchedTitle"] == "Shangri-La Frontier"
+
+    add_calls = [c for c in fake.calls if c[0] == "add_series"]
+    assert len(add_calls) == 1
+    payload = add_calls[0][1]
+    assert payload["tvdbId"] == 421855
+    assert payload["rootFolderPath"] == "/data/media/anime"
+    assert payload["qualityProfileId"] == 9
+    assert payload["monitored"] is True
+
+    tvdb_link = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { externalIds(first: 5) { edges { node { service externalId } } } }
+        }
+        """,
+        {"id": result["show"]["id"]},
+        headers=auth_headers(),
+    )
+    services = {
+        e["node"]["service"]: e["node"]["externalId"]
+        for e in tvdb_link["show"]["externalIds"]["edges"]
+    }
+    assert services["tvdb"] == "421855"
+
+
+async def test_add_show_with_arr_matches_existing_sonarr_series(client, monkeypatch):
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(
+        series={"id": 4, "tvdbId": 421855, "title": "Shangri-La Frontier"},
+        lookup_results=[{"tvdbId": 421855, "title": "Shangri-La Frontier", "titleSlug": "x"}],
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "EPISODIC",
+                "trackingSpace": "ANIME",
+                "titleRomaji": "Shangri-La Frontier",
+                "primaryTitle": "ROMAJI",
+                "tvdbId": 421855,
+            }
+        },
+        headers=auth_headers(),
+    )
+    result = data["addShowWithArr"]
+    assert result["sonarrSeriesCreated"] is False
+    assert result["matchedTvdbId"] == 421855
+    assert [c for c in fake.calls if c[0] == "add_series"] == []
+
+
+async def test_add_show_with_arr_movie_creates_new_radarr_movie(client, monkeypatch):
+    config.set_current(_radarr_configured_config())
+    fake = _FakeRadarrClient(
+        movie=None,
+        lookup_results=[{"tmdbId": 27205, "title": "Inception", "titleSlug": "x"}],
+        add_movie_result={"id": 4, "tmdbId": 27205, "title": "Inception"},
+    )
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "MOVIE",
+                "trackingSpace": "TV",
+                "titleRomaji": "Inception",
+                "primaryTitle": "ROMAJI",
+            }
+        },
+        headers=auth_headers(),
+    )
+    result = data["addShowWithArr"]
+    assert result["radarrMovieCreated"] is True
+    assert result["matchedTmdbId"] == 27205
+
+    add_calls = [c for c in fake.calls if c[0] == "add_movie"]
+    assert len(add_calls) == 1
+    payload = add_calls[0][1]
+    assert payload["tmdbId"] == 27205
+    assert payload["rootFolderPath"] == "/data/media/movies"
+    assert payload["qualityProfileId"] == 7
+
+
+async def test_add_show_with_arr_movie_matches_existing_radarr_movie(client, monkeypatch):
+    config.set_current(_radarr_configured_config())
+    fake = _FakeRadarrClient(
+        movie={"id": 4, "tmdbId": 27205, "title": "Inception"},
+        lookup_results=[{"tmdbId": 27205, "title": "Inception", "titleSlug": "x"}],
+    )
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "MOVIE",
+                "trackingSpace": "TV",
+                "titleRomaji": "Inception",
+                "primaryTitle": "ROMAJI",
+                "tmdbId": 27205,
+            }
+        },
+        headers=auth_headers(),
+    )
+    result = data["addShowWithArr"]
+    assert result["radarrMovieCreated"] is False
+    assert [c for c in fake.calls if c[0] == "add_movie"] == []
+
+
+async def test_add_show_with_arr_zero_lookup_results_rejects_nothing_created(client, monkeypatch):
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(lookup_results=[])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    resp = await client.post(
+        "/",
+        json={
+            "query": ADD_SHOW_WITH_ARR,
+            "variables": {
+                "input": {
+                    "mediaShape": "EPISODIC",
+                    "trackingSpace": "ANIME",
+                    "titleRomaji": "Does Not Exist",
+                    "primaryTitle": "ROMAJI",
+                }
+            },
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "no Sonarr match" in body["errors"][0]["message"]
+    row = db.get_connection().execute(
+        "SELECT COUNT(*) AS n FROM show WHERE title_romaji = 'Does Not Exist'"
+    ).fetchone()
+    assert row["n"] == 0
+
+
+async def test_add_show_with_arr_already_tracked_rejects_before_any_sonarr_call(
+    client, monkeypatch
+):
+    await add_show(client, anilistId=555555)
+    config.set_current(_sonarr_configured_config())
+    called = []
+    monkeypatch.setattr(
+        sonarr_client, "SonarrClient", lambda *a, **kw: called.append(True) or _FakeSonarrClient()
+    )
+
+    resp = await client.post(
+        "/",
+        json={
+            "query": ADD_SHOW_WITH_ARR,
+            "variables": {
+                "input": {
+                    "mediaShape": "EPISODIC",
+                    "trackingSpace": "ANIME",
+                    "titleRomaji": "Konosuba",
+                    "primaryTitle": "ROMAJI",
+                    "anilistId": 555555,
+                }
+            },
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "already" in body["errors"][0]["message"]
+    assert called == []  # rejected before any outbound Sonarr call
+
+
+async def test_add_show_with_arr_not_configured_falls_through_to_plain_local_create(client):
+    # default `client` fixture config has no sonarr_url at all
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "EPISODIC",
+                "trackingSpace": "ANIME",
+                "titleRomaji": "No Sonarr Configured",
+                "primaryTitle": "ROMAJI",
+            }
+        },
+        headers=auth_headers(),
+    )
+    result = data["addShowWithArr"]
+    assert result["sonarrSeriesCreated"] is False
+    assert result["matchedTitle"] is None
+    assert result["show"]["id"] is not None
+
+
+async def test_add_show_with_arr_missing_add_defaults_raises_before_writing(client, monkeypatch):
+    """sonarr_url/api_key configured, but no root folder/quality profile
+    default for this tracking space — must not silently guess, and must
+    not have already written to Sonarr by the time it raises."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    fake = _FakeSonarrClient(
+        series=None,
+        lookup_results=[{"tvdbId": 421855, "title": "x", "titleSlug": "x"}],
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    resp = await client.post(
+        "/",
+        json={
+            "query": ADD_SHOW_WITH_ARR,
+            "variables": {
+                "input": {
+                    "mediaShape": "EPISODIC",
+                    "trackingSpace": "ANIME",
+                    "titleRomaji": "x",
+                    "primaryTitle": "ROMAJI",
+                }
+            },
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "aren't fully configured" in body["errors"][0]["message"]
+    assert [c for c in fake.calls if c[0] == "add_series"] == []
 
 
 # --- source-fact capture: absolute_number + kind (§5.2, A.25) ---------------

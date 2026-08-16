@@ -1027,6 +1027,37 @@ input AddShowInput {
   malId: Int
 }
 
+"B.21 — addShowWithArr's own input, mirrors AddShowInput exactly."
+input AddShowWithArrInput {
+  mediaShape: MediaShape!
+  trackingSpace: TrackingSpace!
+  titleRomaji: String
+  titleEnglish: String
+  titleNative: String
+  primaryTitle: PrimaryTitle!
+  anilistId: Int
+  tvdbId: Int
+  tmdbId: Int
+  imdbId: String
+  malId: Int
+}
+
+"""
+B.21 — addShowWithArr's own result: reports what actually happened against Sonarr/Radarr, not just
+the resulting Show, since "matched an existing entry" vs. "created a brand new one" is meaningfully
+different information the caller may want to show/verify — no human disambiguates a title-only
+search server-side (see addShowWithArr's own docstring).
+"""
+type AddShowResult {
+  show: Show!
+  sonarrSeriesCreated: Boolean!
+  radarrMovieCreated: Boolean!
+  "The title of the Sonarr/Radarr candidate that was matched or created — null if neither service was contacted (not configured, or media_shape didn't need one)."
+  matchedTitle: String
+  matchedTvdbId: Int
+  matchedTmdbId: Int
+}
+
 # ---------------------------------------------------------------------------
 # Query
 # ---------------------------------------------------------------------------
@@ -1115,6 +1146,27 @@ type Mutation {
   refreshShowMetadata once whatever was unreachable is back.
   """
   addShow(input: AddShowInput!): Show!
+  """
+  B.21 — the combined search-Sonarr/Radarr-then-track-in-LCARS flow: one call, given a title
+  and/or a known tvdbId/tmdbId, searches the appropriate service (Sonarr for EPISODIC, Radarr for
+  MOVIE), creates the entry there if it doesn't already exist (LCARS-configured root
+  folder/quality profile — see lcars.ini's sonarr_*/radarr_* defaults, no per-call override yet),
+  then runs the same local create-show + on-demand metadata fetch addShow already does. Distinct
+  from addShow itself (still available, unchanged, for a show with no Sonarr/Radarr entry at all,
+  or one the caller creates separately) — kept as its own mutation rather than extending
+  AddShowInput/addShow since addShow's existing Show! return type has a real caller today (Data's
+  own bridge) that doesn't need or expect this richer result.
+
+  A title-only call with no tvdbId/tmdbId auto-picks the *first* Sonarr/Radarr search result, no
+  human disambiguation step (a single stateless mutation has none) — supply an exact tvdbId/tmdbId
+  when it's already known to sidestep this; AddShowResult's matchedTitle/matchedTvdbId/
+  matchedTmdbId let a caller verify what was actually matched/created after the fact. Not
+  best-effort like addShow's own metadata fetch — a Sonarr/Radarr add failure (or a resolved id
+  that turns out to already belong to a different tracked LCARS show) raises and aborts before
+  anything is written anywhere, deliberately, to avoid ever leaving an orphaned series/movie behind
+  in Sonarr/Radarr with no matching LCARS show.
+  """
+  addShowWithArr(input: AddShowWithArrInput!): AddShowResult!
   "A.8 — re-runs the same on-demand metadata fetch addShow triggers at creation; the manual-retry half of its best-effort policy."
   refreshShowMetadata(showId: ID!): Show!
   """

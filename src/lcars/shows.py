@@ -25,7 +25,7 @@ primarily on TMDB... but [episodic shows] carry ... TMDB ids too where
 they exist."
 """
 
-from lcars import ids, metadata, util
+from lcars import config, ids, metadata, radarr_client, service_health, sonarr_client, util
 
 _EXTERNAL_ID_URL_TEMPLATES = {
     "anilist": "https://anilist.co/anime/{id}",
@@ -231,3 +231,242 @@ def create_show(conn, input: dict) -> str:
     metadata.fetch_and_populate(conn, show_id)
     conn.commit()
     return show_id
+
+
+# --- B.21 — addShowWithArr: search-Sonarr/Radarr-then-track-in-LCARS -------
+#
+# One combined mutation (user's own explicit call), not separate composable
+# steps — a client gets one round trip for "add this show." LCARS-configured
+# root folder/quality profile defaults (config.py), not caller-supplied.
+#
+# The one real outbound write here (add_series/add_movie) only ever happens
+# after every local check that could reject the add has already run,
+# including a *second* find_existing_show() pass once the real tvdb/tmdb id
+# is known — a title-only add's resolved id could belong to a different,
+# already-tracked LCARS show than whatever the caller's own original
+# identity fields matched (or matched nothing at all). This is what makes
+# create_show_with_arr_add() deliberately not best-effort/pending_review-on-
+# failure the way every AniList push in resolvers.py is: creating an
+# orphan/duplicate series in Sonarr on a failed local write is a real,
+# annoying-to-clean-up failure mode, worse than a blocked add.
+
+
+def _resolve_arr_candidate(conn, input: dict) -> tuple[dict | None, dict]:
+    """Read-only: resolves a Sonarr/Radarr lookup candidate for `input`,
+    writes nothing anywhere. Returns (candidate, arr_result) —
+    arr_result is the partial AddShowResult dict the whole flow
+    eventually returns (sonarr_created/radarr_created default False, no
+    matched_* yet). `candidate` is None when the relevant service isn't
+    configured for this show's media_shape — not an error, same
+    "not configured = same as not linked" treatment every other
+    Sonarr/Radarr touchpoint in this codebase already has. An exact-id
+    term (already-known tvdb_id/tmdb_id) or a title-only free-text
+    search that finds zero results *does* raise — a genuine "couldn't
+    find this show" is worth surfacing directly rather than silently
+    falling through to a plain, unlinked local add."""
+    arr_result = {
+        "sonarr_created": False,
+        "radarr_created": False,
+        "matched_title": None,
+        "matched_tvdb_id": None,
+        "matched_tmdb_id": None,
+    }
+    cfg = config.get_current()
+    if input["media_shape"] == "episodic":
+        if not (cfg.sonarr_url and cfg.sonarr_api_key):
+            return None, arr_result
+        term = (
+            f"tvdb:{input['tvdb_id']}"
+            if input.get("tvdb_id")
+            else input[f"title_{input['primary_title']}"]
+        )
+        try:
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                results = client.lookup_series(term)
+            service_health.record_success(conn, "sonarr")
+        except sonarr_client.SonarrError as e:
+            service_health.record_failure(conn, "sonarr", str(e))
+            raise ShowInputError(f"couldn't search Sonarr for {term!r}: {e}") from e
+        if not results:
+            raise ShowInputError(f"no Sonarr match found for {term!r}")
+        return results[0], arr_result
+    if input["media_shape"] == "movie":
+        if not (cfg.radarr_url and cfg.radarr_api_key):
+            return None, arr_result
+        term = (
+            f"tmdb:{input['tmdb_id']}"
+            if input.get("tmdb_id")
+            else input[f"title_{input['primary_title']}"]
+        )
+        try:
+            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                results = client.lookup_movie(term)
+            service_health.record_success(conn, "radarr")
+        except radarr_client.RadarrError as e:
+            service_health.record_failure(conn, "radarr", str(e))
+            raise ShowInputError(f"couldn't search Radarr for {term!r}: {e}") from e
+        if not results:
+            raise ShowInputError(f"no Radarr match found for {term!r}")
+        return results[0], arr_result
+    return None, arr_result
+
+
+def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
+    """Given a resolved lookup candidate, checks whether it's already
+    in Sonarr's/Radarr's own library (the existing read methods, not
+    the lookup response's own id field) and adds it if not — the one
+    real outbound write in this whole flow, only ever reached after
+    create_show_with_arr_add()'s own local re-validation has passed.
+    Returns a dict merged into the caller's arr_result, plus a
+    tvdb_id/tmdb_id key the caller feeds into the local show's own
+    external-id link (so create_show()'s own inline metadata fetch
+    finds the show already present in Sonarr's/Radarr's library on its
+    very first pass, no manual refreshShowMetadata retry needed)."""
+    cfg = config.get_current()
+    if input["media_shape"] == "episodic":
+        try:
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                existing = client.series_by_tvdb_id(candidate["tvdbId"])
+                if existing is not None:
+                    service_health.record_success(conn, "sonarr")
+                    return {
+                        "matched_title": existing.get("title"),
+                        "matched_tvdb_id": existing.get("tvdbId"),
+                        "tvdb_id": existing["tvdbId"],
+                    }
+                is_anime = input["tracking_space"] == "anime"
+                root_folder = (
+                    cfg.sonarr_anime_root_folder if is_anime else cfg.sonarr_tv_root_folder
+                )
+                quality_profile_id = (
+                    cfg.sonarr_anime_quality_profile_id
+                    if is_anime
+                    else cfg.sonarr_tv_quality_profile_id
+                )
+                if not (root_folder and quality_profile_id):
+                    raise ShowInputError(
+                        "Sonarr add defaults aren't fully configured for this show's"
+                        " tracking space — see config.py's sonarr_anime_*/sonarr_tv_*"
+                        " fields"
+                    )
+                payload = {
+                    "title": candidate["title"],
+                    "tvdbId": candidate["tvdbId"],
+                    "qualityProfileId": quality_profile_id,
+                    "titleSlug": candidate.get("titleSlug"),
+                    "images": candidate.get("images", []),
+                    "seasons": candidate.get("seasons", []),
+                    "rootFolderPath": root_folder,
+                    "monitored": True,
+                    "seasonFolder": True,
+                    "addOptions": {"searchForMissingEpisodes": True},
+                }
+                created = client.add_series(payload)
+            service_health.record_success(conn, "sonarr")
+        except sonarr_client.SonarrError as e:
+            service_health.record_failure(conn, "sonarr", str(e))
+            raise ShowInputError(f"couldn't add to Sonarr: {e}") from e
+        return {
+            "sonarr_created": True,
+            "matched_title": created.get("title"),
+            "matched_tvdb_id": created.get("tvdbId"),
+            "tvdb_id": created["tvdbId"],
+        }
+    # movie -> Radarr
+    try:
+        with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+            existing = client.movie_by_tmdb_id(candidate["tmdbId"])
+            if existing is not None:
+                service_health.record_success(conn, "radarr")
+                return {
+                    "matched_title": existing.get("title"),
+                    "matched_tmdb_id": existing.get("tmdbId"),
+                    "tmdb_id": existing["tmdbId"],
+                }
+            if not (cfg.radarr_root_folder and cfg.radarr_quality_profile_id):
+                raise ShowInputError(
+                    "Radarr add defaults aren't fully configured — see config.py's"
+                    " radarr_root_folder/radarr_quality_profile_id"
+                )
+            payload = {
+                "title": candidate["title"],
+                "tmdbId": candidate["tmdbId"],
+                "qualityProfileId": cfg.radarr_quality_profile_id,
+                "titleSlug": candidate.get("titleSlug"),
+                "images": candidate.get("images", []),
+                "rootFolderPath": cfg.radarr_root_folder,
+                "monitored": True,
+                "minimumAvailability": candidate.get("minimumAvailability") or "released",
+                "addOptions": {"searchForMovie": True},
+            }
+            created = client.add_movie(payload)
+        service_health.record_success(conn, "radarr")
+    except radarr_client.RadarrError as e:
+        service_health.record_failure(conn, "radarr", str(e))
+        raise ShowInputError(f"couldn't add to Radarr: {e}") from e
+    return {
+        "radarr_created": True,
+        "matched_title": created.get("title"),
+        "matched_tmdb_id": created.get("tmdbId"),
+        "tmdb_id": created["tmdbId"],
+    }
+
+
+def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
+    """B.21 — addShowWithArr's own backing logic. Returns (show_id,
+    arr_result); arr_result carries sonarr_created/radarr_created/
+    matched_title/matched_tvdb_id/matched_tmdb_id for the resolver to
+    build AddShowResult from. See this module's own B.21 section
+    docstring above for the full ordering rationale."""
+    primary = input["primary_title"]
+    title_field = f"title_{primary}"
+    if not input.get(title_field):
+        raise ShowInputError(
+            f"primaryTitle is {primary.upper()} but {title_field.replace('_', ' ', 1)}"
+            " (as camelCase) was not provided"
+        )
+
+    existing_show_id = find_existing_show(conn, input)
+    if existing_show_id is not None:
+        existing = conn.execute(
+            "SELECT tracked FROM show WHERE id = ?", (existing_show_id,)
+        ).fetchone()
+        if existing["tracked"]:
+            raise ShowInputError(
+                "a show already exists for one of these external ids and is already"
+                f" tracked (show {existing_show_id}) — refusing to create a duplicate"
+            )
+
+    candidate, arr_result = _resolve_arr_candidate(conn, input)
+    resolved_input = dict(input)
+    if candidate is not None:
+        resolved_input["tvdb_id" if input["media_shape"] == "episodic" else "tmdb_id"] = (
+            candidate["tvdbId"] if input["media_shape"] == "episodic" else candidate["tmdbId"]
+        )
+        # Re-validate against the newly-resolved id BEFORE writing anything to
+        # Sonarr/Radarr — see this module's own B.21 section docstring.
+        recheck_id = find_existing_show(conn, resolved_input)
+        if recheck_id is not None and recheck_id != existing_show_id:
+            recheck = conn.execute(
+                "SELECT tracked FROM show WHERE id = ?", (recheck_id,)
+            ).fetchone()
+            if recheck["tracked"]:
+                raise ShowInputError(
+                    "the resolved Sonarr/Radarr entry's own id already belongs to a"
+                    f" different, already-tracked LCARS show ({recheck_id}) — refusing to"
+                    " create a duplicate or an orphaned Sonarr/Radarr entry"
+                )
+            existing_show_id = recheck_id  # a different stub than originally matched
+
+        add_result = _ensure_in_arr(conn, input, candidate)
+        arr_result.update({k: v for k, v in add_result.items() if k in arr_result})
+        if "tvdb_id" in add_result:
+            resolved_input["tvdb_id"] = add_result["tvdb_id"]
+        if "tmdb_id" in add_result:
+            resolved_input["tmdb_id"] = add_result["tmdb_id"]
+
+    if existing_show_id is not None:
+        show_id = _promote_stub(conn, existing_show_id, resolved_input)
+    else:
+        show_id = create_show(conn, resolved_input)
+    return show_id, arr_result
