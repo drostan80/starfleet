@@ -58,8 +58,32 @@
   introspection confirms `addShowWithArr` resolves; `pending_review` count unchanged (0)
   post-deploy. **Not yet exercised against a real add** — same "strong test coverage, no live
   production write performed without asking first" posture as slice 4's own deploy note.
-  **B.21 code-complete.** `BUILD_PLAN.md` gets its own B.21 entry next, then Part C of the plan
-  (delete the `aa` chord in `~/repos/data`).
+  **B.21 code-complete, `BUILD_PLAN.md` entry added.** Part C (delete `aa`) done same day, `c6729d6`.
+
+  **B.22 — user's own correction closed two things this plan had wrongly left as "open
+  questions."** After Part A/B/C shipped, a fresh planning-only agent produced
+  `~/repos/data/DATA_THIN_CLIENT_PLAN.md` (full 7-phase swap plan) and flagged 7 real open
+  questions — the biggest, §7.2, was whether Data's "permanent" direct-AniList-write exception
+  (SCOPE.md §6.8) still applies now that LCARS pushes to AniList itself. **User's own answer,
+  verbatim, no ambiguity left**: "lcars does everything, data reads it, that's what a thin client
+  is... EVERYTHING IS MOVED TO LCARS WHICH IS THE SOURCE OF TRUTH DATA IS A THIN CLIENT SO IT JUST
+  READS LCARS." Retired the exception — `SCOPE.md` §6.8 struck through and rewritten, `BUILD_PLAN.md`
+  C.3 flipped `[x]` (`9843a93`). Same answer resolves §7.1 too: no narrow "permanent" direct Sonarr
+  read is acceptable either, even just for episode titles — closed the gap properly instead
+  (`212d287`, `v0.1.22`): new `episode.title` column (migration `9ca6bf36583f`), captured from
+  Sonarr's own `episode.title` at fetch time, same source-fact-capture/backfill-once shape
+  `absolute_number`/`available_via_sonarr` already have. 2 new tests, 802 passed. Deployed, DB
+  snapshotted first, migration confirmed applied live, `pending_review` unchanged.
+  Also directly answered, same message, not left as questions: the `setStatus(COMPLETED,
+  confirmed:)` still-airing prompt and the cache-miss-on-a-move gap the plan flagged in its own
+  Phase 2 slice 4 aren't open questions either — "just build it," per the user — both were already
+  correctly identified as required fixes in the plan itself, not decisions needing input; they
+  proceed as originally scoped, no redesign needed.
+  **Two open questions genuinely remain unresolved from the original seven** (§7.3 add-show
+  disambiguation UX, §7.4 the AniList-search-fallback gap for `_link_to_anilist_interactive`) —
+  worth a look before Phase 5 of the Data plan, not blocking anything before then. §7.5/§7.6/§7.7
+  are minor/low-stakes, decide inline when reached rather than blocking on them now.
+  **Next**: execute `DATA_THIN_CLIENT_PLAN.md`'s Phase 1 onward, in `~/repos/data`.
 
 - [x] **Ascendance of a Bookworm's currently-airing part (S4/"Adopted Daughter of an Archduke")
   invisible in Data — Sonarr-vs-AniList season-split mismatch, real data fixed, real durability
