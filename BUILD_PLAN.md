@@ -4396,7 +4396,9 @@ this order because each step is provably independent of the next
   episode-watched/un-watched, delete-from-list, rewatch, startedAt/
   completedAt) is in `todo.md`'s "Ideas / design" section, right after
   this same entry's own narrowed-scope note — user's own explicit
-  instruction, build all of those functions first.** B.5.2 is well-understood plumbing regardless
+  instruction, build all of those functions first.** **All five functions built, tested, and
+  deployed 2026-08-16 (`v0.1.18`) — see `todo.md`'s "write-mirror function set" entries for the full
+  writeup, one per gap.** B.5.2 itself (the priority queue) still not started — B.5.2 is well-understood plumbing regardless
   of what feeds it; B.5.3's real API cost/cadence is the actual unknown,
   and sizing this queue's tiers around a guess about that would mean
   redesigning it once real numbers exist anyway. B.5.3 gets built first

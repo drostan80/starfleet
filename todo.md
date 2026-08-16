@@ -940,6 +940,22 @@
   auto-sync feature just logged above; the historical AniList backfill read (PC.2); and the actual
   Data-side swap-over (the separate audit entry above this one).
 
+  **Deployed 2026-08-16, `v0.1.18`.** DB snapshotted first
+  (`lcars.db.bak-20260816-write-mirror-v0.1.18`, production host) since this includes a real schema
+  migration. `docker compose pull && up -d` for `lcars`+`ops`; migration `8217a5e43344` ran clean
+  (confirmed both via container logs and a direct `PRAGMA table_info(season)` on the live DB — both
+  new columns present). Both containers healthy; `ops` hit the same one-time startup race every
+  deploy this week has shown (raced `lcars`'s own boot by a few seconds on all four loops) and
+  recovered clean on the very next tick, confirmed by watching logs past the recovery point — zero
+  further errors since. Verified live, not just "container is up": schema introspection confirms
+  `markSeasonRewatch`/`confirmHardDelete`/`addShow`/`addWatchEvent`/`setStatus` are all real,
+  resolvable mutations; `Season.startedAt`/`completedAt` resolve cleanly on a real show (null, as
+  expected — no historical row has been touched by the new capture yet); `pending_review` open-count
+  is 0 immediately post-deploy (no error storm from the new push code paths). Not yet
+  exercised by a real watch/status/delete action — that's the next real-world check, whenever the
+  user next marks something watched or completes a show, to confirm the AniList push actually lands
+  as designed, not just that the code loaded without error.
+
 - [ ] **Data-as-thin-client audit (point 2 of the staged plan) — every direct AniList/Sonarr call
   site in `~/repos/data`, checked against what LCARS already covers.** 2026-08-16.
   **Direct-to-AniList reads** (`self._anilist_client.*` in `app.py`), all local-cache-only, no
