@@ -266,27 +266,32 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
 
 
 def _compute_season_episode_progress(conn, show_id: str, season_number: int) -> int:
-    """AniList's `progress` is one scalar high-water mark, not a set of
-    episodes — derive the highest episode N such that every episode
-    1..N is 'watched' or 'skipped' (a skip counts as passed, not
-    watched, matching watch_reconcile.py's own read-side "not the same
-    thing as never watched" distinction — applied here on the write
-    side so an intentionally-skipped episode doesn't stall progress
-    behind it forever). A numbering gap or an unwatched episode stops
-    the count outright — never report a gap as progress, since
-    reconcile_watch_progress reads this same field back and would
-    incorrectly mark the gap watched in LCARS on the next AniList
-    sync."""
-    episodes = conn.execute(
-        "SELECT episode, state FROM episode WHERE show_id = ? AND season = ? ORDER BY episode",
+    """AniList's `progress` is one scalar high-water mark — confirmed
+    live via schema introspection, 2026-08-16: `MediaList` has no
+    per-episode field at all, `progress: Int` is the *only*
+    representation of "how far watched" AniList's data model can hold.
+    Matches that model exactly: the highest episode number marked
+    'watched' or 'skipped' in this season, not required to be
+    contiguous from episode 1 (skip counts as passed, not watched,
+    matching watch_reconcile.py's own read-side "not the same thing as
+    never watched" distinction).
+
+    User's own call, 2026-08-16, after confirming the above live:
+    "realistically I do not jump episodes so why not, for now, adopt
+    the anilist schema" — a genuine out-of-order watch (episode 1 and
+    3 watched, 2 not) pushes 3, and reconcile_watch_progress's own
+    read-back would then treat episode 2 as watched too on its next
+    poll, writing a watch_event LCARS itself never recorded (same
+    failure shape as the HELL MODE/etc. read-back bugs, todo.md
+    2026-08-15). Accepted as a rare, explicit trade-off for now, not
+    guarded against — revisit (e.g. a read-back guard comparing against
+    what LCARS itself last pushed) if it ever actually bites."""
+    row = conn.execute(
+        "SELECT MAX(episode) AS furthest FROM episode"
+        " WHERE show_id = ? AND season = ? AND state IN ('watched', 'skipped')",
         (show_id, season_number),
-    ).fetchall()
-    progress = 0
-    for row in episodes:
-        if row["episode"] != progress + 1 or row["state"] not in ("watched", "skipped"):
-            break
-        progress = row["episode"]
-    return progress
+    ).fetchone()
+    return row["furthest"] or 0
 
 
 def _push_season_progress(conn, season: dict) -> None:

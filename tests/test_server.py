@@ -4546,11 +4546,16 @@ async def test_add_watch_event_pushes_contiguous_progress(client, migrated_db, m
     assert calls == [(111, {"progress": 1})]
 
 
-async def test_progress_push_stops_at_a_gap_not_a_count(client, migrated_db, monkeypatch):
-    """Episodes 1 and 3 watched, 2 still unwatched — AniList's progress must
-    report 1 (highest contiguous run from episode 1), never 2 (a plain count),
-    since reconcile_watch_progress reads progress back and would otherwise
-    incorrectly mark episode 2 watched in LCARS on the next AniList sync."""
+async def test_progress_push_reports_furthest_watched_even_with_a_gap(
+    client, migrated_db, monkeypatch
+):
+    """Episodes 1 and 3 watched, 2 still unwatched — AniList's progress
+    reports 3 (the furthest watched episode, matching AniList's own
+    data model, which has no way to represent the gap at all), not 1.
+    User's own explicit call, 2026-08-16, after confirming AniList has
+    no per-episode field to lose fidelity to — see
+    _compute_season_episode_progress's own docstring for the accepted
+    read-back trade-off."""
     config.set_current(_authenticated_config())
     calls = []
     monkeypatch.setattr(
@@ -4575,7 +4580,7 @@ async def test_progress_push_stops_at_a_gap_not_a_count(client, migrated_db, mon
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    assert calls == [(111, {"progress": 1})]
+    assert calls == [(111, {"progress": 3})]
 
 
 async def test_delete_watch_event_pushes_reduced_progress(client, migrated_db, monkeypatch):

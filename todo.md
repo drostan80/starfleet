@@ -817,15 +817,27 @@
     every mutation that changes `episode.state` (`addWatchEvent`, `deleteWatchEvent`,
     `markSeasonWatched`, `markEpisodeRangeWatched`, `markEpisodeSkipped` — the first two are the
     only ones Data itself currently calls, confirmed by grepping `~/repos/data`; all five wired for
-    correctness regardless of caller). Progress is the **highest contiguous watched-or-skipped run
-    from episode 1**, not a raw count — a gap (e.g. 1,2 watched, 3 not, 4 watched) reports 2, never
-    4, because `reconcile_watch_progress` reads this same field back and an inflated push would
-    wrongly mark the gap watched in LCARS on the next AniList sync. Skipped counts as passed (not
-    watched) so an intentionally-skipped episode doesn't stall progress forever — matches
-    `watch_reconcile.py`'s own existing "not the same as never watched" read-side distinction.
-    Assumes the same one-LCARS-season-maps-to-one-AniList-media shape the read side already
-    assumes uncritically — not a new gap, the same already-logged "hierarchical season
-    subdivision" one (Bookworm/Mushoku Tensei cases above).
+    correctness regardless of caller). Skipped counts as passed (not watched) so an
+    intentionally-skipped episode doesn't stall progress forever — matches `watch_reconcile.py`'s
+    own existing "not the same as never watched" read-side distinction. Assumes the same
+    one-LCARS-season-maps-to-one-AniList-media shape the read side already assumes uncritically —
+    not a new gap, the same already-logged "hierarchical season subdivision" one (Bookworm/Mushoku
+    Tensei cases above).
+    **Progress formula revised same day, 2026-08-16, after the user asked to double-check an
+    AniList assumption**: confirmed live via schema introspection that `MediaList` has no
+    per-episode field at all — `progress: Int` is AniList's *only* representation of "how far
+    watched," genuinely incapable of expressing a gap (1 and 3 watched, 2 not) as anything other
+    than "reached episode 3." Originally shipped conservative (highest *contiguous* run from
+    episode 1 — a gap reported 1, never 3, so a read-back could never invent a false watched
+    episode in LCARS). **User's own call after seeing the trade-off spelled out**: "realistically I
+    do not jump episodes so why not, for now, adopt the anilist schema" — changed to the highest
+    watched-or-skipped episode number, full stop, matching AniList's own model exactly rather than
+    padding around its limitation. Real, accepted, explicitly-not-guarded-against consequence: a
+    genuine out-of-order watch would push the higher number, and `reconcile_watch_progress`'s next
+    poll would read it back and write a watch_event for the skipped-over episode into LCARS — the
+    same failure shape as the HELL MODE/etc. bugs above. Logged in
+    `_compute_season_episode_progress`'s own docstring as a deliberate, revisit-if-it-bites
+    decision, not solved with a guard now.
   - **Gap #1 (status at creation) closed**: `addShow` now pushes the show's real post-creation
     status (always `planned` today — `AddShowInput` has no status field — but read back rather
     than hardcoded, so nothing here needs touching if that ever changes) once `fetch_and_populate`
@@ -835,7 +847,7 @@
     pushing), so the push lives in the `addShow` resolver only.
   - MAL given no equivalent push (score/status already have one) — user's request was AniList-only;
     noted inline in `resolvers.py` so the asymmetry reads as a scope decision, not a miss.
-  - 9 new tests (contiguous-run push, gap handling, skip-counts, unlinked-season no-op, delete
+  - 9 new tests (furthest-watched push, gap handling, skip-counts, unlinked-season no-op, delete
     reduces progress, status-at-creation, no-push-without-link), full suite green.
   - **Still open, in the order advisor review recommended (each its own commit, not folded in)**:
     gap #4 (`DeleteMediaListEntry`, needs the list-entry-id lookup), rewatch/`repeat`,
