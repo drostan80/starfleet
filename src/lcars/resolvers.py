@@ -268,6 +268,64 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
             )
 
 
+def _stamp_season_started_at(
+    conn, show_id: str, season_number: int | None, watched_at: str
+) -> None:
+    """Write-mirror function set, todo.md (2026-08-16) — LCARS's own
+    local `started_at` capture, not an AniList push: the date of this
+    season's first-ever watched episode, per the user's own rule.
+    Written once (`WHERE started_at IS NULL`) so a later
+    deleteWatchEvent/re-mark of that same episode never moves the
+    date. No-ops for a movie watch event (season is None, movies have
+    no season row) or a season LCARS doesn't have a row for yet.
+
+    Deliberately scoped to LCARS-originated watch mutations only
+    (addWatchEvent/markSeasonWatched/markEpisodeRangeWatched, each
+    calling this below) — watch_reconcile.py's own AniList-sourced
+    backfill path is a separate, narrower-scoped module (B.15, "not
+    the full generalized... architecture") and isn't touched here;
+    logged as a known boundary in todo.md, not silently missed."""
+    if season_number is None:
+        return
+    conn.execute(
+        "UPDATE season SET started_at = ?, updated_at = ?"
+        " WHERE show_id = ? AND season_number = ? AND started_at IS NULL",
+        (watched_at, util.now_utc_iso(), show_id, season_number),
+    )
+
+
+def _stamp_completed_at_if_highest_season(conn, show_id: str, new_status: str) -> None:
+    """Write-mirror function set, todo.md (2026-08-16) — the date
+    `show.status` became 'completed', per the user's own rule. Written
+    onto this show's highest-numbered season only, any-status/
+    any-link (not restricted to AniList-linked seasons — a different,
+    narrower "highest linked season" concept watch_reconcile.py's own
+    reconcile_watch_progress uses for a genuinely different purpose,
+    deciding which season's AniList status is authoritative to *read*
+    from; this is a plain local write, no AniList entry needed to pick
+    a target). `show.status` is show-wide but `completed_at` is
+    per-season (§5.5's split-cour model), so only the season that's
+    actually finishing gets stamped — a multi-season show's earlier,
+    already-finished seasons keep whatever completed_at they already
+    have, untouched. Written once (`WHERE completed_at IS NULL`); a
+    later drop-then-complete-again doesn't move an already-recorded
+    date."""
+    if new_status != "completed":
+        return
+    highest = conn.execute(
+        "SELECT id, completed_at FROM season WHERE show_id = ?"
+        " ORDER BY season_number DESC LIMIT 1",
+        (show_id,),
+    ).fetchone()
+    if highest is None or highest["completed_at"] is not None:
+        return
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE season SET completed_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, highest["id"]),
+    )
+
+
 def _push_season_rewatch(conn, season: dict, repeat_count: int) -> None:
     """Write-mirror function set, todo.md (2026-08-16) — the "build it
     anyway" rewatch function: pushes AniList's REPEATING status plus
@@ -1667,6 +1725,7 @@ def resolve_set_status(_, info, show_id, status):
     )
     _push_show_status(conn, show_id, status)  # §6.1/§6.8, A.9 — best-effort
     _push_mal_show_status(conn, show_id, status)  # §6.1/§6.9, B.10 — best-effort
+    _stamp_completed_at_if_highest_season(conn, show_id, status)  # write-mirror, todo.md
     conn.commit()
     return _get_show(conn, show_id)
 
@@ -2051,6 +2110,7 @@ def resolve_add_watch_event(
             " WHERE show_id = ? AND season = ? AND episode = ?",
             (now, show_id, season, episode),
         )
+    _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     row = conn.execute("SELECT rowid, * FROM watch_event WHERE id = ?", (watch_id,)).fetchone()
@@ -2117,6 +2177,7 @@ def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
         "UPDATE episode SET state = 'watched', updated_at = ? WHERE show_id = ? AND season = ?",
         (now, show_id, season),
     )
+    _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     return [
@@ -2152,6 +2213,7 @@ def resolve_mark_episode_range_watched(
         " WHERE show_id = ? AND season = ? AND episode BETWEEN ? AND ?",
         (now, show_id, season, from_episode, to_episode),
     )
+    _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     return [

@@ -409,6 +409,10 @@ type Season {
   malId: Int
   "A.9 — this season's own personal score (0-20 quarter-point scale, same as Show.score); nullable, falls back to Show.score for the AniList push when unset (§6.1)."
   score: Float
+  "Write-mirror function set, todo.md (2026-08-16) — the watchedAt of this season's first-ever watch_event, captured once (never moves on a later delete/re-mark of that same episode). Null for every season that existed before this field did, and for any season not yet started — see the migration's own docstring for the historical-backfill note."
+  startedAt: DateTime
+  "Write-mirror function set, todo.md (2026-08-16) — the date show.status transitioned to 'completed', written onto the show's highest-numbered linked season only (show.status is show-wide; this mirrors watch_reconcile.py's own highest-season convention for that asymmetry). Null until then."
+  completedAt: DateTime
   source: SeasonSource!
   matched: Boolean!
   manualOverride: Boolean!

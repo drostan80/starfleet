@@ -888,14 +888,57 @@
     `test_anilist_client.py`: progress/repeat variable omission, entry-id lookup + both its
     no-entry/no-media shapes, delete's own id-not-media-id + 401 handling). Full suite 742 passed,
     ruff clean.
-  - **Still open**: `startedAt`/`completedAt` — blocked on one real precedence decision the
-    original spec left unsettled ("decide when building"), asking the user before writing the
-    schema migration rather than guessing; then the historical AniList backfill *read* for
-    pre-LCARS shows is its own separate scope, not folded into the same commit (overlaps
-    `BUILD_PLAN.md`'s parked PC.2).
   - **Not deployed yet**, same reasoning as the first two gaps above — real write behavior against
     the user's actual AniList account (and now a real delete, the highest-stakes one), flagged for
     explicit go-ahead.
+
+  **`startedAt`/`completedAt` closed, same day, 2026-08-16 — the last of the five original gaps.**
+  Asked the user the one real precedence question the spec left unsettled first (a season marked
+  completed before its last episode is watched, or vice versa) rather than guessing. **Answer
+  reframed the question**: "both if last episode is completed then mark as completed, if show is
+  marked as completed then mark all episodes as watched" — i.e. these two states shouldn't be
+  allowed to diverge at all, not "pick a date formula for when they do." **That's a real, separate,
+  bidirectional auto-sync feature (episode-completion promoting show.status; status-completion
+  bulk-marking episodes watched) — not built.** Writing real `watch_event` rows automatically from
+  a status change is exactly the class of thing that produced the HELL MODE/phantom-episode-1/
+  Frontier Lord bugs this week; before it's safe, three real open questions need deciding, not
+  assumed: does a skipped episode count as "complete" for this purpose; which season's
+  episode-completion promotes show.status on a multi-season show; and what happens when
+  `total_episodes` is unknown or the show is still airing (watching everything released so far
+  must never auto-complete an ongoing show). **Logged here as its own future item, user's words
+  kept verbatim, not built this round.**
+  What *did* ship, scoped to the original ask (columns + go-forward capture, per advisor review):
+  - Migration `8217a5e43344`: `season.started_at`/`season.completed_at`, both nullable TEXT, same
+    ISO-8601 UTC convention as every other timestamp column. Every existing row gets NULL on both —
+    deliberate, documented in the migration itself, not a missed backfill (the historical AniList
+    *read* import for pre-LCARS shows is still its own separate scope, overlapping `BUILD_PLAN.md`'s
+    parked PC.2).
+  - `started_at` = the `watched_at` of a season's first-ever watch_event, written once
+    (`WHERE started_at IS NULL`, so a later delete/re-mark of that episode never moves the date) —
+    wired into `addWatchEvent`/`markSeasonWatched`/`markEpisodeRangeWatched`. Deliberately **not**
+    wired into `watch_reconcile.py`'s own AniList-sourced backfill path (a separate, narrower-scoped
+    module, B.15) — a show watched through AniList directly rather than LCARS won't get its
+    `started_at` captured by this round; logged as a known boundary, not a silent gap.
+  - `completed_at` = the date `show.status` became `completed`, per the user's own literal rule —
+    wired into `setStatus`. Written onto the show's *highest-numbered* season only (`show.status` is
+    show-wide, `completed_at` is per-season) so a multi-season show's already-finished earlier
+    seasons don't get overwritten — tested explicitly (a 2-season show, only the higher one gets
+    stamped). Written once, same never-moves-once-set guard as `started_at`.
+  - **AniList push for these two fields not wired this round, on purpose** — confirmed
+    `SaveMediaListEntry` accepts `startedAt`/`completedAt` (schema introspection) but as
+    `FuzzyDateInput` (year/month/day object), a different shape from every other param this file
+    pushes so far; not checked in detail, not built. LCARS stores both locally now; the AniList
+    mirror for them is its own next step, not silently assumed done.
+  - 8 new tests (first-watch capture, never-moves-after-first-watch, all three watch mutations,
+    movie watch event no-crash, highest-season-only stamping, non-completed no-op, never-moves-once-
+    set). Full suite 750 passed, ruff clean.
+  - **Not deployed yet**, same reasoning as every gap above.
+
+  **All five original write-mirror gaps now closed at the code level** (status-at-creation, episode
+  watched/un-watched, delete-from-list, rewatch, startedAt/completedAt) — none deployed. Real
+  remaining work, not done today: the AniList push for startedAt/completedAt; the bidirectional
+  auto-sync feature just logged above; the historical AniList backfill read (PC.2); and the actual
+  Data-side swap-over (the separate audit entry above this one).
 
 - [ ] **Data-as-thin-client audit (point 2 of the staged plan) — every direct AniList/Sonarr call
   site in `~/repos/data`, checked against what LCARS already covers.** 2026-08-16.

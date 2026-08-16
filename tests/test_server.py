@@ -4414,6 +4414,186 @@ async def test_mark_season_rewatch_no_push_without_token(client, monkeypatch):
     assert called == []
 
 
+# --- season.startedAt / season.completedAt (write-mirror function set, todo.md 2026-08-16) ---
+#
+# Pure local LCARS capture, no AniList involved — no config.set_current(_authenticated_config())
+# needed for any test in this section.
+
+
+async def _season_dates(client, season_id: str) -> dict:
+    data = await gql(
+        client,
+        "query($id: ID!) { season(id: $id) { startedAt completedAt } }",
+        {"id": season_id},
+        headers=auth_headers(),
+    )
+    return data["season"]
+
+
+async def _create_season(client, show_id: str, season_number: int) -> str:
+    """No mutation creates a bare, unlinked season row on its own — reuse
+    setSeasonMapping with no anilistId/malId, same upsert-creates-the-row
+    behavior test_mark_season_rewatch_no_push_when_unlinked already relies
+    on to clear a link, used here to establish one in the first place."""
+    data = await gql(
+        client,
+        "mutation($id: ID!, $s: Int!) { setSeasonMapping(showId: $id, seasonNumber: $s) { id } }",
+        {"id": show_id, "s": season_number},
+        headers=auth_headers(),
+    )
+    return data["setSeasonMapping"]["id"]
+
+
+async def test_add_watch_event_sets_started_at_on_first_watch(client, migrated_db):
+    show = await add_show(client)
+    await _insert_episode(migrated_db, show["id"])
+    season_id = await _create_season(client, show["id"], 1)
+    assert (await _season_dates(client, season_id))["startedAt"] is None
+
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          addWatchEvent(showId: $id, season: 1, episode: 1, watchedAt: $t) { id }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season_id))["startedAt"] == "2026-08-16T09:00:00Z"
+
+
+async def test_started_at_never_moves_after_the_first_watch(client, migrated_db):
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 3))
+    season_id = await _create_season(client, show["id"], 1)
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          addWatchEvent(showId: $id, season: 1, episode: 1, watchedAt: $t) { id }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          addWatchEvent(showId: $id, season: 1, episode: 2, watchedAt: $t) { id }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-17T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season_id))["startedAt"] == "2026-08-16T09:00:00Z"
+
+
+async def test_mark_season_watched_sets_started_at(client, migrated_db):
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 3))
+    season_id = await _create_season(client, show["id"], 1)
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          markSeasonWatched(showId: $id, season: 1, watchedAt: $t) { id }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season_id))["startedAt"] == "2026-08-16T09:00:00Z"
+
+
+async def test_mark_episode_range_watched_sets_started_at(client, migrated_db):
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 6))
+    season_id = await _create_season(client, show["id"], 1)
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          markEpisodeRangeWatched(
+            showId: $id, season: 1, fromEpisode: 2, toEpisode: 4, watchedAt: $t
+          ) {
+            episode
+          }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season_id))["startedAt"] == "2026-08-16T09:00:00Z"
+
+
+async def test_add_watch_event_for_movie_does_not_crash_on_started_at(client):
+    """season is None for a movie watch event — _stamp_season_started_at
+    must no-op cleanly, not raise."""
+    show = await add_show(
+        client, mediaShape="MOVIE", titleRomaji="A Standalone Film", primaryTitle="ROMAJI"
+    )
+    data = await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["addWatchEvent"]["id"] is not None
+
+
+async def test_set_status_completed_stamps_the_highest_season_only(client, migrated_db):
+    show = await add_show(client)
+    season1 = await _link_season_anilist(client, show["id"], 1, 111)
+    season2 = await _link_season_anilist(client, show["id"], 2, 222)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season2))["completedAt"] is not None
+    assert (await _season_dates(client, season1))["completedAt"] is None
+
+
+async def test_set_status_non_completed_does_not_stamp_completed_at(client):
+    show = await add_show(client)
+    season1 = await _link_season_anilist(client, show["id"], 1, 111)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season1))["completedAt"] is None
+
+
+async def test_completed_at_never_moves_once_set(client):
+    show = await add_show(client)
+    season1 = await _link_season_anilist(client, show["id"], 1, 111)
+    db.get_connection().execute(
+        "UPDATE season SET completed_at = '2020-01-01T00:00:00Z' WHERE id = ?", (season1,)
+    )
+    db.get_connection().commit()
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _season_dates(client, season1))["completedAt"] == "2020-01-01T00:00:00Z"
+
+
 # --- data export/import (§6.12, A.15) ----------------------------------------
 #
 # The actual data-movement logic (24-table round trip, dependency ordering,
