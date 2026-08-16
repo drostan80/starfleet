@@ -4492,7 +4492,8 @@ async def test_started_at_never_moves_after_the_first_watch(client, migrated_db)
 
 async def test_mark_season_watched_sets_started_at(client, migrated_db):
     show = await add_show(client)
-    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 3))
+    # A real past air date — markSeasonWatched only marks aired episodes.
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
     season_id = await _create_season(client, show["id"], 1)
     await gql(
         client,
@@ -4698,10 +4699,24 @@ async def test_auto_complete_does_not_fire_while_still_airing(client, migrated_d
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    # episode 3 got marked watched too (markSeasonWatched marks every
-    # episode row regardless of air date, same as it always has) — but
-    # completion still shouldn't fire, since _season_still_airing only
-    # cares about whether more content is *expected*, not what's watched.
+    # episode 3 (no air date) is untouched by markSeasonWatched's own
+    # aired-only guard (2026-08-16) — stays unwatched, not watched.
+    ep3 = db.get_connection().execute(
+        "SELECT state FROM episode WHERE id = 'e-s1e003'"
+    ).fetchone()
+    assert ep3["state"] == "unwatched"
+
+    # Mark it watched anyway via addWatchEvent — that mutation deliberately
+    # keeps no aired-only guard (an explicit, single-episode action, unlike
+    # markSeasonWatched's bulk one) — so every episode in the season really
+    # is 'watched' now, isolating _season_still_airing's own contribution
+    # rather than a plain still-unwatched-episode outcome.
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 3) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
     assert (await _season_dates(client, season_id))["completedAt"] is None
     assert (await _show_status(client, show["id"])) == "PLANNED"
 
@@ -5189,7 +5204,9 @@ async def test_delete_watch_event_for_movie_has_no_episode_to_revert(client):
 
 async def test_mark_season_watched_creates_one_watch_event_per_episode(client, migrated_db):
     show = await add_show(client)
-    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 4))
+    # A real past air date on every episode — 2026-08-16, markSeasonWatched
+    # only marks episodes that have actually aired.
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 4))
 
     data = await gql(
         client,

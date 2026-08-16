@@ -1323,7 +1323,7 @@ type Mutation {
   "Hard-deletable (§5.3) — the one deliberate exception to soft-delete-by-default."
   deleteWatchEvent(watchEventId: ID!): Boolean!
   markEpisodeSkipped(episodeId: ID!): Episode!
-  "Bulk mutation (§5.3) — one watch_event row per episode in the season, single call."
+  "Bulk mutation (§5.3) — one watch_event row per episode in the season, single call. Only marks episodes that have actually aired (2026-08-16) — an episode with no known air date, or a future one, is silently skipped, never marked watched. addWatchEvent/markEpisodeRangeWatched keep no such guard (explicit, single/range episode choices, unlike this bulk one)."
   markSeasonWatched(showId: ID!, season: Int!, watchedAt: DateTime): [WatchEvent!]!
   markEpisodeRangeWatched(showId: ID!, season: Int!, fromEpisode: Int!, toEpisode: Int!, watchedAt: DateTime): [WatchEvent!]!
 

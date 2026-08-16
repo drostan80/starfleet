@@ -1011,6 +1011,19 @@
     reverse anything** — no un-stamp, no status flip back — same never-moves-once-set posture
     `completed_at` already had, tested explicitly, documented rather than left undefined.
   - 11 new tests, full suite 761 passed, ruff clean.
+  - **A real gap surfaced by advisor review, same day, closed with the user's own go-ahead**:
+    `markSeasonWatched` (pre-existing, not new) marked every episode in a season regardless of air
+    date — combined with this same day's progress push, a still-airing season bulk-marked via it
+    would feed AniList a false progress number covering an unaired episode, the exact "can't have
+    watched something that hasn't aired" contradiction Frontier Lord's real bug already was.
+    User's explicit call: add the same aired-only guard `_bulk_mark_all_aired_episodes_watched`
+    already has. `addWatchEvent`/`markEpisodeRangeWatched` deliberately keep no such guard —
+    explicit, single/range episode choices, a different action than this bulk "whole season" one.
+    A season with zero aired episodes now marks nothing; `started_at`/completion checks only fire
+    when something was actually touched. Two existing tests needed real fixture fixes (real past
+    air dates, not the bare/undated episodes they used before) to keep testing what they meant to;
+    one auto-sync test rewritten to isolate `_season_still_airing`'s own contribution now that
+    `markSeasonWatched` itself can no longer produce an "all watched but still airing" season.
   - **Not deployed yet** — same reasoning as every other write-mirror piece, and arguably the
     highest-stakes one so far: this is the first piece that writes real `watch_event` rows and
     flips real `show.status` automatically, with no human action beyond the original watch/skip.

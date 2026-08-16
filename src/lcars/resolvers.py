@@ -2366,13 +2366,30 @@ def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
     """Bulk mutation (§5.3) — one watch_event row per episode in the
     season, single call. Always inserts fresh rows, never skips
     already-watched episodes — rewatches are normal, not an error
-    (§5.3: "one row per viewing")."""
+    (§5.3: "one row per viewing").
+
+    **Only ever marks episodes that have actually aired — a real, past
+    `air_date_utc`, 2026-08-16, user's own explicit call.** Used to mark
+    every episode in the season regardless of air date; closed once the
+    auto-sync work made the consequence concrete (a real, past-air-dated
+    episode `markSeasonWatched` would otherwise leave a genuinely unaired
+    episode `watched`, and that state now feeds AniList's own progress
+    number — the same "can't have watched something that hasn't aired"
+    contradiction Frontier Lord's own real bug was). `addWatchEvent`/
+    `markEpisodeRangeWatched` deliberately keep no such guard — those name
+    exact episodes one at a time, a different, already-deliberate action
+    unlike this bulk "watch the whole season" one. A season with zero
+    aired episodes marks nothing; `started_at`/completion checks only run
+    when at least one episode was actually touched, never claimed from a
+    call that changed nothing."""
     conn = db.get_connection()
     now = util.now_utc_iso()
     watched_at = watched_at or now
     episodes = conn.execute(
-        "SELECT episode FROM episode WHERE show_id = ? AND season = ? ORDER BY episode",
-        (show_id, season),
+        "SELECT episode FROM episode"
+        " WHERE show_id = ? AND season = ? AND air_date_utc IS NOT NULL AND air_date_utc <= ?"
+        " ORDER BY episode",
+        (show_id, season, now),
     ).fetchall()
     created_ids = []
     for row in episodes:
@@ -2383,13 +2400,15 @@ def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
             (watch_id, show_id, season, row["episode"], watched_at, now),
         )
         created_ids.append(watch_id)
-    conn.execute(
-        "UPDATE episode SET state = 'watched', updated_at = ? WHERE show_id = ? AND season = ?",
-        (now, show_id, season),
-    )
-    _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
-    _try_complete_season(conn, show_id, season, watched_at)  # auto-sync, todo.md
-    _try_complete_show(conn, show_id, watched_at)  # auto-sync, todo.md
+    if created_ids:
+        conn.execute(
+            "UPDATE episode SET state = 'watched', updated_at = ?"
+            " WHERE show_id = ? AND season = ? AND air_date_utc IS NOT NULL AND air_date_utc <= ?",
+            (now, show_id, season, now),
+        )
+        _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
+        _try_complete_season(conn, show_id, season, watched_at)  # auto-sync, todo.md
+        _try_complete_show(conn, show_id, watched_at)  # auto-sync, todo.md
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     return [
