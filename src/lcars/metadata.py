@@ -904,6 +904,13 @@ def _fetch_sonarr(conn, show: dict) -> None:
                 " available_checked_at = ? WHERE id = ? AND available_checked_at IS NULL",
                 (availability_status, availability_path, now, existing["id"]),
             )
+            # 2026-08-16 — same pure source-fact capture as availability above:
+            # only ever fills a row whose title has never been captured at all.
+            if ep.get("title") is not None:
+                conn.execute(
+                    "UPDATE episode SET title = ? WHERE id = ? AND title IS NULL",
+                    (ep["title"], existing["id"]),
+                )
             if ep.get("absoluteEpisodeNumber") is not None:
                 # Overwrites NULL *and* any previously-synthesized value:
                 # §5.2 sources as-is whenever a source reports an official
@@ -926,9 +933,9 @@ def _fetch_sonarr(conn, show: dict) -> None:
             "INSERT INTO episode"
             " (id, show_id, season, season_id, episode, kind, absolute_number,"
             "  air_date_utc, air_date_source, air_date_raw_sonarr, runtime_minutes,"
-            "  available_via_sonarr, file_path_sonarr, available_checked_at,"
+            "  available_via_sonarr, file_path_sonarr, available_checked_at, title,"
             "  created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sonarr', ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sonarr', ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 episode_id,
                 show["id"],
@@ -956,6 +963,7 @@ def _fetch_sonarr(conn, show: dict) -> None:
                 # real check (this one) just happened, same as every
                 # other poll in this codebase already stamps it.
                 now,
+                ep.get("title"),  # 2026-08-16 — Data thin-client swap's own last gap
                 now,
                 now,
             ),
@@ -1081,6 +1089,12 @@ def _fetch_sonarr_multi_show(conn, sibling_ids: list[str], episodes: list[dict])
                 " available_checked_at = ? WHERE id = ? AND available_checked_at IS NULL",
                 (availability_status, availability_path, now, existing["id"]),
             )
+            # 2026-08-16 — same pure source-fact capture as availability above.
+            if ep.get("title") is not None:
+                conn.execute(
+                    "UPDATE episode SET title = ? WHERE id = ? AND title IS NULL",
+                    (ep["title"], existing["id"]),
+                )
             touched_shows.add(existing["show_id"])
             continue
 
@@ -1140,9 +1154,9 @@ def _fetch_sonarr_multi_show(conn, sibling_ids: list[str], episodes: list[dict])
             "INSERT INTO episode"
             " (id, show_id, season, season_id, episode, kind, absolute_number,"
             "  air_date_utc, air_date_source, air_date_raw_sonarr, runtime_minutes,"
-            "  available_via_sonarr, file_path_sonarr, available_checked_at,"
+            "  available_via_sonarr, file_path_sonarr, available_checked_at, title,"
             "  created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, 'regular', ?, ?, 'sonarr', ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, 'regular', ?, ?, 'sonarr', ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 episode_id,
                 best_show_id,
@@ -1156,6 +1170,7 @@ def _fetch_sonarr_multi_show(conn, sibling_ids: list[str], episodes: list[dict])
                 availability_status,
                 availability_path,
                 now,
+                ep.get("title"),  # 2026-08-16 — Data thin-client swap's own last gap
                 now,
                 now,
             ),

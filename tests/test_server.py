@@ -805,6 +805,73 @@ async def test_add_show_sonarr_fetch_creates_episodes(client, monkeypatch):
     assert episodes[0]["node"]["runtimeMinutes"] == 24
 
 
+async def test_add_show_sonarr_fetch_captures_episode_title(client, monkeypatch):
+    """2026-08-16 — the Data thin-client swap's own last gap: episode
+    title, sourced straight from Sonarr's own episode.title, same
+    source-fact-capture shape runtime/absolute_number already have."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    fake = _FakeSonarrClient(
+        series={"id": 42},
+        episodes=[
+            {
+                "seasonNumber": 1,
+                "episodeNumber": 1,
+                "airDateUtc": "2026-01-01T00:00:00Z",
+                "title": "A Journey Begins",
+            }
+        ],
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { title } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["episodes"]["edges"][0]["node"]["title"] == "A Journey Begins"
+
+
+async def test_sonarr_fetch_backfills_title_only_when_never_captured(
+    client, migrated_db, monkeypatch
+):
+    # No Sonarr configured yet — addShow's own inline fetch no-ops, so the
+    # manual row inserted below is untouched until the explicit refresh call.
+    show = await add_show(client, trackingSpace="TV", tvdbId=67890)
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, title,"
+        " state, created_at, updated_at)"
+        " VALUES ('e-titl01', ?, 1, 1, 'regular', '2026-01-01T00:00:00Z', 'Manual Title',"
+        " 'unwatched', 'x', 'x')",
+        (show["id"],),
+    )
+    conn.commit()
+
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    fake = _FakeSonarrClient(
+        series={"id": 42},
+        episodes=[
+            {
+                "seasonNumber": 1,
+                "episodeNumber": 1,
+                "airDateUtc": "2026-01-01T00:00:00Z",
+                "title": "Sonarr's Own Title",
+            }
+        ],
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    row = conn.execute("SELECT title FROM episode WHERE id = 'e-titl01'").fetchone()
+    assert row["title"] == "Manual Title"  # never overwritten once captured
+
+
 async def test_add_show_sonarr_fetch_captures_availability_from_hasfile(client, monkeypatch):
     """Real bug, found 2026-08-13: a freshly-Sonarr-linked show whose
     real import history predates the link showed every episode
