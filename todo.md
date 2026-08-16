@@ -1024,9 +1024,19 @@
     air dates, not the bare/undated episodes they used before) to keep testing what they meant to;
     one auto-sync test rewritten to isolate `_season_still_airing`'s own contribution now that
     `markSeasonWatched` itself can no longer produce an "all watched but still airing" season.
-  - **Not deployed yet** — same reasoning as every other write-mirror piece, and arguably the
-    highest-stakes one so far: this is the first piece that writes real `watch_event` rows and
-    flips real `show.status` automatically, with no human action beyond the original watch/skip.
+  - **Deployed 2026-08-16, `v0.1.19`.** DB snapshotted first
+    (`lcars.db.bak-20260816-completion-autosync-v0.1.19`, production host) — no schema change this
+    round (code + `schema.graphql` only), so no migration ran. Both containers healthy; `ops` hit
+    the same one-time startup race every deploy this week has shown and stayed clean for 5+ minutes
+    past it. Verified live: schema introspection confirms `setStatus` carries its new `confirmed`
+    argument, every touched mutation is real and resolvable. **The real check, per advisor
+    review**: recorded `status_change WHERE changed_by = 'auto_complete'` (0), total `watch_event`
+    count (3266), and open `pending_review` count (0) *before* deploying, then the identical three
+    numbers again after — all three unchanged, the expected quiet outcome for a deploy with no
+    watch/status action taken yet. `changed_by = 'auto_complete'` makes any future automatic status
+    flip individually identifiable and reversible if the auto-sync ever does misfire. Not yet
+    exercised against a real watch/completion action — that's the real test, whenever the user
+    next finishes a show.
 
 - [ ] **Data-as-thin-client audit (point 2 of the staged plan) — every direct AniList/Sonarr call
   site in `~/repos/data`, checked against what LCARS already covers.** 2026-08-16.
