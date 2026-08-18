@@ -65,10 +65,13 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       separate, explicit config value; not configured means no link at all rather than a guessed
       one. Set on `tiny` to `http://192.168.0.152:{8989,7878}` and curl-confirmed reachable.
       Deployed as v0.1.26, 2026-08-18.
-- [ ] Verify the real Sonarr/Radarr `/add/new?term=tvdb:{id}`/`tmdb:{id}` search-and-prefill
-      behavior specifically (host:port reachability is now curl-confirmed; the exact query-param
-      contract is still assumed from standard Servarr frontend convention, not yet clicked
-      through behind auth).
+- [ ] Verify the real Sonarr/Radarr `/add/new?term=...` search-and-prefill behavior specifically
+      (host:port reachability is now curl-confirmed; the exact query-param contract is still
+      assumed from standard Servarr frontend convention, not yet clicked through behind auth).
+- [x] Add-link title fallback: most of the library predates Sonarr/Radarr integration and has no
+      tvdb_id/tmdb_id captured at all (found live via Akame ga Kill!) — `sonarr:add`/`radarr:add`
+      now falls back to `?term=<title>` (Sonarr's/Radarr's own free-text search) instead of
+      refusing a link entirely. `~/repos/starfleet`, deployed as v0.1.27, 2026-08-18.
 - [x] `o` was silently doing nothing on a real browser-open failure — `_open_link` called
       `webbrowser.open` unguarded, unlike every other action in the screen; fixed to report the
       real error on the status line instead. Also: `o` only exists on the show-detail screen, not
