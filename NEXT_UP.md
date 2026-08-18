@@ -53,7 +53,7 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       the existing monthly Sonarr/Radarr catalog sweep (`pollCatalogServicePresence`, B.7) so
       already-tracked shows get linked too, not just new adds. `o` in `~/repos/data`'s
       show-detail view opens whichever link is picked in the system browser — Data never calls
-      Sonarr/Radarr/AniList itself, only LCARS. (2026-08-18; not yet deployed to production)
+      Sonarr/Radarr/AniList itself, only LCARS. Deployed as v0.1.24, 2026-08-18.
 - [ ] Verify the real Sonarr (`/series/{titleSlug}`) and Radarr (`/movie/{titleSlug}`) web UI
       route shapes against a live instance — assumed from standard Servarr frontend convention,
       not yet curl-checked against `tiny`'s own Sonarr/Radarr.
