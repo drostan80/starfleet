@@ -24,13 +24,15 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       (archive/todo.md:1209)
 - [ ] A client-facing way to correct a schedule discrepancy (air date / episode-number
       misalignment) without a direct DB edit. (archive/todo.md:1209)
-- [ ] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
-      move status/score at the show/season level individually.
-- [ ] Manual schedule editing from that view: set weekly time + first air date per season,
-      per-episode offset from the original schedule (+1 week, +2 days…), offer to shift all
-      subsequent episodes when one moves.
-- [ ] List-view Enter → episode list/picker for the selected show, showing local availability
-      per episode (currently does nothing). (archive/todo.md:789)
+- [x] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
+      move status/score at the show/season level individually — built in `~/repos/data`
+      (`show_detail_screen.py`, `enter` on the show browser), 2026-08-18.
+- [ ] Show-detail view: mark a movie watched from the screen itself — gated for now, `w` has
+      no episode row to act on for a `MOVIE` show; needs `Show.watchEvents`-based undo too,
+      not just the episode-scoped lookup the episodic path reuses.
+- [ ] Manual schedule editing from the show-detail view: set weekly time + first air date per
+      season, per-episode offset from the original schedule (+1 week, +2 days…), offer to
+      shift all subsequent episodes when one moves.
 - [ ] PC.2 — one-time historical import: Trakt watch history, AniList data, MAL legacy scores
       (AniList primary for scores where both exist). (archive/BUILD_PLAN.md:4720)
 - [ ] AniList `synonyms` field — last gap in LCARS's AniList read coverage (aninote
