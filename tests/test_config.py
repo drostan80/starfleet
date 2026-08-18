@@ -71,6 +71,44 @@ def test_sonarr_env_vars_override_file(tmp_path, monkeypatch):
     assert cfg.sonarr_url == "http://from-env:8989"
 
 
+def test_sonarr_radarr_public_url_loads_from_file_separately_from_the_internal_one(tmp_path):
+    # 2026-08-18 — a real bug caught live: sonarr_url/radarr_url are
+    # LCARS's own outbound-API addresses (a docker-network hostname on
+    # this deployment), not reachable from a browser — the two must be
+    # genuinely independent config values, not one derived from the other.
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text(
+        "[lcars]\n"
+        "sonarr_url = http://sonarr:8989\n"
+        "sonarr_public_url = http://192.168.0.152:8989\n"
+        "radarr_url = http://radarr:7878\n"
+        "radarr_public_url = http://192.168.0.152:7878\n"
+    )
+    cfg = load_config(config_path=config_path)
+    assert cfg.sonarr_url == "http://sonarr:8989"
+    assert cfg.sonarr_public_url == "http://192.168.0.152:8989"
+    assert cfg.radarr_url == "http://radarr:7878"
+    assert cfg.radarr_public_url == "http://192.168.0.152:7878"
+
+
+def test_sonarr_radarr_public_url_defaults_to_none(tmp_path):
+    cfg = load_config(config_path=tmp_path / "does-not-exist.ini")
+    assert cfg.sonarr_public_url is None
+    assert cfg.radarr_public_url is None
+
+
+def test_sonarr_radarr_public_url_env_vars_override_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "lcars.ini"
+    config_path.write_text(
+        "[lcars]\nsonarr_public_url = http://from-file\nradarr_public_url = http://from-file\n"
+    )
+    monkeypatch.setenv("LCARS_SONARR_PUBLIC_URL", "http://sonarr-from-env")
+    monkeypatch.setenv("LCARS_RADARR_PUBLIC_URL", "http://radarr-from-env")
+    cfg = load_config(config_path=config_path)
+    assert cfg.sonarr_public_url == "http://sonarr-from-env"
+    assert cfg.radarr_public_url == "http://radarr-from-env"
+
+
 def test_arr_add_defaults_default_to_none(tmp_path, monkeypatch):
     cfg = load_config(config_path=tmp_path / "does-not-exist.ini")
     assert cfg.sonarr_anime_root_folder is None

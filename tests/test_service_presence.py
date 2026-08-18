@@ -39,14 +39,16 @@ def _reset_config():
 
 def _configure_sonarr():
     cfg = config.get_current()
-    cfg.sonarr_url = "http://sonarr.test"
+    cfg.sonarr_url = "http://sonarr.test"  # internal-only — presence sweep's own catalog fetch
     cfg.sonarr_api_key = "test-key"
+    cfg.sonarr_public_url = "http://sonarr.public.test"  # browser-facing — deep links use this
 
 
 def _configure_radarr():
     cfg = config.get_current()
-    cfg.radarr_url = "http://radarr.test"
+    cfg.radarr_url = "http://radarr.test"  # internal-only — presence sweep's own catalog fetch
     cfg.radarr_api_key = "test-key"
+    cfg.radarr_public_url = "http://radarr.public.test"  # browser-facing — deep links use this
 
 
 def _add_show(
@@ -336,7 +338,7 @@ def test_sonarr_and_radarr_presence_both_run_in_one_catalog_sweep(conn, monkeypa
 def test_sonarr_catalog_match_backfills_a_real_deep_link(conn, monkeypatch):
     _configure_sonarr()
     cfg = config.get_current()
-    cfg.sonarr_url = "http://sonarr.local"
+    cfg.sonarr_public_url = "http://sonarr.local"
     _add_show(conn, "s-svp020", title_romaji="Attack on Titan")
     fake = _FakeSonarrCatalogClient(
         [{"title": "Attack on Titan", "titleSlug": "attack-on-titan"}]
@@ -353,7 +355,7 @@ def test_sonarr_catalog_match_backfills_a_real_deep_link(conn, monkeypatch):
 def test_radarr_catalog_match_backfills_a_real_deep_link(conn, monkeypatch):
     _configure_radarr()
     cfg = config.get_current()
-    cfg.radarr_url = "http://radarr.local"
+    cfg.radarr_public_url = "http://radarr.local"
     _add_show(conn, "s-svp021", title_romaji="Project Hail Mary", media_shape="movie")
     fake = _FakeRadarrCatalogClient(
         [{"title": "Project Hail Mary", "titleSlug": "project-hail-mary"}]
@@ -371,7 +373,7 @@ def test_sonarr_catalog_match_with_no_title_slug_writes_no_link(conn, monkeypatc
     # Older/unusual Sonarr responses missing titleSlug — presence still
     # records correctly, the link is just skipped rather than guessed.
     _configure_sonarr()
-    config.get_current().sonarr_url = "http://sonarr.local"
+    config.get_current().sonarr_public_url = "http://sonarr.local"
     _add_show(conn, "s-svp022", title_romaji="Attack on Titan")
     fake = _FakeSonarrCatalogClient([{"title": "Attack on Titan"}])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
@@ -388,7 +390,7 @@ def test_sonarr_catalog_match_already_linked_by_add_show_with_arr_is_not_duplica
     # monthly sweep re-matching it afterward is a silent no-op, not a
     # second row or an overwrite.
     _configure_sonarr()
-    config.get_current().sonarr_url = "http://sonarr.local"
+    config.get_current().sonarr_public_url = "http://sonarr.local"
     _add_show(conn, "s-svp023", title_romaji="Attack on Titan")
     conn.execute(
         "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
@@ -410,7 +412,7 @@ def test_sonarr_catalog_match_already_linked_by_add_show_with_arr_is_not_duplica
 
 def test_sonarr_catalog_no_match_writes_no_link(conn, monkeypatch):
     _configure_sonarr()
-    config.get_current().sonarr_url = "http://sonarr.local"
+    config.get_current().sonarr_public_url = "http://sonarr.local"
     _add_show(conn, "s-svp024", title_romaji="Attack on Titan")
     fake = _FakeSonarrCatalogClient(
         [{"title": "Completely Unrelated Show", "titleSlug": "unrelated"}]
@@ -419,3 +421,23 @@ def test_sonarr_catalog_no_match_writes_no_link(conn, monkeypatch):
 
     service_presence.refresh_catalog_presence(conn)
     assert _external_id(conn, "s-svp024", "sonarr") is None
+
+
+def test_sonarr_catalog_match_writes_no_link_when_only_the_internal_url_is_configured(
+    conn, monkeypatch
+):
+    # Real bug caught live 2026-08-18: sonarr_url is LCARS's own
+    # outbound-API address, not a browser-reachable one — a show with
+    # only that configured (no sonarr_public_url) must get no deep link
+    # at all, not one silently built from the wrong address.
+    _configure_sonarr()
+    config.get_current().sonarr_public_url = None
+    _add_show(conn, "s-svp025", title_romaji="Attack on Titan")
+    fake = _FakeSonarrCatalogClient(
+        [{"title": "Attack on Titan", "titleSlug": "attack-on-titan"}]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    service_presence.refresh_catalog_presence(conn)
+    assert _presence(conn, "s-svp025", "sonarr")["present"] == 1  # matching still worked
+    assert _external_id(conn, "s-svp025", "sonarr") is None  # but no guessed link

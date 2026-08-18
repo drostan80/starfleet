@@ -447,12 +447,21 @@ def write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str)
     insert in this module; once a real link exists for a show+service
     there's nothing to update (the URL is a stable function of
     title_slug, which Sonarr/Radarr don't change under an existing
-    entry)."""
+    entry).
+
+    Uses `sonarr_public_url`/`radarr_public_url` (config.py), NOT
+    `sonarr_url`/`radarr_url` — a real bug caught live 2026-08-18: the
+    latter is LCARS's own outbound-API address (this deployment's own
+    docker-network hostname, unreachable from any browser outside that
+    network), and this URL is handed straight to a client's browser
+    (Data's `o`). Not configured means no link is written at all — same
+    "not configured = same as not linked" every other optional
+    integration here already gets, not a guessed fallback."""
     cfg = config.get_current()
     if media_shape == "episodic":
-        base_url, service, path = cfg.sonarr_url, "sonarr", "series"
+        base_url, service, path = cfg.sonarr_public_url, "sonarr", "series"
     else:
-        base_url, service, path = cfg.radarr_url, "radarr", "movie"
+        base_url, service, path = cfg.radarr_public_url, "radarr", "movie"
     if not base_url:
         return
     url = f"{base_url.rstrip('/')}/{path}/{title_slug}"

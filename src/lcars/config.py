@@ -96,6 +96,22 @@ class Config:
     sonarr_api_key: str | None = None
     radarr_url: str | None = None
     radarr_api_key: str | None = None
+    # 2026-08-18 — a real bug caught live: sonarr_url/radarr_url above are
+    # LCARS's own outbound-API addresses (this deployment's own docker
+    # network hostnames, e.g. http://sonarr:8989 — reachable from inside
+    # the compose network LCARS itself runs in, nowhere else). The
+    # deep-link/add-link URLs shows.py/resolvers.py hand to a *browser*
+    # (write_arr_external_id, _synthetic_arr_add_edge) need a genuinely
+    # browser-reachable address instead — shipped once already pointing
+    # a real user's real browser at an internal hostname that can never
+    # resolve for them. Deliberately a separate, optional value rather
+    # than derived from sonarr_url/radarr_url: not configured means those
+    # two functions skip writing/synthesizing a link at all (same
+    # "not configured = same as not linked" treatment every other
+    # optional integration here already gets) rather than ever falling
+    # back to guessing the internal address is fine for a browser too.
+    sonarr_public_url: str | None = None
+    radarr_public_url: str | None = None
     # B.21 — LCARS-configured defaults for addShowWithArr's own
     # search-and-add flow: "for now" caller-supplied root folder/quality
     # profile picking was rejected in favor of these fixed values (user's
@@ -208,8 +224,10 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
                 cfg.db_path = Path(db_path)
             cfg.sonarr_url = parser["lcars"].get("sonarr_url", fallback=None)
             cfg.sonarr_api_key = parser["lcars"].get("sonarr_api_key", fallback=None)
+            cfg.sonarr_public_url = parser["lcars"].get("sonarr_public_url", fallback=None)
             cfg.radarr_url = parser["lcars"].get("radarr_url", fallback=None)
             cfg.radarr_api_key = parser["lcars"].get("radarr_api_key", fallback=None)
+            cfg.radarr_public_url = parser["lcars"].get("radarr_public_url", fallback=None)
             cfg.sonarr_anime_root_folder = parser["lcars"].get(
                 "sonarr_anime_root_folder", fallback=None
             )
@@ -244,8 +262,14 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
         cfg.db_path = Path(env_db_path)
     cfg.sonarr_url = os.environ.get("LCARS_SONARR_URL", cfg.sonarr_url)  # not a secret
     cfg.sonarr_api_key = _resolve_secret(cfg.sonarr_api_key, "LCARS_SONARR_API_KEY")
+    cfg.sonarr_public_url = os.environ.get(  # not a secret
+        "LCARS_SONARR_PUBLIC_URL", cfg.sonarr_public_url
+    )
     cfg.radarr_url = os.environ.get("LCARS_RADARR_URL", cfg.radarr_url)  # not a secret
     cfg.radarr_api_key = _resolve_secret(cfg.radarr_api_key, "LCARS_RADARR_API_KEY")
+    cfg.radarr_public_url = os.environ.get(  # not a secret
+        "LCARS_RADARR_PUBLIC_URL", cfg.radarr_public_url
+    )
     # B.21 — none of these six are secrets (paths and integer ids), same
     # plain-env-var-override treatment as sonarr_url/radarr_url above.
     cfg.sonarr_anime_root_folder = os.environ.get(

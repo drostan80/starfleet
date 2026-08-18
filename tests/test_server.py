@@ -1180,7 +1180,8 @@ mutation($input: AddShowWithArrInput!) {
 
 def _sonarr_configured_config(**overrides):
     defaults = dict(
-        sonarr_url="http://sonarr:8989",
+        sonarr_url="http://sonarr:8989",  # internal-only — LCARS's own outbound API address
+        sonarr_public_url="http://sonarr.public.test",  # browser-facing — deep/add links use this
         sonarr_api_key="key",
         sonarr_anime_root_folder="/data/media/anime",
         sonarr_anime_quality_profile_id=9,
@@ -1193,7 +1194,8 @@ def _sonarr_configured_config(**overrides):
 
 def _radarr_configured_config(**overrides):
     defaults = dict(
-        radarr_url="http://radarr:7878",
+        radarr_url="http://radarr:7878",  # internal-only — LCARS's own outbound API address
+        radarr_public_url="http://radarr.public.test",  # browser-facing — deep/add links use this
         radarr_api_key="key",
         radarr_root_folder="/data/media/movies",
         radarr_quality_profile_id=7,
@@ -1330,7 +1332,7 @@ async def test_add_show_with_arr_new_sonarr_series_writes_a_real_sonarr_deep_lin
     )
     show_id = data["addShowWithArr"]["show"]["id"]
     url = await _external_id_url(client, show_id, "sonarr")
-    assert url == "http://sonarr:8989/series/shangri-la-frontier"
+    assert url == "http://sonarr.public.test/series/shangri-la-frontier"
 
 
 async def test_add_show_with_arr_matched_existing_sonarr_series_writes_a_deep_link(
@@ -1364,7 +1366,7 @@ async def test_add_show_with_arr_matched_existing_sonarr_series_writes_a_deep_li
     )
     show_id = data["addShowWithArr"]["show"]["id"]
     url = await _external_id_url(client, show_id, "sonarr")
-    assert url == "http://sonarr:8989/series/shangri-la-frontier"
+    assert url == "http://sonarr.public.test/series/shangri-la-frontier"
 
 
 async def test_add_show_with_arr_no_title_slug_writes_no_sonarr_link(client, monkeypatch):
@@ -1407,7 +1409,7 @@ async def test_external_ids_offers_a_sonarr_add_link_when_not_yet_followed(clien
     config.set_current(_sonarr_configured_config())
     show = await add_show(client, tvdbId=421855)
     url = await _external_id_url(client, show["id"], "sonarr:add")
-    assert url == "http://sonarr:8989/add/new?term=tvdb:421855"
+    assert url == "http://sonarr.public.test/add/new?term=tvdb:421855"
     # Still no real "sonarr" link — this show has never actually been added.
     assert await _external_id_url(client, show["id"], "sonarr") is None
 
@@ -1416,7 +1418,7 @@ async def test_external_ids_offers_a_radarr_add_link_when_not_yet_followed(clien
     config.set_current(_radarr_configured_config())
     show = await add_show(client, mediaShape="MOVIE", tmdbId=27205)
     url = await _external_id_url(client, show["id"], "radarr:add")
-    assert url == "http://radarr:7878/add/new?term=tmdb:27205"
+    assert url == "http://radarr.public.test/add/new?term=tmdb:27205"
 
 
 async def test_external_ids_no_add_link_without_a_known_tvdb_id(client):
@@ -1430,6 +1432,16 @@ async def test_external_ids_no_add_link_without_a_known_tvdb_id(client):
 
 async def test_external_ids_no_add_link_when_sonarr_not_configured(client):
     config.set_current(config.Config())  # no sonarr_url at all
+    show = await add_show(client, tvdbId=421855)
+    assert await _external_id_url(client, show["id"], "sonarr:add") is None
+
+
+async def test_external_ids_no_add_link_when_only_the_internal_sonarr_url_is_configured(client):
+    # Real bug caught live 2026-08-18: sonarr_url is LCARS's own
+    # outbound-API address (a docker-network hostname on this
+    # deployment), not reachable from a browser — an add link must not
+    # be built from it just because *some* Sonarr config is present.
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     show = await add_show(client, tvdbId=421855)
     assert await _external_id_url(client, show["id"], "sonarr:add") is None
 
@@ -1539,7 +1551,7 @@ async def test_add_show_with_arr_new_radarr_movie_writes_a_real_radarr_deep_link
     )
     show_id = data["addShowWithArr"]["show"]["id"]
     url = await _external_id_url(client, show_id, "radarr")
-    assert url == "http://radarr:7878/movie/inception"
+    assert url == "http://radarr.public.test/movie/inception"
 
 
 async def test_add_show_with_arr_zero_lookup_results_rejects_nothing_created(client, monkeypatch):

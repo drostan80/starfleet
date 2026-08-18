@@ -1205,8 +1205,8 @@ def resolve_show_watch_events(obj, info, **page_args):
 
 
 _ARR_ADD_LINK = {
-    "episodic": ("sonarr", "sonarr:add", "sonarr_url", "tvdb"),
-    "movie": ("radarr", "radarr:add", "radarr_url", "tmdb"),
+    "episodic": ("sonarr", "sonarr:add", "sonarr_public_url", "tvdb"),
+    "movie": ("radarr", "radarr:add", "radarr_public_url", "tmdb"),
 }
 
 
@@ -1237,7 +1237,13 @@ def _synthetic_arr_add_edge(show: dict, edges: list[dict]) -> dict | None:
     this). Silently omitted (no synthetic edge) whenever any part of
     this is unknown — not configured, or LCARS has no tvdb_id/tmdb_id
     for this show yet — same "no answer beats a guessed one" shape
-    every other external link here already follows."""
+    every other external link here already follows.
+
+    Uses `sonarr_public_url`/`radarr_public_url`, NOT `sonarr_url`/
+    `radarr_url` — same real bug `write_arr_external_id` (shows.py) was
+    just fixed for: the latter is LCARS's own outbound-API address
+    (this deployment's docker-network hostname), unreachable from any
+    browser this URL is actually handed to."""
     arr_shape = _ARR_ADD_LINK.get(show["media_shape"])
     if arr_shape is None:
         return None
