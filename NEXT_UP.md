@@ -87,12 +87,18 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `webbrowser.open` unguarded, unlike every other action in the screen; fixed to report the
       real error on the status line instead. Also: `o` only exists on the show-detail screen, not
       the calendar/list view — by original design, not a bug. `~/repos/data`, 2026-08-18.
-- [x] Not-yet-followed Sonarr/Radarr shows now offer the real "Add New" page (pre-filled with the
-      known tvdb/tmdb id, `?term=tvdb:{id}`/`?term=tmdb:{id}`) via `o` instead of no link at all —
-      a synthetic, non-persisted `Show.externalIds` edge (`service: "sonarr:add"`/`"radarr:add"`),
-      computed fresh from the show's own confirmed tvdb/tmdb id and self-healing the moment a real
-      link exists. Never auto-adds — opens the browser to Sonarr's/Radarr's own add screen only.
-      `~/repos/starfleet`/`~/repos/data`, 2026-08-18 (not yet deployed to production).
+- [x] Trakt watch history ported in (PC.2's TV half) — see PC.2 below.
+- [x] `m`'s leader hint letters (watching/later/paused/completed/dropped) were being consumed as
+      Rich markup, not a color issue — literal `[w]`/`[l]`/`[p]`/`[c]`/`[d]` text got parsed as
+      style tags (`[c]` happened to resolve to Rich's own real `conceal`, genuinely invisible;
+      `[d]` to `dim`). Now real markup: bold orange1 on just the target letter, brackets escaped
+      back to literal characters. `~/repos/data`, 2026-08-18.
+- [x] `A` (add show) now shows a real candidate picker instead of silently auto-picking Sonarr's
+      first search result — new read-only `searchArrCandidates` query (LCARS) + a numbered
+      `[title (year)]` picker in Data, auto-selecting only when there's exactly one match. The
+      chosen candidate's exact tvdbId is what gets added — no re-search, no risk of a different
+      show being matched. Still TV/anime only (Sonarr) — a Radarr/movie version of `A` remains
+      unbuilt. `~/repos/starfleet`/`~/repos/data`, deployed as v0.1.29, 2026-08-18.
 
 ## Cutover (not started)
 
