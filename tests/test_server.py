@@ -1396,6 +1396,57 @@ async def test_add_show_with_arr_no_title_slug_writes_no_sonarr_link(client, mon
     assert await _external_id_url(client, show_id, "sonarr") is None
 
 
+# --- synthetic Sonarr/Radarr "add" link (2026-08-18) ---------------------
+
+
+async def test_external_ids_offers_a_sonarr_add_link_when_not_yet_followed(client):
+    # The user's own follow-up correction to the deep-link work above:
+    # a show LCARS already knows a tvdb_id for, but isn't followed in
+    # Sonarr yet, should offer Sonarr's own "Add New" page pre-filled
+    # with that id — not silently offer nothing.
+    config.set_current(_sonarr_configured_config())
+    show = await add_show(client, tvdbId=421855)
+    url = await _external_id_url(client, show["id"], "sonarr:add")
+    assert url == "http://sonarr:8989/add/new?term=tvdb:421855"
+    # Still no real "sonarr" link — this show has never actually been added.
+    assert await _external_id_url(client, show["id"], "sonarr") is None
+
+
+async def test_external_ids_offers_a_radarr_add_link_when_not_yet_followed(client):
+    config.set_current(_radarr_configured_config())
+    show = await add_show(client, mediaShape="MOVIE", tmdbId=27205)
+    url = await _external_id_url(client, show["id"], "radarr:add")
+    assert url == "http://radarr:7878/add/new?term=tmdb:27205"
+
+
+async def test_external_ids_no_add_link_without_a_known_tvdb_id(client):
+    # Nothing to pre-fill the search with — no synthetic edge at all,
+    # same "no answer beats a guessed one" every other external link here
+    # already follows.
+    config.set_current(_sonarr_configured_config())
+    show = await add_show(client)  # no tvdbId given
+    assert await _external_id_url(client, show["id"], "sonarr:add") is None
+
+
+async def test_external_ids_no_add_link_when_sonarr_not_configured(client):
+    config.set_current(config.Config())  # no sonarr_url at all
+    show = await add_show(client, tvdbId=421855)
+    assert await _external_id_url(client, show["id"], "sonarr:add") is None
+
+
+async def test_external_ids_no_add_link_once_really_followed_in_sonarr(client):
+    # A real "sonarr" link (write_arr_external_id) already answers the
+    # question — the synthetic "add" suggestion has nothing left to add,
+    # and shouldn't clutter the picker alongside the real link.
+    config.set_current(_sonarr_configured_config())
+    show = await add_show(client, tvdbId=421855)
+    from lcars import shows as shows_module
+
+    shows_module.write_arr_external_id(db.get_connection(), show["id"], "episodic", "some-show")
+    assert await _external_id_url(client, show["id"], "sonarr") is not None
+    assert await _external_id_url(client, show["id"], "sonarr:add") is None
+
+
 async def test_add_show_with_arr_movie_creates_new_radarr_movie(client, monkeypatch):
     config.set_current(_radarr_configured_config())
     fake = _FakeRadarrClient(

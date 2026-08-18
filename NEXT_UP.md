@@ -54,9 +54,20 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       already-tracked shows get linked too, not just new adds. `o` in `~/repos/data`'s
       show-detail view opens whichever link is picked in the system browser — Data never calls
       Sonarr/Radarr/AniList itself, only LCARS. Deployed as v0.1.24, 2026-08-18.
-- [ ] Verify the real Sonarr (`/series/{titleSlug}`) and Radarr (`/movie/{titleSlug}`) web UI
-      route shapes against a live instance — assumed from standard Servarr frontend convention,
-      not yet curl-checked against `tiny`'s own Sonarr/Radarr.
+- [ ] Verify the real Sonarr (`/series/{titleSlug}`, `/add/new?term=tvdb:{id}`) and Radarr
+      (`/movie/{titleSlug}`, `/add/new?term=tmdb:{id}`) web UI route shapes against a live
+      instance — assumed from standard Servarr frontend convention, not yet curl-checked against
+      `tiny`'s own Sonarr/Radarr.
+- [x] `o` was silently doing nothing on a real browser-open failure — `_open_link` called
+      `webbrowser.open` unguarded, unlike every other action in the screen; fixed to report the
+      real error on the status line instead. Also: `o` only exists on the show-detail screen, not
+      the calendar/list view — by original design, not a bug. `~/repos/data`, 2026-08-18.
+- [x] Not-yet-followed Sonarr/Radarr shows now offer the real "Add New" page (pre-filled with the
+      known tvdb/tmdb id, `?term=tvdb:{id}`/`?term=tmdb:{id}`) via `o` instead of no link at all —
+      a synthetic, non-persisted `Show.externalIds` edge (`service: "sonarr:add"`/`"radarr:add"`),
+      computed fresh from the show's own confirmed tvdb/tmdb id and self-healing the moment a real
+      link exists. Never auto-adds — opens the browser to Sonarr's/Radarr's own add screen only.
+      `~/repos/starfleet`/`~/repos/data`, 2026-08-18 (not yet deployed to production).
 
 ## Cutover (not started)
 

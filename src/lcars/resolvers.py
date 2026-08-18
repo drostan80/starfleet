@@ -1204,11 +1204,77 @@ def resolve_show_watch_events(obj, info, **page_args):
     )
 
 
+_ARR_ADD_LINK = {
+    "episodic": ("sonarr", "sonarr:add", "sonarr_url", "tvdb"),
+    "movie": ("radarr", "radarr:add", "radarr_url", "tmdb"),
+}
+
+
+def _synthetic_arr_add_edge(show: dict, edges: list[dict]) -> dict | None:
+    """2026-08-18 — the user's own correction to the first cut of this
+    feature: a show not yet followed in Sonarr/Radarr shouldn't just
+    show no link at all — it should offer Sonarr's/Radarr's own "Add
+    New" page, pre-filled with the id LCARS already knows, so opening
+    it is one browser hop from "not followed" to "reviewing the add
+    screen there" — never an automatic add, LCARS/Data never call
+    Sonarr's/Radarr's own add endpoint themselves, same as every other
+    link this field returns.
+
+    Sonarr's and Radarr's own "Add New" search box accepts `tvdb:<id>`/
+    `tmdb:<id>` directly (the same lookup their indexer search already
+    does internally) — `?term=` pre-fills and runs that search rather
+    than landing on an empty box.
+
+    Not persisted: computed fresh on every read from data this
+    connection already fetched (the show's own confirmed `tvdb`/`tmdb`
+    show_external_id row — §5.4, written by create_show/
+    create_show_with_arr_add), so it self-heals the moment a real
+    `sonarr`/`radarr` link exists (write_arr_external_id) with zero
+    extra bookkeeping. `service` is `sonarr:add`/`radarr:add` —
+    distinct from a real followed `sonarr`/`radarr` link so a client
+    can label the two differently (ShowExternalId.service is plain,
+    open-ended String by design, schema's own docstring, for exactly
+    this). Silently omitted (no synthetic edge) whenever any part of
+    this is unknown — not configured, or LCARS has no tvdb_id/tmdb_id
+    for this show yet — same "no answer beats a guessed one" shape
+    every other external link here already follows."""
+    arr_shape = _ARR_ADD_LINK.get(show["media_shape"])
+    if arr_shape is None:
+        return None
+    service, add_service, url_config_key, id_service = arr_shape
+    base_url = getattr(config.get_current(), url_config_key)
+    if not base_url:
+        return None
+    services_present = {e["node"]["service"] for e in edges}
+    if service in services_present:
+        return None
+    known_id = next(
+        (e["node"]["external_id"] for e in edges if e["node"]["service"] == id_service), None
+    )
+    if known_id is None:
+        return None
+    url = f"{base_url.rstrip('/')}/add/new?term={id_service}:{known_id}"
+    return {
+        "node": {
+            "show_id": show["id"],
+            "service": add_service,
+            "external_id": known_id,
+            "url": url,
+            "created_at": util.now_utc_iso(),
+        },
+        "cursor": f"synthetic:{add_service}",
+    }
+
+
 @show_type.field("externalIds")
 def resolve_show_external_ids(obj, info, **page_args):
-    return pagination.paginate(
+    connection = pagination.paginate(
         db.get_connection(), "show_external_id", "show_id = ?", (obj["id"],), **page_args
     )
+    synthetic = _synthetic_arr_add_edge(obj, connection["edges"])
+    if synthetic is not None:
+        connection["edges"] = [*connection["edges"], synthetic]
+    return connection
 
 
 @show_type.field("statusHistory")
