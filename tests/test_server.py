@@ -5458,7 +5458,10 @@ async def test_set_tracking_space_rejects_unknown_show(client):
     resp = await client.post(
         "/",
         json={
-            "query": 'mutation { setTrackingSpace(showId: "s-nope000", trackingSpace: ANIME) { id } }',
+            "query": (
+                'mutation { setTrackingSpace(showId: "s-nope000", trackingSpace: ANIME)'
+                " { id } }"
+            ),
         },
         headers=auth_headers(),
     )
