@@ -54,10 +54,21 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       already-tracked shows get linked too, not just new adds. `o` in `~/repos/data`'s
       show-detail view opens whichever link is picked in the system browser — Data never calls
       Sonarr/Radarr/AniList itself, only LCARS. Deployed as v0.1.24, 2026-08-18.
-- [ ] Verify the real Sonarr (`/series/{titleSlug}`, `/add/new?term=tvdb:{id}`) and Radarr
-      (`/movie/{titleSlug}`, `/add/new?term=tmdb:{id}`) web UI route shapes against a live
-      instance — assumed from standard Servarr frontend convention, not yet curl-checked against
-      `tiny`'s own Sonarr/Radarr.
+- [x] Not-yet-followed Sonarr/Radarr shows offer the real "Add New" page (pre-filled via
+      `?term=tvdb:{id}`/`tmdb:{id}`) via `o` instead of no link at all — synthetic, non-persisted
+      `Show.externalIds` edge (`service: "sonarr:add"`/`"radarr:add"`), self-healing once a real
+      link exists. Never auto-adds. `~/repos/starfleet`/`~/repos/data`, deployed as v0.1.25/26,
+      2026-08-18.
+- [x] `sonarr_public_url`/`radarr_public_url` (config.py) — real bug caught live right after
+      deploying the above: deep/add links were built from `sonarr_url`/`radarr_url`, LCARS's own
+      *internal* docker-network outbound-API addresses, unreachable from any real browser. Now a
+      separate, explicit config value; not configured means no link at all rather than a guessed
+      one. Set on `tiny` to `http://192.168.0.152:{8989,7878}` and curl-confirmed reachable.
+      Deployed as v0.1.26, 2026-08-18.
+- [ ] Verify the real Sonarr/Radarr `/add/new?term=tvdb:{id}`/`tmdb:{id}` search-and-prefill
+      behavior specifically (host:port reachability is now curl-confirmed; the exact query-param
+      contract is still assumed from standard Servarr frontend convention, not yet clicked
+      through behind auth).
 - [x] `o` was silently doing nothing on a real browser-open failure — `_open_link` called
       `webbrowser.open` unguarded, unlike every other action in the screen; fixed to report the
       real error on the status line instead. Also: `o` only exists on the show-detail screen, not
