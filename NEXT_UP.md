@@ -31,10 +31,6 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       subsequent episodes when one moves.
 - [ ] List-view Enter → episode list/picker for the selected show, showing local availability
       per episode (currently does nothing). (archive/todo.md:789)
-- [ ] Data-as-thin-client swap-over: move Data's remaining direct AniList reads/writes and
-      Sonarr reads through LCARS instead of calling AniList/Sonarr directly; delete the `aa`
-      (AniList-only add) chord once `addShow`/`addShowWithArr` fully cover it.
-      (archive/todo.md:1126)
 - [ ] PC.2 — one-time historical import: Trakt watch history, AniList data, MAL legacy scores
       (AniList primary for scores where both exist). (archive/BUILD_PLAN.md:4720)
 - [ ] AniList `synonyms` field — last gap in LCARS's AniList read coverage (aninote
