@@ -19,6 +19,7 @@ logic (relationships, computed values, paginated connections).
 """
 
 import json
+import urllib.parse
 
 from ariadne import EnumType, MutationType, ObjectType, QueryType
 from graphql import GraphQLError
@@ -1243,7 +1244,23 @@ def _synthetic_arr_add_edge(show: dict, edges: list[dict]) -> dict | None:
     `radarr_url` — same real bug `write_arr_external_id` (shows.py) was
     just fixed for: the latter is LCARS's own outbound-API address
     (this deployment's docker-network hostname), unreachable from any
-    browser this URL is actually handed to."""
+    browser this URL is actually handed to.
+
+    Title-search fallback, 2026-08-18 — a real gap hit live: most of
+    this library's shows were tracked long before Sonarr/Radarr
+    integration existed at all (AniList-only `addShow`, no tvdb_id/
+    tmdb_id ever captured — Akame ga Kill!, the case that surfaced
+    this), and the monthly catalog sweep only assigns one when the show
+    is genuinely already *in* Sonarr's/Radarr's own library — never for
+    a show that plainly isn't. Refusing every one of those a link at
+    all (the original id-only cut of this) is a real regression for
+    most of the library, not a rare edge case. When no tvdb_id/tmdb_id
+    is known, this falls back to `?term=<title>` — the exact same
+    free-text search box Sonarr's/Radarr's own UI already offers if the
+    user typed the title in by hand, not a guessed id (the thing "no
+    answer beats a guessed one" above is actually protecting against);
+    the user still lands on real search results to confirm themselves,
+    never an auto-selected entry."""
     arr_shape = _ARR_ADD_LINK.get(show["media_shape"])
     if arr_shape is None:
         return None
@@ -1257,14 +1274,19 @@ def _synthetic_arr_add_edge(show: dict, edges: list[dict]) -> dict | None:
     known_id = next(
         (e["node"]["external_id"] for e in edges if e["node"]["service"] == id_service), None
     )
-    if known_id is None:
-        return None
-    url = f"{base_url.rstrip('/')}/add/new?term={id_service}:{known_id}"
+    if known_id is not None:
+        term = f"{id_service}:{known_id}"
+    else:
+        title = show["title_english"] or show["title_romaji"] or show["title_native"]
+        if not title:
+            return None
+        term = title
+    url = f"{base_url.rstrip('/')}/add/new?term={urllib.parse.quote(term, safe=':')}"
     return {
         "node": {
             "show_id": show["id"],
             "service": add_service,
-            "external_id": known_id,
+            "external_id": known_id if known_id is not None else term,
             "url": url,
             "created_at": util.now_utc_iso(),
         },

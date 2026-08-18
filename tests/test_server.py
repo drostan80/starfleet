@@ -1421,13 +1421,17 @@ async def test_external_ids_offers_a_radarr_add_link_when_not_yet_followed(clien
     assert url == "http://radarr.public.test/add/new?term=tmdb:27205"
 
 
-async def test_external_ids_no_add_link_without_a_known_tvdb_id(client):
-    # Nothing to pre-fill the search with — no synthetic edge at all,
-    # same "no answer beats a guessed one" every other external link here
-    # already follows.
+async def test_external_ids_add_link_falls_back_to_a_title_search_without_a_known_tvdb_id(client):
+    # Real gap hit live 2026-08-18 (Akame ga Kill!): most of this
+    # library predates Sonarr/Radarr integration entirely, so most
+    # shows have no tvdb_id captured at all — refusing every one of
+    # those a link would be a regression for most of the library, not
+    # an edge case. Falls back to Sonarr's/Radarr's own free-text
+    # search (?term=<title>) instead of a guessed id.
     config.set_current(_sonarr_configured_config())
-    show = await add_show(client)  # no tvdbId given
-    assert await _external_id_url(client, show["id"], "sonarr:add") is None
+    show = await add_show(client, titleRomaji="Akame ga Kill!")  # no tvdbId given
+    url = await _external_id_url(client, show["id"], "sonarr:add")
+    assert url == "http://sonarr.public.test/add/new?term=Akame%20ga%20Kill%21"
 
 
 async def test_external_ids_no_add_link_when_sonarr_not_configured(client):
