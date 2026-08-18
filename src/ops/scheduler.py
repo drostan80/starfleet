@@ -14,7 +14,10 @@ merge sweep, riding the monthly tier alongside B.7's own catalog
 matching — same real N×M cost), B.5.3 (AniList activity-feed
 poll, its own fourth loop at a much faster fixed interval — the
 whole point is catching a watch-status change sooner than the
-hourly tier would, wired 2026-08-15).
+hourly tier would, wired 2026-08-15), the 2026-08-18 Fribb tvdb_id
+backfill (reverse anilist->tvdb lookup against the same cached
+dataset B.2 already uses — no live outbound call, rides the hourly
+tick like B.7's local rollup and B.8b's reconciliation do).
 
 Each `run_*_once()` is the real, testable unit — one full sweep,
 exercised directly by a test with no infinite loop or real sleep
@@ -220,19 +223,21 @@ async def run_mal_token_refresh_once(client: LcarsClient) -> int:
 async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     """B.1's daily tier, B.2's weekly tier, B.5's animeschedule sweep,
     B.7's local-presence rollup, B.8b's episode_movie_link
-    reconciliation, B.10's MAL token refresh check, and B.11e's
-    untracked-show sweep share one loop/interval (run_forever's own
-    docstring explains why the weekly tier doesn't need its own timer;
-    B.5's own module docstring explains why animeschedule can't wait for
-    a daily one; B.7's local rollup and B.8b's reconciliation are both
+    reconciliation, B.10's MAL token refresh check, B.11e's
+    untracked-show sweep, and the 2026-08-18 Fribb tvdb_id backfill
+    share one loop/interval (run_forever's own docstring explains why
+    the weekly tier doesn't need its own timer; B.5's own module
+    docstring explains why animeschedule can't wait for a daily one;
+    B.7's local rollup and B.8b's reconciliation are both
     negligible-cost, no-external-HTTP SQL; B.10's refresh check
     self-gates on its own 7-day checkpoint, so an hourly tick just means
     "checked cheaply, acted rarely"; B.11e's sweep is a handful of
     global calls (Sonarr/Radarr catalog listings, one AniList list
-    fetch), not per-show, cheap enough to share too — no reason at all
-    not to share this tick) — this is the single unit that loop
-    actually calls each tick. Returns the combined count, for the
-    caller to log."""
+    fetch), not per-show, cheap enough to share too; the tvdb backfill
+    is the same shape again — one SQL query plus an already-cached
+    dataset lookup, no live outbound call — no reason at all not to
+    share this tick) — this is the single unit that loop actually calls
+    each tick. Returns the combined count, for the caller to log."""
     daily = await run_once(client)
     weekly = await run_weekly_once(client)
     animeschedule = await run_animeschedule_once(client)
@@ -240,6 +245,7 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     episode_movie_links = await run_episode_movie_link_reconciliation_once(client)
     mal_token_refresh = await run_mal_token_refresh_once(client)
     untracked_shows = await run_untracked_shows_once(client)
+    tvdb_backfill = await run_tvdb_backfill_once(client)
     return (
         daily
         + weekly
@@ -248,7 +254,21 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
         + episode_movie_links
         + mal_token_refresh
         + untracked_shows
+        + tvdb_backfill
     )
+
+
+async def run_tvdb_backfill_once(client: LcarsClient) -> int:
+    """2026-08-18 — the Fribb reverse-lookup tvdb_id backfill
+    (backfillTvdbIds): no per-item loop, the mutation itself covers
+    every candidate in one call, same shape run_local_presence_once/
+    run_episode_movie_link_reconciliation_once above already use. No
+    live outbound Sonarr/Radarr call and no real per-call network cost
+    (fribb's own dataset is already downloaded/cached for the forward
+    direction, A.4/B.2) — shares the hourly tick rather than B.7's own
+    real-N×M-cost monthly one."""
+    result = await client.backfill_tvdb_ids()
+    return result["showsUpdated"]
 
 
 async def run_anilist_activity_once(client: LcarsClient) -> int:
@@ -380,7 +400,7 @@ async def run_forever(
             client,
             interval_seconds,
             "daily+weekly+animeschedule+local_presence+episode_movie_links"
-            "+mal_token_refresh+untracked_shows",
+            "+mal_token_refresh+untracked_shows+tvdb_backfill",
         ),
         _loop(
             run_monthly_once,

@@ -360,6 +360,20 @@ class LcarsClient:
         data = await self._query(query)
         return data["pollCatalogServicePresence"]
 
+    async def backfill_tvdb_ids(self) -> dict:
+        """2026-08-18 — the Fribb reverse-lookup tvdb_id backfill
+        (backfillTvdbIds): a plain-SQL candidate query plus an
+        already-cached dataset lookup, no live outbound Sonarr/Radarr
+        call at all (unlike poll_catalog_service_presence above) — rides
+        the hourly tick (run_daily_and_weekly_once, scheduler.py), not
+        the real-N×M-cost monthly one, same reasoning
+        reconcile_episode_movie_links already gets."""
+        query = """
+        mutation { backfillTvdbIds { showsUpdated } }
+        """
+        data = await self._query(query)
+        return data["backfillTvdbIds"]
+
     async def poll_show_merges(self) -> dict:
         """§5.0, B.14 — the cross-service show-duplicate *discovery*
         sweep (pollShowMerges): fuzzy title match every tracked

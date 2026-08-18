@@ -60,6 +60,11 @@ _MISSING = (None, "", "unknown")
 # without any explicit invalidation.
 _parse_cache: dict[tuple[str, int], list[dict]] = {}
 _index_cache: dict[int, dict[int, list[dict]]] = {}
+# 2026-08-18 — the reverse of _index_cache above, same "keyed on the
+# dataset object's identity" memoization; see build_anilist_index()'s
+# own docstring for why this exists as a genuinely separate index
+# rather than a lookup derived from build_tvdb_index()'s output.
+_anilist_index_cache: dict[int, dict[int, list[dict]]] = {}
 
 
 def _dataset_is_stale(path: Path, max_age: float) -> bool:
@@ -133,6 +138,55 @@ def build_tvdb_index(dataset: list[dict]) -> dict[int, list[dict]]:
     _index_cache.clear()  # same one-version-at-a-time policy as _parse_cache
     _index_cache[id(dataset)] = index
     return index
+
+
+def build_anilist_index(dataset: list[dict]) -> dict[int, list[dict]]:
+    """Keyed by anilist_id — the reverse of build_tvdb_index() above,
+    same dataset, same memoization shape. 2026-08-18, resolveTvdbIds
+    (tvdb_backfill.py): a show tracked only via AniList (never added to
+    Sonarr) has no tvdb_id at all, and the *forward* index/
+    resolve_season_candidate() can't help — both are keyed by tvdb_id,
+    which is exactly the thing missing. This is the same Fribb rows
+    LCARS already downloads/caches for the forward direction, just
+    indexed the other way — no new dataset, no new network call.
+
+    Not derived from build_tvdb_index()'s own output: a franchise's
+    tvdb_id can appear under several dataset entries (season splits),
+    each with its *own* anilist_id — walking the tvdb-keyed index back
+    out would silently collapse that structure. Building straight from
+    `dataset` keeps every entry's own anilist_id/tvdb_id pairing
+    intact, which resolve_tvdb_id_for_anilist() below needs to detect a
+    genuinely ambiguous case (see its own docstring)."""
+    cached = _anilist_index_cache.get(id(dataset))
+    if cached is not None:
+        return cached
+    index: dict[int, list[dict]] = {}
+    for entry in dataset:
+        if entry.get("anilist_id") in _MISSING or entry.get("tvdb_id") in _MISSING:
+            continue
+        index.setdefault(entry["anilist_id"], []).append(entry)
+    _anilist_index_cache.clear()  # same one-version-at-a-time policy as _index_cache
+    _anilist_index_cache[id(dataset)] = index
+    return index
+
+
+def resolve_tvdb_id_for_anilist(index: dict[int, list[dict]], anilist_id: int) -> int | None:
+    """The single tvdb_id every dataset entry under this anilist_id
+    agrees on, or None — never a guess. Two ways this returns None:
+    genuinely unknown (anilist_id isn't in the dataset at all), or
+    known but ambiguous (a franchise's own AniList entry is split
+    across multiple tvdb_ids in Fribb's own data — rare, but real, and
+    picking the first would risk a wrong link for a browser deep-link
+    feature whose entire point is precision). Same "return None rather
+    than guess" discipline resolve_season_candidate() above already
+    established for the forward direction."""
+    candidates = index.get(anilist_id, [])
+    if not candidates:
+        return None
+    tvdb_ids = {c["tvdb_id"] for c in candidates}
+    if len(tvdb_ids) != 1:
+        return None
+    return tvdb_ids.pop()
 
 
 def resolve_season_candidate(

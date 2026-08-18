@@ -64,6 +64,51 @@ def test_extract_ids():
     assert fribb.extract_ids(None) == (None, None)
 
 
+# --- build_anilist_index / resolve_tvdb_id_for_anilist (2026-08-18) -----------
+
+ANILIST_SAMPLE = [
+    {"tvdb_id": 100, "anilist_id": 1, "mal_id": 1},
+    {"tvdb_id": 100, "anilist_id": 2, "mal_id": 2},  # a second entry, same tvdb_id — agrees
+    {"tvdb_id": 200, "anilist_id": 3, "mal_id": "unknown"},
+    {"tvdb_id": 250, "anilist_id": 3, "mal_id": "unknown"},  # genuinely ambiguous: id 3 splits
+    {"tvdb_id": 300, "anilist_id": "unknown"},  # filtered — no real anilist_id
+    {"anilist_id": 4},  # filtered — no tvdb_id at all
+]
+
+
+def test_build_anilist_index_skips_entries_missing_anilist_or_tvdb_id():
+    index = fribb.build_anilist_index(ANILIST_SAMPLE)
+    assert set(index) == {1, 2, 3}
+    assert len(index[3]) == 2
+
+
+def test_resolve_tvdb_id_for_anilist_returns_the_agreed_tvdb_id():
+    index = fribb.build_anilist_index(ANILIST_SAMPLE)
+    assert fribb.resolve_tvdb_id_for_anilist(index, 1) == 100
+    assert fribb.resolve_tvdb_id_for_anilist(index, 2) == 100
+
+
+def test_resolve_tvdb_id_for_anilist_returns_none_when_genuinely_ambiguous():
+    # anilist_id 3 appears against two different tvdb_ids in the dataset —
+    # never guess, same discipline resolve_season_candidate() uses forward.
+    index = fribb.build_anilist_index(ANILIST_SAMPLE)
+    assert fribb.resolve_tvdb_id_for_anilist(index, 3) is None
+
+
+def test_resolve_tvdb_id_for_anilist_returns_none_when_unknown():
+    index = fribb.build_anilist_index(ANILIST_SAMPLE)
+    assert fribb.resolve_tvdb_id_for_anilist(index, 999) is None
+
+
+def test_build_anilist_index_is_memoized_per_dataset_object():
+    dataset = list(ANILIST_SAMPLE)
+    first = fribb.build_anilist_index(dataset)
+    second = fribb.build_anilist_index(dataset)
+    assert first is second
+    other = list(ANILIST_SAMPLE)
+    assert fribb.build_anilist_index(other) is not first
+
+
 class _FakeResponse:
     def __init__(self, data):
         self._data = data

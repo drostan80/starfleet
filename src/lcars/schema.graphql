@@ -385,6 +385,11 @@ type ServicePresencePollResult {
   showsUpdated: Int!
 }
 
+"backfillTvdbIds's own confirmation summary — same shape as ServicePresencePollResult, counting only a show that actually got a new tvdb_id link written, not every candidate checked."
+type TvdbBackfillResult {
+  showsUpdated: Int!
+}
+
 type ShowServicePresenceConnection {
   edges: [ShowServicePresenceEdge!]!
   pageInfo: PageInfo!
@@ -1476,6 +1481,25 @@ type Mutation {
   silently-skipped design choice.
   """
   pollCatalogServicePresence: ServicePresencePollResult!
+  """
+  2026-08-18, tvdb_backfill.py — every tracked episodic show with a
+  known anilist_id but no tvdb_id yet, resolved via a reverse lookup
+  against the same Fribb dataset already downloaded/cached for the
+  forward (tvdb->anilist) direction (A.4/B.2) — no new network
+  dependency, and load_dataset()'s own on-disk/in-process caching means
+  a call here is a cache hit except once every 7 days. Never guesses: a
+  show Fribb's own data can't resolve unambiguously (unknown, or
+  genuinely split across multiple tvdb_ids) is left alone, retried for
+  free on the next pass. No live outbound Sonarr/Radarr call at all
+  (unlike pollCatalogServicePresence) — negligible cost, so this rides
+  Ops's existing hourly tick rather than the real-N×M-cost monthly one,
+  same "no external HTTP call, no reason not to share the cheap tick"
+  reasoning reconcileEpisodeMovieLinks already gets. Movies are NOT
+  covered — Fribb has no tmdb_id field, and there's no anilist->tmdb
+  path in this codebase at all; a real, checked gap, not a
+  silently-skipped one.
+  """
+  backfillTvdbIds: TvdbBackfillResult!
 
   """
   §5.1/§6.7, B.8b — episode_movie_link's own automatic tmdb_match

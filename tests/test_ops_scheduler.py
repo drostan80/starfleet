@@ -27,6 +27,7 @@ from ops.scheduler import (
     run_once,
     run_season_reconciliation_once,
     run_show_merge_once,
+    run_tvdb_backfill_once,
     run_untracked_shows_once,
     run_weekly_once,
 )
@@ -54,6 +55,7 @@ class _FakeClient:
         untracked_shows_result: dict | None = None,
         show_merge_result: dict | None = None,
         anilist_activity_result: dict | None = None,
+        tvdb_backfill_result: dict | None = None,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
@@ -88,6 +90,7 @@ class _FakeClient:
             "activitiesSeen": 0,
             "reconcileResult": None,
         }
+        self._tvdb_backfill_result = tvdb_backfill_result or {"showsUpdated": 0}
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -146,6 +149,9 @@ class _FakeClient:
 
     async def poll_anilist_activity(self) -> dict:
         return self._anilist_activity_result
+
+    async def backfill_tvdb_ids(self) -> dict:
+        return self._tvdb_backfill_result
 
 
 # --- run_once (B.1) ---------------------------------------------------------
@@ -418,7 +424,7 @@ async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_it
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
 
 
-async def test_run_daily_and_weekly_once_sums_all_seven_tiers():
+async def test_run_daily_and_weekly_once_sums_all_eight_tiers():
     client = _FakeClient(
         due_shows=[{"id": "s-a"}],
         due_seasons=[_season("z-a", "s-b")],
@@ -432,11 +438,25 @@ async def test_run_daily_and_weekly_once_sums_all_seven_tiers():
         },
         mal_token_refresh_result={"refreshed": True},
         untracked_shows_result={"found": 5, "newFindings": 1, "resolvedFindings": 1},
+        tvdb_backfill_result={"showsUpdated": 1},
     )
     count = await run_daily_and_weekly_once(client)
-    assert count == 9
+    assert count == 10
     assert client.refreshed == ["s-a"]
     assert client.reconciled == [("s-b", 1)]
+
+
+# --- run_tvdb_backfill_once (2026-08-18) --------------------------------------
+
+
+async def test_run_tvdb_backfill_once_returns_the_shows_updated_count():
+    client = _FakeClient(tvdb_backfill_result={"showsUpdated": 3})
+    assert await run_tvdb_backfill_once(client) == 3
+
+
+async def test_run_tvdb_backfill_once_returns_zero_on_a_no_op():
+    client = _FakeClient()
+    assert await run_tvdb_backfill_once(client) == 0
 
 
 # --- run_mal_token_refresh_once (B.10) ----------------------------------------
@@ -542,7 +562,7 @@ async def test_run_forever_wires_up_all_four_loops(monkeypatch):
             "run_daily_and_weekly_once",
             3600,
             "daily+weekly+animeschedule+local_presence+episode_movie_links"
-            "+mal_token_refresh+untracked_shows",
+            "+mal_token_refresh+untracked_shows+tvdb_backfill",
         ),
         ("run_monthly_once", 2592000, "monthly+catalog_presence+show_merge"),
         ("run_anilist_activity_once", 240, "anilist_activity"),

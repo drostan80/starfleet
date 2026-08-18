@@ -8107,6 +8107,10 @@ RECONCILE_EPISODE_MOVIE_LINKS = """
     }
 """
 
+BACKFILL_TVDB_IDS = """
+    mutation { backfillTvdbIds { showsUpdated } }
+"""
+
 
 async def test_poll_file_availability_returns_zero_with_nothing_configured(client):
     # No Sonarr/Radarr credentials in the client fixture's default config (§4.9's
@@ -8137,6 +8141,28 @@ async def test_poll_catalog_service_presence_returns_zero_with_nothing_configure
     # catalog-matching logic is test_service_presence.py's job.
     data = await gql(client, POLL_CATALOG_SERVICE_PRESENCE, headers=auth_headers())
     assert data["pollCatalogServicePresence"] == {"showsUpdated": 0}
+
+
+async def test_backfill_tvdb_ids_returns_zero_with_no_candidates(client):
+    # Actual Fribb reverse-lookup logic is test_tvdb_backfill.py's job;
+    # this only locks in that the mutation is wired to
+    # tvdb_backfill.backfill_tvdb_ids().
+    data = await gql(client, BACKFILL_TVDB_IDS, headers=auth_headers())
+    assert data["backfillTvdbIds"] == {"showsUpdated": 0}
+
+
+async def test_backfill_tvdb_ids_writes_a_real_link_end_to_end(client, monkeypatch):
+    from lcars import fribb
+
+    show = await add_show(client, titleRomaji="Akame ga Kill!", anilistId=20613)
+    monkeypatch.setattr(
+        fribb, "load_dataset", lambda: [{"anilist_id": 20613, "tvdb_id": 279328}]
+    )
+    data = await gql(client, BACKFILL_TVDB_IDS, headers=auth_headers())
+    assert data["backfillTvdbIds"] == {"showsUpdated": 1}
+    assert await _external_id_url(client, show["id"], "tvdb") == (
+        "https://thetvdb.com/dereferrer/series/279328"
+    )
 
 
 async def test_reconcile_episode_movie_links_returns_zero_with_no_bonus_movie_episodes(client):

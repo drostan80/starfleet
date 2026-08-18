@@ -47,6 +47,7 @@ from lcars import (
     show_merge,
     shows,
     sonarr_client,
+    tvdb_backfill,
     untracked_sweep,
     util,
     watch_reconcile,
@@ -1924,6 +1925,19 @@ def resolve_poll_catalog_service_presence(_, info):
     sweep. Same passive reasoning as pollLocalServicePresence above."""
     conn = db.get_connection()
     return {"shows_updated": service_presence.refresh_catalog_presence(conn)}
+
+
+@mutation.field("backfillTvdbIds")
+def resolve_backfill_tvdb_ids(_, info):
+    """2026-08-18 — tvdb_backfill.py's own Fribb reverse-lookup sweep.
+    Same passive reasoning as pollLocalServicePresence above (no
+    require_client(), no changed_by column — a bulk sweep, not a
+    targeted human decision). No live outbound Sonarr/Radarr call
+    (unlike pollCatalogServicePresence) — Ops rides its own hourly
+    tick for this, not the monthly one; see schema.graphql's own
+    docstring for the full cost reasoning."""
+    conn = db.get_connection()
+    return {"shows_updated": tvdb_backfill.backfill_tvdb_ids(conn)}
 
 
 @mutation.field("reconcileEpisodeMovieLinks")

@@ -473,6 +473,25 @@ def write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str)
     conn.commit()
 
 
+def write_tvdb_id(conn, show_id: str, tvdb_id: int) -> bool:
+    """2026-08-18, tvdb_backfill.py — a plain `tvdb` show_external_id
+    link, same `_EXTERNAL_ID_URL_TEMPLATES["tvdb"]` template
+    `_promote_stub`/`create_show` already write inline, pulled out here
+    so a third caller (the Fribb reverse-lookup backfill) doesn't need
+    its own copy of the URL format. Returns whether a row was actually
+    inserted (`INSERT OR IGNORE`'s own rowcount) — same "count real
+    changes" convention every Phase B poller uses, since a show already
+    linked (however that happened) is a silent no-op here, not
+    something to recount."""
+    url = _EXTERNAL_ID_URL_TEMPLATES["tvdb"].format(id=tvdb_id)
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'tvdb', ?, ?, ?)",
+        (show_id, str(tvdb_id), url, util.now_utc_iso()),
+    )
+    return cur.rowcount > 0
+
+
 def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
     """B.21 — addShowWithArr's own backing logic. Returns (show_id,
     arr_result); arr_result carries sonarr_created/radarr_created/
