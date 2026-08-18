@@ -17,8 +17,9 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 
 - [ ] Wire the AniList push for `season.started_at`/`completed_at` — columns exist, push
       isn't wired (`FuzzyDateInput` shape unhandled). (archive/todo.md:1013)
-- [ ] Add a real mutation for `tracking_space` — none exists; last fix needed a hand DB edit.
-      (archive/todo.md:1209)
+- [x] Add a real mutation for `tracking_space` — `setTrackingSpace(showId, trackingSpace)`,
+      `~/repos/starfleet` v0.1.23 (deployed) + `t` in `~/repos/data`'s show-detail view,
+      2026-08-18. (archive/todo.md:1209)
 - [ ] A client-facing way to correct episode-*number* misalignment (which Sonarr season/episode
       slot an episode is filed under) without a direct DB edit — the air-date half of this line
       is done (`a`/`A` above); no mutation exists for renumbering an episode itself yet.
@@ -47,6 +48,15 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
       good-to-have, not urgent.
+- [x] Open-in-Sonarr/Radarr/AniList, correctly this time: LCARS stores real deep links
+      (`show_external_id`, `Show.externalIds`) — written on `addShowWithArr` and backfilled by
+      the existing monthly Sonarr/Radarr catalog sweep (`pollCatalogServicePresence`, B.7) so
+      already-tracked shows get linked too, not just new adds. `o` in `~/repos/data`'s
+      show-detail view opens whichever link is picked in the system browser — Data never calls
+      Sonarr/Radarr/AniList itself, only LCARS. (2026-08-18; not yet deployed to production)
+- [ ] Verify the real Sonarr (`/series/{titleSlug}`) and Radarr (`/movie/{titleSlug}`) web UI
+      route shapes against a live instance — assumed from standard Servarr frontend convention,
+      not yet curl-checked against `tiny`'s own Sonarr/Radarr.
 
 ## Cutover (not started)
 

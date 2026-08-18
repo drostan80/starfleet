@@ -416,7 +416,7 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
     }
 
 
-def _write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str) -> None:
+def write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str) -> None:
     """2026-08-18 — a real deep link into the *local* Sonarr/Radarr web
     UI (their own `/series/{slug}`/`/movie/{slug}` route) as a
     `show_external_id` row, same shape every tvdb/anilist/imdb/mal/tmdb
@@ -425,22 +425,29 @@ def _write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str
     itself. `sonarr`/`radarr` were never one of `_EXTERNAL_ID_URL_
     TEMPLATES`'s static id->URL templates above on purpose: unlike
     those, this needs the operator's own `sonarr_url`/`radarr_url`
-    (config.py) plus a real titleSlug from Sonarr/Radarr's own response
-    (`_ensure_in_arr`), not a well-known public template.
+    (config.py) plus a real titleSlug from Sonarr/Radarr's own response,
+    not a well-known public template.
 
-    Go-forward capture only — same "captured at write time, not
-    backfilled" precedent `episode.title` already set: only
-    `addShowWithArr`'s own two write paths (existing-in-Sonarr/Radarr,
-    newly-created) ever call this. A show added the older way
-    (`addShow`, no Sonarr/Radarr write of its own) or backfilled from
-    an already-existing catalog entry has no titleSlug available here
-    to link from at all — a real, known limitation, not silently
-    incomplete: `Show.externalIds` simply won't carry a sonarr/radarr
-    entry for such a show, same as any other unlinked external id.
+    Public (no leading underscore) since 2026-08-18: no longer only
+    `addShowWithArr`'s own write paths (existing-in-Sonarr/Radarr,
+    newly-created) call this — `service_presence.py`'s B.7 catalog
+    sweep (`_refresh_sonarr_presence`/`_refresh_radarr_presence`) now
+    calls it too, for every already-tracked show its own fuzzy match
+    against the live Sonarr/Radarr catalog turns up a titleSlug for.
+    That backfills the ~1600 shows `addShowWithArr` never touched
+    (added via the older `addShow`, or tracked from before this existed)
+    on the sweep's own monthly cadence — real coverage of the existing
+    library, not just new adds going forward. A show neither path ever
+    matches still has no titleSlug to link from — a real, known
+    limitation, not silently incomplete: `Show.externalIds` simply
+    won't carry a sonarr/radarr entry for such a show, same as any
+    other unlinked external id.
 
     `INSERT OR IGNORE`, not upsert — same as every other external-id
-    insert in this module; a show only ever goes through
-    `addShowWithArr` once for a given service."""
+    insert in this module; once a real link exists for a show+service
+    there's nothing to update (the URL is a stable function of
+    title_slug, which Sonarr/Radarr don't change under an existing
+    entry)."""
     cfg = config.get_current()
     if media_shape == "episodic":
         base_url, service, path = cfg.sonarr_url, "sonarr", "series"
@@ -517,5 +524,5 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
     else:
         show_id = create_show(conn, resolved_input)
     if title_slug:
-        _write_arr_external_id(conn, show_id, input["media_shape"], title_slug)
+        write_arr_external_id(conn, show_id, input["media_shape"], title_slug)
     return show_id, arr_result

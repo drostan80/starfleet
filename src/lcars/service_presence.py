@@ -52,11 +52,30 @@ treatment §5.4 already gives the on-demand mutation — a weak match
 just means `present` stays/goes `false`, silently, self-healing like
 a dead poster URL; there is no "correct" value being overwritten here
 to flag.
+
+**Deep-link backfill, added 2026-08-18**: the Sonarr/Radarr catalog
+fetch this module already pays for every match against was, until now,
+thrown away the moment `_matches` returned a bool. `addShowWithArr`
+(B.21) started writing a real `show_external_id` deep link
+(`shows.write_arr_external_id`) for shows added through it, but that
+left the ~1600 already-tracked shows this repo actually has — added
+via the older `addShow`, or tracked from before `addShowWithArr`
+existed — with no titleSlug to link from at all, permanently, since
+nothing ever re-runs their original add path. This sweep already has
+the one thing that was missing (a fuzzy match against the live
+catalog, on a real recurring cadence) — `_matches` now returns the
+matched catalog entry's title instead of a bool, so its titleSlug
+can be pulled straight out of the same response and handed to
+`write_arr_external_id` alongside the presence write. Same
+`INSERT OR IGNORE`/idempotent shape: a show already linked from
+`addShowWithArr` is a silent no-op here every month after; a show
+this sweep matches for the first time gets a real link exactly once.
 """
 
 import logging
 
 from lcars import fuzzy, ids, radarr_client, service_health, sonarr_client, util
+from lcars import shows as shows_module
 from lcars.config import get_current
 
 logger = logging.getLogger("lcars.service_presence")
@@ -108,19 +127,29 @@ def _refresh_sonarr_presence(conn) -> int:
         return 0
     try:
         with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
-            catalog_titles = [series["title"] for series in client.all_series()]
+            catalog = client.all_series()
     except sonarr_client.SonarrError as e:
         logger.exception("Sonarr catalog fetch failed — presence sweep skipped this pass")
         service_health.record_failure(conn, "sonarr", str(e))
         conn.commit()
         return 0
     service_health.record_success(conn, "sonarr")
+    by_title = {series["title"]: series for series in catalog if series.get("title")}
 
     updated = 0
     for show in shows:
-        present = _matches(show, catalog_titles)
+        matched_title = _matches(show, list(by_title))
+        present = matched_title is not None
         if _upsert_presence(conn, show["id"], "sonarr", present):
             updated += 1
+        # Backfill (B.7, 2026-08-18): same match this sweep already made,
+        # spent regardless of whether `present` flipped — a real
+        # titleSlug here means a real deep link for a show addShowWithArr
+        # never wrote one for. See write_arr_external_id's own docstring.
+        if present:
+            title_slug = by_title[matched_title].get("titleSlug")
+            if title_slug:
+                shows_module.write_arr_external_id(conn, show["id"], "episodic", title_slug)
     return updated
 
 
@@ -136,25 +165,35 @@ def _refresh_radarr_presence(conn) -> int:
         return 0
     try:
         with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
-            catalog_titles = [movie["title"] for movie in client.all_movies()]
+            catalog = client.all_movies()
     except radarr_client.RadarrError as e:
         logger.exception("Radarr catalog fetch failed — presence sweep skipped this pass")
         service_health.record_failure(conn, "radarr", str(e))
         conn.commit()
         return 0
     service_health.record_success(conn, "radarr")
+    by_title = {movie["title"]: movie for movie in catalog if movie.get("title")}
 
     updated = 0
     for show in shows:
-        present = _matches(show, catalog_titles)
+        matched_title = _matches(show, list(by_title))
+        present = matched_title is not None
         if _upsert_presence(conn, show["id"], "radarr", present):
             updated += 1
+        if present:
+            title_slug = by_title[matched_title].get("titleSlug")
+            if title_slug:
+                shows_module.write_arr_external_id(conn, show["id"], "movie", title_slug)
     return updated
 
 
-def _matches(show, catalog_titles: list[str]) -> bool:
+def _matches(show, catalog_titles: list[str]) -> str | None:
+    """The catalog_titles entry (original casing) that best matched
+    this show, or None — since 2026-08-18 both callers need the actual
+    matched title back (to look its titleSlug up for the deep-link
+    backfill above), not just a bool."""
     show_titles = [show[f] for f in ("title_romaji", "title_english", "title_native") if show[f]]
-    return fuzzy.best_match(show_titles, catalog_titles) is not None
+    return fuzzy.best_match(show_titles, catalog_titles)
 
 
 def _upsert_presence(conn, show_id: str, service: str, present: bool) -> bool:
