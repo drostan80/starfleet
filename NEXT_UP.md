@@ -27,9 +27,11 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 - [ ] Show-detail view: mark a movie watched from the screen itself — gated for now, `w` has
       no episode row to act on for a `MOVIE` show; needs `Show.watchEvents`-based undo too,
       not just the episode-scoped lookup the episodic path reuses.
-- [ ] Manual schedule editing from the show-detail view: set weekly time + first air date per
-      season, per-episode offset from the original schedule (+1 week, +2 days…), offer to
-      shift all subsequent episodes when one moves.
+- [x] Manual schedule editing from the show-detail view: set weekly time + first air date per
+      season (`A`), per-episode offset from the original schedule (`a`, +1 week/+2 days…),
+      offer to shift all subsequent episodes when one moves — `~/repos/data`
+      `show_detail_screen.py`, 2026-08-18. `A` refuses on season 0 (Sonarr's specials bucket,
+      no real weekly cadence there) — use `a` per-episode for those.
 - [ ] PC.2 — one-time historical import: Trakt watch history, AniList data, MAL legacy scores
       (AniList primary for scores where both exist). (archive/BUILD_PLAN.md:4720)
 - [ ] AniList `synonyms` field — last gap in LCARS's AniList read coverage (aninote
