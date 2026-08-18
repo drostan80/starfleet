@@ -2126,6 +2126,27 @@ def resolve_set_tracked(_, info, show_id, tracked):
     return _get_show(conn, show_id)
 
 
+@mutation.field("setTrackingSpace")
+def resolve_set_tracking_space(_, info, show_id, tracking_space):
+    """2026-08-18 — see this mutation's own SDL docstring for the real
+    incident that flagged the gap. Same shape as resolve_set_episode_kind
+    above: no history table (§5.7's four are status/score/air_date/
+    tracked, trackingSpace isn't among them), a plain field flip — the
+    AniList-linking follow-up an actual reclassification needs is
+    refreshShowMetadata's job, a separate, already-existing call, not
+    this one's."""
+    conn = db.get_connection()
+    now = util.now_utc_iso()
+    cur = conn.execute(
+        "UPDATE show SET tracking_space = ?, updated_at = ? WHERE id = ?",
+        (tracking_space, now, show_id),
+    )
+    if cur.rowcount == 0:
+        raise GraphQLError(f"no such show: {show_id}")
+    conn.commit()
+    return _get_show(conn, show_id)
+
+
 # -- §6.2 paced/catch-up mode (A.10) -----------------------------------------
 
 

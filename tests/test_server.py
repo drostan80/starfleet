@@ -5430,6 +5430,41 @@ async def test_set_tracked_records_history(client):
     assert entries[0]["node"]["show"]["id"] == show["id"]
 
 
+async def test_set_tracking_space_reclassifies_the_show(client):
+    # 2026-08-18 — the real gap "The Frontier Lord Begins with Zero
+    # Subjects" hit: trackingSpace used to be set-once at creation, no
+    # mutation existed to correct a wrong initial classification.
+    show = await add_show(client, trackingSpace="TV")
+    data = await gql(
+        client,
+        "mutation($id: ID!) { setTrackingSpace(showId: $id, trackingSpace: ANIME)"
+        " { id trackingSpace } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["setTrackingSpace"]["trackingSpace"] == "ANIME"
+
+    # Persisted, not just returned in the mutation's own response.
+    confirm = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { trackingSpace } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert confirm["show"]["trackingSpace"] == "ANIME"
+
+
+async def test_set_tracking_space_rejects_unknown_show(client):
+    resp = await client.post(
+        "/",
+        json={
+            "query": 'mutation { setTrackingSpace(showId: "s-nope000", trackingSpace: ANIME) { id } }',
+        },
+        headers=auth_headers(),
+    )
+    assert "no such show" in resp.text
+
+
 # --- B.21 — auto-unmonitor-on-drop -------------------------------------------
 
 

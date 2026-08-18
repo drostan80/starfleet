@@ -1350,6 +1350,20 @@ type Mutation {
   """
   setStatus(showId: ID!, status: ShowStatus!, confirmed: Boolean = false): Show!
   setTracked(showId: ID!, tracked: Boolean!): Show!
+  """
+  2026-08-18 — `trackingSpace` used to be set-once, at creation only, decided purely from
+  whatever the Fribb crowd-dataset happened to know at that exact moment (`show_backfill.py`'s
+  `_classify_sonarr`) — nothing ever rechecked it later, even once Fribb caught up. Real, live-hit
+  gap ("The Frontier Lord Begins with Zero Subjects," a brand-new simulcast backfilled before
+  Fribb had it, stuck on TV and silently never linked to AniList at all, fixed by hand with a
+  direct DB edit at the time — no mutation existed for this at all). Same shape as setEpisodeKind
+  — no history table (§5.7 lists exactly four: status/score/air_date/tracked), a plain field flip.
+  Deliberately doesn't re-trigger metadata fetch itself — refreshShowMetadata already does exactly
+  that as its own separate call, and reads tracking_space fresh from the row every time, so the two
+  compose correctly as two deliberate steps (flip, then refresh) rather than this reaching into
+  metadata.py on its own.
+  """
+  setTrackingSpace(showId: ID!, trackingSpace: TrackingSpace!): Show!
 
   # -- §6.2 paced/catch-up mode (A.10) ---------------------------------------
   """
