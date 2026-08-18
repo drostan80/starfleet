@@ -19,8 +19,10 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       isn't wired (`FuzzyDateInput` shape unhandled). (archive/todo.md:1013)
 - [ ] Add a real mutation for `tracking_space` — none exists; last fix needed a hand DB edit.
       (archive/todo.md:1209)
-- [ ] A client-facing way to correct a schedule discrepancy (air date / episode-number
-      misalignment) without a direct DB edit. (archive/todo.md:1209)
+- [ ] A client-facing way to correct episode-*number* misalignment (which Sonarr season/episode
+      slot an episode is filed under) without a direct DB edit — the air-date half of this line
+      is done (`a`/`A` above); no mutation exists for renumbering an episode itself yet.
+      (archive/todo.md:1209)
 - [x] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
       move status/score at the show/season level individually — built in `~/repos/data`
       (`show_detail_screen.py`, `enter` on the show browser), 2026-08-18.
