@@ -1222,7 +1222,7 @@
   Worked around 2026-08-12 by connecting to the host's real LAN IP directly instead
   (`tiny@192.168.0.152`, a different local account, bypasses Tailscale's SSH proxy entirely) —
   works, but the Tailscale ACL should actually get fixed rather than relied on staying broken.
-- [ ] `aa` (add to AniList only, no Sonarr relationship) never bridges to LCARS at all — a real
+- [x] `aa` (add to AniList only, no Sonarr relationship) never bridges to LCARS at all — a real
   gap, deliberately not closed during B.12 since LCARS's `addShow` always assumes an episodic
   show (Data has no Radarr/movie path), which would be wrong for anything `aa` adds that's
   actually a movie. Needs its own scoping, not a rushed fix. See BUILD_PLAN.md's B.12 entry.
@@ -1272,3 +1272,10 @@
   wrong — it was generated before the tv-show contamination bug (B.16) was found, so ~318 of
   its ~340 rows were tv shows that should never have been on it. Don't use it; the real
   remaining backlog (23 items, all genuine cour-split cases) doesn't need a spreadsheet pass.
+
+
+  [ ] add a view to access a show details where seasons are displayed with all episodes
+  each episode can be marked watched and same can be done at the season level
+  season, and show can also be moved individually to different status and scored
+  another function, from there a schedule can be added manually for the season (thursdays 1530 GMT...) and per episode individually as a difference from original schedule (+ 1 week, +2 days...) if so offer to move all subsequent episode accordingly
+  this will be a good manual way to fix a schedule

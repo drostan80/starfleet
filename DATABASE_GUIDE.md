@@ -138,6 +138,17 @@ to always have an AniList link (see `show_external_id` below) — that's
 a rule LCARS enforces in its own logic, not something the database
 itself blocks if broken.
 
+##### notes and ideas
+make sure tracking_space allows for something to be tracked on several places (anilist and mal for example) 
+
+I may want to have a way to make sure something is present in sonarr / radarr and the status there (monitored or not)
+
+should everything link to show or should it link to episode? does it matter? feels like the most nuclear item but since it needs to link to other databases (tmdb, anilist...) it may be better to look at shows first, genuine question here
+
+a start airing date and time field could be very useful, especially to set air time and first episode air date, the rest is calculated from here, same it should be a field in the episode table so that it can be modified, with maybe a way to say if a modification impacts following episodes or not (weekly show get 2 episodes or more in one day for some reason (double bill...)
+
+reading further some of that feels like it is answered by the table "season"
+
 ---
 
 ### `episode`
@@ -658,6 +669,10 @@ connect.
 `availability_poll_checkpoint`, `service_health` — every one of these
 is either a join table or a one-row-per-name internal table, always
 reached through something else, never fetched by its own ID.)*
+
+##### note and ideas 
+maybe some of those with no prefix may need one
+show studio is a field I may look for (displaying shows from this studio) does it means it would be helpful to have a prefix for this?
 
 ---
 
