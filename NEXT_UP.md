@@ -35,8 +35,12 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       offer to shift all subsequent episodes when one moves — `~/repos/data`
       `show_detail_screen.py`, 2026-08-18. `A` refuses on season 0 (Sonarr's specials bucket,
       no real weekly cadence there) — use `a` per-episode for those.
-- [ ] PC.2 — one-time historical import: Trakt watch history, AniList data, MAL legacy scores
-      (AniList primary for scores where both exist). (archive/BUILD_PLAN.md:4720)
+- [x] PC.2, Trakt half — one-time historical import from a Trakt export zip run: 366 shows
+      created, 62 matched to existing shows, 419 status writes, 13,112 watch events (real
+      historical timestamps) + 10,211 synthesized episode rows. Sword Art Online excluded
+      (already AniList-tracked). `scripts/import_trakt_history.py`, 2026-08-18.
+- [ ] PC.2, remaining — AniList data / MAL legacy scores historical import (AniList primary for
+      scores where both exist). (archive/BUILD_PLAN.md:4720)
 - [ ] AniList `synonyms` field — last gap in LCARS's AniList read coverage (aninote
       note-matching only).
 - [ ] `tracking_space`: allow a show to be tracked in more than one place at once (e.g.
