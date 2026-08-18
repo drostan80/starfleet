@@ -1,0 +1,78 @@
+# Next up
+
+Working assumption: the system runs as-is; from here it's debugging, new
+functions, and reshaping things to taste. Full design/build history archived
+to `~/repos/starfleet-archive` (`SCOPE.md`, `BUILD_PLAN.md`, `KICKOFF_PROMPT.md`,
+old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
+`archive/<file>:<line>` below points into it for the full story.
+
+## Verify first (deployed, never exercised against a real action)
+
+- [ ] B.21's Sonarr/Radarr writes (add-show, auto-unmonitor-on-drop) — no real add/drop
+      performed yet, only tests. (archive/BUILD_PLAN.md:4709)
+- [ ] v0.1.18/v0.1.19 AniList write-mirror (status/score/episode-progress/delete/rewatch) +
+      completion auto-sync — never exercised by a real watch/status/completion/delete; this
+      one writes to the real AniList account. (archive/todo.md:837)
+- [ ] Calendar backlog counter / mark-watched display (B.11g) — "seems mostly fixed," not
+      explicitly confirmed clean. (archive/todo.md:675)
+
+## Build
+
+- [ ] Wire the AniList push for `season.started_at`/`completed_at` — columns exist, push
+      isn't wired (`FuzzyDateInput` shape unhandled). (archive/todo.md:1013)
+- [ ] Add a real mutation for `tracking_space` — none exists; last fix needed a hand DB edit.
+      (archive/todo.md:1209)
+- [ ] A client-facing way to correct a schedule discrepancy (air date / episode-number
+      misalignment) without a direct DB edit. (archive/todo.md:1209)
+- [ ] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
+      move status/score at the show/season level individually.
+- [ ] Manual schedule editing from that view: set weekly time + first air date per season,
+      per-episode offset from the original schedule (+1 week, +2 days…), offer to shift all
+      subsequent episodes when one moves.
+- [ ] List-view Enter → episode list/picker for the selected show, showing local availability
+      per episode (currently does nothing). (archive/todo.md:789)
+- [ ] Data-as-thin-client swap-over: move Data's remaining direct AniList reads/writes and
+      Sonarr reads through LCARS instead of calling AniList/Sonarr directly; delete the `aa`
+      (AniList-only add) chord once `addShow`/`addShowWithArr` fully cover it.
+      (archive/todo.md:1126)
+- [ ] PC.2 — one-time historical import: Trakt watch history, AniList data, MAL legacy scores
+      (AniList primary for scores where both exist). (archive/BUILD_PLAN.md:4720)
+- [ ] AniList `synonyms` field — last gap in LCARS's AniList read coverage (aninote
+      note-matching only).
+- [ ] `tracking_space`: allow a show to be tracked in more than one place at once (e.g.
+      AniList and MAL simultaneously).
+- [ ] Hierarchical season subdivision for legitimate cross-source granularity mismatches
+      (Bookworm/Mushoku Tensei-style cases). (archive/todo.md:1175)
+- [ ] MAL side of AniList/MAL drift detection (AniList side already built, B.5).
+- [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
+      IP in place).
+- [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
+      good-to-have, not urgent.
+
+## Cutover (not started)
+
+- [ ] Switch actual daily use over to Data, once proven reliable day-to-day.
+- [ ] Archive aniq — don't delete, keep as emergency fallback.
+- [ ] Data becomes the permanent front-end under its own name.
+- [ ] Rotate Sonarr/Radarr keys, MAL client_id, LCARS's own AniList client_secret (all
+      pasted in chat during build, intentionally left live until now).
+
+## Ideas / open questions
+
+- [ ] Move all secrets/passwords to a safer place (plaintext `config.ini` today).
+- [ ] Design the HTML client's UI properly.
+- [ ] HTML client: add a login/password gate, keep it safe.
+- [ ] HTML client video playback: local player vs. browser — undecided (native mpv only
+      works from the media machine itself, browser `<video>` has real format limits).
+- [ ] Open question: should linkage to external DBs (TMDB, AniList…) hang off `show` or
+      `episode`? First read: `season` already answers most of this.
+- [ ] Open question: does `show.studio` deserve an id-prefix like other entities, for
+      "browse by studio"?
+- [ ] LCARS→clients webhook push — future idea, don't start unprompted.
+- [ ] If a tracked show gets delayed, check livechart.me/feeds/headlines (or its /search)
+      for a matching headline — manual only, not automated.
+- [ ] animeschedule.net's real API v3 (`/anime/{slug}`, `/timetables/{airType}`) as a second
+      schedule source, if it ever becomes worth building — its RSS feed is a confirmed dead
+      end.
+- [ ] AniList indexes a not-yet-aired season under its romaji title only — handle case-by-case
+      as each season airs, not automated.
