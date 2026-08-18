@@ -73,7 +73,8 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `?term=<title>` to the more precise `?term=tvdb:{id}` for shows never added to Sonarr.
       Never guesses (skips a genuinely ambiguous Fribb entry). Rides Ops's hourly tick, not a new
       interval. Movies NOT covered — no anilist->tmdb path exists in this codebase, a real gap.
-      `~/repos/starfleet`, 2026-08-18.
+      `~/repos/starfleet`, deployed as v0.1.28 and manually triggered once — 936 shows backfilled
+      with a real tvdb_id in one pass, 2026-08-18.
 - [x] Add-link title fallback: most of the library predates Sonarr/Radarr integration and has no
       tvdb_id/tmdb_id captured at all (found live via Akame ga Kill!) — `sonarr:add`/`radarr:add`
       now falls back to `?term=<title>` (Sonarr's/Radarr's own free-text search) instead of
