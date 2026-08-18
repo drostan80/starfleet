@@ -1672,6 +1672,130 @@ async def test_add_show_with_arr_missing_add_defaults_raises_before_writing(clie
     assert [c for c in fake.calls if c[0] == "add_series"] == []
 
 
+# --- searchArrCandidates (2026-08-18, Data's own `A` disambiguation picker) --
+
+SEARCH_ARR_CANDIDATES = """
+    query($mediaShape: MediaShape!, $title: String!) {
+      searchArrCandidates(mediaShape: $mediaShape, title: $title) {
+        title year tvdbId tmdbId overview
+      }
+    }
+"""
+
+
+async def test_search_arr_candidates_returns_every_sonarr_result_not_just_the_first(
+    client, monkeypatch
+):
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(
+        lookup_results=[
+            {"tvdbId": 1, "title": "Silo", "year": 2023, "overview": "A silo."},
+            {"tvdbId": 2, "title": "Silo (2005)", "year": 2005, "overview": "A different silo."},
+        ]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        SEARCH_ARR_CANDIDATES,
+        {"mediaShape": "EPISODIC", "title": "Silo"},
+        headers=auth_headers(),
+    )
+    candidates = data["searchArrCandidates"]
+    assert candidates == [
+        {"title": "Silo", "year": 2023, "tvdbId": 1, "tmdbId": None, "overview": "A silo."},
+        {
+            "title": "Silo (2005)",
+            "year": 2005,
+            "tvdbId": 2,
+            "tmdbId": None,
+            "overview": "A different silo.",
+        },
+    ]
+    assert fake.calls == [("lookup_series", "Silo")]  # the raw title, not a tvdb: term
+
+
+async def test_search_arr_candidates_returns_every_radarr_result(client, monkeypatch):
+    config.set_current(_radarr_configured_config())
+    fake = _FakeRadarrClient(
+        lookup_results=[{"tmdbId": 27205, "title": "Inception", "year": 2010}]
+    )
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        SEARCH_ARR_CANDIDATES,
+        {"mediaShape": "MOVIE", "title": "Inception"},
+        headers=auth_headers(),
+    )
+    assert data["searchArrCandidates"] == [
+        {"title": "Inception", "year": 2010, "tvdbId": None, "tmdbId": 27205, "overview": None}
+    ]
+
+
+async def test_search_arr_candidates_empty_result_is_not_an_error(client, monkeypatch):
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(lookup_results=[])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        SEARCH_ARR_CANDIDATES,
+        {"mediaShape": "EPISODIC", "title": "Nothing Like This Exists"},
+        headers=auth_headers(),
+    )
+    assert data["searchArrCandidates"] == []
+
+
+async def test_search_arr_candidates_not_configured_returns_empty_not_an_error(client):
+    config.set_current(config.Config())  # no sonarr_url at all
+    data = await gql(
+        client,
+        SEARCH_ARR_CANDIDATES,
+        {"mediaShape": "EPISODIC", "title": "Anything"},
+        headers=auth_headers(),
+    )
+    assert data["searchArrCandidates"] == []
+
+
+async def test_search_arr_candidates_a_real_sonarr_failure_raises(client, monkeypatch):
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(error=sonarr_client.SonarrError("unreachable"))
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    resp = await client.post(
+        "/",
+        json={
+            "query": SEARCH_ARR_CANDIDATES,
+            "variables": {"mediaShape": "EPISODIC", "title": "Silo"},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "couldn't search Sonarr" in body["errors"][0]["message"]
+
+
+async def test_search_arr_candidates_does_not_write_or_track_anything(client, monkeypatch):
+    # The whole point: this is a preview, addShowWithArr (called separately,
+    # once the user picks one) is the only thing that ever tracks a show.
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(
+        lookup_results=[{"tvdbId": 421855, "title": "Shangri-La Frontier", "year": 2023}]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    await gql(
+        client,
+        SEARCH_ARR_CANDIDATES,
+        {"mediaShape": "EPISODIC", "title": "Shangri-La Frontier"},
+        headers=auth_headers(),
+    )
+    assert [c for c in fake.calls if c[0] != "lookup_series"] == []
+    stats = await gql(client, "{ stats { totalShows } }", headers=auth_headers())
+    assert stats["stats"]["totalShows"] == 0
+
+
 # --- source-fact capture: absolute_number + kind (§5.2, A.25) ---------------
 #
 # Both are *capture*, not behavior: nothing reads `kind` to decide anything,

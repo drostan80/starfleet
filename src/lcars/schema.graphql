@@ -1065,6 +1065,15 @@ type AddShowResult {
   matchedTmdbId: Int
 }
 
+"searchArrCandidates's own result shape — one raw Sonarr/Radarr lookup entry. tvdbId is set for a Sonarr (EPISODIC) search, tmdbId for a Radarr (MOVIE) one; the other is always null. year/overview are best-effort passthrough from Sonarr's/Radarr's own response, not guaranteed present for every candidate."
+type ArrCandidate {
+  title: String!
+  year: Int
+  tvdbId: Int
+  tmdbId: Int
+  overview: String
+}
+
 # ---------------------------------------------------------------------------
 # Query
 # ---------------------------------------------------------------------------
@@ -1090,6 +1099,22 @@ type Query {
 
   "§8/§6.5 — full-text search across all title variants and synopses (not just the primary title)."
   search(query: String!, first: Int, after: String, last: Int, before: String): ShowConnection!
+
+  """
+  2026-08-18 — Sonarr's/Radarr's own "add new" search (title, not an
+  id), read-only: writes nothing anywhere, tracks nothing in LCARS.
+  Exists for a client's own disambiguation picker (Data's `A`) *before*
+  calling addShowWithArr, not a replacement for it — once the user
+  picks one, pass that exact candidate's own tvdbId/tmdbId into
+  AddShowWithArrInput to add it, sidestepping addShowWithArr's own
+  auto-pick-first-result behavior entirely (already supported, see its
+  own docstring). Genuinely empty (not a GraphQL error) when the
+  search found nothing, or when the relevant service isn't configured
+  for this mediaShape at all — same "not configured = same as not
+  linked" every other Sonarr/Radarr touchpoint in this schema already
+  has. A real service failure (unreachable, bad api key) does raise.
+  """
+  searchArrCandidates(mediaShape: MediaShape!, title: String!): [ArrCandidate!]!
 
   "§8/§6.4 — cross-show next-up, across watching-status and paced/catch-up shows, soonest-available-first by default."
   nextUp(first: Int, after: String, last: Int, before: String): NextUpEntryConnection!

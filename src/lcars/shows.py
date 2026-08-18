@@ -251,6 +251,45 @@ def create_show(conn, input: dict) -> str:
 # annoying-to-clean-up failure mode, worse than a blocked add.
 
 
+def _lookup_arr(conn, media_shape: str, term: str) -> list[dict]:
+    """Read-only Sonarr/Radarr search — the actual HTTP-calling core
+    both `_resolve_arr_candidate` (below, single-result, write-path)
+    and `search_arr_candidates` (2026-08-18, the picker feature's own
+    read-only query, full list) build on, so the config-check/
+    error-handling/service_health bookkeeping exists in exactly one
+    place rather than twice. Returns `[]` when the relevant service
+    isn't configured for this media_shape at all — not an error, same
+    "not configured = same as not linked" every other Sonarr/Radarr
+    touchpoint in this codebase already has. Raises `ShowInputError` on
+    a genuine service failure (unreachable, bad api key) — a real,
+    caller-visible problem, distinct from "searched fine, found
+    nothing" (an empty list, not an error)."""
+    cfg = config.get_current()
+    if media_shape == "episodic":
+        if not (cfg.sonarr_url and cfg.sonarr_api_key):
+            return []
+        try:
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                results = client.lookup_series(term)
+            service_health.record_success(conn, "sonarr")
+        except sonarr_client.SonarrError as e:
+            service_health.record_failure(conn, "sonarr", str(e))
+            raise ShowInputError(f"couldn't search Sonarr for {term!r}: {e}") from e
+        return results
+    if media_shape == "movie":
+        if not (cfg.radarr_url and cfg.radarr_api_key):
+            return []
+        try:
+            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                results = client.lookup_movie(term)
+            service_health.record_success(conn, "radarr")
+        except radarr_client.RadarrError as e:
+            service_health.record_failure(conn, "radarr", str(e))
+            raise ShowInputError(f"couldn't search Radarr for {term!r}: {e}") from e
+        return results
+    return []
+
+
 def _resolve_arr_candidate(conn, input: dict) -> tuple[dict | None, dict]:
     """Read-only: resolves a Sonarr/Radarr lookup candidate for `input`,
     writes nothing anywhere. Returns (candidate, arr_result) —
@@ -280,13 +319,7 @@ def _resolve_arr_candidate(conn, input: dict) -> tuple[dict | None, dict]:
             if input.get("tvdb_id")
             else input[f"title_{input['primary_title']}"]
         )
-        try:
-            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
-                results = client.lookup_series(term)
-            service_health.record_success(conn, "sonarr")
-        except sonarr_client.SonarrError as e:
-            service_health.record_failure(conn, "sonarr", str(e))
-            raise ShowInputError(f"couldn't search Sonarr for {term!r}: {e}") from e
+        results = _lookup_arr(conn, "episodic", term)
         if not results:
             raise ShowInputError(f"no Sonarr match found for {term!r}")
         return results[0], arr_result
@@ -298,17 +331,26 @@ def _resolve_arr_candidate(conn, input: dict) -> tuple[dict | None, dict]:
             if input.get("tmdb_id")
             else input[f"title_{input['primary_title']}"]
         )
-        try:
-            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
-                results = client.lookup_movie(term)
-            service_health.record_success(conn, "radarr")
-        except radarr_client.RadarrError as e:
-            service_health.record_failure(conn, "radarr", str(e))
-            raise ShowInputError(f"couldn't search Radarr for {term!r}: {e}") from e
+        results = _lookup_arr(conn, "movie", term)
         if not results:
             raise ShowInputError(f"no Radarr match found for {term!r}")
         return results[0], arr_result
     return None, arr_result
+
+
+def search_arr_candidates(conn, media_shape: str, title: str) -> list[dict]:
+    """2026-08-18 — read-only Sonarr/Radarr search for Data's own `A`
+    disambiguation picker, called *before* `addShowWithArr` rather than
+    from inside it: the user picks a candidate here, then that exact
+    candidate's own `tvdbId`/`tmdbId` gets passed back into
+    `addShowWithArr`'s `AddShowWithArrInput` to sidestep re-searching
+    entirely — already supported ("supply an exact tvdbId/tmdbId when
+    it's already known to sidestep this", addShowWithArr's own schema
+    docstring), so this needed no changes to the write path at all.
+    Returns the raw candidate list, genuinely empty (not an error) when
+    the search itself found nothing or the relevant service isn't
+    configured — see `_lookup_arr`'s own docstring."""
+    return _lookup_arr(conn, media_shape, title)
 
 
 def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:

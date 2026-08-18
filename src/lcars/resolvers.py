@@ -1067,6 +1067,34 @@ def resolve_search(_, info, query, **page_args):
     return pagination.paginate(conn, "show", where, (like, like, like, like), **page_args)
 
 
+@query.field("searchArrCandidates")
+def resolve_search_arr_candidates(_, info, media_shape, title):
+    """2026-08-18 — Data's own `A` disambiguation picker. Explicit
+    dict-shaping below, not a bare passthrough of Sonarr's/Radarr's own
+    raw response: those come back genuinely camelCase already
+    (`tvdbId`/`tmdbId`, Sonarr's/Radarr's own API convention) — server.py's
+    `convert_names_case=True` expects snake_case dict keys and derives
+    camelCase GraphQL field names *from* them, so a raw passthrough
+    would silently resolve every id field to null (looking for a
+    "tvdb_id" key that was never there) rather than error, the kind of
+    gap that's easy to miss without a real end-to-end test."""
+    conn = db.get_connection()
+    try:
+        results = shows.search_arr_candidates(conn, media_shape, title)
+    except shows.ShowInputError as e:
+        raise GraphQLError(str(e)) from e
+    return [
+        {
+            "title": r.get("title"),
+            "year": r.get("year"),
+            "tvdb_id": r.get("tvdbId"),
+            "tmdb_id": r.get("tmdbId"),
+            "overview": r.get("overview"),
+        }
+        for r in results
+    ]
+
+
 @query.field("stats")
 def resolve_stats(_, info):
     """§6.6, A.13 — no ObjectType binding needed for `Stats`/
