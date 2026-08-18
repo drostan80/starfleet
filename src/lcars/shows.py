@@ -333,6 +333,7 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
                         "matched_title": existing.get("title"),
                         "matched_tvdb_id": existing.get("tvdbId"),
                         "tvdb_id": existing["tvdbId"],
+                        "title_slug": existing.get("titleSlug"),
                     }
                 is_anime = input["tracking_space"] == "anime"
                 root_folder = (
@@ -371,6 +372,7 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
             "matched_title": created.get("title"),
             "matched_tvdb_id": created.get("tvdbId"),
             "tvdb_id": created["tvdbId"],
+            "title_slug": created.get("titleSlug"),
         }
     # movie -> Radarr
     try:
@@ -382,6 +384,7 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
                     "matched_title": existing.get("title"),
                     "matched_tmdb_id": existing.get("tmdbId"),
                     "tmdb_id": existing["tmdbId"],
+                    "title_slug": existing.get("titleSlug"),
                 }
             if not (cfg.radarr_root_folder and cfg.radarr_quality_profile_id):
                 raise ShowInputError(
@@ -409,7 +412,49 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
         "matched_title": created.get("title"),
         "matched_tmdb_id": created.get("tmdbId"),
         "tmdb_id": created["tmdbId"],
+        "title_slug": created.get("titleSlug"),
     }
+
+
+def _write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str) -> None:
+    """2026-08-18 — a real deep link into the *local* Sonarr/Radarr web
+    UI (their own `/series/{slug}`/`/movie/{slug}` route) as a
+    `show_external_id` row, same shape every tvdb/anilist/imdb/mal/tmdb
+    link already gets (§5.4) — a client asking LCARS "where's this
+    show in Sonarr" gets a real answer instead of guessing a URL
+    itself. `sonarr`/`radarr` were never one of `_EXTERNAL_ID_URL_
+    TEMPLATES`'s static id->URL templates above on purpose: unlike
+    those, this needs the operator's own `sonarr_url`/`radarr_url`
+    (config.py) plus a real titleSlug from Sonarr/Radarr's own response
+    (`_ensure_in_arr`), not a well-known public template.
+
+    Go-forward capture only — same "captured at write time, not
+    backfilled" precedent `episode.title` already set: only
+    `addShowWithArr`'s own two write paths (existing-in-Sonarr/Radarr,
+    newly-created) ever call this. A show added the older way
+    (`addShow`, no Sonarr/Radarr write of its own) or backfilled from
+    an already-existing catalog entry has no titleSlug available here
+    to link from at all — a real, known limitation, not silently
+    incomplete: `Show.externalIds` simply won't carry a sonarr/radarr
+    entry for such a show, same as any other unlinked external id.
+
+    `INSERT OR IGNORE`, not upsert — same as every other external-id
+    insert in this module; a show only ever goes through
+    `addShowWithArr` once for a given service."""
+    cfg = config.get_current()
+    if media_shape == "episodic":
+        base_url, service, path = cfg.sonarr_url, "sonarr", "series"
+    else:
+        base_url, service, path = cfg.radarr_url, "radarr", "movie"
+    if not base_url:
+        return
+    url = f"{base_url.rstrip('/')}/{path}/{title_slug}"
+    conn.execute(
+        "INSERT OR IGNORE INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (show_id, service, title_slug, url, util.now_utc_iso()),
+    )
+    conn.commit()
 
 
 def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
@@ -439,6 +484,7 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
 
     candidate, arr_result = _resolve_arr_candidate(conn, input)
     resolved_input = dict(input)
+    title_slug = None
     if candidate is not None:
         resolved_input["tvdb_id" if input["media_shape"] == "episodic" else "tmdb_id"] = (
             candidate["tvdbId"] if input["media_shape"] == "episodic" else candidate["tmdbId"]
@@ -464,9 +510,12 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
             resolved_input["tvdb_id"] = add_result["tvdb_id"]
         if "tmdb_id" in add_result:
             resolved_input["tmdb_id"] = add_result["tmdb_id"]
+        title_slug = add_result.get("title_slug")
 
     if existing_show_id is not None:
         show_id = _promote_stub(conn, existing_show_id, resolved_input)
     else:
         show_id = create_show(conn, resolved_input)
+    if title_slug:
+        _write_arr_external_id(conn, show_id, input["media_shape"], title_slug)
     return show_id, arr_result

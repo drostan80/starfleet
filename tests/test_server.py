@@ -1282,6 +1282,120 @@ async def test_add_show_with_arr_matches_existing_sonarr_series(client, monkeypa
     assert [c for c in fake.calls if c[0] == "add_series"] == []
 
 
+async def _external_id_url(client, show_id, service):
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { externalIds(first: 10)"
+        " { edges { node { service url } } } } }",
+        {"id": show_id},
+        headers=auth_headers(),
+    )
+    edges = data["show"]["externalIds"]["edges"]
+    services = {e["node"]["service"]: e["node"]["url"] for e in edges}
+    return services.get(service)
+
+
+async def test_add_show_with_arr_new_sonarr_series_writes_a_real_sonarr_deep_link(
+    client, monkeypatch
+):
+    # 2026-08-18 — the actual gap the user flagged: LCARS is the one
+    # place that knows sonarr_url + the real titleSlug Sonarr assigned;
+    # a client asking for it should get a real answer, not have to
+    # guess a URL itself (or lose the link entirely, the prior state).
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(
+        series=None,
+        lookup_results=[{"tvdbId": 421855, "title": "Shangri-La Frontier", "titleSlug": "x"}],
+        add_series_result={
+            "id": 4,
+            "tvdbId": 421855,
+            "title": "Shangri-La Frontier",
+            "titleSlug": "shangri-la-frontier",
+        },
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "EPISODIC",
+                "trackingSpace": "ANIME",
+                "titleRomaji": "Shangri-La Frontier",
+                "primaryTitle": "ROMAJI",
+            }
+        },
+        headers=auth_headers(),
+    )
+    show_id = data["addShowWithArr"]["show"]["id"]
+    url = await _external_id_url(client, show_id, "sonarr")
+    assert url == "http://sonarr:8989/series/shangri-la-frontier"
+
+
+async def test_add_show_with_arr_matched_existing_sonarr_series_writes_a_deep_link(
+    client, monkeypatch
+):
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(
+        series={
+            "id": 4,
+            "tvdbId": 421855,
+            "title": "Shangri-La Frontier",
+            "titleSlug": "shangri-la-frontier",
+        },
+        lookup_results=[{"tvdbId": 421855, "title": "Shangri-La Frontier", "titleSlug": "x"}],
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "EPISODIC",
+                "trackingSpace": "ANIME",
+                "titleRomaji": "Shangri-La Frontier",
+                "primaryTitle": "ROMAJI",
+                "tvdbId": 421855,
+            }
+        },
+        headers=auth_headers(),
+    )
+    show_id = data["addShowWithArr"]["show"]["id"]
+    url = await _external_id_url(client, show_id, "sonarr")
+    assert url == "http://sonarr:8989/series/shangri-la-frontier"
+
+
+async def test_add_show_with_arr_no_title_slug_writes_no_sonarr_link(client, monkeypatch):
+    # Real, known limitation (this mutation's own docstring): a Sonarr
+    # response with no titleSlug at all leaves nothing to link from —
+    # not silently wrong, just genuinely nothing to write.
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(
+        series=None,
+        lookup_results=[{"tvdbId": 421855, "title": "Shangri-La Frontier", "titleSlug": "x"}],
+        add_series_result={"id": 4, "tvdbId": 421855, "title": "Shangri-La Frontier"},
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "EPISODIC",
+                "trackingSpace": "ANIME",
+                "titleRomaji": "Shangri-La Frontier",
+                "primaryTitle": "ROMAJI",
+            }
+        },
+        headers=auth_headers(),
+    )
+    show_id = data["addShowWithArr"]["show"]["id"]
+    assert await _external_id_url(client, show_id, "sonarr") is None
+
+
 async def test_add_show_with_arr_movie_creates_new_radarr_movie(client, monkeypatch):
     config.set_current(_radarr_configured_config())
     fake = _FakeRadarrClient(
@@ -1341,6 +1455,40 @@ async def test_add_show_with_arr_movie_matches_existing_radarr_movie(client, mon
     result = data["addShowWithArr"]
     assert result["radarrMovieCreated"] is False
     assert [c for c in fake.calls if c[0] == "add_movie"] == []
+
+
+async def test_add_show_with_arr_new_radarr_movie_writes_a_real_radarr_deep_link(
+    client, monkeypatch
+):
+    config.set_current(_radarr_configured_config())
+    fake = _FakeRadarrClient(
+        movie=None,
+        lookup_results=[{"tmdbId": 27205, "title": "Inception", "titleSlug": "x"}],
+        add_movie_result={
+            "id": 4,
+            "tmdbId": 27205,
+            "title": "Inception",
+            "titleSlug": "inception",
+        },
+    )
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "MOVIE",
+                "trackingSpace": "TV",
+                "titleRomaji": "Inception",
+                "primaryTitle": "ROMAJI",
+            }
+        },
+        headers=auth_headers(),
+    )
+    show_id = data["addShowWithArr"]["show"]["id"]
+    url = await _external_id_url(client, show_id, "radarr")
+    assert url == "http://radarr:7878/movie/inception"
 
 
 async def test_add_show_with_arr_zero_lookup_results_rejects_nothing_created(client, monkeypatch):
