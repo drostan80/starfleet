@@ -6,15 +6,12 @@ to `~/repos/starfleet-archive` (`SCOPE.md`, `BUILD_PLAN.md`, `KICKOFF_PROMPT.md`
 old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 `archive/<file>:<line>` below points into it for the full story.
 
-## Verify first (deployed, never exercised against a real action)
+## Verified (confirmed via real daily use, 2026-08-18 — resurfacing is a new bug, not a reopen)
 
-- [ ] B.21's Sonarr/Radarr writes (add-show, auto-unmonitor-on-drop) — no real add/drop
-      performed yet, only tests. (archive/BUILD_PLAN.md:4709)
-- [ ] v0.1.18/v0.1.19 AniList write-mirror (status/score/episode-progress/delete/rewatch) +
-      completion auto-sync — never exercised by a real watch/status/completion/delete; this
-      one writes to the real AniList account. (archive/todo.md:837)
-- [ ] Calendar backlog counter / mark-watched display (B.11g) — "seems mostly fixed," not
-      explicitly confirmed clean. (archive/todo.md:675)
+- [x] B.21's Sonarr/Radarr writes (add-show, auto-unmonitor-on-drop).
+- [x] v0.1.18/v0.1.19 AniList write-mirror (status/score/episode-progress/delete/rewatch) +
+      completion auto-sync.
+- [x] Calendar backlog counter / mark-watched display (B.11g).
 
 ## Build
 
