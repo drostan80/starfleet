@@ -578,10 +578,26 @@ def _link_relation(conn, show_id: str, related_media: dict) -> None:
 def _create_relation_stub(conn, related_media: dict, related_anilist_id: str) -> str:
     title = related_media.get("title") or {}
     romaji, english, native = title.get("romaji"), title.get("english"), title.get("native")
-    if romaji:
-        primary_title = "romaji"
-    elif english:
+    # 2026-08-19 — real live bug, user-caught (Ascendance of a Bookworm: 4 of
+    # its 5 parts came into LCARS through this exact function, this exact
+    # relation graph): this used to prefer `romaji` whenever it existed at
+    # all, `english` only as a fallback for when romaji was missing — so a
+    # stub with a perfectly good English title still got stuck displaying/
+    # searching under its Japanese romaji one ("Honzuki no Gekokujou:
+    # Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen 2nd Season"
+    # instead of "Ascendance of a Bookworm Part 2") the instant that romaji
+    # field happened to be non-empty, which AniList populates for nearly
+    # everything. `primary_title` is a write-once choice — `_promote_stub`
+    # (shows.py) deliberately never revisits it, and no metadata refresh
+    # does either — so this was the one place to get it right. English,
+    # when AniList actually provides one, is what a user searching/browsing
+    # in English types and recognizes; romaji is the honest fallback for
+    # the (common, legitimate) case where no official English title exists
+    # at all, not the default over one that does.
+    if english:
         primary_title = "english"
+    elif romaji:
+        primary_title = "romaji"
     elif native:
         primary_title = "native"
     else:

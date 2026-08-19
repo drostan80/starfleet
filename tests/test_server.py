@@ -552,6 +552,45 @@ async def test_add_show_anilist_fetch_creates_relation_stub_shows(client, monkey
     assert links["mal"] == "433"
 
 
+async def test_add_show_anilist_fetch_relation_stub_prefers_english_title(client, monkeypatch):
+    # 2026-08-19, real live bug (Ascendance of a Bookworm): a relation stub
+    # used to prefer romaji whenever it existed at all, english only as a
+    # fallback for when romaji was missing — so a stub with a real English
+    # title still ended up displayed/searched under its Japanese romaji one.
+    # English wins whenever AniList actually provides one.
+    fake_media = {
+        **FAKE_ANILIST_MEDIA_WITH_RELATIONS,
+        "relations": {
+            "edges": [
+                {
+                    "node": {
+                        "id": 333,
+                        "idMal": 433,
+                        "format": "TV",
+                        "title": {
+                            "romaji": "Honzuki no Gekokujou 2nd Season",
+                            "english": "Ascendance of a Bookworm Part 2",
+                            "native": None,
+                        },
+                    }
+                }
+            ]
+        },
+    }
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: fake_media)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+    show = await add_show(client, anilistId=111)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { relatedShows { edges { node { displayTitle } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    titles = {e["node"]["displayTitle"] for e in data["show"]["relatedShows"]["edges"]}
+    assert titles == {"Ascendance of a Bookworm Part 2"}  # not the romaji title
+
+
 async def test_add_show_anilist_fetch_relation_reuses_existing_show(client, monkeypatch):
     """When the related AniList id is already a real, tracked show in
     LCARS, the edge must point at that show — no duplicate stub."""
