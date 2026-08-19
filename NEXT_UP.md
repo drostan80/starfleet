@@ -99,6 +99,24 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       chosen candidate's exact tvdbId is what gets added — no re-search, no risk of a different
       show being matched. Still TV/anime only (Sonarr) — a Radarr/movie version of `A` remains
       unbuilt. `~/repos/starfleet`/`~/repos/data`, deployed as v0.1.29, 2026-08-18.
+- [x] Ascendance of a Bookworm audit, user-caught ("it is all wrong in lcars"), three real bugs:
+      (1) `watch_reconcile.py`'s `reconcile_watch_progress` trusted AniList's raw progress/status
+      wholesale with no air-date check — on 2026-08-15 it marked six not-yet-aired episodes
+      watched and flipped "Adopted Daughter of an Archduke" to `completed` while it was still
+      weekly-releasing, overwriting a correct manual fix from hours earlier. Third hardening fix
+      in that module (see its own docstring for #1/#2) — both the episode backfill and the
+      show-level completion status now exclude any episode with a real, future `air_date_utc`;
+      self-heals once it airs. (2) Duplicate Part 1 show row: `s-ebqx1f` (untracked stub, 0
+      episodes) and `s-2k4jb6` (real tracked data) both held anilist id 108268 — orphaned
+      2026-08-12 when a pending_review got resolved by hand instead of via `applyShowMerge`.
+      Worse, Part 2/3/Ryoushu's `show_relation` rows pointed at the dead stub as "Part 1", not
+      the real show. Merged via `applyShowMerge` (after unlinking the duplicate anilist id from
+      the loser first — its overlap guard otherwise refuses a same-id merge, a real gap in that
+      guard worth a future look) — fixed the inbound relation edges, reversible via
+      `reverseShowMerge`. (3) 3 of 2311 anilist deep links (incl. this show's) had a literal
+      unsubstituted `https://anilist.co/anime/$eid` — a one-off manual-mutation typo from the
+      same 2026-08-12 session, not a code bug; fixed via `linkShowExternalId`. Code fix deployed
+      as v0.1.30; data fixes applied live the same session, 2026-08-19.
 
 ## Cutover (not started)
 
