@@ -8908,6 +8908,63 @@ async def test_reconcile_watch_progress_backfills_and_corrects_status_through_re
     assert ep3_data["episode"]["state"] == "UNWATCHED"  # beyond progress=2, untouched
 
 
+async def test_reconcile_watch_progress_never_marks_an_unaired_episode_watched(client, monkeypatch):
+    # Fix 3, 2026-08-19 — the real Ascendance of a Bookworm bug: AniList's
+    # own progress/status can be ahead of an episode's real air date (a
+    # premature total-episode count, a stray click). Episode 3 here has a
+    # real, future air_date_utc; AniList reports progress=3 and COMPLETED
+    # anyway. Reconcile must leave episode 3 unwatched, the show WATCHING
+    # (not COMPLETED), and episodes 1-2 (already aired) genuinely backfilled.
+    show = await add_show(
+        client, mediaShape="EPISODIC", trackingSpace="ANIME", titleRomaji="Still Airing"
+    )
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO season"
+        " (id, show_id, season_number, anilist_id, source, matched, manual_override,"
+        "  created_at, updated_at)"
+        " VALUES ('z-recon2', ?, 1, 556, 'manual', 1, 1, 'x', 'x')",
+        (show["id"],),
+    )
+    future = (datetime.now(UTC) + timedelta(days=7)).isoformat()
+    for ep, air_date in ((1, None), (2, None), (3, future)):
+        conn.execute(
+            "INSERT INTO episode"
+            " (id, show_id, season, episode, kind, air_date_utc, created_at, updated_at)"
+            " VALUES (?, ?, 1, ?, 'regular', ?, 'x', 'x')",
+            (f"e-rcn2-{ep}", show["id"], ep, air_date),
+        )
+    conn.commit()
+
+    config.set_current(_authenticated_config())
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_my_anime_list",
+        lambda token: [
+            {"anilist_id": 556, "status": "COMPLETED", "progress": 3, "format": "TV", "title": "x"}
+        ],
+    )
+
+    data = await gql(client, RECONCILE_WATCH_PROGRESS, headers=auth_headers())
+    assert data["reconcileWatchProgress"]["episodesBackfilled"] == 2  # not ep 3
+
+    show_data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert show_data["show"]["status"] == "WATCHING"  # never COMPLETED off an unaired episode
+
+    ep3_data = await gql(
+        client,
+        "query($id: ID!) { episode(id: $id) { state } }",
+        {"id": "e-rcn2-3"},
+        headers=auth_headers(),
+    )
+    assert ep3_data["episode"]["state"] == "UNWATCHED"
+
+
 # --- B.5.1: Sonarr/Radarr webhook routes --------------------------------
 #
 # Route-level: auth, routing (GraphQL at "/" still works alongside the two

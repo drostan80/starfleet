@@ -130,6 +130,20 @@ def reconcile_watch_progress(conn) -> dict:
        simply not guessing: a show's status is only ever set from its
        true highest linked season number, never a lower one standing
        in for it.
+
+    **Third hardening fix, 2026-08-19**, same "reproduced live, not
+    theoretical" bar as the two above — Ascendance of a Bookworm
+    ("Adopted Daughter of an Archduke"): this pass marked six not-yet-
+    aired episodes watched and flipped a still-weekly-releasing show to
+    `completed`, straight from AniList's raw `progress`/`status`,
+    overwriting a correct manual fix from hours earlier. The module
+    docstring's "AniList wins outright" was never meant to license
+    fabricating watch history for an episode that doesn't exist yet —
+    AniList's own progress/status can be ahead of reality. Both the
+    per-episode backfill and the show-level completion status now
+    exclude any episode this show's own already-known (Sonarr/TVDB)
+    `air_date_utc` places in the future — self-heals the moment that
+    episode actually airs, same as fix #2's own self-healing case.
     """
     cfg = config.get_current()
     result = {
@@ -211,8 +225,46 @@ def reconcile_watch_progress(conn) -> dict:
 
         show_id = season["show_id"]
         season_number = season["season_number"]
+
+        # Fix 3, 2026-08-19 — Ascendance of a Bookworm ("Adopted Daughter
+        # of an Archduke"), real live bug, user-caught: this pass ran
+        # 2026-08-15T19:52:12Z and marked episodes 18-24 watched from
+        # AniList's raw `progress: 24`/`status: COMPLETED`, six of which
+        # (19-24) hadn't aired yet at that moment — the show was still
+        # weekly-releasing, and the human had correctly set it back to
+        # `watching` (through ep 17) just hours earlier. The module
+        # docstring's "AniList wins outright, no pending_review gate" is
+        # right for the divergence this was built to fix (a real watch
+        # LCARS never heard about) but was never meant to license
+        # fabricating watch history for episodes that don't exist yet —
+        # AniList's own `progress`/`status` can be ahead of reality (a
+        # premature total-episode count, a stray click) and this pass had
+        # no way to tell the difference. `unaired_episodes` below is
+        # this season's own already-known TVDB/Sonarr air dates (§5.2 —
+        # the one source that actually knows release schedules); an
+        # episode with a real, future air_date_utc is excluded from both
+        # the progress backfill and the status-completion check that
+        # follows, same "apply what's confident, flag/skip what isn't"
+        # principle every other guard in this pass already uses.
+        unaired_episodes = {
+            row["episode"]
+            for row in conn.execute(
+                "SELECT episode FROM episode"
+                " WHERE show_id = ? AND season = ? AND air_date_utc IS NOT NULL"
+                "   AND air_date_utc > ?",
+                (show_id, season_number, now),
+            ).fetchall()
+        }
+
         if season_number == highest_season_number_by_show.get(show_id):
-            status_candidate_by_show[show_id] = (season_number, entry["status"])
+            # A season with any real not-yet-aired episode can't honestly
+            # be COMPLETED yet, whatever AniList's own status says — same
+            # reasoning as the per-episode guard just below, applied to
+            # the show-level status this season is about to drive.
+            season_status = entry["status"]
+            if season_status == "COMPLETED" and unaired_episodes:
+                season_status = "CURRENT"
+            status_candidate_by_show[show_id] = (season_number, season_status)
 
         progress = entry["progress"] or 0
         if progress <= 0:
@@ -222,6 +274,7 @@ def reconcile_watch_progress(conn) -> dict:
             " WHERE show_id = ? AND season = ? AND episode <= ? AND state = 'unwatched'",
             (show_id, season_number, progress),
         ).fetchall()
+        unwatched = [row for row in unwatched if row["episode"] not in unaired_episodes]
         for ep_row in unwatched:
             conn.execute(
                 "INSERT INTO watch_event"
