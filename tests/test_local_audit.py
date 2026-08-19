@@ -72,12 +72,14 @@ def _add_show(conn, show_id, tvdb_id=None, tmdb_id=None, media_shape="episodic")
     conn.commit()
 
 
-def _add_episode(conn, episode_id, show_id, season=1, episode=1, available="unavailable"):
+def _add_episode(
+    conn, episode_id, show_id, season=1, episode=1, available="unavailable", file_path=None
+):
     conn.execute(
         "INSERT INTO episode (id, show_id, season, episode, kind, state,"
-        " available_via_sonarr, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, 'regular', 'unwatched', ?, 'x', 'x')",
-        (episode_id, show_id, season, episode, available),
+        " available_via_sonarr, file_path_sonarr, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, 'regular', 'unwatched', ?, ?, 'x', 'x')",
+        (episode_id, show_id, season, episode, available, file_path),
     )
     conn.commit()
 
@@ -185,6 +187,30 @@ def test_sonarr_already_correct_state_is_a_no_op(conn, monkeypatch):
 
     result = local_audit._audit_sonarr(conn)
     assert result["episodes_corrected"] == 0
+
+
+def test_sonarr_corrects_a_moved_file_path_while_still_available(conn, monkeypatch):
+    # 2026-08-19, real live bug (Anna Pigeon): a file that stays `available`
+    # throughout a Sonarr root-folder move never got its stale
+    # file_path_sonarr corrected, since the old code only wrote anything
+    # when available_via_sonarr itself was about to flip.
+    _configure_sonarr()
+    _add_show(conn, "s-lau004", tvdb_id=463597)
+    _add_episode(
+        conn, "e-lau004", "s-lau004", available="available", file_path="/data/anime/s01e01.mkv"
+    )
+    series = [{"id": 1, "tvdbId": 463597, "title": "Test", "path": "/data/series"}]
+    episodes = {1: [_sonarr_episode(1, 1, has_file=True, path="/data/series/s01e01.mkv")]}
+    fake = _FakeSonarrClient(series, episodes)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit._audit_sonarr(conn)
+    assert result["episodes_corrected"] == 1
+    row = conn.execute(
+        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-lau004'"
+    ).fetchone()
+    assert row["available_via_sonarr"] == "available"
+    assert row["file_path_sonarr"] == "/data/series/s01e01.mkv"
 
 
 def test_sonarr_not_configured_is_a_clean_no_op(conn, monkeypatch):
@@ -395,6 +421,32 @@ def test_radarr_corrects_a_stale_available_flag(conn, monkeypatch):
     ).fetchone()
     assert row["available_via_radarr"] == "unavailable"
     assert row["file_path_radarr"] is None
+
+
+def test_radarr_corrects_a_moved_file_path_while_still_available(conn, monkeypatch):
+    # Mirrors the Sonarr fix just above (2026-08-19, Anna Pigeon) — a movie
+    # that stays `available` throughout a Radarr root-folder move needs its
+    # stale file_path_radarr corrected too, not just a status flip.
+    _configure_radarr()
+    _add_show(conn, "s-lau103", tmdb_id=687163, media_shape="movie")
+    conn.execute(
+        "UPDATE show SET available_via_radarr = 'available', file_path_radarr = '/old.mkv'"
+        " WHERE id = 's-lau103'"
+    )
+    conn.commit()
+    movies = [
+        _radarr_movie(687163, "Project Hail Mary", has_file=True, movie_file_path="/new.mkv")
+    ]
+    fake = _FakeRadarrClient(movies)
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    result = local_audit._audit_radarr(conn)
+    assert result["shows_corrected"] == 1
+    row = conn.execute(
+        "SELECT available_via_radarr, file_path_radarr FROM show WHERE id = 's-lau103'"
+    ).fetchone()
+    assert row["available_via_radarr"] == "available"
+    assert row["file_path_radarr"] == "/new.mkv"
 
 
 def test_radarr_not_configured_is_a_clean_no_op(conn, monkeypatch):

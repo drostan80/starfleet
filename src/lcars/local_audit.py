@@ -337,7 +337,7 @@ def _audit_sonarr(conn) -> dict:
                 known_file_paths: set[str] = set()
                 for ep in episodes:
                     row = conn.execute(
-                        "SELECT id, available_via_sonarr FROM episode"
+                        "SELECT id, available_via_sonarr, file_path_sonarr FROM episode"
                         " WHERE show_id = ? AND season = ? AND episode = ?",
                         (show_id, ep["seasonNumber"], ep["episodeNumber"]),
                     ).fetchone()
@@ -346,7 +346,21 @@ def _audit_sonarr(conn) -> dict:
                     episode_file = ep.get("episodeFile")
                     if ep["hasFile"] and episode_file:
                         known_file_paths.add(episode_file["path"])
-                        if row["available_via_sonarr"] != "available":
+                        # 2026-08-19 — real live bug, user-caught (Anna
+                        # Pigeon): this used to only correct anything when
+                        # available_via_sonarr itself was about to flip, so
+                        # a file that stayed `available` throughout (the
+                        # user moved Sonarr's save location — a root-folder
+                        # change, still hasFile) never got its now-stale
+                        # file_path_sonarr touched at all, contradicting
+                        # this module's own docstring ("corrects... the
+                        # matching file_path_* directly"). The path itself
+                        # is just as much "current truth" as the status —
+                        # compared and corrected the same way.
+                        if (
+                            row["available_via_sonarr"] != "available"
+                            or row["file_path_sonarr"] != episode_file["path"]
+                        ):
                             conn.execute(
                                 "UPDATE episode SET available_via_sonarr = 'available',"
                                 " file_path_sonarr = ?, available_checked_at = ? WHERE id = ?",
@@ -418,13 +432,20 @@ def _audit_radarr(conn) -> dict:
 
         show_id = _show_id_for_tmdb_movie(conn, movie["tmdbId"])
         row = conn.execute(
-            "SELECT available_via_radarr FROM show WHERE id = ?", (show_id,)
+            "SELECT available_via_radarr, file_path_radarr FROM show WHERE id = ?", (show_id,)
         ).fetchone()
         movie_file = movie.get("movieFile")
         known_file_paths: set[str] = set()
         if movie.get("hasFile") and movie_file:
             known_file_paths.add(movie_file["path"])
-            if row["available_via_radarr"] != "available":
+            # Mirrors _audit_sonarr's own 2026-08-19 fix just above — a
+            # movie that stays `available` throughout a Radarr root-folder
+            # move needs its stale file_path_radarr corrected too, not
+            # just a status flip.
+            if (
+                row["available_via_radarr"] != "available"
+                or row["file_path_radarr"] != movie_file["path"]
+            ):
                 conn.execute(
                     "UPDATE show SET available_via_radarr = 'available', file_path_radarr = ?,"
                     " available_checked_at = ? WHERE id = ?",
