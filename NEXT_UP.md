@@ -24,6 +24,12 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       slot an episode is filed under) without a direct DB edit — the air-date half of this line
       is done (`a`/`A` above); no mutation exists for renumbering an episode itself yet.
       (archive/todo.md:1209)
+- [ ] Per-show manual audit trigger from the show-detail view — user's own ask, 2026-08-19,
+      after the Anna Pigeon `auditLocalFiles` fix (v0.1.32) landed: that mutation is still
+      whole-library-only, no `showId` scope, so fixing one show's stale Sonarr/Radarr path means
+      re-walking everything. Needs a scoped LCARS mutation (`auditLocalFiles(showId: ID)` or a
+      new single-show variant reusing `_audit_sonarr`/`_audit_radarr`'s per-series/per-movie
+      correction logic) plus a trigger key in `~/repos/data`'s `show_detail_screen.py`.
 - [x] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
       move status/score at the show/season level individually — built in `~/repos/data`
       (`show_detail_screen.py`, `enter` on the show browser), 2026-08-18.
