@@ -110,13 +110,24 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       episodes) and `s-2k4jb6` (real tracked data) both held anilist id 108268 — orphaned
       2026-08-12 when a pending_review got resolved by hand instead of via `applyShowMerge`.
       Worse, Part 2/3/Ryoushu's `show_relation` rows pointed at the dead stub as "Part 1", not
-      the real show. Merged via `applyShowMerge` (after unlinking the duplicate anilist id from
-      the loser first — its overlap guard otherwise refuses a same-id merge, a real gap in that
-      guard worth a future look) — fixed the inbound relation edges, reversible via
-      `reverseShowMerge`. (3) 3 of 2311 anilist deep links (incl. this show's) had a literal
-      unsubstituted `https://anilist.co/anime/$eid` — a one-off manual-mutation typo from the
-      same 2026-08-12 session, not a code bug; fixed via `linkShowExternalId`. Code fix deployed
-      as v0.1.30; data fixes applied live the same session, 2026-08-19.
+      the real show. `applyShowMerge`'s overlap guard correctly refused the merge outright
+      ("winner already has this service") since both sides held the same anilist id — worked
+      as designed, not a gap; unlinked the duplicate anilist id from the loser first (a genuine
+      no-op, the winner already carried the identical id) so the merge had nothing to conflict
+      on, then merged clean — fixed the inbound relation edges, reversible via
+      `reverseShowMerge`. Also nulled `anilist_id`/`mal_id` on the demoted loser's own leftover
+      season row (`setSeasonMapping`, still held the same anilist id post-merge, would've
+      tripped `reconcile_watch_progress`'s Fix 1 "two seasons sharing one anilist_id" guard and
+      silently excluded *both* Part 1 seasons from every future reconcile). (3) 3 of 2311
+      anilist deep links (incl. this show's) had a literal unsubstituted
+      `https://anilist.co/anime/$eid` — a one-off manual-mutation typo from the same 2026-08-12
+      session, not a code bug; fixed via `linkShowExternalId`. Code fix deployed as v0.1.30;
+      data fixes applied live the same session, 2026-08-19. Known remaining gap, not fixed:
+      Part 1 (`s-2k4jb6`) carries 4 unwatched `special`-kind episodes (season 0, Sonarr/TVDB's
+      flat-series specials bucket) under an otherwise `completed` show — genuinely ambiguous
+      whether they belong here or to the separate OVA AniList entry (`s-5gbznf`, still
+      untracked); the existing "Hierarchical season subdivision" open item above is the right
+      place for that call, not a guess made here.
 
 ## Cutover (not started)
 
