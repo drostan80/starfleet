@@ -142,6 +142,25 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `primary_title` post-creation) after user confirmation; DB snapshotted first
       (`lcars.db.bak-20260819-primary-title-backfill-pre`). `~/repos/starfleet`, deployed as
       v0.1.31, 2026-08-19.
+- [x] Follow-up, same session: user moved a show's save location in Sonarr (Anna Pigeon), asked
+      whether LCARS picks it up automatically — it didn't, for two separate reasons. (1) Sonarr's
+      `Rename` event (what a root-folder move fires) is deliberately unhandled by both the
+      webhook and the `/history` poller (availability.py, by original design — not this bug).
+      (2) The one mechanism that *does* re-read Sonarr's current state, `auditLocalFiles`
+      (local_audit.py), turned out to have a real bug of its own: `_audit_sonarr`/`_audit_radarr`
+      only corrected `file_path_sonarr`/`file_path_radarr` when `available_via_sonarr`/`_radarr`
+      itself was about to flip — a file that stayed `available` throughout a root-folder move
+      (Anna Pigeon's exact case, confirmed live against Sonarr before touching anything) never
+      got its stale path corrected, contradicting the module's own docstring. Fixed both
+      (path now compared and corrected independently of the status flip) and ran
+      `auditLocalFiles` for real: **2299 episodes + 69 shows corrected** catalog-wide — this had
+      been silently broken for far more than just Anna Pigeon. `auditLocalFiles` itself stays
+      manual-trigger-only (unchanged, deliberate — not on Ops's automatic loop); still no per-
+      show scope exists for it. Also surfaced (pre-existing, unrelated, not acted on): 214 orphan
+      files (mostly a large legacy library, `Those Obnoxious Aliens`/Urusei Yatsura 1981, not yet
+      fully fetched into LCARS) and 5 untracked Urusei Yatsura movies — report-only findings for
+      the user to act on by hand, not this session's job. `~/repos/starfleet`, deployed as
+      v0.1.32, 2026-08-19; DB snapshotted first (`lcars.db.bak-20260819-audit-path-fix-v0.1.31-pre`).
 
 ## Cutover (not started)
 
