@@ -128,6 +128,20 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       whether they belong here or to the separate OVA AniList entry (`s-5gbznf`, still
       untracked); the existing "Hierarchical season subdivision" open item above is the right
       place for that call, not a guess made here.
+- [x] Follow-up, same session: user still couldn't find 4 of Bookworm's 5 parts searching
+      "ascenda" — real, catalog-wide bug, not a search issue. `show.primaryTitle` is a
+      write-once pointer column (`romaji`/`english`/`native`, resolved via
+      `title_{primary_title}`) decided once at creation and never revisited.
+      `_create_relation_stub` (metadata.py, the path that created 4 of Bookworm's 5 parts as
+      AniList relation edges) preferred romaji whenever it existed at all, english only as a
+      fallback — so a stub with a real English title still displayed/searched under its
+      Japanese romaji one. 904 shows catalog-wide affected (had a real `title_english` but
+      `primary_title='romaji'`). Fixed the precedence (english wins when AniList provides one)
+      and one-time backfilled all 904 rows directly on the DB — required a brief lcars/ops stop
+      (`journal_mode=delete`, one persistent app connection, no mutation exists for editing
+      `primary_title` post-creation) after user confirmation; DB snapshotted first
+      (`lcars.db.bak-20260819-primary-title-backfill-pre`). `~/repos/starfleet`, deployed as
+      v0.1.31, 2026-08-19.
 
 ## Cutover (not started)
 
