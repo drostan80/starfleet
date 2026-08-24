@@ -11,6 +11,29 @@ needed to match a history event straight to LCARS's own
 `show_external_id` crosswalk (§5.4) — no separate correlation-id
 column needed, confirmed live rather than assumed.
 
+**One tvdb id, more than one LCARS show — 2026-08-24, real live bug
+user-caught (Ascendance of a Bookworm).** `show_external_id` doesn't
+enforce one show per tvdb id — a franchise TVDB tracks as one flat
+series can back several LCARS shows, one per AniList-side part
+(metadata.py's `_fetch_sonarr_multi_show` docstring has the full
+Bookworm case). That function already knew to route by
+`absoluteEpisodeNumber` rather than Sonarr's raw season/episode, which
+only means anything within Sonarr's own numbering, not any one
+sibling's own restarted-at-1 numbering — but it only ever fills a row
+once (`available_checked_at IS NULL`), by design, deferring every
+later update to this module as "more authoritative." This module's own
+`_poll_sonarr`/`apply_sonarr_webhook` had no equivalent routing, so
+that later update could in fact never land for a shared-tvdb show:
+their season/episode match could never succeed against a sibling's own
+restarted numbering, silently no-oping forever the moment an episode's
+first fetch had already set `available_checked_at` — exactly what left
+a real, already-imported episode reading `UNAVAILABLE` days after
+Sonarr had the file. `_show_ids_for_tvdb`/`_route_episode_availability`/
+`_apply_episode_availability_multi_show` below are this module's own
+counterpart to that same routing, for the exact case
+`_apply_episode_availability`'s single-show docstring says doesn't
+apply to it.
+
 Availability is 3-state (`unavailable | downloading | available`), not
 boolean — a file grabbed but not yet imported is a real, distinct,
 useful state. Events are processed oldest-first within each poll
@@ -192,12 +215,19 @@ def _fetch_new_records(history_page_fn, checkpoint: str | None) -> list[dict]:
     return new_records
 
 
-def _show_id_for_tvdb(conn, tvdb_id: int) -> str | None:
-    row = conn.execute(
+def _show_ids_for_tvdb(conn, tvdb_id: int) -> list[str]:
+    """Plural on purpose, 2026-08-24 — a franchise TVDB tracks as one flat
+    series can back more than one LCARS show (metadata.py's own
+    `_fetch_sonarr_multi_show` docstring has the full Bookworm case this
+    was built for). A caller with exactly one result can still use the
+    single-show `_apply_episode_availability` path unchanged below; more
+    than one routes through `_apply_episode_availability_multi_show`
+    instead."""
+    rows = conn.execute(
         "SELECT show_id FROM show_external_id WHERE service = 'tvdb' AND external_id = ?",
         (str(tvdb_id),),
-    ).fetchone()
-    return row["show_id"] if row else None
+    ).fetchall()
+    return [row["show_id"] for row in rows]
 
 
 def _apply_episode_availability(
@@ -208,7 +238,13 @@ def _apply_episode_availability(
     `available_checked_at`. Returns the touched episode's id, or None if
     no matching row exists yet (episode not fetched into LCARS yet — not
     an error, same "not yet, not wrong" treatment `_poll_sonarr` already
-    gave this case before this was extracted)."""
+    gave this case before this was extracted).
+
+    Single-show only — matches by Sonarr's own raw season/episode
+    numbers, which is exactly this show's own numbering only when it
+    isn't sharing its tvdb id with any sibling (§5.1's overwhelmingly
+    common case). See `_apply_episode_availability_multi_show` for the
+    shared-tvdb-id case, where that equivalence doesn't hold."""
     row = conn.execute(
         "SELECT id FROM episode WHERE show_id = ? AND season = ? AND episode = ?",
         (show_id, season, episode),
@@ -221,6 +257,76 @@ def _apply_episode_availability(
         (status, path, util.now_utc_iso(), row["id"]),
     )
     return row["id"]
+
+
+def _apply_episode_availability_multi_show(
+    conn, show_ids: list[str], absolute_episode_number, status: str, path: str | None
+) -> str | None:
+    """2026-08-24, real live bug user-caught: Ascendance of a Bookworm
+    ("Adopted Daughter of an Archduke" episode 19 showed `UNAVAILABLE`
+    days after Sonarr had already imported it). Root cause: this
+    function's single-show sibling, `_apply_episode_availability`,
+    matches by Sonarr's own raw season/episode numbers — correct only
+    when a show isn't sharing its tvdb id with any other LCARS show.
+    Bookworm's parts do share one (tvdb 366263, one flat Sonarr series,
+    metadata.py's own `_fetch_sonarr_multi_show` is the fetch-side fix
+    for the exact same sharing) — Sonarr's raw "episode 55" there is
+    this one sibling's own "episode 19", a translation only
+    `absolute_number` survives, each sibling's season/episode numbering
+    restarting at 1 independently. `_fetch_sonarr_multi_show` already
+    knew this (and both DB tables agree it's the same key: this
+    function's own `WHERE ... AND absolute_number = ?` is copied
+    straight from that function's own existing-row lookup) — but the
+    *ongoing* sync paths (`_poll_sonarr`/`apply_sonarr_webhook`) never
+    got the equivalent fix, so any episode whose `available_checked_at`
+    was already set (i.e. every episode past its own first-ever fetch)
+    could never be updated again for a shared-tvdb show: the raw
+    season/episode match below in `_apply_episode_availability` can
+    never succeed against a sibling's own restarted-at-1 numbering, so
+    it silently no-ops (`row is None`) forever. This is that fetch-side
+    fix's ongoing-sync counterpart — same matching key, same "episode
+    without one is left alone" scope boundary metadata.py's own
+    docstring already documents for specials/no-absolute-number
+    episodes."""
+    placeholders = ",".join("?" for _ in show_ids)
+    row = conn.execute(
+        f"SELECT id FROM episode WHERE show_id IN ({placeholders}) AND absolute_number = ?",
+        (*show_ids, absolute_episode_number),
+    ).fetchone()
+    if row is None:
+        return None
+    conn.execute(
+        "UPDATE episode SET available_via_sonarr = ?, file_path_sonarr = ?,"
+        " available_checked_at = ? WHERE id = ?",
+        (status, path, util.now_utc_iso(), row["id"]),
+    )
+    return row["id"]
+
+
+def _route_episode_availability(
+    conn, show_ids: list[str], episode: dict, status: str, path: str | None
+) -> str | None:
+    """Shared by `_poll_sonarr` and `apply_sonarr_webhook` — picks the
+    right one of the two `_apply_episode_availability*` functions above
+    for however many LCARS shows `show_ids` (from `_show_ids_for_tvdb`)
+    turned out to hold. The overwhelmingly common single-show case is
+    unchanged; `episode["seasonNumber"]`/`["episodeNumber"]` genuinely
+    are this one show's own numbering there. `absoluteEpisodeNumber` is
+    only meaningful (and only needed) once there's more than one
+    sibling to route across — real Sonarr `/history`/webhook payloads
+    both embed it on every regular episode (specials/no-absolute-number
+    episodes come back `None`, left alone entirely, same scope boundary
+    metadata.py's `_fetch_sonarr_multi_show` already documents)."""
+    if len(show_ids) == 1:
+        if episode.get("seasonNumber") is None or episode.get("episodeNumber") is None:
+            return None
+        return _apply_episode_availability(
+            conn, show_ids[0], episode["seasonNumber"], episode["episodeNumber"], status, path
+        )
+    abs_number = episode.get("absoluteEpisodeNumber")
+    if abs_number is None:
+        return None
+    return _apply_episode_availability_multi_show(conn, show_ids, float(abs_number), status, path)
 
 
 def _apply_show_availability_radarr(conn, show_id: str, status: str, path: str | None) -> None:
@@ -298,13 +404,11 @@ def _poll_sonarr(conn, backfill: bool = False) -> int:
         episode = record.get("episode")
         if series is None or episode is None:
             continue
-        show_id = _show_id_for_tvdb(conn, series["tvdbId"])
-        if show_id is None:
+        show_ids = _show_ids_for_tvdb(conn, series["tvdbId"])
+        if not show_ids:
             continue  # not (yet) tracked in LCARS — not an error, §5.1
         path = record["data"].get("importedPath") if status == "available" else None
-        episode_id = _apply_episode_availability(
-            conn, show_id, episode["seasonNumber"], episode["episodeNumber"], status, path
-        )
+        episode_id = _route_episode_availability(conn, show_ids, episode, status, path)
         if episode_id is None:
             continue  # episode not yet fetched into LCARS — A.8's job, not this poll's
         touched_episode_ids.add(episode_id)
@@ -391,19 +495,15 @@ def apply_sonarr_webhook(conn, payload: dict) -> dict:
     episodes = payload.get("episodes") or []
     if series is None or series.get("tvdbId") is None or not episodes:
         return {"episodes_updated": 0}
-    show_id = _show_id_for_tvdb(conn, series["tvdbId"])
-    if show_id is None:
+    show_ids = _show_ids_for_tvdb(conn, series["tvdbId"])
+    if not show_ids:
         return {"episodes_updated": 0}  # not (yet) tracked in LCARS — same as the poller
     path = None
     if status == "available":
         path = (payload.get("episodeFile") or {}).get("path")
     touched_episode_ids: set[str] = set()
     for ep in episodes:
-        if ep.get("seasonNumber") is None or ep.get("episodeNumber") is None:
-            continue
-        episode_id = _apply_episode_availability(
-            conn, show_id, ep["seasonNumber"], ep["episodeNumber"], status, path
-        )
+        episode_id = _route_episode_availability(conn, show_ids, ep, status, path)
         if episode_id is not None:
             touched_episode_ids.add(episode_id)
     conn.commit()

@@ -74,12 +74,14 @@ def _add_show(conn, show_id, tvdb_id=None, tmdb_id=None, media_shape="episodic")
     conn.commit()
 
 
-def _add_episode(conn, episode_id, show_id, season=1, episode=1, air_date_utc=None):
+def _add_episode(
+    conn, episode_id, show_id, season=1, episode=1, air_date_utc=None, absolute_number=None
+):
     conn.execute(
-        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, state,"
-        " created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, 'regular', ?, 'unwatched', 'x', 'x')",
-        (episode_id, show_id, season, episode, air_date_utc),
+        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc,"
+        " absolute_number, state, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, 'regular', ?, ?, 'unwatched', 'x', 'x')",
+        (episode_id, show_id, season, episode, air_date_utc, absolute_number),
     )
     conn.commit()
 
@@ -107,12 +109,23 @@ class _FakeHistoryClient:
         return {"records": self._records[start:end], "totalRecords": len(self._records)}
 
 
-def _sonarr_record(event_type, date, tvdb_id=457078, season=1, episode=1, imported_path=None):
+def _sonarr_record(
+    event_type,
+    date,
+    tvdb_id=457078,
+    season=1,
+    episode=1,
+    imported_path=None,
+    absolute_episode_number=None,
+):
+    ep = {"id": 36997, "seasonNumber": season, "episodeNumber": episode}
+    if absolute_episode_number is not None:
+        ep["absoluteEpisodeNumber"] = absolute_episode_number
     return {
         "date": date,
         "eventType": event_type,
         "series": {"id": 955, "tvdbId": tvdb_id},
-        "episode": {"id": 36997, "seasonNumber": season, "episodeNumber": episode},
+        "episode": ep,
         "data": {"importedPath": imported_path} if imported_path else {},
     }
 
@@ -227,6 +240,114 @@ def test_poll_sonarr_skips_an_unfetched_episode(conn, monkeypatch):
     assert count == 0
 
 
+# --- 2026-08-24: one tvdb id shared by more than one LCARS show --------
+#
+# Real live bug, user-caught: Ascendance of a Bookworm's parts all share
+# one flat Sonarr series (tvdb 366263) but each part restarts its own
+# season/episode numbering at 1 — Sonarr's raw season/episode only means
+# anything within Sonarr's own continuous numbering, so a naive
+# show_id + season + episode match can never land on a sibling's own
+# row. `absolute_number` is the one identity that survives the
+# renumbering, same key metadata.py's own `_fetch_sonarr_multi_show`
+# already routes by.
+
+
+def test_poll_sonarr_multi_show_routes_by_absolute_episode_number(conn, monkeypatch):
+    _configure_sonarr()
+    _add_show(conn, "s-mshowa", tvdb_id=457099)
+    _add_show(conn, "s-mshowb", tvdb_id=457099)
+    # Sibling A's own local numbering, Sonarr absolute 1-2.
+    _add_episode(conn, "e-mshoa1", "s-mshowa", season=1, episode=1, absolute_number=1)
+    # Sibling B's own local numbering restarts at 1, but continues Sonarr's
+    # absolute numbering at 3 — exactly Bookworm's own "part 2" shape.
+    _add_episode(conn, "e-mshob1", "s-mshowb", season=1, episode=1, absolute_number=3)
+    fake = _FakeHistoryClient(
+        [
+            _sonarr_record(
+                "downloadFolderImported",
+                "2026-08-09T10:00:00Z",
+                tvdb_id=457099,
+                season=1,
+                episode=3,  # Sonarr's own raw episode number — matches neither sibling's own
+                imported_path="/data/b1.mkv",
+                absolute_episode_number=3,
+            )
+        ]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    count = availability._poll_sonarr(conn, backfill=True)
+    assert count == 1
+    a = conn.execute(
+        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-mshoa1'"
+    ).fetchone()
+    b = conn.execute(
+        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-mshob1'"
+    ).fetchone()
+    assert a["available_via_sonarr"] == "unavailable"  # untouched — the event was about B
+    assert b["available_via_sonarr"] == "available"
+    assert b["file_path_sonarr"] == "/data/b1.mkv"
+
+
+def test_poll_sonarr_multi_show_skips_event_with_no_absolute_episode_number(conn, monkeypatch):
+    """Same scope boundary metadata.py's own `_fetch_sonarr_multi_show`
+    documents for specials — no reliable way to route across siblings
+    without it, so this is left alone rather than guessed at."""
+    _configure_sonarr()
+    _add_show(conn, "s-mshowc", tvdb_id=457100)
+    _add_show(conn, "s-mshowd", tvdb_id=457100)
+    _add_episode(conn, "e-mshoc1", "s-mshowc", season=0, episode=1, absolute_number=None)
+    fake = _FakeHistoryClient(
+        [
+            _sonarr_record(
+                "downloadFolderImported",
+                "2026-08-09T10:00:00Z",
+                tvdb_id=457100,
+                season=0,
+                episode=1,
+                imported_path="/data/special.mkv",
+            )
+        ]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    count = availability._poll_sonarr(conn, backfill=True)
+    assert count == 0
+
+
+def test_poll_sonarr_single_show_ignores_absolute_number_and_still_uses_raw_numbering(
+    conn, monkeypatch
+):
+    """The overwhelmingly common, non-shared-tvdb case must stay exactly
+    as it was — season/episode numbers genuinely are this one show's
+    own numbering there, `absoluteEpisodeNumber` irrelevant."""
+    _configure_sonarr()
+    _add_show(conn, "s-mshowe", tvdb_id=457101)
+    _add_episode(conn, "e-mshoe1", "s-mshowe", season=1, episode=1, absolute_number=None)
+    fake = _FakeHistoryClient(
+        [
+            _sonarr_record(
+                "downloadFolderImported",
+                "2026-08-09T10:00:00Z",
+                tvdb_id=457101,
+                season=1,
+                episode=1,
+                imported_path="/data/single.mkv",
+                absolute_episode_number=55,  # present but must be ignored here
+            )
+        ]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    count = availability._poll_sonarr(conn, backfill=True)
+    assert count == 1
+    row = conn.execute(
+        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-mshoe1'"
+    ).fetchone()
+    assert row["available_via_sonarr"] == "available"
+    assert row["file_path_sonarr"] == "/data/single.mkv"
+
+
 def test_poll_sonarr_not_configured_is_a_clean_no_op(conn, monkeypatch):
     # _configure_sonarr() deliberately not called.
     called = []
@@ -319,6 +440,55 @@ def test_sonarr_webhook_multi_episode_payload_updates_every_episode(conn):
         "SELECT available_via_sonarr FROM episode WHERE show_id = 's-whk003'"
     ).fetchall()
     assert all(r["available_via_sonarr"] == "downloading" for r in rows)
+
+
+def test_sonarr_webhook_multi_show_routes_by_absolute_episode_number(conn):
+    _add_show(conn, "s-whkma1", tvdb_id=457199)
+    _add_show(conn, "s-whkmb1", tvdb_id=457199)
+    _add_episode(conn, "e-whkma1", "s-whkma1", season=1, episode=1, absolute_number=1)
+    _add_episode(conn, "e-whkmb1", "s-whkmb1", season=1, episode=1, absolute_number=3)
+    result = availability.apply_sonarr_webhook(
+        conn,
+        _sonarr_webhook(
+            "Download",
+            tvdb_id=457199,
+            episodes=[
+                {
+                    "id": 1,
+                    "seasonNumber": 1,
+                    "episodeNumber": 3,  # Sonarr's own raw number — matches neither sibling's own
+                    "absoluteEpisodeNumber": 3,
+                }
+            ],
+            imported_path="/data/b1.mkv",
+        ),
+    )
+    assert result == {"episodes_updated": 1}
+    a = conn.execute(
+        "SELECT available_via_sonarr FROM episode WHERE id = 'e-whkma1'"
+    ).fetchone()
+    b = conn.execute(
+        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-whkmb1'"
+    ).fetchone()
+    assert a["available_via_sonarr"] == "unavailable"
+    assert b["available_via_sonarr"] == "available"
+    assert b["file_path_sonarr"] == "/data/b1.mkv"
+
+
+def test_sonarr_webhook_multi_show_skips_episode_with_no_absolute_episode_number(conn):
+    _add_show(conn, "s-whkmc1", tvdb_id=457299)
+    _add_show(conn, "s-whkmd1", tvdb_id=457299)
+    _add_episode(conn, "e-whkmc1", "s-whkmc1", season=0, episode=1, absolute_number=None)
+    result = availability.apply_sonarr_webhook(
+        conn,
+        _sonarr_webhook(
+            "Download",
+            tvdb_id=457299,
+            episodes=[{"id": 1, "seasonNumber": 0, "episodeNumber": 1}],
+            imported_path="/data/special.mkv",
+        ),
+    )
+    assert result == {"episodes_updated": 0}
 
 
 def test_sonarr_webhook_test_event_is_a_clean_no_op(conn):

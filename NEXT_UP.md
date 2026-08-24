@@ -8,6 +8,20 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 
 ## Verified (confirmed via real daily use, 2026-08-18 — resurfacing is a new bug, not a reopen)
 
+- [x] Merged-away duplicate shows leaking back onto the calendar — found live 2026-08-20 (Kaiju
+      Girl Caramelise / Otome Kaijuu Caraméliser, merged via `applyShowMerge`; the demoted loser
+      `s-vdphq9` kept showing up because it sat at `status: planned`, which
+      `_HIDDEN_LCARS_STATUSES` never hides — only Paused/Completed/Dropped did, and `tracked` was
+      never part of that check at all. `episodesInRange`/`Show.tracked` needed no server change
+      (`tracked` was already queryable, confirmed live against v0.1.32); fixed entirely
+      client-side in `~/repos/data`: `lcars_client.py`'s `episodes_in_range()` now requests
+      `show.tracked`, `app.py`'s `_synthesize_lcars_row` carries it as `lcarsTracked` (fail-open
+      `True` when absent, same convention as a missing `lcarsStatus`), and
+      `_is_hidden_from_calendar` now hides on `lcarsTracked is False` independent of status. Two
+      new tests in `test_app_list_status.py` cover both the hide case and the fail-open-on-absence
+      case. Needs a Data restart to pick up — the on-disk episode cache predates the `tracked`
+      field and fails open (visible) until the next successful `episodesInRange` fetch overwrites
+      it.
 - [x] B.21's Sonarr/Radarr writes (add-show, auto-unmonitor-on-drop).
 - [x] v0.1.18/v0.1.19 AniList write-mirror (status/score/episode-progress/delete/rewatch) +
       completion auto-sync.
@@ -30,6 +44,16 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       re-walking everything. Needs a scoped LCARS mutation (`auditLocalFiles(showId: ID)` or a
       new single-show variant reusing `_audit_sonarr`/`_audit_radarr`'s per-series/per-movie
       correction logic) plus a trigger key in `~/repos/data`'s `show_detail_screen.py`.
+- [ ] `ops audit-local-files`'s 10s `LcarsClient` HTTP timeout (`ops/lcars_client.py`'s own
+      default) is too short for a real whole-library run — found live, 2026-08-20: manually
+      triggering it against the real library (fixing Lioness/Lanterns after a Sonarr
+      anime→series root-folder move) hit `httpx.ReadTimeout`/`LcarsError: Timed out talking to
+      LCARS` in the CLI, but the mutation had actually committed successfully server-side
+      (confirmed after the fact via the DB's `available_checked_at` timestamp + cross-checking
+      Sonarr's API and the filesystem directly) — the CLI just gave up waiting and never printed
+      the summary. Needs either a longer/no timeout specifically for this command's own
+      `LcarsClient` construction in `_cmd_audit_local_files`, or a way to poll/confirm completion
+      after a client-side timeout instead of leaving the operator to go verify by hand.
 - [x] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
       move status/score at the show/season level individually — built in `~/repos/data`
       (`show_detail_screen.py`, `enter` on the show browser), 2026-08-18.
@@ -167,6 +191,68 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       fully fetched into LCARS) and 5 untracked Urusei Yatsura movies — report-only findings for
       the user to act on by hand, not this session's job. `~/repos/starfleet`, deployed as
       v0.1.32, 2026-08-19; DB snapshotted first (`lcars.db.bak-20260819-audit-path-fix-v0.1.31-pre`).
+- [x] 2026-08-24 — user reported a review saying AniList "temporarily disabled", plus asked to
+      clear the 47-entry open review queue. Confirmed live against AniList directly: a real,
+      transient AniList-side outage ("The AniList API has been temporarily disabled due to
+      severe stability issues"), not an LCARS bug — 38 of the 47 open `pending_review` entries
+      were `metadata_fetch` failures from that outage window (2026-08-23 ~23:00 UTC), the other
+      9 were normal `air_date_utc` audit entries (weekly schedule slips `_reconcile_air_dates`
+      had already applied). AniList was back up by the time this ran: retried all 38 via
+      `refreshShowMetadata` (real data — synopsis/poster/genres — confirmed populated on
+      spot-check), cross-checked all 9 air-date entries against AniList's live `airingSchedule`
+      (exact match), then resolved all 47 via `resolvePendingReview`. Queue is empty.
+      Along the way, re-audited "Ascendance of a Bookworm" per the user's specific callout —
+      not the air-date/duplicate-show bugs already fixed in the 2026-08-19 audit above, a third,
+      new one: Part 1 (`s-2k4jb6`, the *winner* of that 2026-08-12 merge) had `title_english`
+      NULL and `title_romaji` holding the English string `"Ascendance of a Bookworm"` instead of
+      the real romaji — confirmed against AniList id 108268 directly. Root cause: this show was
+      originally added before an AniList link existed (pre-A.20), and unlike poster/synopsis/etc,
+      title fields are caller-input-at-creation only — `_fetch_anilist` (metadata.py) never
+      touches them once set, and no mutation exists to correct them after creation, same gap the
+      v0.1.31 `primary_title` backfill was patching around, not this exact field-corruption
+      shape. Fixed the same way as that backfill: DB snapshotted first
+      (`lcars.db.bak-20260824-bookworm-part1-title-fix-pre`), brief `lcars`/`ops` stop, direct
+      `UPDATE` to the real AniList values (`title_romaji`/`title_english`/`primary_title`),
+      restarted, verified live via GraphQL. No code changed — pure data fix, no new deploy.
+      **Known wider gap, investigated not fixed (user asked to scope only, not backfill)**:
+      sampled 60 of the 1457 other `tracking_space = 'anime'` shows with `title_english IS NULL`
+      that carry an AniList link, checked each against real AniList title data — ~22% (extrapolates
+      to roughly 300 shows) share Part 1's exact corruption (`title_romaji` holds the real English
+      title verbatim, AniList genuinely has an English title LCARS never stored under
+      `title_english`); a further ~47% (~700 shows) have a *correct* `title_romaji` but are
+      simply missing a real AniList English title that was never fetched (lower priority — not
+      wrong data, just incomplete); the remaining ~32% (~470 shows) are legitimately titleless in
+      English on AniList — nothing to fix. A real fix needs a proper per-show AniList
+      title re-fetch + comparison (the two categories can't be told apart by string heuristics
+      alone, confirmed against the sample), i.e. new code/tooling, not a blind mass `UPDATE` —
+      scoped here as a `~/repos/starfleet` follow-up, not attempted this session.
+- [x] 2026-08-24, same session — user flagged Bookworm's "Adopted Daughter of an Archduke"
+      episode 19 as showing `Missing` in Data despite Sonarr already having the file (imported
+      2026-08-22). Traced it to a real, general `availability.py` bug, not a one-off: Bookworm's
+      parts share one flat Sonarr series (tvdb 366263) with continuous absolute numbering across
+      all parts, so Sonarr's raw "episode 55" *is* this part's own "episode 19" — a translation
+      only `absolute_number` survives, each sibling's season/episode restarting at 1
+      independently. metadata.py's `_fetch_sonarr_multi_show` (2026-08-15) already knew to route
+      by `absolute_number`, but only ever fills a row once (`available_checked_at IS NULL`),
+      deferring every later update to `availability.py`'s ongoing poller/webhook as "more
+      authoritative" — and *those* had no equivalent routing, just a naive raw
+      `show_id + season + episode` match that can never land on a shared-tvdb sibling's own
+      restarted numbering. Once an episode's first fetch set `available_checked_at`, no later
+      Sonarr grab/import could ever reach it again — silently stuck forever, for every future
+      episode of every multi-part franchise sharing one tvdb id this way. Fixed properly, not
+      just patched: `_show_ids_for_tvdb` (plural)/`_route_episode_availability`/
+      `_apply_episode_availability_multi_show` added to `availability.py`, wired into both
+      `_poll_sonarr` and `apply_sonarr_webhook`, matching by `absoluteEpisodeNumber` (already
+      embedded in Sonarr's `/history`/webhook payloads, just unused before this) whenever a tvdb
+      id resolves to more than one LCARS show; the overwhelmingly common single-show path is
+      unchanged. 8 new tests (`test_availability.py`) cover multi-show routing, the
+      no-absolute-number skip case (mirrors specials' own scope boundary in
+      `_fetch_sonarr_multi_show`), and confirm single-show behavior is untouched — full suite
+      856 passed. Data fix applied immediately, live: episode 19's stale `available_checked_at`
+      reset by hand (brief `lcars`/`ops` stop, single-row update, restart, same pattern as the
+      title fix above) then `refreshShowMetadata` re-ran to let the app's own already-correct
+      fetch-side logic fill it properly — confirmed `AVAILABLE` with the real file path.
+      `~/repos/starfleet`, deployed as v0.1.33.
 
 ## Cutover (not started)
 
@@ -178,6 +264,11 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 
 ## Ideas / open questions
 
+- [ ] Catalog-wide `title_english`/`title_romaji` backfill (found 2026-08-24 auditing Bookworm
+      Part 1, see the Build entry above for the full breakdown) — needs a real per-show AniList
+      re-fetch + comparison tool (~300 shows share Part 1's exact corruption, ~700 more are just
+      missing a real English title, ~470 are legitimately titleless in English), plus a mutation
+      to actually write corrected title fields post-creation, since none exists today.
 - [ ] Move all secrets/passwords to a safer place (plaintext `config.ini` today).
 - [ ] Design the HTML client's UI properly.
 - [ ] HTML client: add a login/password gate, keep it safe.

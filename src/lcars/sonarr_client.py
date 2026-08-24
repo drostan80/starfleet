@@ -181,15 +181,18 @@ class SonarrClient:
     def history_page(self, page: int, page_size: int = 250) -> dict:
         """§5.2/§6.7, B.3 — one page of Sonarr's own grab/import event
         log, newest first. `includeEpisode`/`includeSeries` embed the
-        full episode (seasonNumber/episodeNumber) and series (tvdbId)
-        objects directly on each record — verified live against a real
-        Sonarr instance (4.0.19.2979) before this was written: this is
-        enough to match an event straight to LCARS's own
-        show_external_id crosswalk (§5.4), no separate seriesId->tvdbId
-        lookup or new correlation-id column needed. Real event types
-        seen: `grabbed`, `downloadFolderImported` (data.importedPath is
-        the file's actual path), `episodeFileDeleted`,
-        `downloadIgnored` (a rejected grab — no availability effect)."""
+        full episode (seasonNumber/episodeNumber, and — 2026-08-24 —
+        absoluteEpisodeNumber, real live availability.py bug fix,
+        needed to route a tvdb id shared by more than one LCARS show)
+        and series (tvdbId) objects directly on each record — verified
+        live against a real Sonarr instance (4.0.19.2979) before this
+        was written: this is enough to match an event straight to
+        LCARS's own show_external_id crosswalk (§5.4), no separate
+        seriesId->tvdbId lookup or new correlation-id column needed.
+        Real event types seen: `grabbed`, `downloadFolderImported`
+        (data.importedPath is the file's actual path),
+        `episodeFileDeleted`, `downloadIgnored` (a rejected grab — no
+        availability effect)."""
         return self._get(
             "history",
             params={
