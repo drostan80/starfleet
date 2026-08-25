@@ -247,8 +247,9 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       following direct connectivity check. Pre-existing race on every deploy that recreates both
       containers together, not a regression from this change.
 
-      `~/repos/data`'s `websockets>=13` dependency still needs `pip install -e .` (or equivalent)
-      on next deploy of the client itself, not just a git pull — not yet done as of this writing.
+      `~/repos/data` runs editable-installed straight out of this checkout (`data` alias ->
+      `.venv/bin/data`, no separate deploy step) — `websockets>=13` confirmed installed
+      (17.0.1) and `LCARS_SUBSCRIPTIONS` importable, 2026-08-25.
 - [x] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
       move status/score at the show/season level individually — built in `~/repos/data`
       (`show_detail_screen.py`, `enter` on the show browser), 2026-08-18.
