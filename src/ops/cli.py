@@ -80,7 +80,20 @@ def _cmd_audit_local_files(args: argparse.Namespace) -> None:
     called by `ops run`'s own loop, only by hand, at a moment of the
     operator's own choosing. Prints both report-only finding lists
     (orphan files, untracked remote shows) in full — the whole point of
-    an audit is a human reading what it found, not just a count."""
+    an audit is a human reading what it found, not just a count.
+
+    Real bug, live-caught 2026-08-20 (NEXT_UP.md): this used the
+    client's default 10s timeout despite blocking LCARS's single
+    request-handling thread for a real whole-library walk — a manual
+    run fixing Lioness/Lanterns after a Sonarr anime->series
+    root-folder move hit `httpx.ReadTimeout`/`LcarsError: Timed out
+    talking to LCARS` here, even though the mutation had actually
+    committed successfully server-side (confirmed after the fact via
+    `available_checked_at` + cross-checking Sonarr/the filesystem
+    directly) — the CLI just gave up waiting and never printed the
+    summary. Same class of bug `_cmd_backfill_availability` above
+    already fixed for its own command; matches its `timeout=3600.0`
+    rather than being a new decision."""
     logging.basicConfig(level=logging.INFO)
     cfg = config.load_config()
     _require_bearer_token(cfg)
@@ -91,7 +104,7 @@ def _cmd_audit_local_files(args: argparse.Namespace) -> None:
     )
 
     async def _main() -> None:
-        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token) as client:
+        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token, timeout=3600.0) as client:
             result = await client.audit_local_files()
             print(
                 f"Done: {result['episodesCorrected']} episode(s), "

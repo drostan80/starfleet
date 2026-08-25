@@ -144,16 +144,15 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `~/repos/starfleet` full suite 880 passed; `~/repos/data` full suite 484 passed. Ruff
       clean both repos. `~/repos/starfleet` deployed as v0.1.34, 2026-08-25 (same tag as item 1
       above and the episode-renumbering item below).
-- [ ] `ops audit-local-files`'s 10s `LcarsClient` HTTP timeout (`ops/lcars_client.py`'s own
-      default) is too short for a real whole-library run — found live, 2026-08-20: manually
-      triggering it against the real library (fixing Lioness/Lanterns after a Sonarr
-      anime→series root-folder move) hit `httpx.ReadTimeout`/`LcarsError: Timed out talking to
-      LCARS` in the CLI, but the mutation had actually committed successfully server-side
-      (confirmed after the fact via the DB's `available_checked_at` timestamp + cross-checking
-      Sonarr's API and the filesystem directly) — the CLI just gave up waiting and never printed
-      the summary. Needs either a longer/no timeout specifically for this command's own
-      `LcarsClient` construction in `_cmd_audit_local_files`, or a way to poll/confirm completion
-      after a client-side timeout instead of leaving the operator to go verify by hand.
+- [x] `ops audit-local-files`'s 10s `LcarsClient` HTTP timeout was too short for a real
+      whole-library run — found live, 2026-08-20 (see original entry for the exact repro).
+      2026-08-25: fixed the same way `_cmd_backfill_availability` already fixed the identical
+      bug for its own command (that fix predates this session, B.11f) — `_cmd_audit_local_files`
+      now constructs its `LcarsClient` with `timeout=3600.0` instead of the 10s default, matching
+      `_cmd_backfill_shows`'s own precedent. One new regression test,
+      `test_audit_local_files_uses_a_long_client_timeout`, mirroring
+      `test_backfill_availability_uses_a_long_client_timeout` exactly. `~/repos/starfleet` full
+      suite 891 passed, ruff clean. **Not deployed yet.**
 - [x] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
       move status/score at the show/season level individually — built in `~/repos/data`
       (`show_detail_screen.py`, `enter` on the show browser), 2026-08-18.

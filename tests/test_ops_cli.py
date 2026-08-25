@@ -150,6 +150,35 @@ def test_audit_local_files_prints_nothing_extra_with_no_findings(monkeypatch, ca
     assert "untracked remote show(s)" not in out
 
 
+def test_audit_local_files_uses_a_long_client_timeout(monkeypatch):
+    # Regression test, real bug live-caught 2026-08-20 (NEXT_UP.md): this
+    # used to construct LcarsClient with the default 10s timeout despite
+    # blocking LCARS's single request-handling thread for a real
+    # whole-library walk — a real manual run hit httpx.ReadTimeout even
+    # though the mutation had already committed successfully server-side.
+    # Same fix as test_backfill_availability_uses_a_long_client_timeout
+    # above, matches _cmd_backfill_shows's own timeout=3600.0.
+    monkeypatch.setattr("sys.argv", ["ops", "audit-local-files"])
+    cfg = config.Config(lcars_bearer_token="test-token")
+    with (
+        patch("ops.config.load_config", return_value=cfg),
+        patch("ops.cli.LcarsClient", autospec=True) as lcars_client_cls,
+    ):
+        instance = lcars_client_cls.return_value
+        instance.__aenter__ = AsyncMock(return_value=instance)
+        instance.__aexit__ = AsyncMock(return_value=False)
+        instance.audit_local_files = AsyncMock(
+            return_value={
+                "episodesCorrected": 0,
+                "showsCorrected": 0,
+                "orphanFiles": [],
+                "untrackedShows": [],
+            }
+        )
+        cli.main()
+    lcars_client_cls.assert_called_once_with("http://lcars:8000", "test-token", timeout=3600.0)
+
+
 # --- B.11d: preview-show-backfill / backfill-shows --------------------------
 
 _PREVIEW = [
