@@ -53,7 +53,7 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       completed_at push, the two-season bulk-path case confirming completed_at still pushes
       while started_at never does, x6) + 6 existing push tests updated to filter out the
       now-additional started_at/completed_at calls their own assertions didn't expect. Full
-      suite 865 passed, ruff clean. **Not deployed yet.**
+      suite 865 passed, ruff clean. Deployed as v0.1.34, 2026-08-25.
 - [x] Add a real mutation for `tracking_space` — `setTrackingSpace(showId, trackingSpace)`,
       `~/repos/starfleet` v0.1.23 (deployed) + `t` in `~/repos/data`'s show-detail view,
       2026-08-18. (archive/todo.md:1209)
@@ -99,9 +99,11 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       mutation end to end against a Sonarr-fetched episode and resync rather than just the
       columns via raw SQL — plus 11 `data`-side: 5 `_parse_episode_number` cases, 6 screen-level
       prompt/error/wiring tests). `~/repos/starfleet` full suite 890 passed;
-      `~/repos/data` full suite 495 passed. Ruff clean both repos. **Not deployed yet** — same as
-      items 1 and 3 above; carries a migration, so snapshot the DB before the next deploy tag
-      applies it (v0.1.18 precedent). (archive/todo.md:1209)
+      `~/repos/data` full suite 495 passed. Ruff clean both repos. `~/repos/starfleet` deployed as
+      v0.1.34, 2026-08-25 (same tag as items 1 and 3 above) — DB snapshotted first
+      (`lcars.db.bak-20260825-episode-renumber-v0.1.33-pre`), migration `36bbe45d39f3` applied
+      cleanly on container start, confirmed against a live GraphQL query afterward.
+      (archive/todo.md:1209)
 - [ ] `show_merge.py` has the same composite-FK ordering bug `setEpisodeNumber` above needed
       `PRAGMA defer_foreign_keys` to avoid, found by inspection while designing that mutation
       (2026-08-25), not from a live failure: merging two shows re-points a moved episode's
@@ -137,7 +139,8 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       the plain post-reload HINT reset would otherwise wipe). 21 new tests across both repos
       (13 `test_local_audit.py`, 2 `test_server.py` wiring, 6 `data`-side client/screen).
       `~/repos/starfleet` full suite 880 passed; `~/repos/data` full suite 484 passed. Ruff
-      clean both repos. **Not deployed yet** — same as item 1 above, next tag carries both.
+      clean both repos. `~/repos/starfleet` deployed as v0.1.34, 2026-08-25 (same tag as item 1
+      above and the episode-renumbering item below).
 - [ ] `ops audit-local-files`'s 10s `LcarsClient` HTTP timeout (`ops/lcars_client.py`'s own
       default) is too short for a real whole-library run — found live, 2026-08-20: manually
       triggering it against the real library (fixing Lioness/Lanterns after a Sonarr
