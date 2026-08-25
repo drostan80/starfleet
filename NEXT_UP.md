@@ -250,6 +250,13 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `~/repos/data` runs editable-installed straight out of this checkout (`data` alias ->
       `.venv/bin/data`, no separate deploy step) — `websockets>=13` confirmed installed
       (17.0.1) and `LCARS_SUBSCRIPTIONS` importable, 2026-08-25.
+
+      Subscription verified live end-to-end, 2026-08-25: the real `DataApp` on_mount connects to
+      production, subscribes to both topics, and its worker task stays alive/awaiting (the
+      `run_worker`-hang regression is confirmed gone). Auth enforced — wrong bearer → HTTP 403 at
+      handshake. Actual event *delivery* not manufactured: Sonarr queue was empty so nothing
+      fired naturally, and per the user that last hop is left to the existing WS end-to-end tests
+      rather than a production-polluting trigger.
 - [x] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
       move status/score at the show/season level individually — built in `~/repos/data`
       (`show_detail_screen.py`, `enter` on the show browser), 2026-08-18.
