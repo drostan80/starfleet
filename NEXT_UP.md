@@ -104,15 +104,18 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       (`lcars.db.bak-20260825-episode-renumber-v0.1.33-pre`), migration `36bbe45d39f3` applied
       cleanly on container start, confirmed against a live GraphQL query afterward.
       (archive/todo.md:1209)
-- [ ] `show_merge.py` has the same composite-FK ordering bug `setEpisodeNumber` above needed
-      `PRAGMA defer_foreign_keys` to avoid, found by inspection while designing that mutation
-      (2026-08-25), not from a live failure: merging two shows re-points a moved episode's
-      `season`/`episode` before its `watch_event` rows, under immediate FK checking — raises
-      `FOREIGN KEY constraint failed` whenever the moved episode actually has watch history.
-      Never fired in practice because merges have so far only ever involved zero-watch-event
-      stub shows. Fix is the same tool already validated for this exact class of problem: wrap
-      the merge's episode-move + watch_event-repoint in one transaction with
-      `PRAGMA defer_foreign_keys = ON`. No test currently covers this path.
+- [x] ~~`show_merge.py` has the same composite-FK ordering bug `setEpisodeNumber` needed
+      `PRAGMA defer_foreign_keys` to avoid~~ — **false positive, logged 2026-08-25, retracted the
+      same day.** Claimed by analogy while designing `setEpisodeNumber`, without actually
+      re-reading `show_merge.py` first. It already handles this correctly, and has since the
+      original B.14 build (`25000de`, predates this session entirely): `merge_shows` and
+      `reverse_show_merge` both open with `BEGIN IMMEDIATE` + `PRAGMA defer_foreign_keys = ON`,
+      with their own docstring comment explaining the exact same episode/watch_event reasoning
+      this entry re-derived from scratch. `test_merge_shows_moves_episodes_and_matching_
+      watch_events` (`test_show_merge.py`) exercises exactly this path and passes — confirmed by
+      running the full 23-test file, not just reading the code. No fix needed; nothing was
+      broken. Left here (struck through, not deleted) as the honest record rather than quietly
+      dropping a line that turned out wrong.
 - [x] Per-show manual audit trigger from the show-detail view — user's own ask, 2026-08-19,
       after the Anna Pigeon `auditLocalFiles` fix (v0.1.32) landed: that mutation is still
       whole-library-only, no `showId` scope, so fixing one show's stale Sonarr/Radarr path means
