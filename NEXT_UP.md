@@ -21,7 +21,8 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       new tests in `test_app_list_status.py` cover both the hide case and the fail-open-on-absence
       case. Needs a Data restart to pick up — the on-disk episode cache predates the `tracked`
       field and fails open (visible) until the next successful `episodesInRange` fetch overwrites
-      it.
+      it. Built 2026-08-20, committed 2026-08-25 (`~/repos/data` commit `7fcedef`) — had sat
+      uncommitted in the working tree since build.
 - [x] B.21's Sonarr/Radarr writes (add-show, auto-unmonitor-on-drop).
 - [x] v0.1.18/v0.1.19 AniList write-mirror (status/score/episode-progress/delete/rewatch) +
       completion auto-sync.
@@ -103,7 +104,8 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       v0.1.34, 2026-08-25 (same tag as items 1 and 3 above) — DB snapshotted first
       (`lcars.db.bak-20260825-episode-renumber-v0.1.33-pre`), migration `36bbe45d39f3` applied
       cleanly on container start, confirmed against a live GraphQL query afterward.
-      (archive/todo.md:1209)
+      `~/repos/data`'s own half had sat uncommitted in the working tree since build — committed
+      2026-08-25 (`~/repos/data` commit `f9800b4`). (archive/todo.md:1209)
 - [x] ~~`show_merge.py` has the same composite-FK ordering bug `setEpisodeNumber` needed
       `PRAGMA defer_foreign_keys` to avoid~~ — **false positive, logged 2026-08-25, retracted the
       same day.** Claimed by analogy while designing `setEpisodeNumber`, without actually
@@ -143,7 +145,9 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       (13 `test_local_audit.py`, 2 `test_server.py` wiring, 6 `data`-side client/screen).
       `~/repos/starfleet` full suite 880 passed; `~/repos/data` full suite 484 passed. Ruff
       clean both repos. `~/repos/starfleet` deployed as v0.1.34, 2026-08-25 (same tag as item 1
-      above and the episode-renumbering item below).
+      above and the episode-renumbering item below). `~/repos/data`'s own half had sat
+      uncommitted in the working tree since build — committed 2026-08-25 (`~/repos/data` commit
+      `f34c512`).
 - [x] `ops audit-local-files`'s 10s `LcarsClient` HTTP timeout was too short for a real
       whole-library run — found live, 2026-08-20 (see original entry for the exact repro).
       2026-08-25: fixed the same way `_cmd_backfill_availability` already fixed the identical
@@ -261,6 +265,8 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       (`test_lcars_client.py`: watchEventId flattening, present/absent; `test_show_detail_
       screen.py`: mark/unmark send the right mutation, no-op unmark with no event, three
       `build_rows` icon tests) all passing, ruff clean, full `~/repos/data` suite 478 passed.
+      Had sat uncommitted in the working tree since build — committed 2026-08-25 (`~/repos/data`
+      commit `0421285`).
 - [x] Manual schedule editing from the show-detail view: set weekly time + first air date per
       season (`A`), per-episode offset from the original schedule (`a`, +1 week/+2 days…),
       offer to shift all subsequent episodes when one moves — `~/repos/data`
@@ -300,6 +306,22 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       separate, explicit config value; not configured means no link at all rather than a guessed
       one. Set on `tiny` to `http://192.168.0.152:{8989,7878}` and curl-confirmed reachable.
       Deployed as v0.1.26, 2026-08-18.
+- [x] `O` — a dedicated "open this show's Sonarr page directly" shortcut, no picker, alongside
+      the existing lowercase `o` (lists every known service) — real gap when all you want from a
+      show is Sonarr specifically. `~/repos/data` only, no server change: reachable from all
+      three places a show can be selected (the calendar, the list browser, the show-detail
+      screen). New `links.py` — `pick_sonarr_link` (prefers the real followed-in-Sonarr edge
+      over the synthetic not-yet-added `sonarr:add` one) and `rewrite_host` (swaps a URL's host
+      for `Config.home_server_host`, leaving path/query untouched — the real Sonarr title slug is
+      information only LCARS has post-thin-client) — both pure, shared by all three call sites
+      rather than three hand-rolled copies. New `LcarsClient.external_ids()` (none of the three
+      call sites already hold a url-bearing `externalIds` edge for their own rows). New
+      `Config.home_server_host` field (`[network]` section / `DATA_HOME_SERVER_HOST` env var) —
+      the network address *this* Data instance reaches the home stack through, distinct from
+      LCARS's own server-side `sonarr_public_url` (one value for every client; this is the
+      per-instance override) — hardcoded default for now per the user's own "for now let's
+      hardcode the local 192.168.0.152" call. 2026-08-20 built, 2026-08-25 committed
+      (`~/repos/data` commit `7d5fb99`) — had sat uncommitted in the working tree since build.
 - [ ] Verify the real Sonarr/Radarr `/add/new?term=...` search-and-prefill behavior specifically
       (host:port reachability is now curl-confirmed; the exact query-param contract is still
       assumed from standard Servarr frontend convention, not yet clicked through behind auth).
