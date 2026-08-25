@@ -370,13 +370,18 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       fetch-side logic fill it properly — confirmed `AVAILABLE` with the real file path.
       `~/repos/starfleet`, deployed as v0.1.33.
 
-## Cutover (not started)
+## Cutover (in progress, 2026-08-25)
 
-- [ ] Switch actual daily use over to Data, once proven reliable day-to-day.
-- [ ] Archive aniq — don't delete, keep as emergency fallback.
-- [ ] Data becomes the permanent front-end under its own name.
-- [ ] Rotate Sonarr/Radarr keys, MAL client_id, LCARS's own AniList client_secret (all
-      pasted in chat during build, intentionally left live until now).
+- [ ] Switch actual daily use over to Data, once proven reliable day-to-day — ongoing: daily use
+      has already shifted over to Data, not yet declared fully proven/complete.
+- [ ] Archive aniq — don't delete, keep as emergency fallback. User's explicit call, 2026-08-25:
+      keep it around as-is for now (costs nothing) until Data is 100% to their liking — no fixed
+      timeline, not tied to any specific remaining item above.
+- [ ] Data becomes the permanent front-end under its own name — ongoing, same as the daily-use
+      item above.
+- [ ] Rotate Sonarr/Radarr keys, MAL client_id, LCARS's own AniList client_secret (all pasted in
+      chat during build, intentionally left live until now) — user's explicit call, 2026-08-25:
+      still held for once everything above is worked out, not now.
 
 ## Ideas / open questions
 
