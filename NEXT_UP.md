@@ -156,7 +156,8 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `_cmd_backfill_shows`'s own precedent. One new regression test,
       `test_audit_local_files_uses_a_long_client_timeout`, mirroring
       `test_backfill_availability_uses_a_long_client_timeout` exactly. `~/repos/starfleet` full
-      suite 891 passed, ruff clean. **Not deployed yet.**
+      suite 891 passed, ruff clean. Deployed as v0.1.35, 2026-08-25 (same tag as the subscription
+      push entry below).
 - [x] LCARS→clients webhook push (user's own idea, 2026-08-17, parked for their own research —
       see the old parked entry this replaces), designed and built 2026-08-25 after the user
       brought it back with two concrete cases: mirror the missing/downloading/available episode
@@ -234,12 +235,20 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `test_app_lcars_subscription_wiring.py`. `~/repos/starfleet` full suite 905 passed,
       `~/repos/data` full suite 505 passed, ruff clean both repos.
 
-      **Not deployed yet** — starfleet's undeployed queue is now five items (this one plus the
-      four above: started_at/completed_at push, per-show audit trigger, episode renumbering,
-      ops audit-local-files timeout), still carrying migration `36bbe45d39f3` — snapshot the DB
-      first, same as noted on the episode-renumbering entry. `~/repos/data`'s `websockets>=13`
-      dependency needs `pip install -e .` (or equivalent) on next deploy of the client itself,
-      not just a git pull.
+      `~/repos/starfleet` deployed as v0.1.35, 2026-08-25 (same tag as the ops audit-local-files
+      timeout fix above; DB snapshot skipped — no migration in this deploy, `36bbe45d39f3` had
+      already shipped with v0.1.34). Verified live on `tiny`: `lcars`/`ops` containers recreated
+      cleanly (0 restarts), `curl .../graphql` returns 401 (auth middleware enforcing on both
+      HTTP and WS scopes as intended), and a direct in-network request from `ops` confirmed
+      connectivity. `ops`'s first sweep attempts logged `Could not connect to LCARS` — all
+      timestamped to the exact container-start instant, before `lcars` had finished its own
+      startup (both containers recreated in the same `docker compose up`); `ops`'s existing
+      retry-next-interval handling absorbed it with no crash/restart, confirmed resolved by the
+      following direct connectivity check. Pre-existing race on every deploy that recreates both
+      containers together, not a regression from this change.
+
+      `~/repos/data`'s `websockets>=13` dependency still needs `pip install -e .` (or equivalent)
+      on next deploy of the client itself, not just a git pull — not yet done as of this writing.
 - [x] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
       move status/score at the show/season level individually — built in `~/repos/data`
       (`show_detail_screen.py`, `enter` on the show browser), 2026-08-18.
