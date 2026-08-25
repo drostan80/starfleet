@@ -1261,6 +1261,36 @@ type Mutation {
   """
   auditLocalFiles: LocalFileAuditResult!
   """
+  NEXT_UP.md, 2026-08-19 — auditLocalFiles above's current-state
+  reconciliation half (episodesCorrected/showsCorrected), scoped to one
+  already-tracked show instead of the whole library: user's own ask,
+  after the Anna Pigeon auditLocalFiles fix (v0.1.32) landed, for
+  fixing one show's stale Sonarr/Radarr path without re-walking every
+  other tracked show's folder too. Routed by the show's own mediaShape
+  to whichever service actually applies (Sonarr for episodic, Radarr
+  for a movie) — a single-record Sonarr `series?tvdbId=`/Radarr
+  `movie?tmdbId=` lookup, not the whole-catalog `all_series()`/
+  `all_movies()` fetch the whole-library pass needs.
+
+  `orphanFiles`/`untrackedShows` are always empty here — deliberately
+  narrower than auditLocalFiles, not a smaller version of the same
+  thing: the filesystem orphan walk is skipped entirely for this scope
+  (real gap caught in review — it can only ever compare against
+  episodes LCARS has already fetched, so a real file for a not-yet-
+  fetched episode would be reported as a false-positive orphan;
+  tolerable on a whole-library CLI report an operator skims, not on a
+  single keypress fired from the exact show being actively inspected),
+  and `untrackedShows` never applies to an already-tracked show in the
+  first place. Orphan/untracked discovery stays auditLocalFiles' job.
+
+  A no-op, empty result (not an error) if this show has no matching
+  Sonarr/Radarr link yet, or that service isn't configured — same
+  "report-only, nothing to correct against" posture as an inaccessible
+  filesystem mount above. Errors if showId doesn't exist at all. Not
+  part of Ops's own automatic loop, same reasoning as auditLocalFiles.
+  """
+  auditLocalFilesForShow(showId: ID!): LocalFileAuditResult!
+  """
   §5.1/§5.2, B.11d — one addShow (with its own inline A.8 metadata
   fetch: episodes, AniList link resolution via Fribb, season
   reconciliation) per untracked item from three sources: Sonarr/Radarr
@@ -1428,6 +1458,36 @@ type Mutation {
   # -- 5.2 episode field overrides -----------------------------------------
   "Sets air_date_source = MANUAL — §6.7's priority order means this then wins over every automatic source."
   setEpisodeAirDate(episodeId: ID!, airDateUtc: DateTime!): Episode!
+  """
+  archive/todo.md:1209, closed 2026-08-25 — the other half of "a way to correct a schedule
+  discrepancy... wrong episode-number alignment against AniList" (the air-date half is
+  setEpisodeAirDate above): corrects which season/episode slot this episode is filed under,
+  e.g. what AniList counts as episode 6 got filed under Sonarr's own episode 5. Only `season`/
+  `episode` (the display columns everything else reads — the calendar, reconcile_watch_progress's
+  own AniList-progress matching, etc.) move; Sonarr's own raw-reported numbering
+  (sonarr_season/sonarr_episode) is captured separately and immutably at fetch time precisely so
+  a correction survives every future Sonarr sync rather than getting silently reverted (a phantom
+  duplicate re-inserted under the original number) the next time Sonarr reports the episode under
+  its own unchanged numbering.
+
+  Rejects (does not swap/shift) if the target season/episode slot is already occupied by a
+  *different* episode on this show — same "prefer refuse over guess" posture pending_review's own
+  matching already leans on; moving the other episode out of the way first is the caller's own
+  call to make, not something this mutation infers. A no-op (returns the episode unchanged) if
+  season/episode already match the current values. Re-points any existing watch_event rows for
+  the old (season, episode) to the new one (the composite FK they're keyed against, §5.3) so watch
+  history isn't orphaned by the move. Resolves `seasonEntity` against a `season` row for the new
+  season number if one already exists; left unmatched (null), same as Sonarr fetching into a
+  not-yet-reconciled season, if none does — no season row is auto-created here.
+
+  Known boundary, not fixed here: if this leaves seasonEntity unmatched after a cross-season
+  move, the *next* real Sonarr fetch can re-match it via `_fetch_sonarr`'s own
+  `season_id IS NULL` fallback — which resolves against Sonarr's raw-reported season, i.e. the
+  *old* one, not this mutation's corrected new one. That silently re-points seasonEntity back
+  at the original season on the following sync. Only bites when the target season row didn't
+  already exist at call time; create it first (setSeasonMapping) to avoid it.
+  """
+  setEpisodeNumber(episodeId: ID!, season: Int!, episode: Int!): Episode!
   setEpisodeRuntimeOverride(episodeId: ID!, runtimeMinutes: Int): Episode!
 
   """

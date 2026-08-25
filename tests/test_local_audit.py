@@ -96,10 +96,13 @@ def _sonarr_episode(season, episode, has_file, path=None):
 
 
 class _FakeSonarrClient:
-    def __init__(self, series_list, episodes_by_series_id=None, fail_series_id=None):
+    def __init__(
+        self, series_list, episodes_by_series_id=None, fail_series_id=None, fail_lookup=False
+    ):
         self._series_list = series_list
         self._episodes_by_series_id = episodes_by_series_id or {}
         self._fail_series_id = fail_series_id
+        self._fail_lookup = fail_lookup
 
     def __enter__(self):
         return self
@@ -115,10 +118,19 @@ class _FakeSonarrClient:
             raise sonarr_client.SonarrError("boom")
         return self._episodes_by_series_id.get(series_id, [])
 
+    def series_by_tvdb_id(self, tvdb_id):
+        if self._fail_lookup:
+            raise sonarr_client.SonarrError("boom")
+        for series in self._series_list:
+            if series["tvdbId"] == tvdb_id:
+                return series
+        return None
+
 
 class _FakeRadarrClient:
-    def __init__(self, movies):
+    def __init__(self, movies, fail_lookup=False):
         self._movies = movies
+        self._fail_lookup = fail_lookup
 
     def __enter__(self):
         return self
@@ -128,6 +140,14 @@ class _FakeRadarrClient:
 
     def all_movies(self):
         return self._movies
+
+    def movie_by_tmdb_id(self, tmdb_id):
+        if self._fail_lookup:
+            raise radarr_client.RadarrError("boom")
+        for movie in self._movies:
+            if movie["tmdbId"] == tmdb_id:
+                return movie
+        return None
 
 
 def _radarr_movie(tmdb_id, title, has_file, path=None, movie_file_path=None):
@@ -528,6 +548,200 @@ def test_audit_local_files_combines_both_services(conn, monkeypatch):
     assert result["shows_corrected"] == 1
     assert result["orphan_files"] == []
     assert result["untracked_shows"] == []
+
+
+# --- per-show scope (NEXT_UP.md, 2026-08-19) --------------------------------
+
+
+def test_scoped_sonarr_corrects_only_this_show(conn, monkeypatch):
+    _configure_sonarr()
+    _add_show(conn, "s-lau401", tvdb_id=457078)
+    _add_episode(conn, "e-lau401", "s-lau401", available="unavailable")
+    series = {"id": 1, "tvdbId": 457078, "title": "Test", "path": "/data/show"}
+    episodes = {1: [_sonarr_episode(1, 1, has_file=True, path="/data/show/s01e01.mkv")]}
+    fake = _FakeSonarrClient([series], episodes)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.audit_local_files_for_show(conn, "s-lau401")
+    assert result["episodes_corrected"] == 1
+    assert result["shows_corrected"] == 0
+    row = conn.execute(
+        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-lau401'"
+    ).fetchone()
+    assert row["available_via_sonarr"] == "available"
+    assert row["file_path_sonarr"] == "/data/show/s01e01.mkv"
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "sonarr")
+    assert health["status"] == "ok"
+
+
+def test_scoped_sonarr_never_walks_for_orphans(conn, monkeypatch, tmp_path):
+    # Real gap caught in review: the orphan walk can only ever compare
+    # against episodes LCARS has already fetched, so a not-yet-fetched
+    # episode's real file would be reported as a false-positive orphan —
+    # tolerable on the whole-library CLI report, not on this scope's own
+    # single keypress. The scoped path skips the walk entirely
+    # (walk_orphans=False), so orphan_files stays empty even with a real
+    # orphan physically present on disk.
+    _configure_sonarr()
+    _add_show(conn, "s-lau402", tvdb_id=457078)
+    show_dir = tmp_path / "show"
+    show_dir.mkdir()
+    (show_dir / "Test Show - S01E02 - Orphan [1080p].mkv").write_bytes(b"x")
+    series = {"id": 1, "tvdbId": 457078, "title": "Test Show", "path": str(show_dir)}
+    fake = _FakeSonarrClient([series], {1: []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.audit_local_files_for_show(conn, "s-lau402")
+    assert result["orphan_files"] == []
+
+
+def test_scoped_sonarr_no_op_when_not_configured(conn, monkeypatch):
+    _add_show(conn, "s-lau403", tvdb_id=457078)
+    called = []
+    monkeypatch.setattr(
+        sonarr_client, "SonarrClient", lambda *a, **kw: called.append(1) or _FakeSonarrClient([])
+    )
+    result = local_audit.audit_local_files_for_show(conn, "s-lau403")
+    assert result == {
+        "episodes_corrected": 0,
+        "shows_corrected": 0,
+        "orphan_files": [],
+        "untracked_shows": [],
+    }
+    assert called == []
+
+
+def test_scoped_sonarr_no_op_when_show_has_no_tvdb_link(conn, monkeypatch):
+    _configure_sonarr()
+    _add_show(conn, "s-lau404")  # no tvdb_id
+    called = []
+    monkeypatch.setattr(
+        sonarr_client, "SonarrClient", lambda *a, **kw: called.append(1) or _FakeSonarrClient([])
+    )
+    result = local_audit.audit_local_files_for_show(conn, "s-lau404")
+    assert result["episodes_corrected"] == 0
+    assert called == []
+
+
+def test_scoped_sonarr_no_op_when_unknown_to_sonarr(conn, monkeypatch):
+    _configure_sonarr()
+    _add_show(conn, "s-lau405", tvdb_id=457078)
+    fake = _FakeSonarrClient([])  # series_by_tvdb_id resolves to None
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.audit_local_files_for_show(conn, "s-lau405")
+    assert result["episodes_corrected"] == 0
+    # A resolvable-but-empty lookup is still a successful contact — same
+    # "reported: sonarr not in trouble" posture the whole-library pass has.
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "sonarr")
+    assert health["status"] == "ok"
+
+
+def test_scoped_sonarr_records_failure_on_a_real_error(conn, monkeypatch):
+    _configure_sonarr()
+    _add_show(conn, "s-lau406", tvdb_id=457078)
+    fake = _FakeSonarrClient([], fail_lookup=True)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.audit_local_files_for_show(conn, "s-lau406")
+    assert result["episodes_corrected"] == 0
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "sonarr")
+    assert health["status"] == "unreachable"
+
+
+def test_scoped_radarr_corrects_only_this_show(conn, monkeypatch):
+    _configure_radarr()
+    _add_show(conn, "s-lau407", tmdb_id=687163, media_shape="movie")
+    movie = _radarr_movie(687163, "Project Hail Mary", has_file=True, movie_file_path="/data/m.mkv")
+    fake = _FakeRadarrClient([movie])
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.audit_local_files_for_show(conn, "s-lau407")
+    assert result["shows_corrected"] == 1
+    assert result["episodes_corrected"] == 0
+    row = conn.execute(
+        "SELECT available_via_radarr, file_path_radarr FROM show WHERE id = 's-lau407'"
+    ).fetchone()
+    assert row["available_via_radarr"] == "available"
+    assert row["file_path_radarr"] == "/data/m.mkv"
+
+
+def test_scoped_radarr_never_walks_for_orphans(conn, monkeypatch, tmp_path):
+    # Symmetric with the Sonarr case above — walk_orphans=False on this
+    # scope too, even though a movie's own known_file_paths has no
+    # equivalent false-positive risk (see _audit_radarr_movie's own
+    # docstring): skipped purely to avoid real filesystem I/O for a
+    # result this scope doesn't return at all.
+    _configure_radarr()
+    _add_show(conn, "s-lau412", tmdb_id=687163, media_shape="movie")
+    movie_dir = tmp_path / "movie"
+    movie_dir.mkdir()
+    (movie_dir / "orphan.mkv").write_bytes(b"x")
+    movie = _radarr_movie(687163, "Project Hail Mary", has_file=False, path=str(movie_dir))
+    fake = _FakeRadarrClient([movie])
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.audit_local_files_for_show(conn, "s-lau412")
+    assert result["orphan_files"] == []
+
+
+def test_scoped_radarr_no_op_when_not_configured(conn, monkeypatch):
+    _add_show(conn, "s-lau408", tmdb_id=687163, media_shape="movie")
+    called = []
+    monkeypatch.setattr(
+        radarr_client, "RadarrClient", lambda *a, **kw: called.append(1) or _FakeRadarrClient([])
+    )
+    result = local_audit.audit_local_files_for_show(conn, "s-lau408")
+    assert result["shows_corrected"] == 0
+    assert called == []
+
+
+def test_scoped_radarr_no_op_when_show_has_no_tmdb_link(conn, monkeypatch):
+    _configure_radarr()
+    _add_show(conn, "s-lau409", media_shape="movie")  # no tmdb_id
+    called = []
+    monkeypatch.setattr(
+        radarr_client, "RadarrClient", lambda *a, **kw: called.append(1) or _FakeRadarrClient([])
+    )
+    result = local_audit.audit_local_files_for_show(conn, "s-lau409")
+    assert result["shows_corrected"] == 0
+    assert called == []
+
+
+def test_scoped_radarr_no_op_when_unknown_to_radarr(conn, monkeypatch):
+    _configure_radarr()
+    _add_show(conn, "s-lau410", tmdb_id=687163, media_shape="movie")
+    fake = _FakeRadarrClient([])  # movie_by_tmdb_id resolves to None
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.audit_local_files_for_show(conn, "s-lau410")
+    assert result["shows_corrected"] == 0
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "radarr")
+    assert health["status"] == "ok"
+
+
+def test_scoped_radarr_records_failure_on_a_real_error(conn, monkeypatch):
+    _configure_radarr()
+    _add_show(conn, "s-lau411", tmdb_id=687163, media_shape="movie")
+    fake = _FakeRadarrClient([], fail_lookup=True)
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.audit_local_files_for_show(conn, "s-lau411")
+    assert result["shows_corrected"] == 0
+    health = next(r for r in service_health.get_all(conn) if r["service"] == "radarr")
+    assert health["status"] == "unreachable"
+
+
+def test_scoped_audit_unknown_show_id_is_a_defensive_no_op(conn):
+    # local_audit.py's own defensive branch — resolvers.py's own
+    # _require_show is the real guard (own coverage in test_server.py).
+    result = local_audit.audit_local_files_for_show(conn, "s-nope")
+    assert result == {
+        "episodes_corrected": 0,
+        "shows_corrected": 0,
+        "orphan_files": [],
+        "untracked_shows": [],
+    }
 
 
 # --- known_anilist_ids / all_sonarr_series_with_seasons (B.11d) --------------

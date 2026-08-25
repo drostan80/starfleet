@@ -891,10 +891,56 @@ def _fetch_sonarr(conn, show: dict) -> None:
         if season_number is None or episode_number is None:
             continue
         season_id = season_ids_by_number.get(season_number)
+        # NEXT_UP.md, 2026-08-25 (setEpisodeNumber) — matches on
+        # sonarr_season/sonarr_episode, Sonarr's own raw numbering
+        # captured immutably at insert time (below), not the display
+        # season/episode a manual renumber may have since corrected.
+        # Matching on the display columns here would silently undo
+        # every renumber the moment this fetch next runs: Sonarr still
+        # reports the episode under its original number, that lookup
+        # would find no existing row, and a phantom duplicate would get
+        # INSERTed at the original slot instead of recognizing the
+        # renumbered row as already known.
         existing = conn.execute(
-            "SELECT id FROM episode WHERE show_id = ? AND season = ? AND episode = ?",
+            "SELECT id FROM episode WHERE show_id = ? AND sonarr_season = ? AND sonarr_episode = ?",
             (show["id"], season_number, episode_number),
         ).fetchone()
+        if existing is None:
+            # Fallback for a row that predates sonarr_season/sonarr_episode
+            # capture entirely (e.g. scripts/import_trakt_history.py's own
+            # synthesized episode rows, which never set them) — match on
+            # the legacy display columns instead, `sonarr_season IS NULL`-
+            # guarded so this can only ever match a row genuinely never
+            # captured, never one that's since been through a real
+            # renumber (sonarr_season would be non-NULL there, correctly
+            # failing this guard). Backfills sonarr_season/sonarr_episode
+            # the moment it matches, same "capture once" shape as
+            # season_id/absolute_number below — every later fetch for this
+            # row uses the fast/correct lookup above instead of this
+            # fallback.
+            #
+            # Known boundary, not fixed here: migration 36bbe45d39f3 left
+            # this NULL for a show that was multi-show-tvdb-routed
+            # (_fetch_sonarr_multi_show) at migration time, precisely
+            # because its display season/episode are locally-derived
+            # per-part numbers, not Sonarr's raw ones. If that show later
+            # stops being multi-show-routed (unlinked, merged) and reaches
+            # this single-show path for the first time, this fallback
+            # compares Sonarr's *raw* season/episode against those
+            # locally-derived display values — a coincidental match here
+            # would backfill the wrong Sonarr identity onto the row.
+            # Nothing re-derives true identity for that case retroactively;
+            # see the migration's own docstring.
+            existing = conn.execute(
+                "SELECT id FROM episode WHERE show_id = ? AND season = ? AND episode = ?"
+                " AND sonarr_season IS NULL",
+                (show["id"], season_number, episode_number),
+            ).fetchone()
+            if existing is not None:
+                conn.execute(
+                    "UPDATE episode SET sonarr_season = ?, sonarr_episode = ? WHERE id = ?",
+                    (season_number, episode_number, existing["id"]),
+                )
         if existing is not None:
             # A.20 — backfill season_id on a pre-existing row that predates
             # this fix (or was inserted before its season was reconciled).
@@ -947,16 +993,23 @@ def _fetch_sonarr(conn, show: dict) -> None:
         availability_status, availability_path = _availability_from_sonarr_episode(ep)
         conn.execute(
             "INSERT INTO episode"
-            " (id, show_id, season, season_id, episode, kind, absolute_number,"
-            "  air_date_utc, air_date_source, air_date_raw_sonarr, runtime_minutes,"
-            "  available_via_sonarr, file_path_sonarr, available_checked_at, title,"
-            "  created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sonarr', ?, ?, ?, ?, ?, ?, ?, ?)",
+            " (id, show_id, season, season_id, episode, sonarr_season, sonarr_episode, kind,"
+            "  absolute_number, air_date_utc, air_date_source, air_date_raw_sonarr,"
+            "  runtime_minutes, available_via_sonarr, file_path_sonarr, available_checked_at,"
+            "  title, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sonarr', ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 episode_id,
                 show["id"],
                 season_number,
                 season_id,
+                episode_number,
+                # NEXT_UP.md, 2026-08-25 — the immutable raw-numbering
+                # capture setEpisodeNumber's own resync-safety depends on
+                # (see the `existing` lookup's own comment above). A brand
+                # new row has no correction yet, so season/episode (display)
+                # and sonarr_season/sonarr_episode (raw) start identical.
+                season_number,
                 episode_number,
                 # A.25 — capture what the source actually says. §5.2's `kind`
                 # records how the source files an episode; season 0 is
@@ -1166,6 +1219,15 @@ def _fetch_sonarr_multi_show(conn, sibling_ids: list[str], episodes: list[dict])
         ).fetchone()
         episode_id = ids.generate_id(conn, "e")
         availability_status, availability_path = _availability_from_sonarr_episode(ep)
+        # sonarr_season/sonarr_episode (NEXT_UP.md, 2026-08-25) deliberately
+        # left NULL here, unlike the single-show INSERT above: `season`/
+        # `episode` on this path are already this function's own locally
+        # derived per-part numbering (`anchor["episode"] + 1`), not a literal
+        # Sonarr per-series season/episode — Sonarr's own raw identity for
+        # this flat multi-part series is `abs_number` (absolute_number),
+        # already what this path's own `existing` lookup above matches on
+        # and unaffected by anything setEpisodeNumber ever touches. Nothing
+        # here needs the sonarr_season/sonarr_episode resync-safety net.
         conn.execute(
             "INSERT INTO episode"
             " (id, show_id, season, season_id, episode, kind, absolute_number,"

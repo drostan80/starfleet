@@ -29,21 +29,115 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 
 ## Build
 
-- [ ] Wire the AniList push for `season.started_at`/`completed_at` — columns exist, push
-      isn't wired (`FuzzyDateInput` shape unhandled). (archive/todo.md:1013)
+- [x] Wire the AniList push for `season.started_at`/`completed_at` — columns exist, push
+      isn't wired (`FuzzyDateInput` shape unhandled). (archive/todo.md:1013) 2026-08-25:
+      `anilist_client.save_media_list_entry` takes `started_at`/`completed_at` (ISO-8601 UTC
+      TEXT, same as the local columns), converts to AniList's `FuzzyDateInput`
+      (`_fuzzy_date_input`, the shape that had left this unbuilt). `resolvers.py`:
+      `_push_season_started_at`/`_push_season_completed_at`, same no-op-before-login/
+      no-op-unlinked/best-effort/pending_review-on-failure shape as `_push_season_score`.
+      Wired into every path that already stamps the local column — the three watch
+      mutations (via `_stamp_season_started_at`) and both completion triggers
+      (`_stamp_completed_at_if_highest_season`, setStatus's manual path; `_try_complete_season`,
+      the forward auto-complete path) — each only pushes on the write-once transition, never a
+      re-mark. One deliberate exception: `_bulk_mark_all_aired_episodes_watched` (setStatus's
+      reverse "mark all aired episodes watched" bulk path) still stamps `started_at` locally
+      but passes `push=False` — its `watched_at` is a synthesized "marked completed today"
+      timestamp, not a real historical watch date, and pushing it would silently overwrite a
+      genuine AniList `startedAt` with today's date — `completed_at` gets no such
+      suppression, deliberately: it's the date the status change is happening right now, not a
+      guess (see that function's own docstring for the started_at/completed_at asymmetry). 9
+      new tests (`test_anilist_client.py`: FuzzyDateInput conversion for both fields,
+      omitted-unless-given, x3; `test_server.py`: push on first watch, no re-push on a later
+      watch, no push when unlinked, highest-season-only completed_at push, forward-path
+      completed_at push, the two-season bulk-path case confirming completed_at still pushes
+      while started_at never does, x6) + 6 existing push tests updated to filter out the
+      now-additional started_at/completed_at calls their own assertions didn't expect. Full
+      suite 865 passed, ruff clean. **Not deployed yet.**
 - [x] Add a real mutation for `tracking_space` — `setTrackingSpace(showId, trackingSpace)`,
       `~/repos/starfleet` v0.1.23 (deployed) + `t` in `~/repos/data`'s show-detail view,
       2026-08-18. (archive/todo.md:1209)
-- [ ] A client-facing way to correct episode-*number* misalignment (which Sonarr season/episode
+- [x] A client-facing way to correct episode-*number* misalignment (which Sonarr season/episode
       slot an episode is filed under) without a direct DB edit — the air-date half of this line
-      is done (`a`/`A` above); no mutation exists for renumbering an episode itself yet.
-      (archive/todo.md:1209)
-- [ ] Per-show manual audit trigger from the show-detail view — user's own ask, 2026-08-19,
+      was already done (`a`/`A` above); 2026-08-25 closed the rest. `~/repos/starfleet`: new
+      mutation `setEpisodeNumber(episodeId, season, episode)` — rejects (never swaps/shifts) if
+      the target slot is already occupied by a different episode, no-ops if unchanged, re-points
+      any existing `watch_event` rows to the new (season, episode) (the composite FK they're
+      keyed against, §5.3), resolves `seasonEntity` against an existing `season` row for the new
+      number or leaves it unmatched (never auto-creates one). Real durability problem found
+      *while designing* the mutation, not assumed: `episode.season`/`episode.episode` are the
+      exact columns `metadata.py`'s `_fetch_sonarr` uses to recognize an already-known row — a
+      mutation that only wrote those would get silently undone on the next Sonarr sync (Sonarr
+      still reports the episode under its old number, the lookup no longer finds the renumbered
+      row, a phantom duplicate gets inserted at the original slot). Fixed with two new immutable
+      columns, `sonarr_season`/`sonarr_episode` (migration `36bbe45d39f3`), capturing Sonarr's
+      own raw numbering once at first fetch; `_fetch_sonarr`'s existing-row lookup now matches
+      on these instead, so a correction survives every future sync. Backfilled from
+      `season`/`episode` for existing rows on the single-show fetch path only — excluded (left
+      NULL) for any show currently multi-show-tvdb-routed (`_fetch_sonarr_multi_show`,
+      Bookworm-style), since those rows' `season`/`episode` were already locally-derived
+      per-part numbers, never Sonarr's raw ones, and backfilling them would have stamped a wrong
+      value under a column whose whole contract is "what Sonarr actually reports." Two boundaries
+      surfaced during build, deliberately logged rather than solved here (both would need a
+      dedicated "was this show ever multi-show-routed" marker LCARS doesn't have): a show that
+      stops being multi-show-routed after this migration (unlinked, merged) and reaches the
+      single-show fetch path for the first time isn't guaranteed a correct match from the legacy
+      `sonarr_season IS NULL` fallback (documented on the fallback itself, `metadata.py`); and a
+      cross-season `setEpisodeNumber` move to a season with no existing row yet can have its
+      unmatched `seasonEntity` silently re-pointed back at the *old* season by `_fetch_sonarr`'s
+      own `season_id IS NULL` fallback on the next real sync (documented on the mutation itself,
+      `schema.graphql`) — create the target season row first (`setSeasonMapping`) to avoid it.
+      The write itself needs `PRAGMA defer_foreign_keys = ON` for the transaction — updating
+      `episode.season`/`episode` (the watch_event composite FK's own parent columns) fails with
+      `FOREIGN KEY constraint failed` otherwise regardless of statement order; verified
+      experimentally that the pragma resets automatically at the next commit/rollback, so it's
+      safe to set unconditionally in the resolver with no manual reset needed. `~/repos/data`:
+      `n` in `show_detail_screen.py` (episode row only), prompting for a new slot in any of three
+      accepted formats (`S1E6`, `1x6`, `1 6`) via `_parse_episode_number`;
+      `LcarsClient.set_episode_number()`. 21 new tests across both repos (10 `test_server.py` —
+      7 on the mutation itself, 2 on `_fetch_sonarr`'s resync-safety, 1 exercising the real
+      mutation end to end against a Sonarr-fetched episode and resync rather than just the
+      columns via raw SQL — plus 11 `data`-side: 5 `_parse_episode_number` cases, 6 screen-level
+      prompt/error/wiring tests). `~/repos/starfleet` full suite 890 passed;
+      `~/repos/data` full suite 495 passed. Ruff clean both repos. **Not deployed yet** — same as
+      items 1 and 3 above; carries a migration, so snapshot the DB before the next deploy tag
+      applies it (v0.1.18 precedent). (archive/todo.md:1209)
+- [ ] `show_merge.py` has the same composite-FK ordering bug `setEpisodeNumber` above needed
+      `PRAGMA defer_foreign_keys` to avoid, found by inspection while designing that mutation
+      (2026-08-25), not from a live failure: merging two shows re-points a moved episode's
+      `season`/`episode` before its `watch_event` rows, under immediate FK checking — raises
+      `FOREIGN KEY constraint failed` whenever the moved episode actually has watch history.
+      Never fired in practice because merges have so far only ever involved zero-watch-event
+      stub shows. Fix is the same tool already validated for this exact class of problem: wrap
+      the merge's episode-move + watch_event-repoint in one transaction with
+      `PRAGMA defer_foreign_keys = ON`. No test currently covers this path.
+- [x] Per-show manual audit trigger from the show-detail view — user's own ask, 2026-08-19,
       after the Anna Pigeon `auditLocalFiles` fix (v0.1.32) landed: that mutation is still
       whole-library-only, no `showId` scope, so fixing one show's stale Sonarr/Radarr path means
       re-walking everything. Needs a scoped LCARS mutation (`auditLocalFiles(showId: ID)` or a
       new single-show variant reusing `_audit_sonarr`/`_audit_radarr`'s per-series/per-movie
-      correction logic) plus a trigger key in `~/repos/data`'s `show_detail_screen.py`.
+      correction logic) plus a trigger key in `~/repos/data`'s `show_detail_screen.py`. 2026-08-25:
+      new mutation `auditLocalFilesForShow(showId: ID!)`, `~/repos/starfleet`. `sonarr_client`/
+      `radarr_client` already had the single-record lookups needed
+      (`series_by_tvdb_id`/`movie_by_tmdb_id`) — no new client methods. `local_audit.py`: the
+      whole-library `_audit_sonarr`/`_audit_radarr` loop bodies factored into
+      `_audit_sonarr_series`/`_audit_radarr_movie`, reused verbatim by the new
+      `audit_local_files_for_show()` for the correction half (one implementation, not two that
+      could drift) — routed by the show's own `mediaShape`. Real gap caught in review before
+      shipping: the shared functions' own orphan-file filesystem walk can only ever compare
+      against episodes LCARS has already fetched, so a real file for a not-yet-fetched episode
+      would report as a false-positive orphan — tolerable on the whole-library CLI report an
+      operator skims, not on a single keypress fired from the exact show being actively
+      inspected; added a `walk_orphans` flag (default `True`, unchanged whole-library behavior)
+      and the scoped path passes `False` — `orphanFiles`/`untrackedShows` are always `[]` for
+      this mutation, deliberately narrower than `auditLocalFiles`, not a smaller version of the
+      same thing. `~/repos/data`: `x` in `show_detail_screen.py` (show row only, mirrors `O`'s
+      own scope), `LcarsClient.audit_local_files_for_show()`; `_load`/`_render_options` gained
+      an optional `status_override` param (the one action here whose whole point is a summary
+      the plain post-reload HINT reset would otherwise wipe). 21 new tests across both repos
+      (13 `test_local_audit.py`, 2 `test_server.py` wiring, 6 `data`-side client/screen).
+      `~/repos/starfleet` full suite 880 passed; `~/repos/data` full suite 484 passed. Ruff
+      clean both repos. **Not deployed yet** — same as item 1 above, next tag carries both.
 - [ ] `ops audit-local-files`'s 10s `LcarsClient` HTTP timeout (`ops/lcars_client.py`'s own
       default) is too short for a real whole-library run — found live, 2026-08-20: manually
       triggering it against the real library (fixing Lioness/Lanterns after a Sonarr
@@ -57,9 +151,28 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 - [x] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
       move status/score at the show/season level individually — built in `~/repos/data`
       (`show_detail_screen.py`, `enter` on the show browser), 2026-08-18.
-- [ ] Show-detail view: mark a movie watched from the screen itself — gated for now, `w` has
+- [x] Show-detail view: mark a movie watched from the screen itself — gated for now, `w` has
       no episode row to act on for a `MOVIE` show; needs `Show.watchEvents`-based undo too,
-      not just the episode-scoped lookup the episodic path reuses.
+      not just the episode-scoped lookup the episodic path reuses. 2026-08-25: turned out
+      `~/repos/starfleet` already had everything this needed — `Show.watchEvents`, its
+      resolver, and `addWatchEvent(showId, season: null, episode: null)`'s movie support all
+      pre-existed — so this was `~/repos/data`-only, **no server change, no deploy**.
+      `show_seasons_and_episodes` now also fetches `watchEvents(last: 1)`, flattened to a
+      single `watchEventId` (same "last = most recently inserted" ordering
+      `latest_watch_event_id` already relies on for episodes). `show_detail_screen.py`: `w`/`u`
+      on the show row now call `addWatchEvent`/`deleteWatchEvent` directly for a MOVIE show
+      (`_mark_movie_watched`/`_unmark_movie_watched`, `DetailRow.movie_watch_event_id`); the
+      show row itself now renders a ✓/○ watched icon for movies, same convention
+      `_format_episode_row` already uses. Real semantics question surfaced during build and
+      put to the user rather than guessed: marking a movie watched does NOT auto-complete its
+      status or push to AniList (LCARS's own auto-complete, `_try_complete_season`/
+      `_try_complete_show`, only fires when `addWatchEvent`'s `season is not None` — always
+      `None` for a movie) — user's explicit call was to leave that asymmetry alone for now,
+      status stays a separate `m`-leader move; documented on `_mark_movie_watched` itself so a
+      future reader doesn't mistake "✓ but still Planned" for a bug. 8 new tests
+      (`test_lcars_client.py`: watchEventId flattening, present/absent; `test_show_detail_
+      screen.py`: mark/unmark send the right mutation, no-op unmark with no event, three
+      `build_rows` icon tests) all passing, ruff clean, full `~/repos/data` suite 478 passed.
 - [x] Manual schedule editing from the show-detail view: set weekly time + first air date per
       season (`A`), per-episode offset from the original schedule (`a`, +1 week/+2 days…),
       offer to shift all subsequent episodes when one moves — `~/repos/data`

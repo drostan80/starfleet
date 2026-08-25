@@ -343,6 +343,50 @@ def test_save_media_list_entry_sends_repeat_and_status_for_rewatch():
     assert fake.last_variables == {"mediaId": 123, "status": "REPEATING", "repeat": 2}
 
 
+def test_save_media_list_entry_sends_started_at_as_fuzzy_date():
+    """archive/todo.md:1013 — the actual gap: `startedAt`/`completedAt`
+    take AniList's `FuzzyDateInput` shape (plain year/month/day ints),
+    not a scalar like every other param above. LCARS's own
+    `season.started_at` is a full ISO-8601 UTC TEXT timestamp; this
+    confirms the conversion, not just that the caller's own string got
+    forwarded unchanged."""
+    fake = _FakeClient(
+        response=_FakeResponse(payload={"data": {"SaveMediaListEntry": {"id": 1}}})
+    )
+    anilist_client.save_media_list_entry(
+        "tok", 123, started_at="2026-08-16T09:00:00Z", client=fake
+    )
+    assert fake.last_variables == {
+        "mediaId": 123,
+        "startedAt": {"year": 2026, "month": 8, "day": 16},
+    }
+
+
+def test_save_media_list_entry_sends_completed_at_as_fuzzy_date():
+    fake = _FakeClient(
+        response=_FakeResponse(payload={"data": {"SaveMediaListEntry": {"id": 1}}})
+    )
+    anilist_client.save_media_list_entry(
+        "tok", 123, completed_at="2026-08-19T00:00:00Z", client=fake
+    )
+    assert fake.last_variables == {
+        "mediaId": 123,
+        "completedAt": {"year": 2026, "month": 8, "day": 19},
+    }
+
+
+def test_save_media_list_entry_score_only_omits_started_at_and_completed_at():
+    """Same "omit, don't null" guard as every other param — a score-only
+    push (the common case) must never send startedAt/completedAt at all,
+    which would unset them on AniList."""
+    fake = _FakeClient(
+        response=_FakeResponse(payload={"data": {"SaveMediaListEntry": {"score": 85.0}}})
+    )
+    anilist_client.save_media_list_entry("tok", 123, score=17.0, client=fake)
+    assert "startedAt" not in fake.last_variables
+    assert "completedAt" not in fake.last_variables
+
+
 # --- fetch_my_list_entry_id / delete_media_list_entry (write-mirror gap #4) ---
 
 

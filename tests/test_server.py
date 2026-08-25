@@ -1906,6 +1906,151 @@ async def test_sonarr_fetch_backfills_absolute_number_on_existing_episode(client
     assert data["show"]["episodes"]["edges"][0]["node"]["absoluteNumber"] == 7
 
 
+async def test_sonarr_fetch_does_not_duplicate_a_renumbered_episode(client, monkeypatch):
+    """NEXT_UP.md, 2026-08-25 (setEpisodeNumber) — the actual durability
+    problem the sonarr_season/sonarr_episode columns exist to solve:
+    Sonarr keeps reporting the episode under its own original number
+    forever, so a refetch after a manual renumber must still recognize
+    the row (via sonarr_season/sonarr_episode, unaffected by the
+    renumber) rather than treat it as unseen and insert a duplicate."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+    ep = {"seasonNumber": 1, "episodeNumber": 5, "airDateUtc": None, "runtime": None}
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[ep])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    # Simulate setEpisodeNumber's own write directly (mutation covered
+    # end-to-end in its own test section) — renumber the display slot,
+    # sonarr_season/sonarr_episode deliberately untouched.
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE episode SET season = 1, episode = 6 WHERE show_id = ?", (show["id"],)
+    )
+    conn.commit()
+
+    # Sonarr still reports the same episode under its own original number.
+    await gql(
+        client,
+        "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
+        {"i": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { season episode } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    edges = data["show"]["episodes"]["edges"]
+    assert len(edges) == 1  # no phantom duplicate inserted
+    assert (edges[0]["node"]["season"], edges[0]["node"]["episode"]) == (1, 6)  # not reverted
+
+
+async def test_set_episode_number_survives_a_sonarr_resync_end_to_end(client, monkeypatch):
+    """Same durability problem as the raw-SQL test above, but exercised through the real
+    setEpisodeNumber mutation end to end (episode fetched from Sonarr, renumbered via the
+    mutation, re-synced) rather than a bare UPDATE standing in for it — proves the full write
+    path (season_id resolution, watch_event repoint, defer_foreign_keys) composes correctly
+    with the fetch path's own sonarr_season/sonarr_episode lookup, not just the columns in
+    isolation."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+    ep = {"seasonNumber": 1, "episodeNumber": 5, "airDateUtc": None, "runtime": None}
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[ep])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    episode_id = data["show"]["episodes"]["edges"][0]["node"]["id"]
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setEpisodeNumber(episodeId: $id, season: 1, episode: 6)"
+        " { season episode } }",
+        {"id": episode_id},
+        headers=auth_headers(),
+    )
+
+    # Sonarr still reports the same episode under its own original number.
+    await gql(
+        client,
+        "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
+        {"i": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { season episode } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    edges = data["show"]["episodes"]["edges"]
+    assert len(edges) == 1  # no phantom duplicate inserted
+    assert (edges[0]["node"]["season"], edges[0]["node"]["episode"]) == (1, 6)  # not reverted
+
+
+async def test_sonarr_fetch_recognizes_a_pre_existing_episode_with_no_raw_numbering_captured(
+    client, monkeypatch
+):
+    """A row that predates sonarr_season/sonarr_episode capture entirely
+    (e.g. scripts/import_trakt_history.py's own synthesized episodes,
+    which never set them) must still be recognized as "already known"
+    by its first real Sonarr fetch — the legacy display-column fallback
+    — and get backfilled, not duplicated. No tvdbId at add_show time
+    (nothing to fetch yet, §5.1 — addShow's own inline fetch no-ops
+    cleanly): the Trakt-style row is inserted, then the show is linked
+    to Sonarr and fetched explicitly, so the fetch under test is
+    genuinely the first one that ever touches this show."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+    show = await add_show(client, trackingSpace="TV")
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)"
+        " VALUES ('e-trak01', ?, 1, 5, 'regular', 'watched', 'x', 'x')",
+        (show["id"],),
+    )
+    conn.commit()
+
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show["id"], "externalId": "555", "url": "https://thetvdb.com/x"},
+        headers=auth_headers(),
+    )
+    ep = {"seasonNumber": 1, "episodeNumber": 5, "airDateUtc": None, "runtime": None}
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[ep])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    await gql(
+        client,
+        "mutation($i:ID!){ refreshShowMetadata(showId:$i){ id } }",
+        {"i": show["id"]},
+        headers=auth_headers(),
+    )
+
+    edges = (
+        await gql(
+            client,
+            "query($id: ID!) { show(id: $id) { episodes { edges { node { id state } } } } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    )["show"]["episodes"]["edges"]
+    assert len(edges) == 1  # no duplicate — the Trakt-imported row itself was recognized
+    assert edges[0]["node"]["id"] == "e-trak01"
+    assert edges[0]["node"]["state"] == "WATCHED"  # untouched by the fetch
+    row = conn.execute(
+        "SELECT sonarr_season, sonarr_episode FROM episode WHERE id = 'e-trak01'"
+    ).fetchone()
+    assert (row["sonarr_season"], row["sonarr_episode"]) == (1, 5)  # backfilled
+
+
 async def test_sonarr_fetch_captures_season_zero_as_special_kind(client, monkeypatch):
     config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
     _patch_fribb_dataset(monkeypatch, dataset=[])
@@ -3491,7 +3636,12 @@ async def test_set_status_pushes_to_every_linked_season(client, monkeypatch):
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    assert calls == [(111, {"status": "COMPLETED"})]
+    # This single season is also setStatus's own highest-linked-season, so it
+    # gets a second, separate completed_at push too (own dedicated coverage:
+    # test_set_status_completed_pushes_completed_at_for_the_highest_linked_season) —
+    # filtered out here since this test is only about the status push itself.
+    status_calls = [c for c in calls if "status" in c[1]]
+    assert status_calls == [(111, {"status": "COMPLETED"})]
 
 
 async def test_anilist_push_failure_logs_pending_review_against_season(client, monkeypatch):
@@ -5387,6 +5537,180 @@ async def test_completed_at_never_moves_once_set(client):
     assert (await _season_dates(client, season1))["completedAt"] == "2020-01-01T00:00:00Z"
 
 
+# --- AniList push for startedAt/completedAt (archive/todo.md:1013 — the
+# FuzzyDateInput gap the section above's own comment flagged is now closed:
+# _push_season_started_at/_push_season_completed_at, anilist_client.py's
+# save_media_list_entry extended with started_at/completed_at). Same
+# authenticated-config/monkeyed-save_media_list_entry harness as the
+# setScore/setStatus push tests further up.
+
+
+async def test_add_watch_event_pushes_started_at_to_anilist(client, migrated_db, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _insert_episode(migrated_db, show["id"])
+    await _link_season_anilist(client, show["id"], 1, 111)
+
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          addWatchEvent(showId: $id, season: 1, episode: 1, watchedAt: $t) { id }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    # addWatchEvent also pushes recomputed progress (_push_show_episode_progress,
+    # already-wired territory) to the same season — filtered out, this test is
+    # only about the started_at push.
+    started_at_calls = [c for c in calls if "started_at" in c[1]]
+    assert started_at_calls == [(111, {"started_at": "2026-08-16T09:00:00Z"})]
+
+
+async def test_started_at_push_does_not_repeat_on_a_later_watch(client, migrated_db, monkeypatch):
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 3))
+    await _link_season_anilist(client, show["id"], 1, 111)
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          addWatchEvent(showId: $id, season: 1, episode: 1, watchedAt: $t) { id }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          addWatchEvent(showId: $id, season: 1, episode: 2, watchedAt: $t) { id }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-17T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    started_at_calls = [c for c in calls if "started_at" in c[1]]
+    assert started_at_calls == [(111, {"started_at": "2026-08-16T09:00:00Z"})]  # not pushed twice
+
+
+async def test_started_at_no_push_when_season_unlinked(client, migrated_db, monkeypatch):
+    config.set_current(_authenticated_config())
+    called = []
+    monkeypatch.setattr(
+        anilist_client, "save_media_list_entry", lambda *a, **kw: called.append(True)
+    )
+    show = await add_show(client)
+    await _insert_episode(migrated_db, show["id"])
+    await _create_season(client, show["id"], 1)  # no anilistId
+
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          addWatchEvent(showId: $id, season: 1, episode: 1, watchedAt: $t) { id }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    assert called == []
+
+
+async def test_set_status_completed_pushes_completed_at_for_the_highest_linked_season(
+    client, migrated_db, monkeypatch
+):
+    """Mirrors test_set_status_completed_stamps_the_highest_season_only
+    above — same highest-season-only scope, now also asserting the push."""
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _link_season_anilist(client, show["id"], 1, 111)
+    season2 = await _link_season_anilist(client, show["id"], 2, 222)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    # setStatus also pushes the status itself to both linked seasons
+    # (already-wired territory, own coverage above) — filtered out here.
+    completed_at_calls = [c for c in calls if "completed_at" in c[1]]
+    assert len(completed_at_calls) == 1
+    anilist_id, kw = completed_at_calls[0]
+    assert anilist_id == 222
+    assert kw["completed_at"] == (await _season_dates(client, season2))["completedAt"]
+
+
+async def test_forward_auto_complete_pushes_completed_at_to_anilist(
+    client, migrated_db, monkeypatch
+):
+    """The *other* completion trigger — a season completing because its
+    own episodes were all watched (_try_complete_season, not setStatus)
+    — pushes too, mirroring
+    test_last_episode_watched_auto_completes_season_and_show above."""
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 4))
+    await _link_season_anilist(client, show["id"], 1, 111)
+
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $t: DateTime!) {
+          markEpisodeRangeWatched(
+            showId: $id, season: 1, fromEpisode: 1, toEpisode: 2, watchedAt: $t
+          ) {
+            episode
+          }
+        }
+        """,
+        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
+        headers=auth_headers(),
+    )
+    # This first watch legitimately pushes progress and started_at (both
+    # already-wired/covered territory) — only completed_at must stay absent
+    # until the season is actually done.
+    assert [c for c in calls if "completed_at" in c[1]] == []  # not complete yet
+
+    await gql(
+        client,
+        "mutation($id: ID!, $t: DateTime!) {"
+        " addWatchEvent(showId: $id, season: 1, episode: 3, watchedAt: $t) { id } }",
+        {"id": show["id"], "t": "2026-08-16T10:00:00Z"},
+        headers=auth_headers(),
+    )
+    completed_calls = [c for c in calls if "completed_at" in c[1]]
+    assert completed_calls == [(111, {"completed_at": "2026-08-16T10:00:00Z"})]
+
+
 # --- bidirectional completion auto-sync (write-mirror, todo.md 2026-08-16) ---
 #
 # User's own rule, verbatim: "season are marked complete when all episodes are
@@ -5642,6 +5966,55 @@ async def test_set_status_completed_confirmed_bulk_marks_aired_episodes_only(cli
     assert conn.execute("SELECT state FROM episode WHERE id = 'e-noair1'").fetchone()["state"] == (
         "unwatched"
     )
+
+
+async def test_bulk_mark_all_aired_stamps_started_at_locally_but_does_not_push_it(
+    client, migrated_db, monkeypatch
+):
+    """setStatus(COMPLETED)'s reverse-direction bulk-mark path
+    (_bulk_mark_all_aired_episodes_watched) uses a synthesized "now" as
+    started_at, not a real historical watch date — pushing that to
+    AniList would silently overwrite a genuine startedAt there with
+    today's date. LCARS still captures its own local value either way;
+    only the AniList push is suppressed (`push=False`).
+
+    Two linked seasons, deliberately — the real risk this guards is
+    setStatus's own completion loop pushing a *second* season's
+    completed_at (season 1's, via _try_complete_season, run right after
+    this bulk-mark) as well as the highest season's own (via
+    _stamp_completed_at_if_highest_season, run before it): unlike
+    started_at, completed_at genuinely is "now" here (see
+    _bulk_mark_all_aired_episodes_watched's own docstring for why that's
+    not the same kind of guess), so both of those pushes are expected —
+    only started_at must stay silent, for either season."""
+    config.set_current(_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
+    )
+    show = await add_show(client)
+    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 2))
+    await _insert_aired_episode_range(migrated_db, show["id"], 2, range(1, 2))
+    season1 = await _link_season_anilist(client, show["id"], 1, 111)
+    season2 = await _link_season_anilist(client, show["id"], 2, 222)
+
+    await gql(
+        client,
+        "mutation($id: ID!) {"
+        " setStatus(showId: $id, status: COMPLETED, confirmed: true) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    # Captured locally on both seasons either way.
+    assert (await _season_dates(client, season1))["startedAt"] is not None
+    assert (await _season_dates(client, season2))["startedAt"] is not None
+    # Never pushed for either season...
+    assert [c for c in calls if "started_at" in c[1]] == []
+    # ...but completed_at genuinely is pushed for both (own docstring above).
+    completed_at_ids = {c[0] for c in calls if "completed_at" in c[1]}
+    assert completed_at_ids == {111, 222}
 
 
 async def test_set_status_completed_confirmed_never_overwrites_a_skipped_episode(
@@ -6305,7 +6678,10 @@ async def test_add_watch_event_pushes_contiguous_progress(client, migrated_db, m
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    assert calls == [(111, {"progress": 1})]
+    # This is also the season's first-ever watch, so it pushes started_at too
+    # (own dedicated coverage above) — filtered out, this test is progress-only.
+    progress_calls = [c for c in calls if "progress" in c[1]]
+    assert progress_calls == [(111, {"progress": 1})]
 
 
 async def test_progress_push_reports_furthest_watched_even_with_a_gap(
@@ -6404,7 +6780,10 @@ async def test_mark_episode_range_watched_pushes_progress(client, migrated_db, m
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    assert calls == [(111, {"progress": 3})]
+    # Also the season's first-ever watch, so started_at gets pushed too (own
+    # dedicated coverage above) — filtered out, this test is progress-only.
+    progress_calls = [c for c in calls if "progress" in c[1]]
+    assert progress_calls == [(111, {"progress": 3})]
 
 
 async def test_mark_episode_skipped_counts_toward_progress(client, migrated_db, monkeypatch):
@@ -6539,6 +6918,144 @@ async def test_set_episode_air_date_requires_client_header(client, migrated_db):
         headers=auth_headers(client_name=None),
     )
     assert "errors" in resp.json()
+
+
+# --- setEpisodeNumber (archive/todo.md:1209, 2026-08-25) --------------------
+
+
+async def test_set_episode_number_updates_season_and_episode(client, migrated_db):
+    show = await add_show(client)
+    episode_id = await _insert_episode(migrated_db, show["id"])  # season 1, episode 1
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!) {
+          setEpisodeNumber(episodeId: $id, season: 1, episode: 6) { season episode }
+        }
+        """,
+        {"id": episode_id},
+        headers=auth_headers(),
+    )
+    assert data["setEpisodeNumber"] == {"season": 1, "episode": 6}
+
+
+async def test_set_episode_number_is_a_no_op_when_unchanged(client, migrated_db):
+    show = await add_show(client)
+    episode_id = await _insert_episode(migrated_db, show["id"])  # season 1, episode 1
+    data = await gql(
+        client,
+        "mutation($id: ID!) { setEpisodeNumber(episodeId: $id, season: 1, episode: 1)"
+        " { season episode } }",
+        {"id": episode_id},
+        headers=auth_headers(),
+    )
+    assert data["setEpisodeNumber"] == {"season": 1, "episode": 1}
+
+
+async def test_set_episode_number_rejects_a_conflicting_slot(client, migrated_db):
+    show = await add_show(client)
+    await _insert_episode(migrated_db, show["id"], episode_id="e-tst001")
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)"
+        " VALUES ('e-tst002', ?, 1, 2, 'regular', 'unwatched', 'x', 'x')",
+        (show["id"],),
+    )
+    conn.commit()
+
+    resp = await client.post(
+        "/",
+        json={
+            "query": "mutation($id: ID!) { setEpisodeNumber(episodeId: $id, season: 1, episode: 2)"
+            " { id } }",
+            "variables": {"id": "e-tst001"},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "already occupied by episode e-tst002" in body["errors"][0]["message"]
+    # Refused, not silently swapped — e-tst001 stays exactly where it was.
+    row = conn.execute("SELECT season, episode FROM episode WHERE id = 'e-tst001'").fetchone()
+    assert (row["season"], row["episode"]) == (1, 1)
+
+
+async def test_set_episode_number_repoints_an_existing_watch_event(client, migrated_db):
+    """The composite watch_event FK (show_id, season, episode) — §5.3 —
+    is the exact reason PRAGMA defer_foreign_keys is needed in the
+    resolver: this must not raise, and the watch_event must end up
+    pointing at the new slot, not orphaned at the old one."""
+    show = await add_show(client)
+    episode_id = await _insert_episode(migrated_db, show["id"])  # season 1, episode 1
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setEpisodeNumber(episodeId: $id, season: 1, episode: 6)"
+        " { season episode } }",
+        {"id": episode_id},
+        headers=auth_headers(),
+    )
+
+    conn = db.get_connection()
+    events = conn.execute(
+        "SELECT season, episode FROM watch_event WHERE show_id = ?", (show["id"],)
+    ).fetchall()
+    assert [(e["season"], e["episode"]) for e in events] == [(1, 6)]
+
+
+async def test_set_episode_number_leaves_season_entity_unmatched_with_no_season_row(
+    client, migrated_db
+):
+    show = await add_show(client)
+    episode_id = await _insert_episode(migrated_db, show["id"])  # season 1, episode 1
+    data = await gql(
+        client,
+        "mutation($id: ID!) { setEpisodeNumber(episodeId: $id, season: 2, episode: 1)"
+        " { seasonEntity { id } } }",
+        {"id": episode_id},
+        headers=auth_headers(),
+    )
+    assert data["setEpisodeNumber"]["seasonEntity"] is None
+
+
+async def test_set_episode_number_matches_an_existing_season_row(client, migrated_db):
+    show = await add_show(client)
+    episode_id = await _insert_episode(migrated_db, show["id"])  # season 1, episode 1
+    season2_id = await gql(
+        client,
+        "mutation($id: ID!, $s: Int!) { setSeasonMapping(showId: $id, seasonNumber: $s) { id } }",
+        {"id": show["id"], "s": 2},
+        headers=auth_headers(),
+    )
+    season2_id = season2_id["setSeasonMapping"]["id"]
+
+    data = await gql(
+        client,
+        "mutation($id: ID!) { setEpisodeNumber(episodeId: $id, season: 2, episode: 1)"
+        " { seasonEntity { id } } }",
+        {"id": episode_id},
+        headers=auth_headers(),
+    )
+    assert data["setEpisodeNumber"]["seasonEntity"]["id"] == season2_id
+
+
+async def test_set_episode_number_rejects_unknown_episode(client):
+    resp = await client.post(
+        "/",
+        json={
+            "query": "mutation($id: ID!) { setEpisodeNumber(episodeId: $id, season: 1, episode: 1)"
+            " { id } }",
+            "variables": {"id": "e-nope001"},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "no such episode" in body["errors"][0]["message"]
 
 
 async def test_set_episode_runtime_override(client, migrated_db):
@@ -8248,6 +8765,17 @@ AUDIT_LOCAL_FILES = """
     }
 """
 
+AUDIT_LOCAL_FILES_FOR_SHOW = """
+    mutation($id: ID!) {
+      auditLocalFilesForShow(showId: $id) {
+        episodesCorrected
+        showsCorrected
+        orphanFiles { showId path parsedSeason parsedEpisode }
+        untrackedShows { service title externalId path }
+      }
+    }
+"""
+
 RECOMMENDED_INTERVAL_QUERY = """
     query { recommendedAvailabilityPollIntervalSeconds }
 """
@@ -8354,6 +8882,33 @@ async def test_audit_local_files_wiring_returns_empty_with_nothing_configured(cl
         "orphanFiles": [],
         "untrackedShows": [],
     }
+
+
+async def test_audit_local_files_for_show_wiring_returns_empty_with_nothing_configured(client):
+    # Same not-configured no-op guard as auditLocalFiles above — the actual
+    # per-show reconciliation logic is test_local_audit.py's job
+    # (audit_local_files_for_show); this only locks in that the mutation is
+    # wired through with the right showId arg and result shape.
+    show = await add_show(client)
+    data = await gql(
+        client, AUDIT_LOCAL_FILES_FOR_SHOW, {"id": show["id"]}, headers=auth_headers()
+    )
+    assert data["auditLocalFilesForShow"] == {
+        "episodesCorrected": 0,
+        "showsCorrected": 0,
+        "orphanFiles": [],
+        "untrackedShows": [],
+    }
+
+
+async def test_audit_local_files_for_show_raises_for_an_unknown_show(client):
+    resp = await client.post(
+        "/",
+        json={"query": AUDIT_LOCAL_FILES_FOR_SHOW, "variables": {"id": "s-nope"}},
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "no such show" in body["errors"][0]["message"]
 
 
 PREVIEW_SHOW_BACKFILL = """

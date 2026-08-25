@@ -272,16 +272,54 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
             )
 
 
+def _push_season_started_at(conn, season_id: str, anilist_id: int | None, started_at: str) -> None:
+    """AniList push half of `_stamp_season_started_at` below — the
+    write-mirror gap logged in todo.md (archive/todo.md:1013):
+    `SaveMediaListEntry`'s `startedAt` takes a `FuzzyDateInput`, a
+    different shape from every other param this write-mirror pushes,
+    which is why it was left unwired when started_at/completed_at were
+    first built (2026-08-16) even though the local column was. Same
+    no-op-before-login/no-op-unlinked/best-effort/pending_review-on-
+    failure shape as `_push_season_score`."""
+    if anilist_id is None:
+        return
+    cfg = config.get_current()
+    if not cfg.anilist_access_token:
+        return
+    try:
+        anilist_client.save_media_list_entry(
+            cfg.anilist_access_token, anilist_id, started_at=started_at
+        )
+    except anilist_client.AniListError as e:
+        pending_review.open_or_extend(
+            conn, "season", season_id, "anilist_push", "anilist", None, str(e)
+        )
+
+
 def _stamp_season_started_at(
-    conn, show_id: str, season_number: int | None, watched_at: str
+    conn, show_id: str, season_number: int | None, watched_at: str, push: bool = True
 ) -> None:
     """Write-mirror function set, todo.md (2026-08-16) — LCARS's own
-    local `started_at` capture, not an AniList push: the date of this
-    season's first-ever watched episode, per the user's own rule.
-    Written once (`WHERE started_at IS NULL`) so a later
+    local `started_at` capture, the date of this season's first-ever
+    watched episode, per the user's own rule; also pushes it on to
+    AniList (`_push_season_started_at` above) now that todo.md's
+    FuzzyDateInput gap is closed. Written once (`WHERE started_at IS
+    NULL`, checked here rather than folded into the UPDATE so the
+    already-fetched row can be reused for the push) so a later
     deleteWatchEvent/re-mark of that same episode never moves the
-    date. No-ops for a movie watch event (season is None, movies have
-    no season row) or a season LCARS doesn't have a row for yet.
+    date, and a re-mark never re-pushes either. No-ops for a movie
+    watch event (season is None, movies have no season row) or a
+    season LCARS doesn't have a row for yet.
+
+    `push=False` (only `_bulk_mark_all_aired_episodes_watched` passes
+    this) covers a real corruption risk found in review: that caller's
+    `watched_at` is a synthesized "now" (the moment a show got manually
+    marked completed today), not a real historical watch date — pushing
+    that as `startedAt` would overwrite AniList's own, possibly-genuine
+    value with today's date for every season that had none locally yet.
+    LCARS still captures its own local value either way (this function's
+    entire local-write half is unconditional) — only the AniList push
+    is suppressed for this one synthetic-date caller.
 
     Deliberately scoped to LCARS-originated watch mutations only
     (addWatchEvent/markSeasonWatched/markEpisodeRangeWatched, each
@@ -291,11 +329,41 @@ def _stamp_season_started_at(
     logged as a known boundary in todo.md, not silently missed."""
     if season_number is None:
         return
+    season = conn.execute(
+        "SELECT id, anilist_id, started_at FROM season WHERE show_id = ? AND season_number = ?",
+        (show_id, season_number),
+    ).fetchone()
+    if season is None or season["started_at"] is not None:
+        return
     conn.execute(
-        "UPDATE season SET started_at = ?, updated_at = ?"
-        " WHERE show_id = ? AND season_number = ? AND started_at IS NULL",
-        (watched_at, util.now_utc_iso(), show_id, season_number),
+        "UPDATE season SET started_at = ?, updated_at = ? WHERE id = ?",
+        (watched_at, util.now_utc_iso(), season["id"]),
     )
+    if push:
+        _push_season_started_at(conn, season["id"], season["anilist_id"], watched_at)
+
+
+def _push_season_completed_at(
+    conn, season_id: str, anilist_id: int | None, completed_at: str
+) -> None:
+    """AniList push half of `_stamp_completed_at_if_highest_season`/
+    `_try_complete_season` below — same todo.md FuzzyDateInput gap
+    `_push_season_started_at` closes, for the other of the two fields.
+    Same no-op-before-login/no-op-unlinked/best-effort/pending_review-
+    on-failure shape."""
+    if anilist_id is None:
+        return
+    cfg = config.get_current()
+    if not cfg.anilist_access_token:
+        return
+    try:
+        anilist_client.save_media_list_entry(
+            cfg.anilist_access_token, anilist_id, completed_at=completed_at
+        )
+    except anilist_client.AniListError as e:
+        pending_review.open_or_extend(
+            conn, "season", season_id, "anilist_push", "anilist", None, str(e)
+        )
 
 
 def _stamp_completed_at_if_highest_season(conn, show_id: str, new_status: str) -> None:
@@ -306,18 +374,19 @@ def _stamp_completed_at_if_highest_season(conn, show_id: str, new_status: str) -
     narrower "highest linked season" concept watch_reconcile.py's own
     reconcile_watch_progress uses for a genuinely different purpose,
     deciding which season's AniList status is authoritative to *read*
-    from; this is a plain local write, no AniList entry needed to pick
-    a target). `show.status` is show-wide but `completed_at` is
-    per-season (§5.5's split-cour model), so only the season that's
-    actually finishing gets stamped — a multi-season show's earlier,
-    already-finished seasons keep whatever completed_at they already
-    have, untouched. Written once (`WHERE completed_at IS NULL`); a
-    later drop-then-complete-again doesn't move an already-recorded
-    date."""
+    from; the local write itself needs no AniList entry to pick a
+    target, but the push below — `_push_season_completed_at` — is a
+    genuine no-op on an unlinked highest season). `show.status` is
+    show-wide but `completed_at` is per-season (§5.5's split-cour
+    model), so only the season that's actually finishing gets stamped
+    — a multi-season show's earlier, already-finished seasons keep
+    whatever completed_at they already have, untouched. Written once
+    (`WHERE completed_at IS NULL`); a later drop-then-complete-again
+    doesn't move an already-recorded date or re-push it."""
     if new_status != "completed":
         return
     highest = conn.execute(
-        "SELECT id, completed_at FROM season WHERE show_id = ?"
+        "SELECT id, anilist_id, completed_at FROM season WHERE show_id = ?"
         " ORDER BY season_number DESC LIMIT 1",
         (show_id,),
     ).fetchone()
@@ -328,6 +397,7 @@ def _stamp_completed_at_if_highest_season(conn, show_id: str, new_status: str) -
         "UPDATE season SET completed_at = ?, updated_at = ? WHERE id = ?",
         (now, now, highest["id"]),
     )
+    _push_season_completed_at(conn, highest["id"], highest["anilist_id"], now)
 
 
 # -- bidirectional completion auto-sync (write-mirror, todo.md 2026-08-16) --
@@ -375,9 +445,14 @@ def _try_complete_season(conn, show_id: str, season_number: int, completed_at: s
     (write-once, same guard `_stamp_completed_at_if_highest_season`
     already uses). Returns whether it actually stamped anything, so a
     caller can tell "already complete" apart from "just completed" if
-    it ever needs to."""
+    it ever needs to. Also pushes the new completed_at on to AniList
+    (`_push_season_completed_at`) whenever it actually stamps — this is
+    the forward/auto-complete path, so unlike
+    `_stamp_completed_at_if_highest_season` (setStatus's manual path)
+    it fires for every completing season, not just the highest one."""
     season = conn.execute(
-        "SELECT id, completed_at FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT id, anilist_id, completed_at FROM season"
+        " WHERE show_id = ? AND season_number = ?",
         (show_id, season_number),
     ).fetchone()
     if season is None or season["completed_at"] is not None:
@@ -393,6 +468,7 @@ def _try_complete_season(conn, show_id: str, season_number: int, completed_at: s
         "UPDATE season SET completed_at = ?, updated_at = ? WHERE id = ?",
         (completed_at, util.now_utc_iso(), season["id"]),
     )
+    _push_season_completed_at(conn, season["id"], season["anilist_id"], completed_at)
     return True
 
 
@@ -460,10 +536,25 @@ def _bulk_mark_all_aired_episodes_watched(conn, show_id: str) -> None:
     aired would be false no matter how the caller answered the warning
     prompt (setStatus's own `confirmed` argument only gates *whether
     the status change itself proceeds*, not what this function is
-    willing to mark). Pushes each touched season's progress and
-    `started_at` too, same as every other real watch mutation — an
-    auto-completed show whose AniList entry still shows old progress
-    would be its own new inconsistency otherwise."""
+    willing to mark). Pushes each touched season's progress, same as
+    every other real watch mutation — an auto-completed show whose
+    AniList entry still shows old progress would be its own new
+    inconsistency otherwise. `started_at` is captured locally
+    (`_stamp_season_started_at`) but deliberately NOT pushed to AniList
+    from here (`push=False`) — `now` is a synthesized "marked completed
+    today" timestamp, not a real historical watch date, and pushing it
+    would silently overwrite AniList's own possibly-genuine `startedAt`
+    with today's date for every season that had none locally yet.
+
+    No equivalent suppression for `completed_at`, deliberately: this
+    same `now` (passed on as `completed_at` to the `_try_complete_season`
+    calls setStatus's own caller loop makes right after this function
+    returns) genuinely *is* the correct value there, not a guess — the
+    migration's own definition is "the date show.status became
+    'completed'", and that's exactly what just happened, this instant.
+    `started_at` and `completed_at` differ in kind here: one estimates a
+    past event this function has no real record of, the other stamps
+    the event this function's own caller is causing right now."""
     now = util.now_utc_iso()
     to_mark = conn.execute(
         "SELECT id, season, episode FROM episode"
@@ -483,7 +574,7 @@ def _bulk_mark_all_aired_episodes_watched(conn, show_id: str) -> None:
         )
         touched_seasons.add(ep["season"])
     for season_number in touched_seasons:
-        _stamp_season_started_at(conn, show_id, season_number, now)
+        _stamp_season_started_at(conn, show_id, season_number, now, push=False)
         _push_show_episode_progress(conn, show_id, season_number)
 
 
@@ -1784,6 +1875,19 @@ def resolve_audit_local_files(_, info):
     return local_audit.audit_local_files(conn)
 
 
+@mutation.field("auditLocalFilesForShow")
+def resolve_audit_local_files_for_show(_, info, show_id):
+    """NEXT_UP.md, 2026-08-19 — the per-show scope of auditLocalFiles
+    above; see schema.graphql's own docstring for the full rationale.
+    `_require_show` raises for an unknown show_id — local_audit.py's
+    own function trusts a valid id and just returns the empty result
+    for every other "nothing to correct against" case (no link, service
+    not configured, id unknown to Sonarr/Radarr itself)."""
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    return local_audit.audit_local_files_for_show(conn, show_id)
+
+
 @query.field("previewShowBackfill")
 def resolve_preview_show_backfill(_, info):
     """§5.1/§5.2, B.11d — dry-run, no writes. See show_backfill.py's
@@ -2778,6 +2882,68 @@ def resolve_set_episode_air_date(_, info, episode_id, air_date_utc):
             now,
             client,
         ),
+    )
+    conn.commit()
+    return _get_episode(conn, episode_id)
+
+
+@mutation.field("setEpisodeNumber")
+def resolve_set_episode_number(_, info, episode_id, season, episode):
+    """archive/todo.md:1209, closed 2026-08-25 — schema.graphql's own
+    docstring on `setEpisodeNumber` has the full rationale. Only ever
+    writes `season`/`episode`/`season_id`/`updated_at` — never
+    `sonarr_season`/`sonarr_episode` (metadata.py's own Sonarr-fetch
+    resync-identity columns; immutable by design once captured, that's
+    the entire point) or `absolute_number` (a separate, already-durable
+    correction the multi-show Sonarr sync path keys on instead — no
+    duplicate-row risk to guard against there, so no reason to fold it
+    into this mutation).
+
+    Reject-on-conflict, not swap/shift: a caller wanting to shift a
+    whole run of episodes makes one call per episode, same two-level
+    shape `a`/`A` (setEpisodeAirDate, plus `~/repos/data`'s own "shift
+    all subsequent" client-side loop) already established for air-date
+    correction — not duplicated here since nothing about *this*
+    mutation needs a bulk variant of its own yet (no concrete case on
+    record the way air-date drift had).
+
+    `PRAGMA defer_foreign_keys` (reset automatically at the next
+    commit/rollback per SQLite's own documented behavior, confirmed
+    live before relying on it) is required here, not optional: the
+    episode/watch_event pair below is a genuine chicken-and-egg update
+    under the composite `watch_event` FK (§5.3) — updating either
+    table first, with immediate per-statement FK checking, raises
+    `FOREIGN KEY constraint failed` regardless of which one goes
+    first, since each side transiently references a key the other
+    side hasn't been written to yet mid-transaction."""
+    conn = db.get_connection()
+    row = _require_episode(conn, episode_id)
+    show_id = row["show_id"]
+    if row["season"] == season and row["episode"] == episode:
+        return row  # already at this slot — no-op, not an error
+    conflict = conn.execute(
+        "SELECT id FROM episode WHERE show_id = ? AND season = ? AND episode = ? AND id != ?",
+        (show_id, season, episode, episode_id),
+    ).fetchone()
+    if conflict is not None:
+        raise GraphQLError(
+            f"S{season:02}E{episode:02} is already occupied by episode {conflict['id']}"
+            " on this show — move it out of the way first"
+        )
+    season_row = conn.execute(
+        "SELECT id FROM season WHERE show_id = ? AND season_number = ?", (show_id, season)
+    ).fetchone()
+    new_season_id = season_row["id"] if season_row is not None else None
+    now = util.now_utc_iso()
+    conn.execute("PRAGMA defer_foreign_keys = ON")
+    conn.execute(
+        "UPDATE episode SET season = ?, episode = ?, season_id = ?, updated_at = ? WHERE id = ?",
+        (season, episode, new_season_id, now, episode_id),
+    )
+    conn.execute(
+        "UPDATE watch_event SET season = ?, episode = ?"
+        " WHERE show_id = ? AND season = ? AND episode = ?",
+        (season, episode, show_id, row["season"], row["episode"]),
     )
     conn.commit()
     return _get_episode(conn, episode_id)

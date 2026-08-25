@@ -499,6 +499,20 @@ def exchange_code(
             client.close()
 
 
+def _fuzzy_date_input(iso_timestamp: str) -> dict[str, int]:
+    """AniList's `FuzzyDateInput` shape (`{year, month, day}` plain
+    ints, no time component) — the one `SaveMediaListEntry` param shape
+    that isn't a scalar (confirmed via schema introspection; see
+    save_media_list_entry's own docstring for the todo.md gap this
+    closes). LCARS's own `started_at`/`completed_at` columns are full
+    ISO-8601 UTC timestamps (same TEXT convention as every other
+    timestamp column, e.g. util.now_utc_iso()), so this just splits the
+    leading `YYYY-MM-DD` off and parses it — a whole-day-granularity
+    value needs no real timezone conversion."""
+    year, month, day = (int(p) for p in iso_timestamp[:10].split("-"))
+    return {"year": year, "month": month, "day": day}
+
+
 def save_media_list_entry(
     token: str,
     anilist_id: int,
@@ -506,16 +520,23 @@ def save_media_list_entry(
     score: float | None = None,
     progress: int | None = None,
     repeat: int | None = None,
+    started_at: str | None = None,
+    completed_at: str | None = None,
     client: httpx.Client | None = None,
 ) -> dict:
     """§6.1/§6.8, extended for the LCARS->AniList write-mirror (see
     todo.md's full function enumeration): the actual push.
-    `status`/`score`/`progress`/`repeat` are each omitted from the
-    mutation's variables (not just passed as null) unless explicitly
-    given — same reasoning as Data's own save_media_list_entry():
-    GraphQL treats an explicit null for an optional argument as "unset
-    this", not "leave it alone", so e.g. a progress-only push must
-    never accidentally reset score/status (and vice versa).
+    `status`/`score`/`progress`/`repeat`/`started_at`/`completed_at`
+    are each omitted from the mutation's variables (not just passed as
+    null) unless explicitly given — same reasoning as Data's own
+    save_media_list_entry(): GraphQL treats an explicit null for an
+    optional argument as "unset this", not "leave it alone", so e.g. a
+    progress-only push must never accidentally reset score/status (and
+    vice versa). `started_at`/`completed_at` take the same ISO-8601 UTC
+    TEXT strings LCARS's own `season.started_at`/`season.completed_at`
+    columns store — converted to AniList's `FuzzyDateInput` shape via
+    `_fuzzy_date_input` above (todo.md: this shape, not checked in
+    detail before, is exactly why the push wasn't wired sooner).
     `SaveMediaListEntry` keys on `mediaId` alone (AniList upserts the
     viewer's own list entry for that media, no entry id needed here —
     DeleteMediaListEntry is the one call in this family that needs the
@@ -540,6 +561,12 @@ def save_media_list_entry(
     if repeat is not None:
         fields.append("$repeat: Int")
         variables["repeat"] = repeat
+    if started_at is not None:
+        fields.append("$startedAt: FuzzyDateInput")
+        variables["startedAt"] = _fuzzy_date_input(started_at)
+    if completed_at is not None:
+        fields.append("$completedAt: FuzzyDateInput")
+        variables["completedAt"] = _fuzzy_date_input(completed_at)
     var_defs = ", ".join(["$mediaId: Int", *fields])
     args = ", ".join(
         ["mediaId: $mediaId"]
@@ -547,6 +574,8 @@ def save_media_list_entry(
         + (["score: $score"] if score is not None else [])
         + (["progress: $progress"] if progress is not None else [])
         + (["repeat: $repeat"] if repeat is not None else [])
+        + (["startedAt: $startedAt"] if started_at is not None else [])
+        + (["completedAt: $completedAt"] if completed_at is not None else [])
     )
     mutation = f"""
     mutation ({var_defs}) {{
