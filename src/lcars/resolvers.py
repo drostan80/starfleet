@@ -21,7 +21,7 @@ logic (relationships, computed values, paginated connections).
 import json
 import urllib.parse
 
-from ariadne import EnumType, MutationType, ObjectType, QueryType
+from ariadne import EnumType, MutationType, ObjectType, QueryType, SubscriptionType
 from graphql import GraphQLError
 
 from lcars import (
@@ -31,6 +31,7 @@ from lcars import (
     config,
     db,
     episode_movie_link,
+    events,
     export_import,
     fuzzy,
     ids,
@@ -55,6 +56,7 @@ from lcars import (
 
 query = QueryType()
 mutation = MutationType()
+subscription = SubscriptionType()
 show_type = ObjectType("Show")
 episode_type = ObjectType("Episode")
 watch_event_type = ObjectType("WatchEvent")
@@ -116,6 +118,7 @@ ENUMS = [
 BINDABLES = [
     query,
     mutation,
+    subscription,
     show_type,
     episode_type,
     watch_event_type,
@@ -3443,3 +3446,35 @@ def resolve_import_data(_, info, json):
         "episodes_imported": counts.get("episode", 0),
         "watch_events_imported": counts.get("watch_event", 0),
     }
+
+
+# -- outbound push, "webhook push to clients" design, 2026-08-25 ------------
+# See schema.graphql's own `type Subscription` docstring and
+# lcars/events.py's module docstring for the full design rationale.
+# Each `.source` generator below just adapts events.subscribe(topic)'s
+# raw payload (an id) into the same row-dict shape resolve_show/
+# resolve_episode already return, reusing _get_show/_get_episode rather
+# than duplicating that lookup — a subscriber sees exactly the same
+# Show/Episode object shape a query for the same id would return.
+
+
+@subscription.source("episodeAvailabilityChanged")
+async def source_episode_availability_changed(_, info):
+    async for episode_id in events.subscribe("episode_availability_changed"):
+        yield episode_id
+
+
+@subscription.field("episodeAvailabilityChanged")
+def resolve_episode_availability_changed(episode_id, info):
+    return _get_episode(db.get_connection(), episode_id)
+
+
+@subscription.source("showCreated")
+async def source_show_created(_, info):
+    async for show_id in events.subscribe("show_created"):
+        yield show_id
+
+
+@subscription.field("showCreated")
+def resolve_show_created(show_id, info):
+    return _get_show(db.get_connection(), show_id)

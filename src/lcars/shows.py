@@ -25,7 +25,16 @@ primarily on TMDB... but [episodic shows] carry ... TMDB ids too where
 they exist."
 """
 
-from lcars import config, ids, metadata, radarr_client, service_health, sonarr_client, util
+from lcars import (
+    config,
+    events,
+    ids,
+    metadata,
+    radarr_client,
+    service_health,
+    sonarr_client,
+    util,
+)
 
 _EXTERNAL_ID_URL_TEMPLATES = {
     "anilist": "https://anilist.co/anime/{id}",
@@ -132,6 +141,12 @@ def _promote_stub(conn, show_id: str, input: dict) -> str:
             (show_id, str(tmdb_id), url, now),
         )
     conn.commit()
+    # events.py, 2026-08-25 — "genuinely new to the client" from the
+    # outside the moment `tracked` flips to 1, same as create_show's own
+    # brand-new-row case below; published after this commit (unlike
+    # availability.py's own narrower race, there's nothing left in this
+    # function that could still fail and roll this UPDATE back).
+    events.publish("show_created", show_id)
     metadata.fetch_and_populate(conn, show_id)
     conn.commit()
     return show_id
@@ -222,6 +237,7 @@ def create_show(conn, input: dict) -> str:
         )
 
     conn.commit()
+    events.publish("show_created", show_id)  # events.py, 2026-08-25 — see _promote_stub's own note
 
     # A.8 — the on-demand metadata fetch itself, best-effort (see
     # metadata.py's own docstring: never raises, failures go to

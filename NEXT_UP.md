@@ -153,6 +153,89 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `test_audit_local_files_uses_a_long_client_timeout`, mirroring
       `test_backfill_availability_uses_a_long_client_timeout` exactly. `~/repos/starfleet` full
       suite 891 passed, ruff clean. **Not deployed yet.**
+- [x] LCARS→clients webhook push (user's own idea, 2026-08-17, parked for their own research —
+      see the old parked entry this replaces), designed and built 2026-08-25 after the user
+      brought it back with two concrete cases: mirror the missing/downloading/available episode
+      transitions LCARS already receives from Sonarr/Radarr webhooks, and push a newly-added show
+      into a client's calendar immediately. Discussed with the user first, not built straight
+      off the idea: "webhook" turned out to mean two different shapes — LCARS POSTing to a URL a
+      client runs its own listener for (mirrors the Sonarr→LCARS direction exactly, but Data has
+      never run a listener and never needed to accept inbound connections before), or a GraphQL
+      subscription over WebSocket, where the client connects *out* to LCARS and holds the
+      connection open, same direction every other call it already makes. Laid out safest/
+      resource-cost/quickest-to-ship for both plus the separate "missed event while
+      disconnected" question; user chose subscription + "fine to miss" (no replay/backlog for a
+      client that wasn't connected when an event fired — every consumer already has its own
+      periodic poll as the real source of truth).
+
+      `~/repos/starfleet`: new module `lcars/events.py` — a tiny in-process pub/sub (topic ->
+      set of `asyncio.Queue`s), fire-and-forget, bounded queues (a stalled subscriber drops new
+      events rather than blocking the publisher or growing unbounded). New `type Subscription`
+      in schema.graphql: `episodeAvailabilityChanged` (fires only on a genuine status
+      transition, not a same-status re-poll/re-webhook — `availability.py`'s
+      `_apply_episode_availability`/`_apply_episode_availability_multi_show` now compare against
+      the row's prior value before publishing) and `showCreated` (fires from `shows.py`'s
+      `create_show`/`_promote_stub`, both real "genuinely new to the client" moments, right
+      after their own commit). `ariadne.asgi.GraphQL` wired with `GraphQLTransportWSHandler`
+      explicitly (the current graphql-transport-ws subprotocol, not ariadne's own default
+      `GraphQLWSHandler`, which speaks the older/deprecated one).
+
+      Real security gap found and closed while building this, not assumed: `BearerTokenMiddleware`
+      only ever checked `scope["type"] == "http"`, silently letting *any other* scope type
+      through unauthenticated — harmless while GraphQL only ever answered plain HTTP, but would
+      have left the new WS endpoint wide open the moment `type Subscription` existed. Now covers
+      `websocket` scope too (reads the same `Authorization` header via `Headers(scope=scope)` —
+      `Request(scope, receive)` asserts `scope["type"] == "http"` internally, an undocumented
+      constraint found by hitting it), denying a bad/missing token with `websocket.close` code
+      4401 before the handshake ever completes.
+
+      Two more real findings from advisor review, both fixed: the migration's own claim that a
+      publish-before-commit race in `_apply_episode_availability` "self-corrects via `_get_episode`"
+      was wrong — `~/repos/data`'s actual handler never re-queries the episode, it re-fetches the
+      whole visible window instead; docstring corrected to describe what actually consumes the
+      event. And a reconnect-resubscribe gap: `subscribe_events` re-sends the same subscription
+      ids after a dropped connection, which is correct (graphql-transport-ws ids are scoped per
+      connection) but wasn't actually tested — added a two-good-connections test confirming both
+      get subscribed, not just the first.
+
+      Cleanup-on-disconnect verified, not assumed: `websockets`'s own reconnecting client wraps
+      each connection in `async with`, so a cancelled task properly closes the socket via
+      `__aexit__`; a real end-to-end test confirms the server-side `events._subscribers` queue
+      is actually deregistered after a client disconnects, not just on an explicit `aclose()`.
+
+      Real regression found and fixed before it ever shipped: the subscription worker is a
+      persistent, intentionally-never-completing connection — using `self.run_worker(...)` for
+      it (matching every other background job in `~/repos/data`'s `on_mount`) would have hung
+      `app.workers.wait_for_complete()` forever in *every* existing test file that configures an
+      `lcars_client`, since that bare call awaits every tracked Worker unconditionally. Switched
+      to a bare `asyncio.Task` (outside Textual's Worker tracking entirely), explicitly cancelled
+      in a new `on_unmount` handler — confirmed against the whole existing `~/repos/data` suite,
+      not just the new tests.
+
+      `~/repos/data`: new dependency `websockets>=13` (a genuinely new runtime dependency, not
+      already vendored anywhere in this client). `LcarsClient.subscribe_events()` — hand-rolls
+      the graphql-transport-ws message protocol (connection_init/ack, subscribe/next/error/ping-
+      pong) over `websockets.connect`'s own built-in reconnect-with-backoff iterator, rather than
+      a hand-rolled retry loop. `app.py`'s `_lcars_subscription_worker` doesn't care *what*
+      changed, just that something did — every event reuses the exact same
+      `_trigger_lcars_window_refresh()` call the periodic polls already make, one source of
+      truth for "what the calendar shows," not a second rendering path.
+
+      27 new tests across both repos: `~/repos/starfleet` — 6 `test_events.py`, 6
+      `test_subscriptions.py` (real WS end-to-end: auth accept/reject, handshake, delivery via a
+      real webhook POST and a real `addShow` mutation — not raw DB pokes — plus the disconnect-
+      cleanup test above), 2 `test_availability.py` (publish-on-genuine-change-only, both
+      directions). `~/repos/data` — 7 `test_lcars_client.py` (`subscribe_events`'s own message
+      handling, ping/pong, error tolerance, reconnect + resubscribe), 4
+      `test_app_lcars_subscription_wiring.py`. `~/repos/starfleet` full suite 905 passed,
+      `~/repos/data` full suite 505 passed, ruff clean both repos.
+
+      **Not deployed yet** — starfleet's undeployed queue is now five items (this one plus the
+      four above: started_at/completed_at push, per-show audit trigger, episode renumbering,
+      ops audit-local-files timeout), still carrying migration `36bbe45d39f3` — snapshot the DB
+      first, same as noted on the episode-renumbering entry. `~/repos/data`'s `websockets>=13`
+      dependency needs `pip install -e .` (or equivalent) on next deploy of the client itself,
+      not just a git pull.
 - [x] Show-detail view: seasons with all episodes, mark watched per-episode and per-season,
       move status/score at the show/season level individually — built in `~/repos/data`
       (`show_detail_screen.py`, `enter` on the show browser), 2026-08-18.
@@ -401,7 +484,6 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `episode`? First read: `season` already answers most of this.
 - [ ] Open question: does `show.studio` deserve an id-prefix like other entities, for
       "browse by studio"?
-- [ ] LCARS→clients webhook push — future idea, don't start unprompted.
 - [ ] If a tracked show gets delayed, check livechart.me/feeds/headlines (or its /search)
       for a matching headline — manual only, not automated.
 - [ ] animeschedule.net's real API v3 (`/anime/{slug}`, `/timetables/{airType}`) as a second

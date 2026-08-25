@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from lcars import availability, config, radarr_client, service_health, sonarr_client, util
+from lcars import availability, config, events, radarr_client, service_health, sonarr_client, util
 
 
 @pytest.fixture
@@ -416,6 +416,34 @@ def test_sonarr_webhook_download_sets_available_with_path(conn):
     assert row["available_via_sonarr"] == "available"
     assert row["available_locally"] == 1
     assert row["file_path_sonarr"] == "/data/real.mkv"
+
+
+def test_sonarr_webhook_grab_publishes_episode_availability_changed(conn, monkeypatch):
+    # events.py, 2026-08-25 ("webhook push to clients" design) — the
+    # actual publish-on-genuine-transition behavior, at the level it
+    # belongs: no ASGI/WS/threading involved, just the function call.
+    # See test_subscriptions.py for the real wire-level delivery coverage.
+    published = []
+    monkeypatch.setattr(
+        events, "publish", lambda topic, payload: published.append((topic, payload))
+    )
+    _add_show(conn, "s-whk099", tvdb_id=457078)
+    _add_episode(conn, "e-whk099", "s-whk099")
+    availability.apply_sonarr_webhook(conn, _sonarr_webhook("Grab"))
+    assert published == [("episode_availability_changed", "e-whk099")]
+
+
+def test_sonarr_webhook_re_grab_does_not_republish_the_same_status(conn, monkeypatch):
+    published = []
+    monkeypatch.setattr(
+        events, "publish", lambda topic, payload: published.append((topic, payload))
+    )
+    _add_show(conn, "s-whk098", tvdb_id=457078)
+    _add_episode(conn, "e-whk098", "s-whk098")
+    availability.apply_sonarr_webhook(conn, _sonarr_webhook("Grab"))  # unavailable -> downloading
+    published.clear()
+    availability.apply_sonarr_webhook(conn, _sonarr_webhook("Grab"))  # downloading -> downloading
+    assert published == []
 
 
 def test_sonarr_webhook_multi_episode_payload_updates_every_episode(conn):

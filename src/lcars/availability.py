@@ -127,7 +127,7 @@ checked.
 
 import logging
 
-from lcars import radarr_client, service_health, sonarr_client, util
+from lcars import events, radarr_client, service_health, sonarr_client, util
 from lcars.config import get_current
 
 logger = logging.getLogger("lcars.availability")
@@ -244,9 +244,37 @@ def _apply_episode_availability(
     numbers, which is exactly this show's own numbering only when it
     isn't sharing its tvdb id with any sibling (§5.1's overwhelmingly
     common case). See `_apply_episode_availability_multi_show` for the
-    shared-tvdb-id case, where that equivalence doesn't hold."""
+    shared-tvdb-id case, where that equivalence doesn't hold.
+
+    Publishes `episode_availability_changed` (events.py, 2026-08-25)
+    only when `status` genuinely differs from what was already stored —
+    every poll/webhook re-confirms the current state far more often than
+    it actually changes it, and a subscriber only wants to hear about
+    real transitions (schema.graphql's own Subscription docstring).
+
+    Known, narrow, unfixed boundary: this publishes before the caller's
+    own `conn.commit()` (both call sites commit once after a whole
+    batch/loop), so a *later* item in the same batch failing and rolling
+    back the transaction would roll back this row's UPDATE after an
+    already-published event already told a subscriber it changed.
+    Self-correcting in the overwhelmingly likely case, but not the way
+    resolve_episode_availability_changed's own payload is — that
+    resolver's `_get_episode` call happens on delivery, genuinely
+    reading whatever the row says at that instant, rolled back or not,
+    so it isn't itself the source of the correction. `~/repos/data`'s
+    real handler for this event never re-reads the episode at all — it
+    calls `_trigger_lcars_window_refresh()`, a full re-fetch of the
+    visible calendar window, which reads committed state same as any
+    other query would. A phantom event costs that one redundant fetch
+    (and, if delivery raced the rollback, one payload reflecting a
+    status that already reverted by then) — never a wrong value that
+    sticks. Consistent with this whole mechanism's own "fine to miss,
+    best-effort, not a correctness channel" design (events.py's module
+    docstring). Not worth a buffer-then-publish-after-commit refactor
+    for how rare a mid-batch failure here actually is."""
     row = conn.execute(
-        "SELECT id FROM episode WHERE show_id = ? AND season = ? AND episode = ?",
+        "SELECT id, available_via_sonarr FROM episode WHERE show_id = ? AND season = ?"
+        " AND episode = ?",
         (show_id, season, episode),
     ).fetchone()
     if row is None:
@@ -256,6 +284,8 @@ def _apply_episode_availability(
         " available_checked_at = ? WHERE id = ?",
         (status, path, util.now_utc_iso(), row["id"]),
     )
+    if row["available_via_sonarr"] != status:
+        events.publish("episode_availability_changed", row["id"])
     return row["id"]
 
 
@@ -287,10 +317,15 @@ def _apply_episode_availability_multi_show(
     fix's ongoing-sync counterpart — same matching key, same "episode
     without one is left alone" scope boundary metadata.py's own
     docstring already documents for specials/no-absolute-number
-    episodes."""
+    episodes.
+
+    Same `episode_availability_changed` publish-on-genuine-change-only
+    behavior as `_apply_episode_availability` above — see its own
+    docstring."""
     placeholders = ",".join("?" for _ in show_ids)
     row = conn.execute(
-        f"SELECT id FROM episode WHERE show_id IN ({placeholders}) AND absolute_number = ?",
+        f"SELECT id, available_via_sonarr FROM episode WHERE show_id IN ({placeholders})"
+        f" AND absolute_number = ?",
         (*show_ids, absolute_episode_number),
     ).fetchone()
     if row is None:
@@ -300,6 +335,8 @@ def _apply_episode_availability_multi_show(
         " available_checked_at = ? WHERE id = ?",
         (status, path, util.now_utc_iso(), row["id"]),
     )
+    if row["available_via_sonarr"] != status:
+        events.publish("episode_availability_changed", row["id"])
     return row["id"]
 
 

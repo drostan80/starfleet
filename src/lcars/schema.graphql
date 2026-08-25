@@ -1676,7 +1676,42 @@ type Mutation {
   importData(json: String!): ImportResult!
 }
 
+# -- outbound push, "webhook push to clients" design, 2026-08-25 -------------
+# GraphQL subscriptions over WebSocket, not a true outbound webhook —
+# every client (Data first; `ResolvedByClient`'s `holodeck`/
+# `captains_log` name the other two this schema already anticipates)
+# connects *out* to LCARS for these, same direction as every other call
+# it already makes, rather than LCARS needing to reach a listener on the
+# client's own machine. Fire-and-forget, no backlog/replay for a client
+# that wasn't connected when the event fired — see lcars/events.py's own
+# module docstring for the full "fine to miss" reasoning. A latency
+# optimization layered on top of each client's own existing poll/refresh
+# path, never the only way state reaches it.
+type Subscription {
+  """
+  Fires once per genuine availableViaSonarr/availableViaRadarr
+  transition on an episode (UNAVAILABLE<->DOWNLOADING<->AVAILABLE, any
+  direction — availability.py's own _apply_episode_availability(_multi_
+  show) only publishes when the new status actually differs from what
+  was already stored, so a same-status re-poll/re-webhook is silent
+  here, not a redundant fire). The one place both apply_sonarr_webhook/
+  apply_radarr_webhook and the ongoing poller funnel through.
+  """
+  episodeAvailabilityChanged: Episode!
+  """
+  Fires once a show becomes tracked for the first time — a brand new
+  row (addShow/addShowWithArr's own create_show path) or an untracked
+  stub getting promoted (_promote_stub, same "genuinely new to the
+  client" moment from the outside even though the row already existed).
+  The concrete case this whole mechanism was built for: mirroring a
+  newly-tracked show into a client's own calendar immediately rather
+  than waiting for its next periodic refresh.
+  """
+  showCreated: Show!
+}
+
 schema {
   query: Query
   mutation: Mutation
+  subscription: Subscription
 }

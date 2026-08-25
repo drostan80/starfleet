@@ -24,10 +24,13 @@ from importlib import resources
 
 from ariadne import make_executable_schema
 from ariadne.asgi import GraphQL
+from ariadne.asgi.handlers import GraphQLTransportWSHandler
+from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Mount, Route, Router
 from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.websockets import WebSocketClose
 
 from lcars import availability, config, db
 from lcars.resolvers import BINDABLES
@@ -54,7 +57,22 @@ class BearerTokenMiddleware:
     """§8 — single static bearer token auth. Plain ASGI middleware, not
     GraphQL-context-based: an auth failure is a transport-level 401, not
     a GraphQL-shaped error, so it belongs in front of the GraphQL app
-    entirely, not inside a resolver or context builder."""
+    entirely, not inside a resolver or context builder.
+
+    Covers `websocket` scope too, not just `http` — real gap found while
+    building the outbound-subscription mechanism (events.py, 2026-08-25,
+    "webhook push to clients" design): this used to let *any* scope type
+    other than `http` straight through unauthenticated, which was
+    harmless while GraphQL only ever answered plain HTTP requests but
+    would have left the new WS subscription endpoint wide open the
+    moment `type Subscription` existed. The WS handshake itself carries
+    plain HTTP headers (ASGI exposes them via `scope["headers"]` same as
+    an HTTP request) — a Python client can set an `Authorization` header
+    on a WS handshake same as any other request (unlike a browser's
+    `WebSocket` API, which can't; not a constraint here, every current
+    and anticipated client — Data/Holodeck/Captain's Log — is a Python
+    process), so this reuses the exact same header/comparison rather
+    than inventing a second, connection-init-payload-based scheme."""
 
     def __init__(self, app: ASGIApp, bearer_token: str | None) -> None:
         self._app = app
@@ -65,12 +83,25 @@ class BearerTokenMiddleware:
         self._expected = f"Bearer {bearer_token}" if bearer_token else None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] not in ("http", "websocket"):
             await self._app(scope, receive, send)
             return
-        request = Request(scope, receive)
-        presented = request.headers.get("authorization", "")
+        # Headers(scope=...) rather than Request(scope, receive): Request
+        # asserts scope["type"] == "http" in its own constructor (Starlette
+        # internals, not documented as a public constraint) — this is the
+        # one thing here that has to work for both scope types uniformly.
+        presented = Headers(scope=scope).get("authorization", "")
         if self._expected is None or not hmac.compare_digest(presented, self._expected):
+            if scope["type"] == "websocket":
+                # PlainTextResponse is an HTTP response type, doesn't know
+                # how to speak the WS ASGI sub-protocol — deny the
+                # handshake outright instead (Starlette's own denial
+                # shape, ASGI spec allows closing before ever accepting),
+                # same "closed before it ever opens" posture a 401 gives
+                # an HTTP request. 4401 is in the private-use range
+                # (4000-4999) the WS spec reserves for exactly this.
+                await WebSocketClose(code=4401)(scope, receive, send)
+                return
             response = PlainTextResponse("Unauthorized", status_code=401)
             await response(scope, receive, send)
             return
@@ -126,7 +157,17 @@ def build_app(
     radarr_webhook_secret: str | None = None,
 ) -> ASGIApp:
     schema = build_schema()
-    graphql_app = GraphQL(schema, context_value=_context_value)
+    # websocket_handler: explicit, not the default. Ariadne's own default
+    # is GraphQLWSHandler (the older, deprecated "graphql-ws" subprotocol
+    # — Apollo itself has moved off it for years) unless told otherwise;
+    # GraphQLTransportWSHandler speaks the current "graphql-transport-ws"
+    # subprotocol instead. Only matters from schema.graphql's `type
+    # Subscription` onward (2026-08-25, "webhook push to clients" design)
+    # — no subscription fields existed before that to make this decision
+    # visible at all.
+    graphql_app = GraphQL(
+        schema, context_value=_context_value, websocket_handler=GraphQLTransportWSHandler()
+    )
     protected_graphql = BearerTokenMiddleware(graphql_app, bearer_token)
     routes = [
         Route(
