@@ -429,10 +429,10 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       linking, never the Radarr root folder, which Radarr has just one of). Config on `tiny`
       already set: `radarr_root_folder = /data/media/movies`, quality profile 7. 4 new tests + all
       existing add-show sequences updated, `~/repos/data` full suite 510 passed, ruff clean,
-      committed `a729bae`. **First real Radarr write still unproven** — B.21's whole Radarr add
-      path (`client.add_movie`) has never executed against the live Radarr (the Sonarr half has,
-      since 2026-08-18 daily use); the natural proof is one real movie add by the user. No LCARS
-      deploy needed; `~/repos/data` runs from source, so this is live for the user immediately.
+      committed `a729bae`. **Verified live 2026-08-26** — the user did a real movie add through
+      `A`, confirmed working: this is the first time B.21's whole Radarr add path
+      (`client.add_movie`) has ever executed against the live Radarr (the Sonarr half had been
+      proven since 2026-08-18 daily use). No LCARS deploy needed; `~/repos/data` runs from source.
 - [x] Ascendance of a Bookworm audit, user-caught ("it is all wrong in lcars"), three real bugs:
       (1) `watch_reconcile.py`'s `reconcile_watch_progress` trusted AniList's raw progress/status
       wholesale with no air-date check — on 2026-08-15 it marked six not-yet-aired episodes
