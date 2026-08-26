@@ -342,8 +342,27 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       score/status changes to MAL on `setScore`/`setStatus`; the separate tool still covers the
       bulk/historical mirror for now. That growth is a *push/write* feature, distinct from PC.2's
       one-time *import*, so it lives under Ideas below, not here.
-- [ ] AniList `synonyms` field — last gap in LCARS's AniList read coverage (aninote
-      note-matching only).
+- [x] AniList `synonyms` field — last gap in LCARS's AniList read coverage, plus a per-show
+      display-title override (user's request 2026-08-26). Deployed v0.1.36. **Synonyms**: AniList
+      `Media.synonyms` → new `show_synonym` child table (delete-then-insert re-sync in metadata.py,
+      `UNIQUE(show_id, synonym)`; the list legitimately grows, unlike the write-once title columns),
+      exposed as `Show.synonyms`. Fed into the three places it earns its keep: aninote note-matching
+      candidate titles (`~/repos/data`, on-demand `show_detail` fetch at `n`-press), `service_presence`'s
+      fuzzy Sonarr/Radarr catalog matcher (the user's own case — a planned sequel sitting in Sonarr
+      under an arc/other-language name), and the `search` query (EXISTS subquery). No merge handling
+      (merge only demotes a loser, FK stays intact; winner re-syncs from AniList); added to
+      export_import + hard-delete purge. **Display title**: nullable `show.display_title_override`
+      + `setDisplayTitle` mutation; `displayTitle` = override if set, else `title_{primary_title}`
+      (default unchanged: english-first, romaji fallback). `_computed_display_title` shared by the
+      field and confirmHardDelete's retyped-title check. `~/repos/data`: `T` in show-detail opens a
+      picker over the show's titles+synonyms+custom+clear. Local-only, no AniList/MAL push. Migration
+      `b3f9c2a7d1e4`. LCARS suite 921 passed, Data 516 passed, ruff clean, `~/repos/starfleet`
+      `e0360f2` / `~/repos/data` `36e04a3`. **Verified live post-deploy**: score data intact
+      (1018 shows / 1109 seasons), `show_synonym` correctly empty (go-forward capture), then
+      refreshed Urusei Yatsura (anilist 1293) → synonyms `["...","Lamu","Lamù",...]` returned by the
+      real read path, and `setDisplayTitle` → it now displays as "Lamu" (the user's own example).
+      DB snapshot `lcars.db.bak-20260826-pre-v0.1.36-synonyms` taken before deploy. This tag also
+      carried the earlier PC.2 `anilist_client` score additions (score field + fetch_score_format).
 - [ ] `tracking_space`: allow a show to be tracked in more than one place at once (e.g.
       AniList and MAL simultaneously).
 - [ ] Hierarchical season subdivision for legitimate cross-source granularity mismatches
