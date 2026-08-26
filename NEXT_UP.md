@@ -643,4 +643,18 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       end.
 - [ ] AniList indexes a not-yet-aired season under its romaji title only — handle case-by-case
       as each season airs, not automated.
-- [ ] make sure changes made on client are sent immidiately to LCARS the buffer time was there from when data was talking to sonarr and anilist, not the case anymore. unless there is a reason to continue having this buffer ???
+- [x] Client changes now sent to LCARS immediately, not buffered (2026-08-26, `~/repos/data`
+      `7148d70`). The queue-then-flush buffer dated from when Data wrote to Sonarr/AniList directly;
+      Data only talks to LCARS now, so `w`/`m`-status/`S` flush the moment they're made instead of
+      waiting up to 5 min for the `_check_pending_flush` tick (quit/`b`/`P` still flush too). The
+      on-disk queue stays as the **offline-reliability fallback** — a change that can't reach LCARS
+      is saved and retried exactly as before, only the online latency changed (answer to the "unless
+      there is a reason to keep the buffer?" question: yes, keep it — but only for offline, not as a
+      routine delay). Two correctness pieces came with it: (1) every flush path now funnels through a
+      reentrancy-guarded `_flush_pending_lcars_change` (`_is_syncing`) — `flush_queue` sends each
+      watch_event then clears it, so overlapping flushes would insert a duplicate watch_event; the
+      guard serializes them and also closes a pre-existing timer-vs-`P` race; (2) the pending marker
+      had doubled as the optimistic-display source, so on a successful send the new status/score/
+      episode-state is now written into the local confirmed model too (else the row snapped back to
+      the stale value until the next refresh). Data-only, no LCARS change, no deploy — live on next
+      Data launch (runs from source). Full Data suite 516 passed.
