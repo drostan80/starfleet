@@ -332,8 +332,16 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       S3=NULL) and LCARS confirmed back up serving 200s. No LCARS server deploy needed; the
       `anilist_client` additions (`score` field + `fetch_score_format`) ship with the next tag,
       the import script rode along as a one-off and isn't baked into the image.
-- [ ] PC.2, MAL-legacy-scores half — import scores unique to MAL (i.e. no AniList entry to take
-      them from), the last remaining piece of PC.2's score import. (archive/BUILD_PLAN.md:4720)
+- [x] PC.2, MAL-legacy-scores half — resolved as *not needed*, 2026-08-26 (user's explicit call):
+      nothing is unique to MAL. The user mirrors MAL *from* AniList with a separate external tool,
+      so every MAL score already has an AniList origin — the AniList-score half above imported all
+      of it, and a "scores unique to MAL" import would find an empty set. This completes PC.2's
+      score import entirely (Trakt history + AniList scores done, MAL-unique a confirmed no-op).
+      Forward note: LCARS is intended to absorb the AniList→MAL mirroring itself over time — its
+      B.10 MAL push (`_push_mal_show_score`/`_push_mal_show_status`) already mirrors *new*
+      score/status changes to MAL on `setScore`/`setStatus`; the separate tool still covers the
+      bulk/historical mirror for now. That growth is a *push/write* feature, distinct from PC.2's
+      one-time *import*, so it lives under Ideas below, not here.
 - [ ] AniList `synonyms` field — last gap in LCARS's AniList read coverage (aninote
       note-matching only).
 - [ ] `tracking_space`: allow a show to be tracked in more than one place at once (e.g.
@@ -548,6 +556,12 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 
 ## Ideas / open questions
 
+- [ ] LCARS absorbs the AniList→MAL mirroring the user currently runs as a separate external tool
+      (2026-08-26). LCARS already push-mirrors *new* score/status changes to MAL (B.10,
+      `_push_mal_show_score`/`_push_mal_show_status` on setScore/setStatus); the gap is the
+      *bulk/historical* AniList→MAL sync the external tool does today. A future LCARS-native
+      mirror would make that tool redundant. Not urgent — the external tool works and nothing is
+      unique to MAL (see PC.2 above).
 - [ ] Catalog-wide `title_english`/`title_romaji` backfill (found 2026-08-24 auditing Bookworm
       Part 1, see the Build entry above for the full breakdown) — needs a real per-show AniList
       re-fetch + comparison tool (~300 shows share Part 1's exact corruption, ~700 more are just
