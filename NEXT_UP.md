@@ -363,11 +363,31 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       real read path, and `setDisplayTitle` → it now displays as "Lamu" (the user's own example).
       DB snapshot `lcars.db.bak-20260826-pre-v0.1.36-synonyms` taken before deploy. This tag also
       carried the earlier PC.2 `anilist_client` score additions (score field + fetch_score_format).
-- [ ] `tracking_space`: allow a show to be tracked in more than one place at once (e.g.
-      AniList and MAL simultaneously).
+- [x] `tracking_space` multi-place + MAL side of AniList/MAL drift detection — both closed
+      together by the MAL bidirectional sync, deployed v0.1.37, 2026-08-26. **No tracking_space
+      schema change** (user's call): a show already syncs to whichever services its seasons carry
+      ids for (`anilist_id` / `mal_id`), and that id-presence *is* the multi-place mechanism, both
+      directions. **Scope: status + episode progress only** — no score reverse-sync exists in
+      *either* direction (AniList→LCARS score reconciliation was never built either; only the
+      forward push of score to both on a local `setScore` is live, unchanged). Built at once:
+      forward (`mal_client.update_my_list_status` gains `num_watched_episodes`;
+      `_push_mal_show_episode_progress` wired next to every AniList progress push — status+score
+      MAL push already existed, B.10); reverse (`mal_client.fetch_my_list` paged +
+      `mal_reconcile.reconcile_mal_progress`, the `pollMalList` mutation, its own hourly Ops loop —
+      MAL has no activity feed so it diffs the whole list each tick). Hub: `watch_reconcile`'s apply
+      core extracted to `_apply_remote_list`, reused by both reconcilers (shared dup-id-exclusion /
+      highest-season / unaired-episode hardening — no drift); after a change lands in LCARS it's
+      pushed *onward to the other service only* (AniList→MAL, MAL→AniList) via direct client calls
+      (no circular import). Loop-safe: status/progress are exact (no lossy scale), only real diffs
+      propagate, converged state pushes nothing. A stale MAL can only push progress *forward* (never
+      un-watches). 14 new tests, full suite 935 passed. **Verified live post-deploy**: controlled
+      manual `pollMalList` before enabling the Ops loop — first run applied 17 status + 54 episode
+      backfills across 1373 seasons (0 conflicts; MAL was a close mirror, slightly ahead on ~2
+      dozen shows, all mirrored onward to AniList), second run 0 changes (converged, no
+      oscillation); then ops brought to 0.1.37, loops running clean. Snapshot
+      `lcars.db.bak-20260826-pre-v0.1.37-mal`. `~/repos/starfleet` `9efa01e`.
 - [ ] Hierarchical season subdivision for legitimate cross-source granularity mismatches
       (Bookworm/Mushoku Tensei-style cases). (archive/todo.md:1175)
-- [ ] MAL side of AniList/MAL drift detection (AniList side already built, B.5).
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
@@ -592,12 +612,16 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 
 ## Ideas / open questions
 
-- [ ] LCARS absorbs the AniList→MAL mirroring the user currently runs as a separate external tool
-      (2026-08-26). LCARS already push-mirrors *new* score/status changes to MAL (B.10,
-      `_push_mal_show_score`/`_push_mal_show_status` on setScore/setStatus); the gap is the
-      *bulk/historical* AniList→MAL sync the external tool does today. A future LCARS-native
-      mirror would make that tool redundant. Not urgent — the external tool works and nothing is
-      unique to MAL (see PC.2 above).
+- [ ] LCARS absorbs the AniList↔MAL mirroring the user currently runs as a separate external tool
+      (2026-08-26). **Largely superseded by the MAL bidirectional sync (v0.1.37, Build above)**:
+      LCARS now mirrors status + episode progress both ways (AniList↔LCARS↔MAL), forward and
+      reverse, on its own loops. The remaining gap is **score reverse-sync** — LCARS pushes score
+      to both on a local `setScore`, but neither reconcile path reads score back from AniList *or*
+      MAL, so a score changed directly on either service still relies on the external tool to
+      propagate it. Building score reverse-sync (both directions) would retire the external tool
+      entirely. Deferred as not critical (user's call 2026-08-26); the lossy 100↔20↔10 round-trip
+      is why it needs its own careful design (tolerance/last-synced-value guard) rather than riding
+      the exact-value status/progress path.
 - [ ] Catalog-wide `title_english`/`title_romaji` backfill (found 2026-08-24 auditing Bookworm
       Part 1, see the Build entry above for the full breakdown) — needs a real per-show AniList
       re-fetch + comparison tool (~300 shows share Part 1's exact corruption, ~700 more are just
