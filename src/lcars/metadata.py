@@ -230,6 +230,27 @@ def _ensure_anilist_link(conn, show: dict) -> None:
     conn.commit()
 
 
+def _sync_synonyms(conn, show_id: str, synonyms: list, now: str) -> None:
+    """AniList's `Media.synonyms` -> the `show_synonym` child table,
+    delete-then-insert so a re-fetch stays idempotent and picks up any
+    synonyms AniList has since added (unlike the write-once title
+    columns, this list legitimately grows). Deduplicated and blank-
+    stripped here; `UNIQUE(show_id, synonym)` is the backstop. Only ever
+    touches this one show's own rows — never another show's, and never a
+    manual `display_title_override` (a separate `show` column)."""
+    conn.execute("DELETE FROM show_synonym WHERE show_id = ?", (show_id,))
+    seen: set[str] = set()
+    for raw in synonyms:
+        synonym = (raw or "").strip()
+        if not synonym or synonym in seen:
+            continue
+        seen.add(synonym)
+        conn.execute(
+            "INSERT INTO show_synonym (show_id, synonym, created_at) VALUES (?, ?, ?)",
+            (show_id, synonym, now),
+        )
+
+
 def _fetch_anilist(conn, show: dict) -> None:
     anilist_id_str = _external_id(conn, show["id"], "anilist")
     if anilist_id_str is None:
@@ -276,6 +297,8 @@ def _fetch_anilist(conn, show: dict) -> None:
             show["id"],
         ),
     )
+
+    _sync_synonyms(conn, show["id"], media.get("synonyms") or [], now)
 
     _upsert_season(conn, show["id"], 1, int(anilist_id_str), media.get("idMal"))
 

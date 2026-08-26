@@ -45,6 +45,7 @@ EXPORT_IMPORT_TABLES = [
     "watch_event",
     "episode_movie_link",
     "show_external_id",
+    "show_synonym",
     "show_service_presence",
     "show_relation",
     "episode_numbering_mapping",

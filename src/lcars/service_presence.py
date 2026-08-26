@@ -138,7 +138,7 @@ def _refresh_sonarr_presence(conn) -> int:
 
     updated = 0
     for show in shows:
-        matched_title = _matches(show, list(by_title))
+        matched_title = _matches(conn, show, list(by_title))
         present = matched_title is not None
         if _upsert_presence(conn, show["id"], "sonarr", present):
             updated += 1
@@ -176,7 +176,7 @@ def _refresh_radarr_presence(conn) -> int:
 
     updated = 0
     for show in shows:
-        matched_title = _matches(show, list(by_title))
+        matched_title = _matches(conn, show, list(by_title))
         present = matched_title is not None
         if _upsert_presence(conn, show["id"], "radarr", present):
             updated += 1
@@ -187,12 +187,23 @@ def _refresh_radarr_presence(conn) -> int:
     return updated
 
 
-def _matches(show, catalog_titles: list[str]) -> str | None:
+def _matches(conn, show, catalog_titles: list[str]) -> str | None:
     """The catalog_titles entry (original casing) that best matched
     this show, or None — since 2026-08-18 both callers need the actual
     matched title back (to look its titleSlug up for the deep-link
-    backfill above), not just a bool."""
+    backfill above), not just a bool.
+
+    Matches against the show's AniList `synonyms` too (2026-08-26), not
+    just its three canonical titles — a planned sequel is often sitting
+    in Sonarr/Radarr under an arc-name or other-language title that only
+    exists here as a synonym, exactly the case the user flagged."""
     show_titles = [show[f] for f in ("title_romaji", "title_english", "title_native") if show[f]]
+    show_titles += [
+        r["synonym"]
+        for r in conn.execute(
+            "SELECT synonym FROM show_synonym WHERE show_id = ?", (show["id"],)
+        )
+    ]
     return fuzzy.best_match(show_titles, catalog_titles)
 
 

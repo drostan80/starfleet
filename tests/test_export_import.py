@@ -86,7 +86,7 @@ def test_export_includes_every_table(source_db):
     data = json.loads(blob)
     assert data["schema_version"] == export_import.SCHEMA_VERSION
     assert set(data["tables"]) == set(export_import.EXPORT_IMPORT_TABLES)
-    assert len(data["tables"]) == 26  # 25 through B.3 + show_merge (B.14)
+    assert len(data["tables"]) == 27  # 26 + show_synonym (2026-08-26)
 
 
 def test_export_import_round_trip_restores_everything(source_db, target_db):

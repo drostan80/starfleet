@@ -78,6 +78,7 @@ _MEDIA_QUERY = """
 query ($mediaId: Int) {
   Media(id: $mediaId) {
     title { romaji english native }
+    synonyms
     coverImage { large }
     bannerImage
     description(asHtml: false)

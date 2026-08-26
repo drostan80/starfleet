@@ -1155,10 +1155,16 @@ def resolve_search(_, info, query, **page_args):
     """
     conn = db.get_connection()
     like = f"%{query}%"
+    # `synonyms` added 2026-08-26 — a not-yet-aired sequel is often indexed on
+    # AniList only under a romaji/arc-name title held here as a synonym, so a
+    # user searching that name (or a show's fan/other-language name) finds it.
     where = (
-        "(title_romaji LIKE ? OR title_english LIKE ? OR title_native LIKE ? OR synopsis LIKE ?)"
+        "(title_romaji LIKE ? OR title_english LIKE ? OR title_native LIKE ?"
+        " OR synopsis LIKE ?"
+        " OR EXISTS (SELECT 1 FROM show_synonym WHERE show_synonym.show_id = show.id"
+        " AND show_synonym.synonym LIKE ?))"
     )
-    return pagination.paginate(conn, "show", where, (like, like, like, like), **page_args)
+    return pagination.paginate(conn, "show", where, (like, like, like, like, like), **page_args)
 
 
 @query.field("searchArrCandidates")
@@ -1303,9 +1309,33 @@ def resolve_filter_presets(_, info, **page_args):
 # --- Show fields ---------------------------------------------------------
 
 
+def _computed_display_title(show) -> str:
+    """A show's effective display title: the manual
+    `display_title_override` when set (any title/synonym the user pinned,
+    e.g. "Lamu" for Urusei Yatsura), else `title_{primary_title}` — the
+    default `metadata.py` already picks english-first, romaji-fallback.
+    Shared by the `displayTitle` field and `confirmHardDelete`'s retyped-
+    title check so the two can never drift."""
+    override = show["display_title_override"] if "display_title_override" in show.keys() else None
+    return override or show[f"title_{show['primary_title']}"]
+
+
 @show_type.field("displayTitle")
 def resolve_display_title(obj, info):
-    return obj[f"title_{obj['primary_title']}"]
+    return _computed_display_title(obj)
+
+
+@show_type.field("synonyms")
+def resolve_synonyms(obj, info):
+    """AniList `Media.synonyms` — the show's alternative titles (alt
+    spellings, abbreviations, other-language/fan names), re-synced on
+    every metadata fetch (metadata.py's `_sync_synonyms`). Ordered by
+    insert order (rowid) for a stable list."""
+    conn = db.get_connection()
+    rows = conn.execute(
+        "SELECT synonym FROM show_synonym WHERE show_id = ? ORDER BY rowid", (obj["id"],)
+    ).fetchall()
+    return [r["synonym"] for r in rows]
 
 
 @show_type.field("genresRaw")
@@ -2239,6 +2269,27 @@ def resolve_set_score(_, info, show_id, score):
     return _get_show(conn, show_id)
 
 
+@mutation.field("setDisplayTitle")
+def resolve_set_display_title(_, info, show_id, title):
+    """2026-08-26 — pins a show's display title to any string the user
+    recognizes (a synonym like "Lamu" for Urusei Yatsura, a romaji/native
+    title, or a hand-typed one), overriding the write-once
+    `primary_title`-derived default without touching it. `title: null` or
+    an all-whitespace string clears the override (falls back to
+    `title_{primary_title}`). Local-only — no AniList/MAL push: display
+    title is a purely local presentation choice, unlike score/status."""
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    override = title.strip() if title and title.strip() else None
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE show SET display_title_override = ?, updated_at = ? WHERE id = ?",
+        (override, now, show_id),
+    )
+    conn.commit()
+    return _get_show(conn, show_id)
+
+
 @mutation.field("setSeasonScore")
 def resolve_set_season_score(_, info, season_id, score):
     """A.9, §6.1/§6.5's season-level score granularity (§5.5 addendum)
@@ -2615,8 +2666,7 @@ def resolve_confirm_hard_delete(_, info, show_id, retyped_title):
     earliest = util.add_days(show["hard_delete_requested_at"], HARD_DELETE_DELAY_DAYS)
     if util.now_utc_iso() < earliest:
         raise GraphQLError(f"the 24-hour delay hasn't elapsed yet — try again after {earliest}")
-    display_title = show[f"title_{show['primary_title']}"]
-    if retyped_title != display_title:
+    if retyped_title != _computed_display_title(show):
         raise GraphQLError("retypedTitle doesn't match this show's current display title")
 
     _delete_from_anilist_before_purge(conn, show_id)
@@ -2642,6 +2692,7 @@ def resolve_confirm_hard_delete(_, info, show_id, retyped_title):
     conn.execute("DELETE FROM episode WHERE show_id = ?", (show_id,))
     conn.execute("DELETE FROM season WHERE show_id = ?", (show_id,))
     conn.execute("DELETE FROM show_external_id WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM show_synonym WHERE show_id = ?", (show_id,))
     conn.execute("DELETE FROM show_service_presence WHERE show_id = ?", (show_id,))
     conn.execute(
         "DELETE FROM show_relation WHERE show_id = ? OR related_show_id = ?", (show_id, show_id)

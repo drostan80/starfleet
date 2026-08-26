@@ -215,6 +215,24 @@ def test_sonarr_presence_true_on_a_confident_title_match(conn, monkeypatch):
     assert _presence(conn, "s-svp010", "sonarr")["present"] == 1
 
 
+def test_sonarr_presence_matches_via_a_synonym(conn, monkeypatch):
+    # The show's three titles don't match the catalog at all — only a
+    # synonym (arc/other-language name) does. This is the planned-sequel
+    # case: it's in Sonarr under a name that only lives in show_synonym.
+    _configure_sonarr()
+    _add_show(conn, "s-svp012", title_romaji="Urusei Yatsura")
+    conn.execute(
+        "INSERT INTO show_synonym (show_id, synonym, created_at) VALUES ('s-svp012', 'Lamu', 'x')"
+    )
+    conn.commit()
+    fake = _FakeSonarrCatalogClient([{"title": "Lamu", "titleSlug": "lamu"}])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    updated = service_presence.refresh_catalog_presence(conn)
+    assert updated == 1
+    assert _presence(conn, "s-svp012", "sonarr")["present"] == 1
+
+
 def test_sonarr_presence_false_with_no_match_in_the_catalog(conn, monkeypatch):
     _configure_sonarr()
     _add_show(conn, "s-svp011", title_romaji="Attack on Titan")

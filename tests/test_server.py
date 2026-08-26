@@ -9848,3 +9848,164 @@ async def test_poll_anilist_activity_new_activity_returns_nested_reconcile_resul
         headers=auth_headers(),
     )
     assert show_data["show"]["status"] == "WATCHING"
+
+
+# --- AniList synonyms + display-title override (2026-08-26) --------------------
+
+
+def _insert_synonym(show_id: str, synonym: str) -> None:
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO show_synonym (show_id, synonym, created_at)"
+        " VALUES (?, ?, '2026-08-26T00:00:00Z')",
+        (show_id, synonym),
+    )
+    conn.commit()
+
+
+_MEDIA_WITH_SYNONYMS = {
+    "title": {"romaji": "Urusei Yatsura", "english": "Urusei Yatsura", "native": "うる星やつら"},
+    "synonyms": ["Lamu", "Lum the Invader Girl", "Those Obnoxious Aliens", "  ", "Lamu"],
+    "coverImage": {"large": None},
+    "bannerImage": None,
+    "description": None,
+    "genres": ["Comedy"],
+    "episodes": 195,
+    "duration": 24,
+    "idMal": 1293,
+    "studios": {"nodes": []},
+    "characters": {"edges": []},
+    "relations": {"edges": []},
+}
+
+
+async def test_synonyms_synced_from_anilist_deduped_and_blank_stripped(client, monkeypatch):
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: _MEDIA_WITH_SYNONYMS)
+    show = await add_show(client, titleRomaji="Urusei Yatsura", anilistId=1293)
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { synonyms } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    # blank stripped, "Lamu" deduped, insert order preserved
+    assert data["show"]["synonyms"] == [
+        "Lamu",
+        "Lum the Invader Girl",
+        "Those Obnoxious Aliens",
+    ]
+
+
+async def test_synonyms_resync_is_idempotent_and_replaces(client, monkeypatch):
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: _MEDIA_WITH_SYNONYMS)
+    show = await add_show(client, titleRomaji="Urusei Yatsura", anilistId=1293)
+    # AniList later drops one synonym and adds another
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_media",
+        lambda *a, **kw: {**_MEDIA_WITH_SYNONYMS, "synonyms": ["Lamu", "Lamù"]},
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { synonyms } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["show"]["synonyms"] == ["Lamu", "Lamù"]  # replaced, not appended/duplicated
+
+
+async def test_display_title_override_takes_precedence_then_clears(client):
+    show = await add_show(client, titleRomaji="Urusei Yatsura", primaryTitle="ROMAJI")
+    # default: the primaryTitle field
+    assert show["displayTitle"] == "Urusei Yatsura"
+
+    async def _display(**vars_):
+        return await gql(
+            client,
+            "mutation($id: ID!, $t: String) { setDisplayTitle(showId: $id, title: $t)"
+            " { displayTitle displayTitleOverride } }",
+            {"id": show["id"], **vars_},
+            headers=auth_headers(),
+        )
+
+    set_ = await _display(t="Lamu")
+    assert set_["setDisplayTitle"]["displayTitle"] == "Lamu"
+    assert set_["setDisplayTitle"]["displayTitleOverride"] == "Lamu"
+
+    # all-whitespace clears it (falls back to the primaryTitle default)
+    cleared = await _display(t="   ")
+    assert cleared["setDisplayTitle"]["displayTitle"] == "Urusei Yatsura"
+    assert cleared["setDisplayTitle"]["displayTitleOverride"] is None
+
+    # explicit null also clears
+    set_again = await _display(t="Lamu")
+    assert set_again["setDisplayTitle"]["displayTitleOverride"] == "Lamu"
+    nulled = await _display(t=None)
+    assert nulled["setDisplayTitle"]["displayTitleOverride"] is None
+
+
+async def test_search_matches_a_synonym(client):
+    show = await add_show(client, titleRomaji="Urusei Yatsura")
+    _insert_synonym(show["id"], "Lamu")
+    data = await gql(
+        client,
+        "query($q: String!) { search(query: $q) { edges { node { id } } } }",
+        {"q": "Lamu"},
+        headers=auth_headers(),
+    )
+    ids_found = {e["node"]["id"] for e in data["search"]["edges"]}
+    assert show["id"] in ids_found
+
+
+async def test_confirm_hard_delete_matches_the_overridden_display_title(client, monkeypatch):
+    show = await add_show(client, titleRomaji="Urusei Yatsura", primaryTitle="ROMAJI")
+    await gql(
+        client,
+        "mutation($id: ID!) { setDisplayTitle(showId: $id, title: \"Lamu\") { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { softDeleteShow(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { requestHardDelete(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE show SET hard_delete_requested_at = '2000-01-01T00:00:00Z' WHERE id = ?",
+        (show["id"],),
+    )
+    conn.commit()
+    # the old romaji title must NOT satisfy the confirm — the override is the display title now
+    resp = await client.post(
+        "/",
+        json={
+            "query": "mutation($id: ID!, $t: String!)"
+            " { confirmHardDelete(showId: $id, retypedTitle: $t) }",
+            "variables": {"id": show["id"], "t": "Urusei Yatsura"},
+        },
+        headers=auth_headers(),
+    )
+    assert "doesn't match" in resp.json()["errors"][0]["message"]
+    # the override string does
+    data = await gql(
+        client,
+        "mutation($id: ID!, $t: String!)"
+        " { confirmHardDelete(showId: $id, retypedTitle: $t) }",
+        {"id": show["id"], "t": "Lamu"},
+        headers=auth_headers(),
+    )
+    assert data["confirmHardDelete"] is True

@@ -180,8 +180,12 @@ type Show {
   titleEnglish: String
   titleNative: String
   primaryTitle: PrimaryTitle!
-  "Resolves to whichever of the three title fields primaryTitle points at."
+  "displayTitleOverride when set, else whichever of the three title fields primaryTitle points at."
   displayTitle: String!
+  "A manual pin for displayTitle (any title/synonym the user chose, e.g. \"Lamu\"); null means the primaryTitle default is used. Set via setDisplayTitle."
+  displayTitleOverride: String
+  "AniList Media.synonyms — alternative titles (alt spellings, abbreviations, other-language/fan names), re-synced on every metadata fetch. Empty when none/not-yet-fetched."
+  synonyms: [String!]!
 
   status: ShowStatus!
   tracked: Boolean!
@@ -1395,6 +1399,8 @@ type Mutation {
   setScore(showId: ID!, score: Float!): Show!
   "A.9, §6.1/§5.5 addendum — same push as setScore, scoped to one season and its own AniList entry only."
   setSeasonScore(seasonId: ID!, score: Float!): Season!
+  "Pins displayTitle to any string (a synonym, a romaji/native title, or a hand-typed one), overriding the write-once primaryTitle default. title: null (or all-whitespace) clears it. Local-only, no AniList/MAL push."
+  setDisplayTitle(showId: ID!, title: String): Show!
   """
   Write-mirror function set, todo.md (2026-08-16) — pushes AniList's REPEATING status plus
   `repeatCount` (its own `repeat` field) for this one season's AniList entry. LCARS has no local
