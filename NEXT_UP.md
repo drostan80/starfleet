@@ -386,8 +386,28 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       dozen shows, all mirrored onward to AniList), second run 0 changes (converged, no
       oscillation); then ops brought to 0.1.37, loops running clean. Snapshot
       `lcars.db.bak-20260826-pre-v0.1.37-mal`. `~/repos/starfleet` `9efa01e`.
-- [ ] Hierarchical season subdivision for legitimate cross-source granularity mismatches
-      (Bookworm/Mushoku Tensei-style cases). (archive/todo.md:1175)
+- [~] Hierarchical season subdivision for legitimate cross-source granularity mismatches
+      (Bookworm/Mushoku Tensei-style cases). (archive/todo.md:1175) **Model chosen + design note
+      written, 2026-08-26 — awaiting decisions before build.** User's chosen model: LCARS is source
+      of truth and subdivides its seasons to the *finest* linked source (so seasons are followable
+      individually like AniList, and MAL's split cours 1/2 come out right), with **absolute-episode
+      ranges** as the reconciliation key — AniList/MAL mapped per-range, Sonarr/TMDB linked at show
+      level only with episode sync routing by absolute number into the right sub-season. Foundation
+      partly exists (`episode.absolute_number`, `availability._route_episode_availability`,
+      `metadata._fetch_sonarr_multi_show`) but at the *show* level (Bookworm = sibling `show` rows
+      sharing a tvdb id), not the *season* level this needs. Design note (8 open decisions +
+      illustrative schema + slice plan) published as an artifact:
+      https://claude.ai/code/artifact/01f25b72-836c-40ef-86d0-d89d0a46acd5 . **Not built this
+      session — deliberately** (advisor + reality): the feature is a single non-deployable change
+      (schema + reconcile + Sonarr sync + the just-shipped MAL/AniList paths all move together),
+      the chosen model is a target not a migration spec, and one part of it ("Sonarr/TMDB show-level
+      only") collides with the 2026-08-25 multi-show-sibling routing. The three blocking decisions
+      to settle first: **D1** sub-season representation vs `season_number INTEGER`/
+      `UNIQUE(show_id,season_number)`; **D2** whether Bookworm's 4 sibling shows migrate into one
+      (fate of `_fetch_sonarr_multi_show`/`_route_episode_availability`, 8 tests); **D3** per-source
+      id mapping when `season.anilist_id`/`mal_id` (single-valued, load-bearing in the shared
+      `_apply_remote_list`) can't express it — likely a new `season_external_id` table. Once D1-D3
+      are answered, Slice 1 is an inert schema migration.
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
@@ -622,11 +642,24 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       entirely. Deferred as not critical (user's call 2026-08-26); the lossy 100↔20↔10 round-trip
       is why it needs its own careful design (tolerance/last-synced-value guard) rather than riding
       the exact-value status/progress path.
-- [ ] Catalog-wide `title_english`/`title_romaji` backfill (found 2026-08-24 auditing Bookworm
-      Part 1, see the Build entry above for the full breakdown) — needs a real per-show AniList
-      re-fetch + comparison tool (~300 shows share Part 1's exact corruption, ~700 more are just
-      missing a real English title, ~470 are legitimately titleless in English), plus a mutation
-      to actually write corrected title fields post-creation, since none exists today.
+- [x] Catalog-wide `title_english`/`title_romaji` backfill — done 2026-08-26,
+      `scripts/backfill_titles.py` (`~/repos/starfleet` `10c0983`). Batch-fetches AniList's own
+      `title{romaji,english,native}` for the 1457 anime shows with an AniList link but NULL
+      `title_english`, and — only when AniList actually has an English title — overwrites all three
+      title fields + sets `primary_title='english'`; titleless-on-AniList shows left untouched,
+      `display_title_override` never touched, `primary_title` written in the same UPDATE so the
+      CHECK always sees consistent state. Applied to production: **278 corrupted** (title_romaji
+      held the English string) fixed, **676 missing-English** filled, **503 legitimately titleless**
+      left alone, 0 not-found — matching the 2026-08-24 audit's ~300/~700/~470 projection almost
+      exactly (the dry-run counts were the audit re-verification). Snapshot
+      `lcars.db.bak-20260826-pre-title-backfill`; stop/apply/restart; override preserved, verified
+      live. Same one-time-script pattern as `backfill_synonyms.py`/`import_anilist_scores.py`.
+- [ ] `refreshTitlesFromAniList(showId)` mutation — a client-facing way to re-pull AniList's
+      authoritative titles for one show post-creation (title fields are still caller-input-at-
+      creation only; `_fetch_anilist` never touches them). The catalog-wide backfill above handled
+      the bulk via direct SQL and didn't need it; build this when a client actually wants per-show
+      correction. Deliberately deferred out of the backfill change (advisor: separate deliverable,
+      no current caller).
 - [ ] Move all secrets/passwords to a safer place (plaintext `config.ini` today).
 - [ ] Design the HTML client's UI properly.
 - [ ] HTML client: add a login/password gate, keep it safe.
