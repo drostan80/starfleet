@@ -2739,6 +2739,11 @@ def resolve_confirm_hard_delete(_, info, show_id, retyped_title):
         (show_id,),
     )
     conn.execute("DELETE FROM episode WHERE show_id = ?", (show_id,))
+    conn.execute(
+        "DELETE FROM season_external_id WHERE season_id IN"
+        " (SELECT id FROM season WHERE show_id = ?)",
+        (show_id,),
+    )
     conn.execute("DELETE FROM season WHERE show_id = ?", (show_id,))
     conn.execute("DELETE FROM show_external_id WHERE show_id = ?", (show_id,))
     conn.execute("DELETE FROM show_synonym WHERE show_id = ?", (show_id,))

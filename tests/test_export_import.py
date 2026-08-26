@@ -69,6 +69,16 @@ def _seed(conn: sqlite3.Connection) -> None:
         " VALUES ('w-exp001', 's-exp001', 1, 1, '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')"
     )
     conn.execute(
+        "INSERT INTO season"
+        " (id, show_id, season_number, source, abs_start, abs_end, created_at, updated_at)"
+        " VALUES ('z-exp001', 's-exp001', 1, 'manual', 1, 12,"
+        "  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES ('z-exp001', 'anilist', 108268, '2026-01-01T00:00:00Z')"
+    )
+    conn.execute(
         "INSERT INTO tag (id, name, created_at)"
         " VALUES ('t-exp001', 'favorite', '2026-01-01T00:00:00Z')"
     )
@@ -86,7 +96,7 @@ def test_export_includes_every_table(source_db):
     data = json.loads(blob)
     assert data["schema_version"] == export_import.SCHEMA_VERSION
     assert set(data["tables"]) == set(export_import.EXPORT_IMPORT_TABLES)
-    assert len(data["tables"]) == 27  # 26 + show_synonym (2026-08-26)
+    assert len(data["tables"]) == 28  # 27 + season_external_id (2026-08-26)
 
 
 def test_export_import_round_trip_restores_everything(source_db, target_db):
@@ -102,8 +112,19 @@ def test_export_import_round_trip_restores_everything(source_db, target_db):
     assert counts["franchise"] == 1
     assert counts["franchise_member"] == 1
 
+    assert counts["season"] == 1
+    assert counts["season_external_id"] == 1
+
     show = dict(target_db.execute("SELECT * FROM show WHERE id = 's-exp001'").fetchone())
     assert show["title_romaji"] == "Export Show"
+
+    season = dict(target_db.execute("SELECT * FROM season WHERE id = 'z-exp001'").fetchone())
+    assert (season["abs_start"], season["abs_end"]) == (1, 12)  # range columns round-trip
+    sxid = target_db.execute(
+        "SELECT external_id FROM season_external_id"
+        " WHERE season_id = 'z-exp001' AND service = 'anilist'"
+    ).fetchone()
+    assert sxid["external_id"] == 108268  # range-based external mapping round-trips
 
     episode = dict(target_db.execute("SELECT * FROM episode WHERE id = 'e-exp001'").fetchone())
     # the generated column: excluded from the INSERT, recomputed fresh by SQLite

@@ -41,6 +41,7 @@ EXPORT_IMPORT_TABLES = [
     "availability_poll_checkpoint",
     # depend on show
     "season",
+    "season_external_id",  # depends on season (range-based external mapping, 2026-08-26)
     "episode",
     "watch_event",
     "episode_movie_link",
