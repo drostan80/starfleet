@@ -10009,3 +10009,66 @@ async def test_confirm_hard_delete_matches_the_overridden_display_title(client, 
         headers=auth_headers(),
     )
     assert data["confirmHardDelete"] is True
+
+
+# --- MAL episode-progress forward push + pollMalList (2026-08-26) --------------
+
+
+async def test_add_watch_event_pushes_episode_progress_to_mal(client, monkeypatch):
+    config.set_current(_mal_authenticated_config())
+    calls = []
+    monkeypatch.setattr(
+        mal_client, "update_my_list_status", lambda token, mal_id, **kw: calls.append((mal_id, kw))
+    )
+    show = await add_show(client)
+    await _link_season_mal(client, show["id"], 1, 111)
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)"
+        " VALUES ('e-malpr1', ?, 1, 1, 'regular', 'unwatched', 'x', 'x')",
+        (show["id"],),
+    )
+    conn.commit()
+    await gql(
+        client,
+        "mutation($id: ID!) { addWatchEvent(showId: $id, season: 1, episode: 1) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    # episode progress mirrored to MAL as num_watched_episodes (high-water = 1)
+    assert (111, {"num_watched_episodes": 1}) in calls
+
+
+async def test_poll_mal_list_applies_and_returns_result(client, monkeypatch):
+    config.set_current(_mal_authenticated_config())
+    show = await add_show(client)  # created 'planned' by default
+    await _link_season_mal(client, show["id"], 1, 111)
+    monkeypatch.setattr(
+        mal_client,
+        "fetch_my_list",
+        lambda token: [{"mal_id": 111, "status": "watching", "num_watched_episodes": 0}],
+    )
+    data = await gql(
+        client,
+        "mutation { pollMalList { seasonsChecked showsStatusUpdated episodesBackfilled"
+        " notMatchedOnMal ambiguousMalIdConflicts } }",
+        headers=auth_headers(),
+    )
+    result = data["pollMalList"]
+    assert result["seasonsChecked"] == 1
+    assert result["showsStatusUpdated"] == 1  # planned -> watching from MAL
+    row = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert row["show"]["status"] == "WATCHING"
+
+
+async def test_poll_mal_list_no_op_when_mal_not_authenticated(client, monkeypatch):
+    monkeypatch.setattr(
+        mal_client, "fetch_my_list", lambda token: (_ for _ in ()).throw(AssertionError("called"))
+    )
+    data = await gql(client, "mutation { pollMalList { seasonsChecked } }", headers=auth_headers())
+    assert data["pollMalList"]["seasonsChecked"] == 0

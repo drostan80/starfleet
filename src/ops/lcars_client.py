@@ -238,6 +238,26 @@ class LcarsClient:
         data = await self._query(query)
         return data["pollAnilistActivity"]
 
+    async def poll_mal_list(self) -> dict:
+        """MAL → LCARS reverse sync (2026-08-26, pollMalList): one call
+        covers the whole account, same shape as poll_anilist_activity()
+        above — but MAL has no activity feed, so LCARS diffs the full
+        list every call rather than a cheap checkpoint pre-check, which
+        is why Ops runs this on a slower loop of its own."""
+        query = """
+        mutation {
+          pollMalList {
+            seasonsChecked
+            notMatchedOnMal
+            showsStatusUpdated
+            episodesBackfilled
+            ambiguousMalIdConflicts
+          }
+        }
+        """
+        data = await self._query(query)
+        return data["pollMalList"]
+
     async def backfill_file_availability(self) -> dict:
         """§5.2/§6.7, B.3 — the manual, one-time counterpart to
         poll_file_availability() above: walks each configured service's

@@ -307,6 +307,31 @@ async def run_anilist_activity_once(client: LcarsClient) -> int:
     return result["activitiesSeen"]
 
 
+async def run_mal_reconcile_once(client: LcarsClient) -> int:
+    """MAL → LCARS reverse sync (2026-08-26, pollMalList): one call
+    covers the whole account, same shape as run_anilist_activity_once
+    above — but MAL has no activity feed, so every tick fetches and
+    diffs the full list (LCARS side), which is why this rides its own
+    slower loop rather than the fast AniList-activity one. Returns
+    showsStatusUpdated + episodesBackfilled (real corrections actually
+    applied) so a quiet tick logs 0 in the same "count real changes"
+    shape every other tier uses; logs the full breakdown when anything
+    changed."""
+    result = await client.poll_mal_list()
+    changed = result["showsStatusUpdated"] + result["episodesBackfilled"]
+    if changed or result["ambiguousMalIdConflicts"]:
+        logger.info(
+            "mal_reconcile: seasonsChecked=%d notMatchedOnMal=%d showsStatusUpdated=%d "
+            "episodesBackfilled=%d ambiguousMalIdConflicts=%d",
+            result["seasonsChecked"],
+            result["notMatchedOnMal"],
+            result["showsStatusUpdated"],
+            result["episodesBackfilled"],
+            result["ambiguousMalIdConflicts"],
+        )
+    return changed
+
+
 async def _loop(coro_fn, client: LcarsClient, interval_seconds: int, label: str) -> None:
     """Shared while-loop shape for both timers below — never returns
     under normal operation. Catches bare Exception, not just LcarsError
@@ -353,6 +378,7 @@ async def run_forever(
     interval_seconds: int,
     monthly_interval_seconds: int,
     anilist_activity_interval_seconds: int = 240,
+    mal_reconcile_interval_seconds: int = 3600,
 ) -> None:
     """Four concurrent loops, not one shared cadence — B.2's own
     weekly tier is self-gating (dueForSeasonReconciliation only ever
@@ -393,7 +419,15 @@ async def run_forever(
     B.3 can't — the whole point is catching a watch-status change
     sooner than hourly would, not less urgently. Wired 2026-08-15 —
     B.5.3 was code-complete and once-tested by hand since 2026-08-13
-    but had never run on any automatic cadence until this loop."""
+    but had never run on any automatic cadence until this loop.
+
+    The MAL reverse sync (2026-08-26, pollMalList) is its own fifth loop
+    — like B.5.3 it can't ride the hourly tier (the point is catching a
+    MAL-side change and mirroring it onward to AniList reasonably
+    promptly), but unlike B.5.3 it has no cheap activity-feed pre-check
+    (MAL has none), so it fetches and diffs the whole list each tick;
+    that per-tick cost is why its default (3600s) is far slower than the
+    AniList activity poll's 240s rather than sharing it."""
     await asyncio.gather(
         _loop(
             run_daily_and_weekly_once,
@@ -414,5 +448,11 @@ async def run_forever(
             client,
             anilist_activity_interval_seconds,
             "anilist_activity",
+        ),
+        _loop(
+            run_mal_reconcile_once,
+            client,
+            mal_reconcile_interval_seconds,
+            "mal_reconcile",
         ),
     )

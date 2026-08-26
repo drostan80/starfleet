@@ -182,6 +182,7 @@ def update_my_list_status(
     mal_id: int,
     status: str | None = None,
     score: int | None = None,
+    num_watched_episodes: int | None = None,
     client: httpx.Client | None = None,
 ) -> dict:
     """§6.1/§6.9 — the actual push, `PATCH /v2/anime/{mal_id}/my_list_
@@ -192,12 +193,18 @@ def update_my_list_status(
     establishes — a score-only push must never accidentally reset
     status (and vice versa). `is_rewatching`/`num_times_rewatched` are
     deliberately never sent here at all (§6.8/§6.9: rewatching never
-    auto-toggles either)."""
+    auto-toggles either).
+
+    `num_watched_episodes` added 2026-08-26 (MAL bidirectional sync) —
+    same omit-unless-given shape; MAL's own field name for episode
+    progress, the counterpart to AniList's `progress`."""
     data: dict[str, object] = {}
     if status is not None:
         data["status"] = status
     if score is not None:
         data["score"] = score
+    if num_watched_episodes is not None:
+        data["num_watched_episodes"] = num_watched_episodes
     owns_client = client is None
     client = client or httpx.Client(timeout=10.0)
     try:
@@ -230,6 +237,61 @@ def update_my_list_status(
                 + (f" ({detail})" if detail else "")
             )
         return payload or {}
+    finally:
+        if owns_client:
+            client.close()
+
+
+def fetch_my_list(token: str, client: httpx.Client | None = None) -> list[dict]:
+    """The authenticated user's entire MAL anime list — the read side of
+    the MAL bidirectional sync (2026-08-26), counterpart to
+    `anilist_client.fetch_my_anime_list`. `GET /users/@me/animelist`
+    with `fields=list_status` (which yields status/score/
+    num_episodes_watched), following `paging.next` to the end (MAL caps
+    a page at 1000; a personal list can exceed it, so paging isn't
+    optional). Returns one flat dict per entry:
+    `{mal_id, status, score, num_watched_episodes}` — `status`/`score`
+    left in MAL's own vocabulary/scale (caller normalizes), matching
+    `fetch_my_anime_list`'s pass-through convention.
+
+    MAL has no activity-feed equivalent to AniList's, so there's no cheap
+    "did anything change" pre-check here — the caller polls the whole
+    list on a cadence and diffs (mal_reconcile.py)."""
+    owns_client = client is None
+    client = client or httpx.Client(timeout=30.0)
+    url = f"{API_BASE_URL}/users/@me/animelist?fields=list_status&limit=1000&nsfw=true"
+    entries: list[dict] = []
+    try:
+        while url:
+            try:
+                response = client.get(url, headers={"Authorization": f"Bearer {token}"})
+            except httpx.ConnectError as e:
+                raise MALError("Could not connect to MyAnimeList") from e
+            except httpx.TimeoutException as e:
+                raise MALError("Timed out talking to MyAnimeList") from e
+            if response.status_code == 401:
+                raise MALAuthError(
+                    "MyAnimeList rejected the access token (401 Unauthorized) — it may "
+                    "have expired; the periodic refresh job should catch this automatically"
+                )
+            if response.status_code >= 400:
+                raise MALError(f"MyAnimeList returned an error: HTTP {response.status_code}")
+            payload = response.json()
+            for row in payload.get("data", []):
+                node = row.get("node") or {}
+                status_obj = row.get("list_status") or {}
+                if node.get("id") is None:
+                    continue
+                entries.append(
+                    {
+                        "mal_id": node["id"],
+                        "status": status_obj.get("status"),
+                        "score": status_obj.get("score"),
+                        "num_watched_episodes": status_obj.get("num_episodes_watched") or 0,
+                    }
+                )
+            url = (payload.get("paging") or {}).get("next")
+        return entries
     finally:
         if owns_client:
             client.close()

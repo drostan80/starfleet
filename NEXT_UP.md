@@ -619,3 +619,4 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       end.
 - [ ] AniList indexes a not-yet-aired season under its romaji title only — handle case-by-case
       as each season airs, not automated.
+- [ ] make sure changes made on client are sent immidiately to LCARS the buffer time was there from when data was talking to sonarr and anilist, not the case anymore. unless there is a reason to continue having this buffer ???

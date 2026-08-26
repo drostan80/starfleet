@@ -46,7 +46,7 @@ Scope, deliberately narrow:
     the honest fallback rather than fabricating a real-looking one.
 """
 
-from lcars import anilist_client, config, ids, pending_review, util
+from lcars import anilist_client, config, ids, mal_client, pending_review, util
 
 # B.5.3, 2026-08-13 — see the module docstring's own note above for how
 # this relates to reconcile_watch_progress. Design checked live against
@@ -94,6 +94,265 @@ _ANILIST_TO_STATUS = {
     # rather than being dropped/skipped by this reconciliation.
     "REPEATING": "watching",
 }
+
+# MAL's own list_status vocabulary -> LCARS status (2026-08-26, MAL
+# bidirectional sync). Exhaustive against MAL's five list states; MAL has
+# no rewatch state in this field (is_rewatching is separate, never read).
+_MAL_TO_STATUS = {
+    "watching": "watching",
+    "plan_to_watch": "planned",
+    "on_hold": "paused",
+    "completed": "completed",
+    "dropped": "dropped",
+}
+
+# LCARS status -> each service's own vocabulary, for the *onward* push a
+# reconcile makes to the OTHER service (hub model: an AniList change lands
+# in LCARS and is pushed to MAL; a MAL change lands and is pushed to
+# AniList). Same maps resolvers.py's forward push uses, duplicated here
+# rather than imported to avoid a circular import (resolvers imports this
+# module) — small and stable enough that drift isn't a real risk.
+_STATUS_TO_ANILIST = {
+    "watching": "CURRENT",
+    "planned": "PLANNING",
+    "paused": "PAUSED",
+    "completed": "COMPLETED",
+    "dropped": "DROPPED",
+}
+_STATUS_TO_MAL = {
+    "watching": "watching",
+    "planned": "plan_to_watch",
+    "paused": "on_hold",
+    "completed": "completed",
+    "dropped": "dropped",
+}
+
+
+def _season_progress(conn, show_id: str, season_number: int) -> int:
+    """This season's episode-watched high-water mark — the same value
+    `resolvers._compute_season_episode_progress` computes (MAX watched/
+    skipped episode number), duplicated here to keep the onward push free
+    of a resolvers import (which would be circular)."""
+    row = conn.execute(
+        "SELECT MAX(episode) AS furthest FROM episode"
+        " WHERE show_id = ? AND season = ? AND state IN ('watched', 'skipped')",
+        (show_id, season_number),
+    ).fetchone()
+    return row["furthest"] or 0
+
+
+def _push_status_onward(conn, service: str, show_id: str, lcars_status: str) -> None:
+    """Push a just-reconciled status change to the OTHER service — every
+    one of the show's seasons linked there. Best-effort, exactly like
+    resolvers.py's forward push: a failure opens a pending_review rather
+    than aborting the reconcile (LCARS is already correct; the push is
+    the mirror). No-op when that service isn't authenticated."""
+    cfg = config.get_current()
+    id_col = "anilist_id" if service == "anilist" else "mal_id"
+    if service == "anilist":
+        token, remote_status = cfg.anilist_access_token, _STATUS_TO_ANILIST.get(lcars_status)
+    else:
+        token, remote_status = cfg.mal_access_token, _STATUS_TO_MAL.get(lcars_status)
+    if not token or remote_status is None:
+        return
+    seasons = conn.execute(
+        f"SELECT id, {id_col} AS ext_id FROM season WHERE show_id = ? AND {id_col} IS NOT NULL",
+        (show_id,),
+    ).fetchall()
+    for season in seasons:
+        try:
+            if service == "anilist":
+                anilist_client.save_media_list_entry(token, season["ext_id"], status=remote_status)
+            else:
+                mal_client.update_my_list_status(token, season["ext_id"], status=remote_status)
+        except (anilist_client.AniListError, mal_client.MALError) as e:
+            pending_review.open_or_extend(
+                conn, "season", season["id"], f"{service}_push", service, None, str(e)
+            )
+
+
+def _push_progress_onward(conn, service: str, season_id: str) -> None:
+    """Push a just-reconciled episode-progress change (this season's new
+    high-water mark) to the OTHER service. Best-effort, same shape as
+    `_push_status_onward`."""
+    cfg = config.get_current()
+    id_col = "anilist_id" if service == "anilist" else "mal_id"
+    season = conn.execute(
+        f"SELECT id, show_id, season_number, {id_col} AS ext_id FROM season WHERE id = ?",
+        (season_id,),
+    ).fetchone()
+    if season is None or season["ext_id"] is None:
+        return
+    token = cfg.anilist_access_token if service == "anilist" else cfg.mal_access_token
+    if not token:
+        return
+    progress = _season_progress(conn, season["show_id"], season["season_number"])
+    try:
+        if service == "anilist":
+            anilist_client.save_media_list_entry(token, season["ext_id"], progress=progress)
+        else:
+            mal_client.update_my_list_status(
+                token, season["ext_id"], num_watched_episodes=progress
+            )
+    except (anilist_client.AniListError, mal_client.MALError) as e:
+        pending_review.open_or_extend(
+            conn, "season", season["id"], f"{service}_push", service, None, str(e)
+        )
+
+
+def _apply_remote_list(conn, *, entries_by_ext_id, id_key, source, now):
+    """The shared reconcile core (2026-08-26 — extracted from
+    `reconcile_watch_progress` so the MAL reverse-sync reuses the exact
+    same hardening rather than a drift-prone second copy). `id_key` is
+    `anilist_id` or `mal_id`; `entries_by_ext_id` maps that id to
+    `{"lcars_status": <LCARS status or None>, "progress": int}` (the
+    caller normalizes each service's own status/progress vocabulary to
+    these before calling). `source` is the `changed_by`/pending_review
+    label. Applies, in order: duplicate-id exclusion (a remote id claimed
+    by >1 season — flagged, skipped), true-highest-season status
+    derivation, the unaired-episode guard (never mark/complete an episode
+    with a real future air date), and the per-episode progress backfill.
+
+    Returns `(changed_status, changed_progress_season_ids)` — `changed_
+    status` maps each show whose status actually changed to its new LCARS
+    status, `changed_progress_season_ids` is the set of season ids that
+    got episodes backfilled — so the caller can push exactly those
+    changes onward to the other service (never a per-season-walked push,
+    same "only write real changes to a live account" rule the Trakt
+    import's docstring spells out)."""
+    stats = {
+        "seasons_checked": 0,
+        "not_matched_remotely": 0,
+        "shows_status_updated": 0,
+        "episodes_backfilled": 0,
+        "ambiguous_id_conflicts": 0,
+    }
+    seasons = conn.execute(
+        f"SELECT id, show_id, season_number, {id_key} AS ext_id"
+        f" FROM season WHERE {id_key} IS NOT NULL"
+    ).fetchall()
+
+    # Duplicate external id claimed by more than one season — excluded
+    # from this whole run and flagged, since its watch state can't be
+    # trusted to belong to either show (watch_reconcile.py Fix 1).
+    seasons_by_ext_id: dict[int, list] = {}
+    for season in seasons:
+        seasons_by_ext_id.setdefault(season["ext_id"], []).append(season)
+    conflicted_season_ids: set[str] = set()
+    for ext_id, dupes in seasons_by_ext_id.items():
+        if len(dupes) <= 1:
+            continue
+        show_ids = [d["show_id"] for d in dupes]
+        for season in dupes:
+            conflicted_season_ids.add(season["id"])
+            other_shows = [s for s in show_ids if s != season["show_id"]]
+            pending_review.open_or_extend(
+                conn,
+                "season",
+                season["id"],
+                f"{id_key}_conflict",
+                source,
+                None,
+                f"{id_key} {ext_id} also claimed by show(s): {other_shows}",
+            )
+    stats["ambiguous_id_conflicts"] = len(conflicted_season_ids)
+
+    # A show's true highest linked season, so a status update is only ever
+    # sourced from it, never a stale lower season standing in (Fix 2).
+    highest_season_number_by_show: dict[str, int] = {}
+    for season in seasons:
+        if season["id"] in conflicted_season_ids:
+            continue
+        show_id = season["show_id"]
+        current = highest_season_number_by_show.get(show_id)
+        if current is None or season["season_number"] > current:
+            highest_season_number_by_show[show_id] = season["season_number"]
+
+    status_candidate_by_show: dict[str, tuple[int, str]] = {}
+    changed_progress_season_ids: set[str] = set()
+
+    for season in seasons:
+        if season["id"] in conflicted_season_ids:
+            continue
+        entry = entries_by_ext_id.get(season["ext_id"])
+        if entry is None:
+            stats["not_matched_remotely"] += 1
+            continue
+        stats["seasons_checked"] += 1
+
+        show_id = season["show_id"]
+        season_number = season["season_number"]
+
+        # Never mark/complete an episode with a real future air date —
+        # the remote's own progress/status can be ahead of reality (Fix 3,
+        # the Bookworm incident). Same guard, both services.
+        unaired_episodes = {
+            row["episode"]
+            for row in conn.execute(
+                "SELECT episode FROM episode"
+                " WHERE show_id = ? AND season = ? AND air_date_utc IS NOT NULL"
+                "   AND air_date_utc > ?",
+                (show_id, season_number, now),
+            ).fetchall()
+        }
+
+        if season_number == highest_season_number_by_show.get(show_id):
+            lcars_status = entry["lcars_status"]
+            if lcars_status == "completed" and unaired_episodes:
+                lcars_status = "watching"
+            if lcars_status is not None:
+                status_candidate_by_show[show_id] = (season_number, lcars_status)
+
+        progress = entry["progress"] or 0
+        if progress <= 0:
+            continue
+        unwatched = conn.execute(
+            "SELECT episode FROM episode"
+            " WHERE show_id = ? AND season = ? AND episode <= ? AND state = 'unwatched'",
+            (show_id, season_number, progress),
+        ).fetchall()
+        unwatched = [row for row in unwatched if row["episode"] not in unaired_episodes]
+        for ep_row in unwatched:
+            conn.execute(
+                "INSERT INTO watch_event"
+                " (id, show_id, season, episode, watched_at, platform, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ids.generate_id(conn, "w"),
+                    show_id,
+                    season_number,
+                    ep_row["episode"],
+                    now,
+                    None,
+                    now,
+                ),
+            )
+            conn.execute(
+                "UPDATE episode SET state = 'watched', updated_at = ?"
+                " WHERE show_id = ? AND season = ? AND episode = ?",
+                (now, show_id, season_number, ep_row["episode"]),
+            )
+            stats["episodes_backfilled"] += 1
+            changed_progress_season_ids.add(season["id"])
+
+    changed_status: dict[str, str] = {}
+    for show_id, (_, new_status) in status_candidate_by_show.items():
+        row = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
+        if row is None or row["status"] == new_status:
+            continue
+        conn.execute(
+            "UPDATE show SET status = ?, updated_at = ? WHERE id = ?", (new_status, now, show_id)
+        )
+        conn.execute(
+            "INSERT INTO status_change"
+            " (id, show_id, previous_status, new_status, changed_at, changed_by)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (ids.generate_id(conn, "c"), show_id, row["status"], new_status, now, source),
+        )
+        stats["shows_status_updated"] += 1
+        changed_status[show_id] = new_status
+
+    return stats, changed_status, changed_progress_season_ids
 
 
 def reconcile_watch_progress(conn) -> dict:
@@ -157,172 +416,31 @@ def reconcile_watch_progress(conn) -> dict:
         return result
 
     my_list = anilist_client.fetch_my_anime_list(cfg.anilist_access_token)
-    by_anilist_id = {entry["anilist_id"]: entry for entry in my_list}
-
-    seasons = conn.execute(
-        "SELECT id, show_id, season_number, anilist_id FROM season WHERE anilist_id IS NOT NULL"
-    ).fetchall()
-
-    now = util.now_utc_iso()
-
-    # Fix 1 — detect any anilist_id claimed by more than one season
-    # before touching anything. Excluded from this entire run (not
-    # just skipped for status — also skipped for episode-progress
-    # backfill below, since that data can't be trusted to belong to
-    # either show either) and flagged for a human via pending_review,
-    # one entry per conflicted season so it surfaces per-show in the
-    # existing review screen.
-    seasons_by_anilist_id: dict[int, list] = {}
-    for season in seasons:
-        seasons_by_anilist_id.setdefault(season["anilist_id"], []).append(season)
-    conflicted_season_ids: set[str] = set()
-    for anilist_id, dupes in seasons_by_anilist_id.items():
-        if len(dupes) <= 1:
-            continue
-        show_ids = [d["show_id"] for d in dupes]
-        for season in dupes:
-            conflicted_season_ids.add(season["id"])
-            other_shows = [s for s in show_ids if s != season["show_id"]]
-            pending_review.open_or_extend(
-                conn,
-                "season",
-                season["id"],
-                "anilist_id_conflict",
-                "anilist_reconcile",
-                None,
-                f"anilist_id {anilist_id} also claimed by show(s): {other_shows}",
-            )
-    result["ambiguous_anilist_id_conflicts"] = len(conflicted_season_ids)
-
-    # Fix 2 — a show's true highest linked season number, computed up
-    # front from every season this show has an anilist_id for
-    # (conflicted ones excluded — already unusable), regardless of
-    # whether that highest season actually resolves against the real
-    # list. Used below to refuse a status update sourced from anything
-    # other than that true highest season.
-    highest_season_number_by_show: dict[str, int] = {}
-    for season in seasons:
-        if season["id"] in conflicted_season_ids:
-            continue
-        show_id = season["show_id"]
-        current = highest_season_number_by_show.get(show_id)
-        if current is None or season["season_number"] > current:
-            highest_season_number_by_show[show_id] = season["season_number"]
-
-    # show_id -> (season_number, that season's own AniList status) —
-    # only ever set from a show's true highest linked season (Fix 2
-    # above), applied to show.status once every season's been walked.
-    status_candidate_by_show: dict[str, tuple[int, str]] = {}
-
-    for season in seasons:
-        if season["id"] in conflicted_season_ids:
-            continue
-        entry = by_anilist_id.get(season["anilist_id"])
-        if entry is None:
-            result["not_matched_on_anilist"] += 1
-            continue
-        result["seasons_checked"] += 1
-
-        show_id = season["show_id"]
-        season_number = season["season_number"]
-
-        # Fix 3, 2026-08-19 — Ascendance of a Bookworm ("Adopted Daughter
-        # of an Archduke"), real live bug, user-caught: this pass ran
-        # 2026-08-15T19:52:12Z and marked episodes 18-24 watched from
-        # AniList's raw `progress: 24`/`status: COMPLETED`, six of which
-        # (19-24) hadn't aired yet at that moment — the show was still
-        # weekly-releasing, and the human had correctly set it back to
-        # `watching` (through ep 17) just hours earlier. The module
-        # docstring's "AniList wins outright, no pending_review gate" is
-        # right for the divergence this was built to fix (a real watch
-        # LCARS never heard about) but was never meant to license
-        # fabricating watch history for episodes that don't exist yet —
-        # AniList's own `progress`/`status` can be ahead of reality (a
-        # premature total-episode count, a stray click) and this pass had
-        # no way to tell the difference. `unaired_episodes` below is
-        # this season's own already-known TVDB/Sonarr air dates (§5.2 —
-        # the one source that actually knows release schedules); an
-        # episode with a real, future air_date_utc is excluded from both
-        # the progress backfill and the status-completion check that
-        # follows, same "apply what's confident, flag/skip what isn't"
-        # principle every other guard in this pass already uses.
-        unaired_episodes = {
-            row["episode"]
-            for row in conn.execute(
-                "SELECT episode FROM episode"
-                " WHERE show_id = ? AND season = ? AND air_date_utc IS NOT NULL"
-                "   AND air_date_utc > ?",
-                (show_id, season_number, now),
-            ).fetchall()
+    entries = {
+        entry["anilist_id"]: {
+            "lcars_status": _ANILIST_TO_STATUS.get(entry["status"]),
+            "progress": entry.get("progress") or 0,
         }
-
-        if season_number == highest_season_number_by_show.get(show_id):
-            # A season with any real not-yet-aired episode can't honestly
-            # be COMPLETED yet, whatever AniList's own status says — same
-            # reasoning as the per-episode guard just below, applied to
-            # the show-level status this season is about to drive.
-            season_status = entry["status"]
-            if season_status == "COMPLETED" and unaired_episodes:
-                season_status = "CURRENT"
-            status_candidate_by_show[show_id] = (season_number, season_status)
-
-        progress = entry["progress"] or 0
-        if progress <= 0:
-            continue
-        unwatched = conn.execute(
-            "SELECT episode FROM episode"
-            " WHERE show_id = ? AND season = ? AND episode <= ? AND state = 'unwatched'",
-            (show_id, season_number, progress),
-        ).fetchall()
-        unwatched = [row for row in unwatched if row["episode"] not in unaired_episodes]
-        for ep_row in unwatched:
-            conn.execute(
-                "INSERT INTO watch_event"
-                " (id, show_id, season, episode, watched_at, platform, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    ids.generate_id(conn, "w"),
-                    show_id,
-                    season_number,
-                    ep_row["episode"],
-                    now,
-                    None,
-                    now,
-                ),
-            )
-            conn.execute(
-                "UPDATE episode SET state = 'watched', updated_at = ?"
-                " WHERE show_id = ? AND season = ? AND episode = ?",
-                (now, show_id, season_number, ep_row["episode"]),
-            )
-            result["episodes_backfilled"] += 1
-
-    for show_id, (_, anilist_status) in status_candidate_by_show.items():
-        new_status = _ANILIST_TO_STATUS.get(anilist_status)
-        if new_status is None:
-            continue  # an AniList status with no LCARS equivalent (see REPEATING note above)
-        row = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
-        if row is None or row["status"] == new_status:
-            continue
-        conn.execute(
-            "UPDATE show SET status = ?, updated_at = ? WHERE id = ?", (new_status, now, show_id)
-        )
-        conn.execute(
-            "INSERT INTO status_change"
-            " (id, show_id, previous_status, new_status, changed_at, changed_by)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                ids.generate_id(conn, "c"),
-                show_id,
-                row["status"],
-                new_status,
-                now,
-                "anilist_reconcile",
-            ),
-        )
-        result["shows_status_updated"] += 1
-
+        for entry in my_list
+    }
+    now = util.now_utc_iso()
+    stats, changed_status, changed_progress_season_ids = _apply_remote_list(
+        conn, entries_by_ext_id=entries, id_key="anilist_id", source="anilist_reconcile", now=now
+    )
+    # Hub model: an AniList change has now landed in LCARS -> mirror it
+    # onward to MAL (never back to AniList). Only the seasons/shows that
+    # actually changed, never a per-season-walked push.
+    for show_id, new_status in changed_status.items():
+        _push_status_onward(conn, "mal", show_id, new_status)
+    for season_id in changed_progress_season_ids:
+        _push_progress_onward(conn, "mal", season_id)
     conn.commit()
+
+    result["seasons_checked"] = stats["seasons_checked"]
+    result["not_matched_on_anilist"] = stats["not_matched_remotely"]
+    result["shows_status_updated"] = stats["shows_status_updated"]
+    result["episodes_backfilled"] = stats["episodes_backfilled"]
+    result["ambiguous_anilist_id_conflicts"] = stats["ambiguous_id_conflicts"]
     return result
 
 

@@ -450,3 +450,60 @@ def test_the_true_highest_season_status_still_applies_normally_when_it_resolves(
     assert result["shows_status_updated"] == 1
     row = conn.execute("SELECT status FROM show WHERE id = 's-stl002'").fetchone()
     assert row["status"] == "watching"  # season 2's status, not season 1's
+
+
+# --- onward push to MAL (2026-08-26, bidirectional hub) -----------------------
+
+
+def test_anilist_reconcile_pushes_changes_onward_to_mal(conn, monkeypatch):
+    from lcars import mal_client
+
+    _show(conn, "s-hubma1", status="planned")
+    _season(conn, "z-hubma1", "s-hubma1", 1, anilist_id=100)
+    conn.execute("UPDATE season SET mal_id = 555 WHERE id = 'z-hubma1'")
+    _episode(conn, "e-hubp11", "s-hubma1", 1, 1)
+    _episode(conn, "e-hubp12", "s-hubma1", 1, 2)
+    conn.commit()
+
+    # AniList says watching, progress 2 -> LCARS changes -> must mirror to MAL.
+    config.set_current(config.Config(anilist_access_token="atok", mal_access_token="mtok"))
+    monkeypatch.setattr(
+        anilist_client, "fetch_my_anime_list", lambda token: [_entry(100, "CURRENT", progress=2)]
+    )
+    mal_calls = []
+    monkeypatch.setattr(
+        mal_client,
+        "update_my_list_status",
+        lambda token, mal_id, **kw: mal_calls.append({"mal_id": mal_id, **kw}),
+    )
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    # status mirrored (watching) and progress mirrored (2) to MAL id 555
+    assert {"mal_id": 555, "status": "watching"} in mal_calls
+    assert {"mal_id": 555, "num_watched_episodes": 2} in mal_calls
+
+
+def test_anilist_reconcile_no_change_pushes_nothing_to_mal(conn, monkeypatch):
+    from lcars import mal_client
+
+    _show(conn, "s-hubma2", status="watching")
+    _season(conn, "z-hubma2", "s-hubma2", 1, anilist_id=101)
+    conn.execute("UPDATE season SET mal_id = 556 WHERE id = 'z-hubma2'")
+    _episode(conn, "e-hubp21", "s-hubma2", 1, 1, state="watched")
+    conn.commit()
+
+    config.set_current(config.Config(anilist_access_token="atok", mal_access_token="mtok"))
+    monkeypatch.setattr(
+        anilist_client, "fetch_my_anime_list", lambda token: [_entry(101, "CURRENT", progress=1)]
+    )
+    mal_calls = []
+    monkeypatch.setattr(
+        mal_client,
+        "update_my_list_status",
+        lambda token, mal_id, **kw: mal_calls.append({"mal_id": mal_id, **kw}),
+    )
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    assert mal_calls == []  # already converged -> no onward push

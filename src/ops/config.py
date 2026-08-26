@@ -59,6 +59,15 @@ class Config:
     # with the user, cheap enough at this real cost to run continuously
     # rather than self-gate like B.10's does.
     anilist_activity_poll_interval_seconds: int = 240
+    # 2026-08-26 — pollMalList's own (fifth) loop interval. MAL has no
+    # activity feed, so unlike the AniList poll above there's no cheap
+    # "did anything change" pre-check — every tick fetches and diffs the
+    # whole MAL list. Hourly by default: prompt enough to mirror a
+    # MAL-side watch/status change onward to AniList within the hour,
+    # slow enough that the full-list fetch's cost is negligible. Tune via
+    # OPS_MAL_RECONCILE_POLL_INTERVAL_SECONDS if a faster mirror is worth
+    # the extra fetches.
+    mal_reconcile_poll_interval_seconds: int = 3600
 
 
 def _resolve_secret(value: str | None, env_var: str) -> str | None:
@@ -94,6 +103,10 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
                 "anilist_activity_poll_interval_seconds",
                 fallback=cfg.anilist_activity_poll_interval_seconds,
             )
+            cfg.mal_reconcile_poll_interval_seconds = parser["ops"].getint(
+                "mal_reconcile_poll_interval_seconds",
+                fallback=cfg.mal_reconcile_poll_interval_seconds,
+            )
     cfg.lcars_url = os.environ.get("OPS_LCARS_URL", cfg.lcars_url)  # not a secret
     cfg.lcars_bearer_token = _resolve_secret(cfg.lcars_bearer_token, "OPS_LCARS_BEARER_TOKEN")
     env_interval = os.environ.get("OPS_POLL_INTERVAL_SECONDS")
@@ -105,4 +118,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     env_anilist_activity_interval = os.environ.get("OPS_ANILIST_ACTIVITY_POLL_INTERVAL_SECONDS")
     if env_anilist_activity_interval is not None:
         cfg.anilist_activity_poll_interval_seconds = int(env_anilist_activity_interval)
+    env_mal_reconcile_interval = os.environ.get("OPS_MAL_RECONCILE_POLL_INTERVAL_SECONDS")
+    if env_mal_reconcile_interval is not None:
+        cfg.mal_reconcile_poll_interval_seconds = int(env_mal_reconcile_interval)
     return cfg

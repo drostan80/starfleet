@@ -37,6 +37,7 @@ from lcars import (
     ids,
     local_audit,
     mal_client,
+    mal_reconcile,
     metadata,
     pagination,
     pending_review,
@@ -579,6 +580,7 @@ def _bulk_mark_all_aired_episodes_watched(conn, show_id: str) -> None:
     for season_number in touched_seasons:
         _stamp_season_started_at(conn, show_id, season_number, now, push=False)
         _push_show_episode_progress(conn, show_id, season_number)
+        _push_mal_show_episode_progress(conn, show_id, season_number)  # MAL mirror
 
 
 def _reopen_show_if_completed(conn, show_id: str, changed_by: str) -> None:
@@ -802,6 +804,41 @@ def _push_mal_show_status(conn, show_id: str, status: str) -> None:
             pending_review.open_or_extend(
                 conn, "season", season["id"], "mal_push", "mal", None, str(e)
             )
+
+
+def _push_mal_season_progress(conn, season: dict) -> None:
+    """Mirrors _push_season_progress (AniList) — pushes this season's own
+    recomputed episode-watched high-water mark to MAL's
+    `num_watched_episodes`, keyed on mal_id. 2026-08-26 — the MAL
+    counterpart the module comment above _push_mal_season_score noted was
+    deliberately unbuilt, now built for the bidirectional sync (user's
+    "watch episodes... need to be reflected on MAL")."""
+    if season["mal_id"] is None:
+        return
+    cfg = config.get_current()
+    if not cfg.mal_access_token:
+        return
+    progress = _compute_season_episode_progress(conn, season["show_id"], season["season_number"])
+    try:
+        mal_client.update_my_list_status(
+            cfg.mal_access_token, season["mal_id"], num_watched_episodes=progress
+        )
+    except mal_client.MALError as e:
+        pending_review.open_or_extend(conn, "season", season["id"], "mal_push", "mal", None, str(e))
+
+
+def _push_mal_show_episode_progress(conn, show_id: str, season_number: int) -> None:
+    """MAL counterpart to _push_show_episode_progress — same one-season
+    lookup, same no-op on a movie/absent season."""
+    if season_number is None:
+        return
+    season = conn.execute(
+        "SELECT * FROM season WHERE show_id = ? AND season_number = ?",
+        (show_id, season_number),
+    ).fetchone()
+    if season is None:
+        return
+    _push_mal_season_progress(conn, dict(season))
 
 
 def _get_episode_numbering_mapping(conn, mapping_id: str) -> dict | None:
@@ -2187,6 +2224,18 @@ def resolve_poll_anilist_activity(_, info):
     return watch_reconcile.poll_anilist_activity(conn)
 
 
+@mutation.field("pollMalList")
+def resolve_poll_mal_list(_, info):
+    """MAL → LCARS reverse sync (2026-08-26) — the MAL half of the
+    bidirectional mirror. Unlike pollAnilistActivity there's no cheap
+    activity-feed pre-check (MAL has none), so this fetches the whole
+    list and diffs every time (mal_reconcile.py). No require_client() —
+    same "bulk sweep, not a targeted human decision" reasoning; the
+    reconcile stamps its own fixed 'mal_reconcile' changed_by."""
+    conn = db.get_connection()
+    return mal_reconcile.reconcile_mal_progress(conn)
+
+
 @query.field("recommendedAvailabilityPollIntervalSeconds")
 def resolve_recommended_availability_poll_interval_seconds(_, info):
     conn = db.get_connection()
@@ -2748,6 +2797,7 @@ def resolve_add_watch_event(
         _try_complete_show(conn, show_id, watched_at)  # auto-sync, todo.md
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
+    _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
     row = conn.execute("SELECT rowid, * FROM watch_event WHERE id = ?", (watch_id,)).fetchone()
     return dict(row)
 
@@ -2783,6 +2833,7 @@ def resolve_delete_watch_event(_, info, watch_event_id):
             )
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #3, todo.md
+    _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
     return True
 
 
@@ -2836,6 +2887,7 @@ def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
         _try_complete_show(conn, show_id, watched_at)  # auto-sync, todo.md
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
+    _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
     return [
         dict(conn.execute("SELECT rowid, * FROM watch_event WHERE id = ?", (wid,)).fetchone())
         for wid in created_ids
@@ -2874,6 +2926,7 @@ def resolve_mark_episode_range_watched(
     _try_complete_show(conn, show_id, watched_at)  # auto-sync, todo.md
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
+    _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
     return [
         dict(conn.execute("SELECT rowid, * FROM watch_event WHERE id = ?", (wid,)).fetchone())
         for wid in created_ids
@@ -2901,6 +2954,7 @@ def resolve_mark_episode_skipped(_, info, episode_id):
     # contiguous run (_compute_season_episode_progress counts skipped as
     # passed), so this needs the same push every real watch mutation gets.
     _push_show_episode_progress(conn, row["show_id"], row["season"])
+    _push_mal_show_episode_progress(conn, row["show_id"], row["season"])  # MAL mirror
     return _get_episode(conn, episode_id)
 
 

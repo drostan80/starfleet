@@ -39,6 +39,9 @@ class _FakeClient:
     def patch(self, url, data=None, headers=None):
         return self._call(url, data, headers)
 
+    def get(self, url, headers=None):
+        return self._call(url, None, headers)
+
     def _call(self, url, data, headers):
         self.calls += 1
         self.last_url = url
@@ -207,3 +210,75 @@ def test_update_my_list_status_raises_on_connect_error():
     fake = _FakeClient(error=httpx.ConnectError("boom"))
     with pytest.raises(mal_client.MALError, match="Could not connect"):
         mal_client.update_my_list_status("tok", 123, score=8, client=fake)
+
+
+# --- num_watched_episodes + fetch_my_list (2026-08-26, bidirectional sync) ----
+
+
+def test_update_my_list_status_sends_num_watched_episodes():
+    fake = _FakeClient(response=_FakeResponse(payload={"num_episodes_watched": 5}))
+    mal_client.update_my_list_status("tok", 123, num_watched_episodes=5, client=fake)
+    assert fake.last_data == {"num_watched_episodes": 5}
+
+
+class _SequencedGetClient:
+    """A GET-only fake that returns a queued response per call — for
+    fetch_my_list's paging (one response per page)."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.urls = []
+
+    def get(self, url, headers=None):
+        self.urls.append(url)
+        return self._responses.pop(0)
+
+    def close(self):
+        pass
+
+
+def test_fetch_my_list_maps_fields():
+    payload = {
+        "data": [
+            {
+                "node": {"id": 1, "num_episodes": 12},
+                "list_status": {"status": "watching", "score": 7, "num_episodes_watched": 5},
+            },
+            {
+                "node": {"id": 2},
+                "list_status": {"status": "completed", "score": 0, "num_episodes_watched": 24},
+            },
+        ],
+        "paging": {},
+    }
+    fake = _SequencedGetClient([_FakeResponse(payload=payload)])
+    result = mal_client.fetch_my_list("tok", client=fake)
+    assert result == [
+        {"mal_id": 1, "status": "watching", "score": 7, "num_watched_episodes": 5},
+        {"mal_id": 2, "status": "completed", "score": 0, "num_watched_episodes": 24},
+    ]
+
+
+def test_fetch_my_list_follows_paging():
+    page1 = {
+        "data": [
+            {"node": {"id": 1}, "list_status": {"status": "watching", "num_episodes_watched": 3}}
+        ],
+        "paging": {"next": "https://api.myanimelist.net/v2/users/@me/animelist?offset=1000"},
+    }
+    page2 = {
+        "data": [
+            {"node": {"id": 2}, "list_status": {"status": "completed", "num_episodes_watched": 12}}
+        ],
+        "paging": {},
+    }
+    fake = _SequencedGetClient([_FakeResponse(payload=page1), _FakeResponse(payload=page2)])
+    result = mal_client.fetch_my_list("tok", client=fake)
+    assert [e["mal_id"] for e in result] == [1, 2]
+    assert len(fake.urls) == 2  # followed paging.next
+
+
+def test_fetch_my_list_raises_auth_error_on_401():
+    fake = _SequencedGetClient([_FakeResponse(status_code=401, payload={"message": "bad"})])
+    with pytest.raises(mal_client.MALAuthError):
+        mal_client.fetch_my_list("bad-tok", client=fake)

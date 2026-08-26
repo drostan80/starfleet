@@ -960,6 +960,15 @@ type WatchProgressReconcileResult {
   ambiguousAnilistIdConflicts: Int!
 }
 
+"pollMalList's own confirmation summary (2026-08-26, MAL reverse sync) — the MAL-keyed mirror of WatchProgressReconcileResult. Same fields, same meanings, keyed on mal_id instead of anilist_id: seasonsChecked matched to a real MAL list entry; notMatchedOnMal known here but absent from the MAL list; showsStatusUpdated/episodesBackfilled real corrections applied to LCARS (then mirrored onward to AniList); ambiguousMalIdConflicts seasons excluded because more than one claims the same mal_id. Status + progress only — score reverse-sync is not built (NEXT_UP)."
+type MalReconcileResult {
+  seasonsChecked: Int!
+  notMatchedOnMal: Int!
+  showsStatusUpdated: Int!
+  episodesBackfilled: Int!
+  ambiguousMalIdConflicts: Int!
+}
+
 "pollAnilistActivity's own confirmation summary — B.5.3. activitiesSeen: how many new AniList activity-feed entries (type ANIME_LIST) existed since the last check, purely a cheap 'did anything change' trigger signal, not itself a source of truth for what changed. reconcileResult: reconcileWatchProgress's own result, populated only when activitiesSeen > 0 (only then does this actually run that heavier sweep) — null on every quiet poll rather than a dict of zeros, so a caller can tell 'nothing new' apart from 'checked and genuinely found nothing to fix' at a glance."
 type AnilistActivityPollResult {
   activitiesSeen: Int!
@@ -1652,6 +1661,9 @@ type Mutation {
   real data instead of a guess.
   """
   pollAnilistActivity: AnilistActivityPollResult!
+
+  "MAL → LCARS reverse sync (2026-08-26): fetch the whole MAL list, reconcile status + episode progress into LCARS (shared hardening with reconcileWatchProgress), then mirror every real change onward to AniList. No activity-feed pre-check (MAL has none), so the whole list is diffed each call — Ops runs it on its own slower loop. Status + progress only; score reverse-sync not built."
+  pollMalList: MalReconcileResult!
 
   # -- 5.6 pending_review ----------------------------------------------------
   """
