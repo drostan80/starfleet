@@ -416,6 +416,23 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       chosen candidate's exact tvdbId is what gets added — no re-search, no risk of a different
       show being matched. Still TV/anime only (Sonarr) — a Radarr/movie version of `A` remains
       unbuilt. `~/repos/starfleet`/`~/repos/data`, deployed as v0.1.29, 2026-08-18.
+- [x] `A` (add show) can now add **movies to Radarr**, not just series to Sonarr (user's request
+      2026-08-26: "make sure movies added go to Radarr with the radarr setup"). `~/repos/data`
+      only, no server change — the whole movie half was already built server-side in B.21
+      (`shows.py` `_ensure_in_arr`/`_resolve_arr_candidate` route `media_shape=movie` to Radarr via
+      `radarr_root_folder`/`radarr_quality_profile_id`) and in `add_show_with_arr`/
+      `searchArrCandidates` (both already take `media_shape`); the only gap was `action_add_show`
+      hardcoding EPISODIC. Now asks `Movie? [y/N]` alongside `Anime? [y/N]` — a movie searches
+      Radarr and adds there (tmdbId), a series still Sonarr (tvdbId); only the id matching the
+      media type is passed (a tmdbId on an episodic add links the wrong thing, shows.py's own
+      warning). Anime asked for both — an anime film is `tracking_space=anime` too (drives AniList
+      linking, never the Radarr root folder, which Radarr has just one of). Config on `tiny`
+      already set: `radarr_root_folder = /data/media/movies`, quality profile 7. 4 new tests + all
+      existing add-show sequences updated, `~/repos/data` full suite 510 passed, ruff clean,
+      committed `a729bae`. **First real Radarr write still unproven** — B.21's whole Radarr add
+      path (`client.add_movie`) has never executed against the live Radarr (the Sonarr half has,
+      since 2026-08-18 daily use); the natural proof is one real movie add by the user. No LCARS
+      deploy needed; `~/repos/data` runs from source, so this is live for the user immediately.
 - [x] Ascendance of a Bookworm audit, user-caught ("it is all wrong in lcars"), three real bugs:
       (1) `watch_reconcile.py`'s `reconcile_watch_progress` trusted AniList's raw progress/status
       wholesale with no air-date check — on 2026-08-15 it marked six not-yet-aired episodes
