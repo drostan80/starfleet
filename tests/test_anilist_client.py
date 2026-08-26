@@ -178,6 +178,7 @@ def test_fetch_my_anime_list_flattens_every_list_into_one():
                                 {
                                     "status": "COMPLETED",
                                     "progress": 12,
+                                    "score": 85,
                                     "media": {"id": 101, "format": "TV", "title": {"romaji": "A"}},
                                 }
                             ]
@@ -187,6 +188,7 @@ def test_fetch_my_anime_list_flattens_every_list_into_one():
                                 {
                                     "status": "CURRENT",
                                     "progress": 0,
+                                    "score": 0,
                                     "media": {
                                         "id": 102,
                                         "format": "MOVIE",
@@ -203,8 +205,22 @@ def test_fetch_my_anime_list_flattens_every_list_into_one():
     fake = _SequencedFakeClient([viewer_response, collection_response])
     result = anilist_client.fetch_my_anime_list("tok", client=fake)
     assert result == [
-        {"anilist_id": 101, "format": "TV", "status": "COMPLETED", "progress": 12, "title": "A"},
-        {"anilist_id": 102, "format": "MOVIE", "status": "CURRENT", "progress": 0, "title": "B"},
+        {
+            "anilist_id": 101,
+            "format": "TV",
+            "status": "COMPLETED",
+            "progress": 12,
+            "score": 85,
+            "title": "A",
+        },
+        {
+            "anilist_id": 102,
+            "format": "MOVIE",
+            "status": "CURRENT",
+            "progress": 0,
+            "score": 0,
+            "title": "B",
+        },
     ]
     # userId came from the Viewer call's own id, not hardcoded
     assert fake.calls[1]["variables"] == {"userId": 24011}
@@ -250,6 +266,50 @@ def test_fetch_my_anime_list_deduplicates_an_entry_appearing_in_two_lists():
     fake = _SequencedFakeClient([viewer_response, collection_response])
     result = anilist_client.fetch_my_anime_list("tok", client=fake)
     assert len(result) == 1
+
+
+def test_fetch_my_anime_list_passes_score_through_including_zero():
+    # AniList returns 0 (not null) for an unscored entry — the score
+    # importer relies on both a real score and that 0 arriving verbatim.
+    viewer_response = _FakeResponse(payload={"data": {"Viewer": {"id": 24011}}})
+    collection_response = _FakeResponse(
+        payload={
+            "data": {
+                "MediaListCollection": {
+                    "lists": [
+                        {
+                            "entries": [
+                                {
+                                    "status": "COMPLETED",
+                                    "progress": 12,
+                                    "score": 90,
+                                    "media": {"id": 1, "format": "TV", "title": {"romaji": "A"}},
+                                },
+                                {
+                                    "status": "CURRENT",
+                                    "progress": 3,
+                                    "score": 0,
+                                    "media": {"id": 2, "format": "TV", "title": {"romaji": "B"}},
+                                },
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    fake = _SequencedFakeClient([viewer_response, collection_response])
+    entries = anilist_client.fetch_my_anime_list("tok", client=fake)
+    assert {e["anilist_id"]: e["score"] for e in entries} == {1: 90, 2: 0}
+
+
+def test_fetch_score_format_returns_the_viewer_format():
+    fake = _FakeClient(
+        response=_FakeResponse(
+            payload={"data": {"Viewer": {"mediaListOptions": {"scoreFormat": "POINT_100"}}}}
+        )
+    )
+    assert anilist_client.fetch_score_format("tok", client=fake) == "POINT_100"
 
 
 # --- OAuth (A.9) --------------------------------------------------------------

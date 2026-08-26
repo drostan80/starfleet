@@ -301,12 +301,31 @@ query ($userId: Int) {
       entries {
         status
         progress
+        score
         media { id format title { romaji } }
       }
     }
   }
 }
 """
+
+_SCORE_FORMAT_QUERY = "query { Viewer { mediaListOptions { scoreFormat } } }"
+
+
+def fetch_score_format(token: str, client: httpx.Client | None = None) -> str:
+    """The authenticated viewer's own AniList score-display format
+    (`POINT_100`/`POINT_10_DECIMAL`/`POINT_10`/`POINT_5`/`POINT_3`).
+
+    Every score this codebase reads or writes assumes `POINT_100`:
+    `resolvers._push_season_score` sends `effective_score * 5` (LCARS's
+    0-20 scale -> AniList's 0-100), and `fetch_my_anime_list`'s `score`
+    below comes back in whatever this format is. That assumption has
+    only ever been *implied* by the push working in production; anything
+    doing a bulk read of `score` (the PC.2 historical import) must
+    assert it explicitly first, since a `POINT_10`-format account would
+    silently return 8.7 where the importer expects 87."""
+    data = _graphql_request(_SCORE_FORMAT_QUERY, {}, token=token, client=client)
+    return data["Viewer"]["mediaListOptions"]["scoreFormat"]
 
 
 def fetch_my_anime_list(token: str, client: httpx.Client | None = None) -> list[dict]:
@@ -327,7 +346,14 @@ def fetch_my_anime_list(token: str, client: httpx.Client | None = None) -> list[
     LCARS can silently diverge from what AniList actually shows,
     entirely independent of `status` above. Purely additive — every
     existing caller (`show_backfill.py`) reads this dict by key and
-    ignores keys it doesn't ask for, confirmed before adding this."""
+    ignores keys it doesn't ask for, confirmed before adding this.
+
+    `score` added 2026-08-26 (PC.2's AniList historical-score import,
+    `scripts/import_anilist_scores.py`) — same additive shape. Comes
+    back in the viewer's own `scoreFormat`; the importer asserts that
+    is `POINT_100` (via `fetch_score_format` above) before dividing by
+    5. AniList returns `0` (not null) for an unscored entry, so callers
+    must treat `0` as absent, not as a real zero score."""
     viewer_id = fetch_viewer_id(token, client=client)
     data = _graphql_request(_MY_ANIME_LIST_QUERY, {"userId": viewer_id}, token=token, client=client)
     by_id: dict[int, dict] = {}
@@ -339,6 +365,7 @@ def fetch_my_anime_list(token: str, client: httpx.Client | None = None) -> list[
                 "format": media["format"],
                 "status": entry["status"],
                 "progress": entry.get("progress") or 0,
+                "score": entry.get("score"),  # POINT_100; 0 means unscored, see docstring
                 "title": media["title"]["romaji"],
             }
     return list(by_id.values())

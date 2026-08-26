@@ -293,8 +293,47 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       created, 62 matched to existing shows, 419 status writes, 13,112 watch events (real
       historical timestamps) + 10,211 synthesized episode rows. Sword Art Online excluded
       (already AniList-tracked). `scripts/import_trakt_history.py`, 2026-08-18.
-- [ ] PC.2, remaining — AniList data / MAL legacy scores historical import (AniList primary for
-      scores where both exist). (archive/BUILD_PLAN.md:4720)
+- [x] PC.2, AniList-score half — historical import of personal AniList scores into LCARS's own
+      missing score fields (AniList primary, per PC.2). 2026-08-26: `scripts/import_anilist_scores.py`,
+      built to the same one-time-script shape as `import_trakt_history.py` (real `--dry-run` against
+      a throwaway DB copy, `--apply`, per-pass counts, idempotent — only ever touches rows whose
+      score is currently NULL, never overwrites a manual `setScore`). Direct SQL, no outbound write:
+      routing through `setScore`/`setSeasonScore` would push every imported score *back* to the
+      user's live AniList+MAL accounts (the data is coming *from* AniList), same reasoning the Trakt
+      script's docstring already spells out. Two passes: season (`season.score` per `anilist_id` —
+      the canonical granularity `_push_season_score` reads; no `score_change` row, that table is
+      show-level only) then show (`show.score` — the Data client's headline "Score" — set only when
+      a show's linked seasons' scores are unambiguous, divergent shows reported and left for manual;
+      one `score_change` row per show at `changed_by='anilist_import'`, symmetry with Trakt's
+      `trakt_import`). Three data-corruption traps handled explicitly: AniList returns `0` (not null)
+      for an unscored entry → treated as absent; the `* 5` POINT_100 assumption in the existing push
+      is now *asserted* (`fetch_score_format` == `POINT_100`) before any write, aborting with a
+      clear "real bug to fix" message otherwise; POINT_100÷5 lands off LCARS's quarter-point grid so
+      every value is re-rounded with `setScore`'s own `round(x*4)/4` (lossy round-trip, documented).
+      `anilist_client`: `score` added to `fetch_my_anime_list` (additive, like `progress` was) +
+      new `fetch_score_format`. 12 new tests (`test_import_anilist_scores.py` x8 against a migrated
+      DB, `test_anilist_client.py` x2 + 2 existing updated), full suite 915 passed, ruff clean.
+      **Applied to production 2026-08-26.** Ran on `tiny` as a throwaway container off the live
+      0.1.35 image with the updated `lcars` package overlaid via `PYTHONPATH` (the deployed image
+      predates the `anilist_client` changes) and the real `config/`+`db/` volumes mounted — so
+      `config.load_config()` picked up the real AniList token automatically. Same
+      stop→apply→restart pattern the earlier direct-DB data fixes used: snapshot
+      (`lcars.db.bak-20260826-anilist-scores`), `docker stop lcars ops` (SQLite — no concurrent
+      writer), `--apply`, `docker start lcars ops`. **scoreFormat assertion passed → the account
+      really is POINT_100, so the existing push's `* 5` was never wrong** (the one thing that would
+      have been a separate bug). Results: 1122 AniList entries with a real score → 1109 seasons
+      filled (of 1425 linked; 316 linked-but-unscored-on-AniList left NULL), 1018 anime shows
+      filled (of 2373; 1320 with no scored AniList season left NULL), 35 divergent shows'
+      `show.score` left blank per the user's explicit call ("when divergent, score the season
+      accordingly, the show as a whole stays un-scored") — their per-season scores still filled.
+      `already_scored: 0` on both passes confirmed nothing was overwritten (this was genuinely the
+      first time scores flowed *in*). 1018 `score_change` rows written at `changed_by='anilist_import'`.
+      Verified on-disk post-apply (counts + Frieren spot-check: show.score blank, S1=20.0/S2=18.5/
+      S3=NULL) and LCARS confirmed back up serving 200s. No LCARS server deploy needed; the
+      `anilist_client` additions (`score` field + `fetch_score_format`) ship with the next tag,
+      the import script rode along as a one-off and isn't baked into the image.
+- [ ] PC.2, MAL-legacy-scores half — import scores unique to MAL (i.e. no AniList entry to take
+      them from), the last remaining piece of PC.2's score import. (archive/BUILD_PLAN.md:4720)
 - [ ] AniList `synonyms` field — last gap in LCARS's AniList read coverage (aninote
       note-matching only).
 - [ ] `tracking_space`: allow a show to be tracked in more than one place at once (e.g.
