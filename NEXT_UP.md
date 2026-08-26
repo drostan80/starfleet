@@ -419,7 +419,12 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       at `season_external_id` (rerun MAL+AniList reconcile suite) + merge handling; S4 season-level
       Sonarr range routing + collapse Bookworm's 4 sibling shows into one (D2); S5 subdivision
       trigger + expose sub-seasons in Data. Carry-forward safeguard: a coarse-source entry is only
-      "complete" when every fine season in its range is.
+      "complete" when every fine season in its range is. **Remaining decisions settled 2026-08-26:**
+      D4 range source = AniList episode counts primary, Sonarr/TVDB fallback (future/out-of-scope:
+      scene numbering); D5 migration = hybrid (backfill known cases now, lazy for the long tail);
+      D7 trigger = flag-for-confirmation via pending_review, never auto-split. D6 (Sonarr→sub-season
+      routing) and D8 (audit shipped paths) are implementation, folded into S4/S3. Design note
+      artifact updated to match.
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
