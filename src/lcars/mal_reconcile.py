@@ -13,6 +13,16 @@ only**. Score reverse-sync is not built in either direction (neither
 MAL→LCARS nor AniList→LCARS reconciles score — see NEXT_UP); the forward
 push of score to both services on a local `setScore` is unaffected.
 
+**Why a stale mirror is safe for progress**: the shared apply only ever
+marks `unwatched` episodes up to the remote's high-water mark — it never
+un-watches. So a MAL list that lags LCARS can only push LCARS *forward*
+on the shows where MAL is genuinely ahead, never roll one back; a MAL
+that's behind is a plain no-op there. (Status is "remote wins" like the
+AniList side — a genuinely stale MAL status could revert a fresher LCARS
+one, then converge; in practice the user's external tool keeps MAL≈
+AniList, and status changes are rare, so this stays a theoretical edge,
+not an oscillation.)
+
 **No activity-feed equivalent**: MAL has no "did anything change" feed
 like AniList's, so this fetches the whole list and diffs on a cadence
 (Ops's own loop) rather than being cheaply poll-triggered. **Token
