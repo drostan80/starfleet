@@ -408,6 +408,18 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       id mapping when `season.anilist_id`/`mal_id` (single-valued, load-bearing in the shared
       `_apply_remote_list`) can't express it — likely a new `season_external_id` table. Once D1-D3
       are answered, Slice 1 is an inert schema migration.
+      **Slice 1 shipped 2026-08-26 (v0.1.38, migration `c7a1e2f4b8d3`)** — inert schema foundation:
+      `season.abs_start`/`abs_end` (D3 range), `season.parent_season`/`sub_ordinal` (D1 fallback),
+      and a new `season_external_id(season_id, service, external_id)` table (external_id NOT unique
+      across seasons, so a coarse source's one entry links every fine season in its range). All
+      nullable/empty, nothing reads it yet (season.anilist_id/mal_id stay live); wired into
+      export_import + hard-delete purge; merge handling deferred to Slice 3. Deployed inert,
+      verified live (schema present, data intact). **Remaining slices** (each gated on its own
+      decisions D4-D8): S2 populate ranges + backfill existing shows; S3 point `_apply_remote_list`
+      at `season_external_id` (rerun MAL+AniList reconcile suite) + merge handling; S4 season-level
+      Sonarr range routing + collapse Bookworm's 4 sibling shows into one (D2); S5 subdivision
+      trigger + expose sub-seasons in Data. Carry-forward safeguard: a coarse-source entry is only
+      "complete" when every fine season in its range is.
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
