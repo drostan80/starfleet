@@ -465,9 +465,35 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       so S3's read switch landed on real data immediately. Both containers (lcars/ops) recreated
       cleanly (0 restarts), `{"data":{"__typename":"Query"}}` confirmed live. No migration in
       this deploy (schema unchanged from c7a1e2f4b8d3).
-      **Remaining slices** (each gated on its own decisions D6/D8): S4 season-level Sonarr range
-      routing + collapse Bookworm's 4 sibling shows into one (D2); S5 subdivision trigger + expose
-      sub-seasons in Data.
+      **Slice 4a built 2026-08-27** — abs-range routing in `_route_episode_availability`.
+      New `_apply_episode_availability_by_abs_range`: finds the season whose `abs_start..abs_end`
+      contains the incoming `absoluteEpisodeNumber`, computes the relative per-season episode number
+      (`abs − abs_start + 1`), and delegates to `_apply_episode_availability`. Updated
+      `_route_episode_availability` tries range routing first whenever `absoluteEpisodeNumber` is
+      present; falls back to raw season/episode matching for single-show shows with no abs ranges
+      (overwhelmingly common); falls back to `_apply_episode_availability_multi_show` as last resort
+      for multi-show shows without ranges. Works uniformly for both the pre-collapse 4-sibling shape
+      (4 shows, each season_number=1 with a range) and the post-collapse single-show shape (1 show,
+      4 ranged seasons) — the range lookup spans whatever shows share the tvdb_id regardless of
+      count. 3 new tests (single-show/multi-season, multi-show siblings, fall-through-no-range).
+      49 availability tests pass. Full suite 1012 passed, ruff clean.
+      **Slice 4b built 2026-08-27** — `scripts/collapse_bookworm.py`, a one-time script to collapse
+      Bookworm's 4 sibling show rows into winner `s-2k4jb6` (Part 1) with seasons 2/3/4 for the
+      three losers. Dry-run verified on production copy: 64 eps, 55 watch events, 4 ranged seasons,
+      0 loser rows remaining; all table moves correct (season, episode, watch_event, score_change,
+      status_change, show_synonym migrated to winner; show_service_presence/episode_numbering_mapping
+      deleted; sibling show_relation rows deleted; dead-stub relation repointed to winner; loser
+      show_external_id deleted; loser show rows deleted). **Not yet applied** — holding until one
+      clean `pollMalList` + `reconcileWatchProgress` cycle on v0.1.40 to confirm reconcile reads
+      from `season_external_id` work correctly before collapsing Bookworm on top.
+      **Deployed as v0.1.41, 2026-08-27.** S4a lands on production immediately (range routing
+      active; existing 4-sibling shape uses it correctly via fall-through until S4b runs).
+      **To apply S4b**: after observing one clean reconcile cycle on v0.1.41, run on `tiny`:
+      `docker cp collapse_bookworm.py lcars:/tmp/collapse_bookworm.py`
+      `docker exec lcars python3 /tmp/collapse_bookworm.py --db /db/lcars.db --apply`
+      (snapshot DB first as usual).
+      **Remaining slices**: S5 subdivision trigger (pending_review flag) + expose sub-seasons in
+      Data UI (gated on S4b applied cleanly).
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
