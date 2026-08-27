@@ -2313,12 +2313,12 @@ def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
     if not show_ids:
         return {}
 
+    placeholders = ",".join("?" * len(show_ids))
     ep_rows = conn.execute(
         "SELECT show_id, sonarr_season, sonarr_episode, file_path_sonarr"
         " FROM episode"
-        " WHERE show_id IN ({}) AND sonarr_season IS NOT NULL AND file_path_sonarr IS NOT NULL".format(
-            ",".join("?" * len(show_ids))
-        ),
+        f" WHERE show_id IN ({placeholders}) AND sonarr_season IS NOT NULL"
+        " AND file_path_sonarr IS NOT NULL",
         show_ids,
     ).fetchall()
     fp_map: dict[tuple[str, int, int], str] = {
