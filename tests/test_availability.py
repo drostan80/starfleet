@@ -359,6 +359,146 @@ def test_poll_sonarr_not_configured_is_a_clean_no_op(conn, monkeypatch):
     assert called == []  # never even constructed
 
 
+# --- S4a: abs_start/abs_end range routing (2026-08-27) -----------------
+#
+# `_apply_episode_availability_by_abs_range` routes by season range rather
+# than scanning all sibling episode rows by `absolute_number`. Works for
+# both multi-show siblings (pre-S4b shape) and a single collapsed show with
+# multiple ranged seasons (post-S4b shape), because the ranges live on the
+# `season` row regardless of show count.
+
+
+def _add_season(conn, season_id, show_id, season_number, abs_start=None, abs_end=None):
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, abs_start, abs_end,"
+        " source, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, 'manual', 'x', 'x')",
+        (season_id, show_id, season_number, abs_start, abs_end),
+    )
+    conn.commit()
+
+
+def test_range_routing_single_show_multiple_seasons(conn, monkeypatch):
+    """Post-S4b shape: one show, two ranged seasons. Sonarr's absolute
+    episode number routes to the correct season and relative episode."""
+    _configure_sonarr()
+    _add_show(conn, "s-rng001", tvdb_id=457900)
+    _add_season(conn, "z-rng001", "s-rng001", season_number=1, abs_start=1, abs_end=3)
+    _add_season(conn, "z-rng002", "s-rng001", season_number=2, abs_start=4, abs_end=6)
+    # Season 1: episodes 1-3 (absolute 1-3)
+    _add_episode(conn, "e-rng001", "s-rng001", season=1, episode=1, absolute_number=1)
+    _add_episode(conn, "e-rng002", "s-rng001", season=1, episode=2, absolute_number=2)
+    _add_episode(conn, "e-rng003", "s-rng001", season=1, episode=3, absolute_number=3)
+    # Season 2: episodes 1-3 (absolute 4-6)
+    _add_episode(conn, "e-rng004", "s-rng001", season=2, episode=1, absolute_number=4)
+    _add_episode(conn, "e-rng005", "s-rng001", season=2, episode=2, absolute_number=5)
+    _add_episode(conn, "e-rng006", "s-rng001", season=2, episode=3, absolute_number=6)
+
+    fake = _FakeHistoryClient(
+        [
+            # absolute 5 → season 2, episode 2 (5 − 4 + 1 = 2)
+            _sonarr_record(
+                "downloadFolderImported",
+                "2026-08-27T10:00:00Z",
+                tvdb_id=457900,
+                season=1,
+                episode=5,  # Sonarr's raw flat number — not meaningful without ranges
+                imported_path="/data/ep5.mkv",
+                absolute_episode_number=5,
+            )
+        ]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    count = availability._poll_sonarr(conn, backfill=True)
+    assert count == 1
+    row = conn.execute(
+        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-rng005'"
+    ).fetchone()
+    assert row["available_via_sonarr"] == "available"
+    assert row["file_path_sonarr"] == "/data/ep5.mkv"
+    # All other episodes untouched
+    others = conn.execute(
+        "SELECT available_via_sonarr FROM episode"
+        " WHERE show_id = 's-rng001' AND id <> 'e-rng005'"
+    ).fetchall()
+    assert all(r["available_via_sonarr"] == "unavailable" for r in others)
+
+
+def test_range_routing_multi_show_siblings_pre_collapse(conn, monkeypatch):
+    """Pre-S4b shape: two sibling show rows, each with one ranged season.
+    Same range lookup — routes to sibling B's season when absolute number
+    falls in its range."""
+    _configure_sonarr()
+    _add_show(conn, "s-rng002", tvdb_id=457901)
+    _add_show(conn, "s-rng003", tvdb_id=457901)
+    _add_season(conn, "z-rng003", "s-rng002", season_number=1, abs_start=1, abs_end=3)
+    _add_season(conn, "z-rng004", "s-rng003", season_number=1, abs_start=4, abs_end=6)
+    _add_episode(conn, "e-rng007", "s-rng002", season=1, episode=1, absolute_number=1)
+    _add_episode(conn, "e-rng008", "s-rng003", season=1, episode=1, absolute_number=4)
+
+    fake = _FakeHistoryClient(
+        [
+            # absolute 4 → sibling B's season 1, episode 1 (4 − 4 + 1 = 1)
+            _sonarr_record(
+                "downloadFolderImported",
+                "2026-08-27T11:00:00Z",
+                tvdb_id=457901,
+                season=1,
+                episode=4,
+                imported_path="/data/sib.mkv",
+                absolute_episode_number=4,
+            )
+        ]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    count = availability._poll_sonarr(conn, backfill=True)
+    assert count == 1
+    a = conn.execute(
+        "SELECT available_via_sonarr FROM episode WHERE id = 'e-rng007'"
+    ).fetchone()
+    b = conn.execute(
+        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-rng008'"
+    ).fetchone()
+    assert a["available_via_sonarr"] == "unavailable"
+    assert b["available_via_sonarr"] == "available"
+    assert b["file_path_sonarr"] == "/data/sib.mkv"
+
+
+def test_range_routing_falls_through_for_no_abs_range(conn, monkeypatch):
+    """Regular single show with no abs ranges: range lookup returns None,
+    falls back to raw season/episode matching (the overwhelmingly common
+    path, unchanged by S4a)."""
+    _configure_sonarr()
+    _add_show(conn, "s-rng004", tvdb_id=457902)
+    # No _add_season call — season table has no abs ranges for this show.
+    _add_episode(conn, "e-rng009", "s-rng004", season=2, episode=3, absolute_number=None)
+
+    fake = _FakeHistoryClient(
+        [
+            _sonarr_record(
+                "downloadFolderImported",
+                "2026-08-27T12:00:00Z",
+                tvdb_id=457902,
+                season=2,
+                episode=3,
+                imported_path="/data/regular.mkv",
+                absolute_episode_number=15,  # present but must not trigger range routing
+            )
+        ]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    count = availability._poll_sonarr(conn, backfill=True)
+    assert count == 1
+    row = conn.execute(
+        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-rng009'"
+    ).fetchone()
+    assert row["available_via_sonarr"] == "available"
+    assert row["file_path_sonarr"] == "/data/regular.mkv"
+
+
 # --- B.5.1: Sonarr/Radarr webhooks --------------------------------------
 #
 # Payload shapes mirror what Sonarr/Radarr actually send (confirmed live

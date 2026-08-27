@@ -340,27 +340,86 @@ def _apply_episode_availability_multi_show(
     return row["id"]
 
 
+def _apply_episode_availability_by_abs_range(
+    conn, show_ids: list[str], absolute_episode_number: float, status: str, path: str | None
+) -> str | None:
+    """Range-based routing via `season.abs_start`/`abs_end` — S4a (2026-08-27).
+
+    Finds the season whose abs_start..abs_end range contains
+    `absolute_episode_number`, computes the relative per-season episode
+    number as `abs_number − abs_start + 1`, and delegates to
+    `_apply_episode_availability` for the actual UPDATE and event publish.
+
+    Works identically for both the pre-S4b shape (multiple sibling show
+    rows, one season each, each with its own abs range) and the post-S4b
+    collapsed shape (one show, multiple seasons with abs ranges) — the
+    range lookup spans whatever shows are in `show_ids`, and the ranges
+    are non-overlapping by construction.
+
+    Returns None when no season range matches `absolute_episode_number`
+    (season_number=0 specials have NULL abs ranges by design — left to
+    the absolute-number-scan fallback in `_route_episode_availability`)."""
+    if not show_ids:
+        return None
+    placeholders = ",".join("?" for _ in show_ids)
+    season_row = conn.execute(
+        f"SELECT show_id, season_number, abs_start"
+        f" FROM season"
+        f" WHERE show_id IN ({placeholders})"
+        f"   AND abs_start IS NOT NULL AND abs_end IS NOT NULL"
+        f"   AND abs_start <= ? AND abs_end >= ?"
+        f"   AND season_number > 0",
+        (*show_ids, absolute_episode_number, absolute_episode_number),
+    ).fetchone()
+    if season_row is None:
+        return None
+    rel_episode = int(absolute_episode_number) - season_row["abs_start"] + 1
+    return _apply_episode_availability(
+        conn, season_row["show_id"], season_row["season_number"], rel_episode, status, path
+    )
+
+
 def _route_episode_availability(
     conn, show_ids: list[str], episode: dict, status: str, path: str | None
 ) -> str | None:
-    """Shared by `_poll_sonarr` and `apply_sonarr_webhook` — picks the
-    right one of the two `_apply_episode_availability*` functions above
-    for however many LCARS shows `show_ids` (from `_show_ids_for_tvdb`)
-    turned out to hold. The overwhelmingly common single-show case is
-    unchanged; `episode["seasonNumber"]`/`["episodeNumber"]` genuinely
-    are this one show's own numbering there. `absoluteEpisodeNumber` is
-    only meaningful (and only needed) once there's more than one
-    sibling to route across — real Sonarr `/history`/webhook payloads
-    both embed it on every regular episode (specials/no-absolute-number
-    episodes come back `None`, left alone entirely, same scope boundary
-    metadata.py's `_fetch_sonarr_multi_show` already documents)."""
+    """Shared by `_poll_sonarr` and `apply_sonarr_webhook`.
+
+    Routing order (S4a, 2026-08-27):
+
+    1. **Range routing** — whenever `absoluteEpisodeNumber` is present,
+       try `_apply_episode_availability_by_abs_range` first. This handles
+       both multi-sibling shows (Bookworm pre-S4b) and a single collapsed
+       show with multiple ranged seasons (post-S4b) uniformly, because the
+       ranges are stored on season rows regardless of show count.
+
+    2. **Single-show raw routing** — if no range matched (season has no
+       abs_start/abs_end, overwhelmingly common for regular shows with an
+       unshared tvdb id): fall back to Sonarr's own season/episode numbers,
+       which genuinely are this show's own numbering in that case.
+
+    3. **Multi-show absolute-number scan** — last resort for multi-show
+       shows whose season rows lack abs ranges (e.g. untracked specials
+       where season_number=0 and abs ranges are intentionally NULL). Scans
+       all sibling episode rows by `absolute_number`."""
+    abs_number = episode.get("absoluteEpisodeNumber")
+
+    # 1. Range routing — attempt first whenever abs_number is available.
+    if abs_number is not None:
+        result = _apply_episode_availability_by_abs_range(
+            conn, show_ids, float(abs_number), status, path
+        )
+        if result is not None:
+            return result
+
+    # 2. Single-show raw routing — no range matched; use Sonarr's own numbers.
     if len(show_ids) == 1:
         if episode.get("seasonNumber") is None or episode.get("episodeNumber") is None:
             return None
         return _apply_episode_availability(
             conn, show_ids[0], episode["seasonNumber"], episode["episodeNumber"], status, path
         )
-    abs_number = episode.get("absoluteEpisodeNumber")
+
+    # 3. Multi-show fallback (specials or shows without abs ranges).
     if abs_number is None:
         return None
     return _apply_episode_availability_multi_show(conn, show_ids, float(abs_number), status, path)
