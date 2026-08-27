@@ -2304,11 +2304,11 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
                 {
                     "service": "sonarr",
                     "title": (r.get("series") or {}).get("title") or r.get("sourceTitle", ""),
-                    "releaseTitle": r.get("sourceTitle", ""),
+                    "release_title": r.get("sourceTitle", ""),
                     "date": r.get("date", ""),
                     "quality": ((r.get("quality") or {}).get("quality") or {}).get("name"),
-                    "seasonNumber": (r.get("episode") or {}).get("seasonNumber"),
-                    "episodeNumber": (r.get("episode") or {}).get("episodeNumber"),
+                    "season_number": (r.get("episode") or {}).get("seasonNumber"),
+                    "episode_number": (r.get("episode") or {}).get("episodeNumber"),
                 }
                 for r in records
                 if r.get("eventType") == "grabbed"
@@ -2323,11 +2323,11 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
                 {
                     "service": "radarr",
                     "title": (r.get("movie") or {}).get("title") or r.get("sourceTitle", ""),
-                    "releaseTitle": r.get("sourceTitle", ""),
+                    "release_title": r.get("sourceTitle", ""),
                     "date": r.get("date", ""),
                     "quality": ((r.get("quality") or {}).get("quality") or {}).get("name"),
-                    "seasonNumber": None,
-                    "episodeNumber": None,
+                    "season_number": None,
+                    "episode_number": None,
                 }
                 for r in records
                 if r.get("eventType") == "grabbed"
