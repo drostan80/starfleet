@@ -479,3 +479,68 @@ def _seed_status_from_anilist(conn, show_id: str, known_status: str | None = Non
         (ids.generate_id(conn, "c"), show_id, previous["status"], new_status, now),
     )
     conn.commit()
+
+
+_SINGLE_TITLE_QUERY = """
+query ($id: Int) {
+  Media(id: $id, type: ANIME) { id title { romaji english native } }
+}
+"""
+
+
+def refresh_titles_from_anilist(conn, show_id: str) -> dict | None:
+    """Fetch AniList's authoritative titles for one show and write them
+    back to LCARS.  Mirrors the logic in scripts/backfill_titles.py but
+    scoped to a single on-demand call.
+
+    Behaviour:
+    - If AniList has an English title: overwrites title_romaji,
+      title_english, title_native (COALESCE for native — never clears a
+      stored native title with a null) and sets primary_title='english'.
+    - If AniList has no English title: overwrites title_romaji and
+      title_native only; title_english and primary_title are left as-is
+      (nothing to promote to).
+    - display_title_override is never touched.
+
+    Returns None when the show has no AniList link (caller should raise).
+    Raises on an AniList network error (propagates from _graphql_request).
+    Never raises when AniList simply has no record of the id (returns None
+    in that case too — same "no link, caller decides" contract)."""
+    row = conn.execute(
+        "SELECT external_id FROM show_external_id"
+        " WHERE show_id = ? AND service = 'anilist'",
+        (show_id,),
+    ).fetchone()
+    if row is None:
+        return None  # no AniList link — caller raises GraphQLError
+
+    anilist_id = int(row["external_id"])
+    data = anilist_client._graphql_request(
+        _SINGLE_TITLE_QUERY, {"id": anilist_id}, token=None, client=None
+    )
+    media = data.get("Media")
+    if media is None:
+        return None  # AniList doesn't know this id — same "no link" contract
+
+    title = media.get("title") or {}
+    romaji = (title.get("romaji") or "").strip() or None
+    english = (title.get("english") or "").strip() or None
+    native = (title.get("native") or "").strip() or None
+    now = util.now_utc_iso()
+
+    if english is not None:
+        conn.execute(
+            "UPDATE show SET title_romaji = ?, title_english = ?,"
+            " title_native = COALESCE(?, title_native), primary_title = 'english',"
+            " updated_at = ? WHERE id = ?",
+            (romaji, english, native, now, show_id),
+        )
+    else:
+        # No English title on AniList — update romaji/native, leave primary_title alone
+        conn.execute(
+            "UPDATE show SET title_romaji = ?,"
+            " title_native = COALESCE(?, title_native), updated_at = ? WHERE id = ?",
+            (romaji, native, now, show_id),
+        )
+    conn.commit()
+    return conn.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone()

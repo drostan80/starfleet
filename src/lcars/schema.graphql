@@ -1451,6 +1451,16 @@ type Mutation {
   "Pins displayTitle to any string (a synonym, a romaji/native title, or a hand-typed one), overriding the write-once primaryTitle default. title: null (or all-whitespace) clears it. Local-only, no AniList/MAL push."
   setDisplayTitle(showId: ID!, title: String): Show!
   """
+  Re-fetches AniList's authoritative title{romaji,english,native} for one
+  show and writes them back to LCARS — the on-demand counterpart to the
+  one-time backfill_titles.py script.  If AniList has an English title,
+  overwrites all three title fields and sets primaryTitle='english'.  If
+  AniList has no English title, overwrites romaji/native only and leaves
+  primaryTitle unchanged.  displayTitleOverride is never touched.
+  Raises if the show has no AniList link or AniList doesn't know the id.
+  """
+  refreshTitlesFromAniList(showId: ID!): Show!
+  """
   Write-mirror function set, todo.md (2026-08-16) — pushes AniList's REPEATING status plus
   `repeatCount` (its own `repeat` field) for this one season's AniList entry. LCARS has no local
   rewatch-count column of its own yet (no read-back mirror exists to consume it either) — this is

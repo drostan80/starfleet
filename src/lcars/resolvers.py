@@ -2365,6 +2365,23 @@ def resolve_set_display_title(_, info, show_id, title):
     return _get_show(conn, show_id)
 
 
+@mutation.field("refreshTitlesFromAniList")
+def resolve_refresh_titles_from_anilist(_, info, show_id):
+    """2026-08-27 — on-demand AniList title re-sync for one show.
+    show_backfill.refresh_titles_from_anilist() handles the fetch and
+    write; we raise GraphQLError when it returns None (no AniList link
+    or id unknown on AniList's side)."""
+    require_client(info)
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    result = show_backfill.refresh_titles_from_anilist(conn, show_id)
+    if result is None:
+        raise GraphQLError(
+            f"Show {show_id} has no AniList link, or AniList doesn't know the linked id."
+        )
+    return dict(result)
+
+
 @mutation.field("setSeasonScore")
 def resolve_set_season_score(_, info, season_id, score):
     """A.9, §6.1/§6.5's season-level score granularity (§5.5 addendum)

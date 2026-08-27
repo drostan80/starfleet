@@ -728,3 +728,104 @@ def test_seed_status_anilist_error_is_a_clean_no_op(conn, monkeypatch):
     show_backfill._seed_status_from_anilist(conn, "s-seed06")  # should not raise
     row = conn.execute("SELECT status FROM show WHERE id = ?", ("s-seed06",)).fetchone()
     assert row["status"] == "planned"
+
+
+# ---------------------------------------------------------------------------
+# refresh_titles_from_anilist (2026-08-27)
+# ---------------------------------------------------------------------------
+
+
+def _title_show(conn, show_id, anilist_id=None,
+                romaji="Old Romaji", english=None, native=None,
+                primary_title="romaji"):
+    """Insert a show with optional title fields and an AniList link."""
+    conn.execute(
+        "INSERT INTO show (id, media_shape, tracking_space, title_romaji,"
+        " title_english, title_native, primary_title, status, tracked,"
+        " created_at, updated_at)"
+        " VALUES (?, 'episodic', 'anime', ?, ?, ?, ?, 'planned', 1, 'x', 'x')",
+        (show_id, romaji, english, native, primary_title),
+    )
+    if anilist_id is not None:
+        conn.execute(
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES (?, 'anilist', ?, 'https://x', 'x')",
+            (show_id, str(anilist_id)),
+        )
+    conn.commit()
+
+
+def _fake_title_response(romaji=None, english=None, native=None):
+    """Build the _graphql_request return value for _SINGLE_TITLE_QUERY."""
+    return {"Media": {"id": 999, "title": {"romaji": romaji, "english": english, "native": native}}}
+
+
+def test_refresh_titles_with_english_updates_all_three(conn, monkeypatch):
+    """AniList returns an English title → all three fields written, primary_title='english'."""
+    _title_show(conn, "s-rt0001", anilist_id=999)
+    monkeypatch.setattr(
+        anilist_client, "_graphql_request",
+        lambda *a, **kw: _fake_title_response(
+            romaji="New Romaji", english="New English", native="新しい"
+        ),
+    )
+    result = show_backfill.refresh_titles_from_anilist(conn, "s-rt0001")
+    assert result is not None
+    row = conn.execute(
+        "SELECT title_romaji, title_english, title_native, primary_title FROM show WHERE id = ?",
+        ("s-rt0001",),
+    ).fetchone()
+    assert row["title_romaji"] == "New Romaji"
+    assert row["title_english"] == "New English"
+    assert row["title_native"] == "新しい"
+    assert row["primary_title"] == "english"
+
+
+def test_refresh_titles_without_english_leaves_primary_title(conn, monkeypatch):
+    """AniList has no English title → romaji updated, primary_title and title_english unchanged."""
+    _title_show(conn, "s-rt0002", anilist_id=999, english="Keep This", primary_title="english")
+    monkeypatch.setattr(
+        anilist_client, "_graphql_request",
+        lambda *a, **kw: _fake_title_response(romaji="New Romaji", english=None, native=None),
+    )
+    result = show_backfill.refresh_titles_from_anilist(conn, "s-rt0002")
+    assert result is not None
+    row = conn.execute(
+        "SELECT title_romaji, title_english, primary_title FROM show WHERE id = ?",
+        ("s-rt0002",),
+    ).fetchone()
+    assert row["title_romaji"] == "New Romaji"
+    assert row["title_english"] == "Keep This"  # unchanged
+    assert row["primary_title"] == "english"    # unchanged
+
+
+def test_refresh_titles_native_coalesce_never_clears(conn, monkeypatch):
+    """AniList returns null native title → existing native title preserved (COALESCE)."""
+    _title_show(conn, "s-rt0003", anilist_id=999, native="Stored Native")
+    monkeypatch.setattr(
+        anilist_client, "_graphql_request",
+        lambda *a, **kw: _fake_title_response(
+            romaji="R", english="E", native=None  # AniList has no native
+        ),
+    )
+    show_backfill.refresh_titles_from_anilist(conn, "s-rt0003")
+    row = conn.execute("SELECT title_native FROM show WHERE id = ?", ("s-rt0003",)).fetchone()
+    assert row["title_native"] == "Stored Native"
+
+
+def test_refresh_titles_no_anilist_link_returns_none(conn):
+    """Show has no AniList link → returns None, no DB change."""
+    _title_show(conn, "s-rt0004", anilist_id=None)
+    result = show_backfill.refresh_titles_from_anilist(conn, "s-rt0004")
+    assert result is None
+
+
+def test_refresh_titles_anilist_unknown_id_returns_none(conn, monkeypatch):
+    """AniList doesn't know the id (Media: null) → returns None."""
+    _title_show(conn, "s-rt0005", anilist_id=999)
+    monkeypatch.setattr(
+        anilist_client, "_graphql_request",
+        lambda *a, **kw: {"Media": None},
+    )
+    result = show_backfill.refresh_titles_from_anilist(conn, "s-rt0005")
+    assert result is None
