@@ -477,23 +477,17 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       4 ranged seasons) — the range lookup spans whatever shows share the tvdb_id regardless of
       count. 3 new tests (single-show/multi-season, multi-show siblings, fall-through-no-range).
       49 availability tests pass. Full suite 1012 passed, ruff clean.
-      **Slice 4b built 2026-08-27** — `scripts/collapse_bookworm.py`, a one-time script to collapse
+      **Slice 4b built + applied 2026-08-27** — `scripts/collapse_bookworm.py` collapses
       Bookworm's 4 sibling show rows into winner `s-2k4jb6` (Part 1) with seasons 2/3/4 for the
-      three losers. Dry-run verified on production copy: 64 eps, 55 watch events, 4 ranged seasons,
-      0 loser rows remaining; all table moves correct (season, episode, watch_event, score_change,
-      status_change, show_synonym migrated to winner; show_service_presence/episode_numbering_mapping
-      deleted; sibling show_relation rows deleted; dead-stub relation repointed to winner; loser
-      show_external_id deleted; loser show rows deleted). **Not yet applied** — holding until one
-      clean `pollMalList` + `reconcileWatchProgress` cycle on v0.1.40 to confirm reconcile reads
-      from `season_external_id` work correctly before collapsing Bookworm on top.
-      **Deployed as v0.1.41, 2026-08-27.** S4a lands on production immediately (range routing
-      active; existing 4-sibling shape uses it correctly via fall-through until S4b runs).
-      **To apply S4b**: after observing one clean reconcile cycle on v0.1.41, run on `tiny`:
-      `docker cp collapse_bookworm.py lcars:/tmp/collapse_bookworm.py`
-      `docker exec lcars python3 /tmp/collapse_bookworm.py --db /db/lcars.db --apply`
-      (snapshot DB first as usual).
+      three losers. Dry-run verified on production DB copy first; applied live on v0.1.41 with
+      containers stopped + DB snapshotted (`lcars.db.bak-20260827-pre-s4b-bookworm-collapse`).
+      Verified post-apply: 4 seasons (abs 1–14, 15–26, 27–36, 37–60), 64 episodes, 55 watch
+      events, 0 loser show rows, winner→OVA relation kept, dead-stub→winner repointed. Bookworm
+      is now one show with 4 seasons — `_fetch_sonarr_multi_show` and
+      `_apply_episode_availability_multi_show` are now dead code for this show (range routing takes
+      over via S4a). DB shipped as part of v0.1.41 (no schema change).
       **Remaining slices**: S5 subdivision trigger (pending_review flag) + expose sub-seasons in
-      Data UI (gated on S4b applied cleanly).
+      Data UI.
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
