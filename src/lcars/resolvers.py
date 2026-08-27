@@ -2301,7 +2301,7 @@ def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
 
     rows = conn.execute(
         "SELECT external_id, show_id FROM show_external_id"
-        " WHERE source = 'tvdb' AND external_id IN ({})".format(
+        " WHERE service = 'tvdb' AND external_id IN ({})".format(
             ",".join("?" * len(tvdb_id_set))
         ),
         tvdb_id_set,
@@ -2351,7 +2351,7 @@ def _grab_file_paths_radarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
 
     rows = conn.execute(
         "SELECT external_id, show_id FROM show_external_id"
-        " WHERE source = 'tmdb' AND external_id IN ({})".format(
+        " WHERE service = 'tmdb' AND external_id IN ({})".format(
             ",".join("?" * len(tmdb_id_set))
         ),
         tmdb_id_set,
