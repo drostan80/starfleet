@@ -2281,6 +2281,62 @@ def resolve_service_health(_, info):
     return service_health.get_all(conn)
 
 
+@query.field("recentGrabs")
+def resolve_recent_grabs(_, info, service: str, page: int = 1, pageSize: int = 20):
+    """2026-08-27 — recent grab events from Sonarr or Radarr, used by
+    Data's G screen.  Proxies Sonarr/Radarr's own /history endpoint
+    (already used by availability.py's sweep) filtered to 'grabbed'
+    events only — imports, deletes, and rejected grabs are noise here.
+
+    Returns empty list (no error) when the service is not configured or
+    the client raises — the screen degrades gracefully rather than
+    blowing up the whole query.  No require_client(): read-only, Ops-
+    internal, same reasoning serviceHealth uses."""
+    cfg = config.get_current()
+    try:
+        if service == "sonarr":
+            if not cfg.sonarr_url or not cfg.sonarr_api_key:
+                return []
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                data = client.history_page(page=page, page_size=pageSize)
+            records = data.get("records") or []
+            return [
+                {
+                    "service": "sonarr",
+                    "title": (r.get("series") or {}).get("title") or r.get("sourceTitle", ""),
+                    "releaseTitle": r.get("sourceTitle", ""),
+                    "date": r.get("date", ""),
+                    "quality": ((r.get("quality") or {}).get("quality") or {}).get("name"),
+                    "seasonNumber": (r.get("episode") or {}).get("seasonNumber"),
+                    "episodeNumber": (r.get("episode") or {}).get("episodeNumber"),
+                }
+                for r in records
+                if r.get("eventType") == "grabbed"
+            ]
+        if service == "radarr":
+            if not cfg.radarr_url or not cfg.radarr_api_key:
+                return []
+            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                data = client.history_page(page=page, page_size=pageSize)
+            records = data.get("records") or []
+            return [
+                {
+                    "service": "radarr",
+                    "title": (r.get("movie") or {}).get("title") or r.get("sourceTitle", ""),
+                    "releaseTitle": r.get("sourceTitle", ""),
+                    "date": r.get("date", ""),
+                    "quality": ((r.get("quality") or {}).get("quality") or {}).get("name"),
+                    "seasonNumber": None,
+                    "episodeNumber": None,
+                }
+                for r in records
+                if r.get("eventType") == "grabbed"
+            ]
+    except (sonarr_client.SonarrError, radarr_client.RadarrError):
+        pass
+    return []
+
+
 @mutation.field("setStatus")
 def resolve_set_status(_, info, show_id, status, confirmed=False):
     """`confirmed` — auto-sync warning gate, todo.md 2026-08-16, user's

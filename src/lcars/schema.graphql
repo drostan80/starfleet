@@ -1013,6 +1013,17 @@ enum ServiceHealthStatus {
   UNKNOWN
 }
 
+"One grab event from Sonarr or Radarr's /history feed (2026-08-27). title: the series or movie title as Sonarr/Radarr knows it. releaseTitle: the release name (Sonarr/Radarr's own sourceTitle — the full filename before download). date: ISO 8601 UTC timestamp. quality: quality profile name (e.g. 'Bluray-1080p'); null when the quality object is absent in the history record. seasonNumber/episodeNumber: populated for Sonarr, null for Radarr."
+type GrabEvent {
+  service: String!
+  title: String!
+  releaseTitle: String!
+  date: String!
+  quality: String
+  seasonNumber: Int
+  episodeNumber: Int
+}
+
 "Reachability only, not rate-limit awareness — confirmed with the user, 2026-08-09 (B.6): none of the four client modules currently distinguish a 429 from any other error, so a rateLimited field would be a lie today; deliberately deferred, not modeled here."
 type ServiceHealth {
   service: TrackedService!
@@ -1161,6 +1172,9 @@ type Query {
 
   "§6.7, B.6 — per-integration reachability, distinct from any individual show's tracking state. Always returns exactly one entry per TrackedService, even one never yet contacted (status UNKNOWN) — Data's status bar reads this as per-source indicators, not one aggregate value. No new polling: every entry reflects the outcome of whatever real Sonarr/Radarr/AniList/animeschedule.net call LCARS already made, whether triggered by Ops's automatic cadence or a human's on-demand action."
   serviceHealth: [ServiceHealth!]!
+
+  "Recent grab events from Sonarr or Radarr (2026-08-27). service: 'sonarr' or 'radarr'. page: 1-indexed page number (Sonarr/Radarr native), default 1. pageSize: events per page, default 20. Only 'grabbed' event types are returned — imports, deletes, and rejected grabs are excluded. Returns an empty list (no error) when the requested service is not configured."
+  recentGrabs(service: String!, page: Int, pageSize: Int): [GrabEvent!]!
 
   franchise(id: ID!): Franchise
   franchises(first: Int, after: String, last: Int, before: String): FranchiseConnection!
