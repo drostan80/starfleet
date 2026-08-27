@@ -2282,7 +2282,7 @@ def resolve_service_health(_, info):
 
 
 @query.field("recentGrabs")
-def resolve_recent_grabs(_, info, service: str, page: int = 1, pageSize: int = 20):
+def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 20):
     """2026-08-27 — recent grab events from Sonarr or Radarr, used by
     Data's G screen.  Proxies Sonarr/Radarr's own /history endpoint
     (already used by availability.py's sweep) filtered to 'grabbed'
@@ -2298,7 +2298,7 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, pageSize: int = 2
             if not cfg.sonarr_url or not cfg.sonarr_api_key:
                 return []
             with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
-                data = client.history_page(page=page, page_size=pageSize)
+                data = client.history_page(page=page, page_size=page_size)
             records = data.get("records") or []
             return [
                 {
@@ -2317,7 +2317,7 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, pageSize: int = 2
             if not cfg.radarr_url or not cfg.radarr_api_key:
                 return []
             with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
-                data = client.history_page(page=page, page_size=pageSize)
+                data = client.history_page(page=page, page_size=page_size)
             records = data.get("records") or []
             return [
                 {
