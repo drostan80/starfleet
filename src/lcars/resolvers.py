@@ -42,6 +42,7 @@ from lcars import (
     pagination,
     pending_review,
     radarr_client,
+    score_sync,
     season_mapping,
     season_ranges,
     service_health,
@@ -2120,6 +2121,21 @@ def resolve_poll_season_subdivision(_, info):
     pollAnimeSchedule: not a user-facing write, no changed_by column."""
     conn = db.get_connection()
     return season_ranges.check_subdivision_widths(conn)
+
+
+@mutation.field("pollScoreSync")
+def resolve_poll_score_sync(_, info):
+    """2026-08-27 — score_sync.check_anilist_score_drift's full-list
+    AniList score sweep.  No require_client() — same passive/Ops-internal
+    reasoning as pollSeasonSubdivision: not a user-facing write, opens
+    pending_review for human confirmation rather than applying anything
+    automatically."""
+    conn = db.get_connection()
+    result = score_sync.check_anilist_score_drift(conn)
+    return {
+        "anilistChecked": result["checked"],
+        "anilistFlagged": result["flagged"],
+    }
 
 
 @mutation.field("pollLocalServicePresence")

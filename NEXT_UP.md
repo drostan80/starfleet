@@ -497,6 +497,22 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       once()` wired into `run_daily_and_weekly_once` (same hourly tick as `pollAnimeSchedule`).
       `absStart`/`absEnd` nullable Int fields added to `type Season` — auto-resolved by
       `convert_names_case=True`, no extra resolver code. 7 new tests; 974 total pass.
+      **Score reverse-sync — AniList direction (v0.1.43, 2026-08-27)**: new
+      `src/lcars/score_sync.py` module. `check_anilist_score_drift(conn)` batch-fetches the
+      viewer's full AniList list (one call; same dataset `fetch_my_anime_list` already returns
+      for the reconcile sweep), compares each season's AniList score against what LCARS would have
+      pushed (`round(effective_lcars × 5)`), and opens a `pending_review` (field "score",
+      entity_type "season") when they differ. Scale guard: compares `int(anilist_score)` against
+      `round(effective_lcars * 5)` so that quarter-point pushes AniList snaps to integer don't
+      produce false positives. Handles "LCARS has no score but AniList does" (inbound new score)
+      and "AniList score changed after LCARS pushed" (drift) the same way. `already_resolved_with`
+      guard: if the human already resolved this exact proposed LCARS-scale value, no re-open.
+      `proposed_value_chain[-1]` is the LCARS-scale score (e.g. "18.0") Data reads and passes to
+      `setSeasonScore` before calling `resolvePendingReview` — no new mutation needed.
+      `pollScoreSync` mutation + `ScoreSyncPollResult { anilistChecked anilistFlagged }` type.
+      Ops: `poll_score_sync()` method + `run_score_sync_once()` wired into
+      `run_daily_and_weekly_once` (same hourly tick). MAL score drift not yet covered (no
+      activity-feed equivalent; future slice). 13 new tests.
       **Remaining**: expose sub-seasons in Data UI (check what Data actually renders for Bookworm
       post-collapse before deciding if client work is needed). `parent_season`/`sub_ordinal` columns
       are dead (zero rows written; D1 ended up using real season_number directly).
@@ -727,13 +743,11 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 - [ ] LCARS absorbs the AniList↔MAL mirroring the user currently runs as a separate external tool
       (2026-08-26). **Largely superseded by the MAL bidirectional sync (v0.1.37, Build above)**:
       LCARS now mirrors status + episode progress both ways (AniList↔LCARS↔MAL), forward and
-      reverse, on its own loops. The remaining gap is **score reverse-sync** — LCARS pushes score
-      to both on a local `setScore`, but neither reconcile path reads score back from AniList *or*
-      MAL, so a score changed directly on either service still relies on the external tool to
-      propagate it. Building score reverse-sync (both directions) would retire the external tool
-      entirely. Deferred as not critical (user's call 2026-08-26); the lossy 100↔20↔10 round-trip
-      is why it needs its own careful design (tolerance/last-synced-value guard) rather than riding
-      the exact-value status/progress path.
+      reverse, on its own loops. **Score reverse-sync — AniList direction done (v0.1.43)**:
+      `pollScoreSync` detects AniList score drift, queues as `pending_review` for human
+      confirmation → Data calls `setSeasonScore` + `resolvePendingReview`. MAL score reverse-sync
+      still missing (no activity-feed equivalent; future slice). Retiring the external tool
+      entirely requires both directions plus MAL.
 - [x] Catalog-wide `title_english`/`title_romaji` backfill — done 2026-08-26,
       `scripts/backfill_titles.py` (`~/repos/starfleet` `10c0983`). Batch-fetches AniList's own
       `title{romaji,english,native}` for the 1457 anime shows with an AniList link but NULL

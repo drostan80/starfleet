@@ -57,6 +57,7 @@ class _FakeClient:
         anilist_activity_result: dict | None = None,
         tvdb_backfill_result: dict | None = None,
         season_subdivision_result: dict | None = None,
+        score_sync_result: dict | None = None,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
@@ -95,6 +96,10 @@ class _FakeClient:
         self._season_subdivision_result = season_subdivision_result or {
             "checked": 0,
             "flagged": 0,
+        }
+        self._score_sync_result = score_sync_result or {
+            "anilistChecked": 0,
+            "anilistFlagged": 0,
         }
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
@@ -160,6 +165,9 @@ class _FakeClient:
 
     async def poll_season_subdivision(self) -> dict:
         return self._season_subdivision_result
+
+    async def poll_score_sync(self) -> dict:
+        return self._score_sync_result
 
 
 # --- run_once (B.1) ---------------------------------------------------------
@@ -432,7 +440,7 @@ async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_it
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
 
 
-async def test_run_daily_and_weekly_once_sums_all_nine_tiers():
+async def test_run_daily_and_weekly_once_sums_all_ten_tiers():
     client = _FakeClient(
         due_shows=[{"id": "s-a"}],
         due_seasons=[_season("z-a", "s-b")],
@@ -448,12 +456,14 @@ async def test_run_daily_and_weekly_once_sums_all_nine_tiers():
         untracked_shows_result={"found": 5, "newFindings": 1, "resolvedFindings": 1},
         tvdb_backfill_result={"showsUpdated": 1},
         season_subdivision_result={"checked": 3, "flagged": 1},
+        score_sync_result={"anilistChecked": 5, "anilistFlagged": 1},
     )
     count = await run_daily_and_weekly_once(client)
     # 1 (show refresh) + 1 (season reconcile) + 2 (animeschedule) + 1 (local
     # presence) + 1 (episode movie links) + 1 (mal refresh) + 2 (untracked) +
-    # 1 (tvdb backfill) + 4 (season subdivision checked+flagged) = 14
-    assert count == 14
+    # 1 (tvdb backfill) + 4 (season subdivision checked+flagged) +
+    # 6 (score sync anilistChecked+anilistFlagged) = 20
+    assert count == 20
     assert client.refreshed == ["s-a"]
     assert client.reconciled == [("s-b", 1)]
 

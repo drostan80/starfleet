@@ -936,6 +936,12 @@ type SeasonSubdivisionPollResult {
   flagged: Int!
 }
 
+"pollScoreSync's own confirmation summary (2026-08-27). anilistChecked: AniList-linked seasons where a non-zero AniList score was fetched and compared against what LCARS would have pushed (round(effective_lcars × 5)). anilistFlagged: seasons where the AniList score no longer matched — a pending_review (field \"score\") was opened or extended for human confirmation; zero on a quiet tick."
+type ScoreSyncPollResult {
+  anilistChecked: Int!
+  anilistFlagged: Int!
+}
+
 # ---------------------------------------------------------------------------
 # §5.1's movie <-> bonus_movie addendum, automatic tmdb_match derivation (B.8b)
 # ---------------------------------------------------------------------------
@@ -1419,6 +1425,17 @@ type Mutation {
   No require_client() — same passive reasoning as pollAnimeSchedule.
   """
   pollSeasonSubdivision: SeasonSubdivisionPollResult!
+  """
+  Score reverse-sync detection (2026-08-27): batch-fetches the viewer's
+  full AniList list and compares each entry's score against what LCARS
+  would have pushed (round(effective_lcars × 5)).  Flags discrepancies as
+  pending_review (field "score", entity_type "season") for human
+  confirmation in Data — no score is auto-applied.  MAL score drift is
+  not yet covered (no activity-feed equivalent; a future slice).
+  No require_client() — same passive/Ops-internal reasoning as
+  pollAnimeSchedule/pollSeasonSubdivision.
+  """
+  pollScoreSync: ScoreSyncPollResult!
   """
   §6.1/§6.8, A.9 — clamps/rounds silently to the 0-20 quarter-point
   scale rather than rejecting out-of-range input. Also pushes to

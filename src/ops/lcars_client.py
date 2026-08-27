@@ -369,6 +369,19 @@ class LcarsClient:
         data = await self._query(query)
         return data["pollSeasonSubdivision"]
 
+    async def poll_score_sync(self) -> dict:
+        """2026-08-27 — the AniList score drift sweep (pollScoreSync):
+        batch-fetches the viewer's full AniList list and flags seasons
+        where the external score diverged from what LCARS pushed.
+        Rides the same hourly tick as pollSeasonSubdivision — one
+        full-list AniList call, same negligible-relative-to-daily cost
+        reasoning.  Returns {anilistChecked, anilistFlagged}."""
+        query = """
+        mutation { pollScoreSync { anilistChecked anilistFlagged } }
+        """
+        data = await self._query(query)
+        return data["pollScoreSync"]
+
     async def poll_local_service_presence(self) -> dict:
         """§5.4/§6.7, B.7 — the `local` pseudo-service rollup
         (pollLocalServicePresence): pure SQL aggregate, no external
