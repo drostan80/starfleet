@@ -486,8 +486,20 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       is now one show with 4 seasons — `_fetch_sonarr_multi_show` and
       `_apply_episode_availability_multi_show` are now dead code for this show (range routing takes
       over via S4a). DB shipped as part of v0.1.41 (no schema change).
-      **Remaining slices**: S5 subdivision trigger (pending_review flag) + expose sub-seasons in
-      Data UI.
+      **S5 (v0.1.42, 2026-08-27)**: subdivision trigger + abs-range GraphQL fields.
+      `season_ranges.check_subdivision_widths` ported `_fetch_anilist_episode_counts` from the
+      backfill script into the live module, then batch-fetches AniList episode counts for all ranged
+      seasons and opens/extends `pending_review` (field `season_subdivision`) when width ≠ AniList
+      count. Idempotent via `pending_review.open_or_extend` + `already_resolved_with`. Skips airing
+      seasons (null episodes) and dead AniList ids (separate concern). `pollSeasonSubdivision`
+      mutation + `SeasonSubdivisionPollResult` type in schema; resolver delegates to
+      `check_subdivision_widths`. Ops: `poll_season_subdivision()` method + `run_season_subdivision_
+      once()` wired into `run_daily_and_weekly_once` (same hourly tick as `pollAnimeSchedule`).
+      `absStart`/`absEnd` nullable Int fields added to `type Season` — auto-resolved by
+      `convert_names_case=True`, no extra resolver code. 7 new tests; 974 total pass.
+      **Remaining**: expose sub-seasons in Data UI (check what Data actually renders for Bookworm
+      post-collapse before deciding if client work is needed). `parent_season`/`sub_ordinal` columns
+      are dead (zero rows written; D1 ended up using real season_number directly).
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
