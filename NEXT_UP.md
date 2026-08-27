@@ -460,13 +460,11 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       (`test_watch_reconcile._season`, `test_mal_reconcile._add_season`, the two
       `test_server.py` tests that bypassed `setSeasonMapping`, and two inline fixtures in
       `test_watch_reconcile.py` that set `mal_id` via UPDATE). Full suite 963 passed, ruff
-      clean. **⚠ Not deployable on its own** — S3 reads `season_external_id`, which is still
-      empty on production (S2's dual-write is go-forward only; the backfill script hasn't run
-      yet). Deploy order: (1) run `scripts/backfill_season_ranges.py --dry-run` against a copy of
-      production and review the validation report (Bookworm / Mushoku Tensei / Fire Force AniList
-      width mismatches); (2) `--apply`; (3) deploy the combined S2+S3 tag. Both slices must ship
-      together — deploying S3 alone against an empty table turns both reconcilers into permanent
-      no-ops on the live DB.
+      clean. **Deployed as v0.1.40, 2026-08-27.** The S2 backfill had already been applied to
+      the live DB before v0.1.39 shipped (1424 AniList + 1384 MAL rows in `season_external_id`),
+      so S3's read switch landed on real data immediately. Both containers (lcars/ops) recreated
+      cleanly (0 restarts), `{"data":{"__typename":"Query"}}` confirmed live. No migration in
+      this deploy (schema unchanged from c7a1e2f4b8d3).
       **Remaining slices** (each gated on its own decisions D6/D8): S4 season-level Sonarr range
       routing + collapse Bookworm's 4 sibling shows into one (D2); S5 subdivision trigger + expose
       sub-seasons in Data.
