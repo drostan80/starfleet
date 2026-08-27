@@ -550,6 +550,19 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       GraphQL query and maps camelCase response keys. `asyncio.gather` runs both service fetches
       concurrently. 17 tests (7 pure-helper, 10 screen-behaviour). Deployed as v0.1.45→v0.1.47
       (three deploys: schema, pageSize fix, dict-key fix).
+
+      **Redesign (v0.1.49 / `~/repos/data` commit `66c859b`, 2026-08-27)**: Static columns
+      replaced with selectable `OptionList` widgets; each row now shows title + `SxxExx` (TV) +
+      `air: YYYY-MM-DD` (if known) + `dl: YYYY-MM-DD HH:MM`; release title, quality, and the
+      ↳ line all stripped. Enter on a highlighted row opens the file in mpv via `player.launch()`;
+      items with no file path (not yet imported) show a `[no file]` marker and Enter writes a brief
+      status note instead of launching. LCARS `GrabEvent` type: added `airDate: String` (episode
+      `airDateUtc` for Sonarr; null for Radarr) and `filePath: String` (batch-looked up from the
+      LCARS episode table — `_grab_file_paths_sonarr`: two queries per call, tvdb_id→show_id then
+      show_id+sonarr_season+sonarr_episode→file_path_sonarr; `_grab_file_paths_radarr`: analogous
+      via tmdb_id→file_path_radarr; both null-safe, return None when not imported). 21 tests;
+      `~/repos/starfleet` 1004 passed, `~/repos/data` 21/21 grabs tests passed. Deployed as
+      v0.1.49.
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
