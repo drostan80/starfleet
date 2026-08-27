@@ -2281,7 +2281,6 @@ def resolve_service_health(_, info):
     return service_health.get_all(conn)
 
 
-@query.field("recentGrabs")
 def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
     """Batch-looks up file_path_sonarr for a list of Sonarr grab records.
 
@@ -2382,6 +2381,7 @@ def _grab_file_paths_radarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
     return result
 
 
+@query.field("recentGrabs")
 def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 20):
     """2026-08-27 — recent grab events from Sonarr or Radarr, used by
     Data's G screen.  Proxies Sonarr/Radarr's own /history endpoint
