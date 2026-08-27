@@ -433,20 +433,43 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       episode count), AniList width validation (batch-fetches AniList's per-entry `episodes` count
       and compares to range width — flags Mushoku Tensei / Fire Force shape), and range integrity
       (ascending, non-overlapping, gap-free ranges + no cross-boundary episodes). Season 0 gets
-      NULL (specials
-      have no meaningful absolute numbering). (b) Dual-write hooks in the three sites that write
-      `season.anilist_id`/`mal_id` (`season_mapping.reconcile_season`, `metadata._upsert_season`,
-      `resolvers.setSeasonMapping`) → `season_ranges.upsert_season_external_id()` so the mapping
-      table stays current going forward without S3 needing its own backfill. (c) Lazy range-fill
-      hook after `_synthesize_absolute_numbers` in both `_fetch_sonarr` and
-      `_fetch_sonarr_multi_show` → `season_ranges.fill_season_ranges()` for D5's long-tail
-      coverage. New module `season_ranges.py`. 26 tests (`test_season_ranges.py`, including
-      5 AniList-mocked width validation tests + TV-show exclusion), full suite green (961).
-      Still inert — nothing
+      NULL (specials have no meaningful absolute numbering). (b) Dual-write hooks in the three
+      sites that write `season.anilist_id`/`mal_id` (`season_mapping.reconcile_season`,
+      `metadata._upsert_season`, `resolvers.setSeasonMapping`) →
+      `season_ranges.upsert_season_external_id()` so the mapping table stays current going forward
+      without S3 needing its own backfill. (c) Lazy range-fill hook after
+      `_synthesize_absolute_numbers` in both `_fetch_sonarr` and `_fetch_sonarr_multi_show` →
+      `season_ranges.fill_season_ranges()` for D5's long-tail coverage. New module
+      `season_ranges.py`. 26 tests (`test_season_ranges.py`, including 5 AniList-mocked width
+      validation tests + TV-show exclusion), full suite green (961). Still inert — nothing
       reads `abs_start`/`abs_end` or `season_external_id` yet (S3 switches reconcile reads).
-      **Before deploy**: run `--dry-run` against a copy of the production DB and review the
-      validation report (especially the AniList width mismatches for Bookworm / Mushoku Tensei /
-      Fire Force), then `--apply`.
+      **Slice 3 built 2026-08-27** — point `_apply_remote_list` at `season_external_id` +
+      merge handling. Three parts: (a) `watch_reconcile._apply_remote_list`: `id_key` param
+      replaced by `service` (`"anilist"`/`"mal"`); the `season.{anilist_id,mal_id}` column
+      lookup replaced by a `season_external_id` JOIN — season.anilist_id/mal_id stay live (D3
+      decision: dual-write keeps them in sync, retirement is a separate later decision). The
+      dup-id guard field name changes from `"anilist_id_conflict"` → `"anilist_id_conflict"` (same
+      string, `{service}_id_conflict`). (b) `_push_status_onward`/`_push_progress_onward`: same
+      column-→-table read switch; no more `id_col` f-string interpolation. (c) `show_merge.py`:
+      comment clarifying `season_external_id` follows season moves automatically via FK (season.id
+      is unchanged by `UPDATE season SET show_id`); in the skipped-season block (winner already has
+      this season_number), the loser's ghost season's `season_external_id` rows are now explicitly
+      deleted — without this, they would permanently trigger the dup-id guard on every future
+      reconcile run. 2 new merge tests (`test_show_merge.py`). All test helpers that inserted
+      `season.anilist_id`/`mal_id` via raw SQL now also write to `season_external_id`
+      (`test_watch_reconcile._season`, `test_mal_reconcile._add_season`, the two
+      `test_server.py` tests that bypassed `setSeasonMapping`, and two inline fixtures in
+      `test_watch_reconcile.py` that set `mal_id` via UPDATE). Full suite 963 passed, ruff
+      clean. **⚠ Not deployable on its own** — S3 reads `season_external_id`, which is still
+      empty on production (S2's dual-write is go-forward only; the backfill script hasn't run
+      yet). Deploy order: (1) run `scripts/backfill_season_ranges.py --dry-run` against a copy of
+      production and review the validation report (Bookworm / Mushoku Tensei / Fire Force AniList
+      width mismatches); (2) `--apply`; (3) deploy the combined S2+S3 tag. Both slices must ship
+      together — deploying S3 alone against an empty table turns both reconcilers into permanent
+      no-ops on the live DB.
+      **Remaining slices** (each gated on its own decisions D6/D8): S4 season-level Sonarr range
+      routing + collapse Bookworm's 4 sibling shows into one (D2); S5 subdivision trigger + expose
+      sub-seasons in Data.
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;

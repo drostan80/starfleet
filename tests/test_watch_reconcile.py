@@ -56,6 +56,14 @@ def _season(conn, season_id, show_id, season_number, anilist_id):
         " VALUES (?, ?, ?, ?, 'manual', 'x', 'x')",
         (season_id, show_id, season_number, anilist_id),
     )
+    # S3: _apply_remote_list reads from season_external_id, not season.anilist_id —
+    # mirror into the table so test fixtures are found by the reconciler.
+    if anilist_id is not None:
+        conn.execute(
+            "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+            " VALUES (?, 'anilist', ?, 'x')",
+            (season_id, anilist_id),
+        )
 
 
 def _episode(conn, episode_id, show_id, season, episode, state="unwatched"):
@@ -461,6 +469,10 @@ def test_anilist_reconcile_pushes_changes_onward_to_mal(conn, monkeypatch):
     _show(conn, "s-hubma1", status="planned")
     _season(conn, "z-hubma1", "s-hubma1", 1, anilist_id=100)
     conn.execute("UPDATE season SET mal_id = 555 WHERE id = 'z-hubma1'")
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES ('z-hubma1', 'mal', 555, 'x')"
+    )
     _episode(conn, "e-hubp11", "s-hubma1", 1, 1)
     _episode(conn, "e-hubp12", "s-hubma1", 1, 2)
     conn.commit()
@@ -490,6 +502,10 @@ def test_anilist_reconcile_no_change_pushes_nothing_to_mal(conn, monkeypatch):
     _show(conn, "s-hubma2", status="watching")
     _season(conn, "z-hubma2", "s-hubma2", 1, anilist_id=101)
     conn.execute("UPDATE season SET mal_id = 556 WHERE id = 'z-hubma2'")
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES ('z-hubma2', 'mal', 556, 'x')"
+    )
     _episode(conn, "e-hubp21", "s-hubma2", 1, 1, state="watched")
     conn.commit()
 

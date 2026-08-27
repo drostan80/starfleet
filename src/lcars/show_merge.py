@@ -92,9 +92,15 @@ logger = logging.getLogger("lcars.show_merge")
 # Every table export_import.EXPORT_IMPORT_TABLES lists as depending on
 # `show` gets a merge branch below — kept in that same order for easy
 # side-by-side comparison against that list, the schema's own
-# authoritative "every show-scoped table" inventory. `air_date_change`
-# is absent: it references `episode.id`, not `show_id`, so it moves for
-# free the moment its parent episode row's `show_id` changes.
+# authoritative "every show-scoped table" inventory. Two tables are
+# absent because they move automatically without an explicit UPDATE:
+#   `air_date_change` — references `episode.id`, not `show_id`, so it
+#     follows the episode the moment its parent row's `show_id` changes.
+#   `season_external_id` — references `season.id`, not `show_id`, so
+#     it follows a moved season for free. The skipped-season case needs
+#     an explicit cleanup (see below) — a ghost season whose episodes
+#     have all been repointed must not leave its mapping rows behind, or
+#     they will permanently trigger _apply_remote_list's dup-id guard.
 
 
 def find_candidate_pairs(conn) -> list[tuple[str, str, str]]:
@@ -248,6 +254,17 @@ def merge_shows(conn, winner_id: str, loser_id: str, matched_on: str) -> str:
                 f" left on loser as {row['id']}"
             )
             season_repoint[row["season_number"]] = winner_seasons[row["season_number"]]
+            # This season's episodes all get repointed to the winner's
+            # same-numbered season (below), leaving this row a ghost with
+            # no episodes. Its season_external_id rows would permanently
+            # trigger _apply_remote_list's dup-id guard if any of the
+            # winner's mapping rows share the same external_id — clean
+            # them up now. (The moved-season path needs no action:
+            # season_external_id references season.id, which is unchanged
+            # by the UPDATE season SET show_id below.)
+            conn.execute(
+                "DELETE FROM season_external_id WHERE season_id = ?", (row["id"],)
+            )
             continue
         conn.execute("UPDATE season SET show_id = ? WHERE id = ?", (winner_id, row["id"]))
         moved_seasons.append(row["id"])

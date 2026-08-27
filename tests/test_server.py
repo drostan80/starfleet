@@ -9452,6 +9452,11 @@ async def test_reconcile_watch_progress_backfills_and_corrects_status_through_re
         " VALUES ('z-recon1', ?, 1, 555, 'manual', 1, 1, 'x', 'x')",
         (show["id"],),
     )
+    # S3: _apply_remote_list now reads from season_external_id, not season.anilist_id
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES ('z-recon1', 'anilist', 555, 'x')"
+    )
     for ep in (1, 2, 3):
         conn.execute(
             "INSERT INTO episode (id, show_id, season, episode, kind, created_at, updated_at)"
@@ -9519,6 +9524,11 @@ async def test_reconcile_watch_progress_never_marks_an_unaired_episode_watched(c
         "  created_at, updated_at)"
         " VALUES ('z-recon2', ?, 1, 556, 'manual', 1, 1, 'x', 'x')",
         (show["id"],),
+    )
+    # S3: _apply_remote_list now reads from season_external_id, not season.anilist_id
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES ('z-recon2', 'anilist', 556, 'x')"
     )
     future = (datetime.now(UTC) + timedelta(days=7)).isoformat()
     for ep, air_date in ((1, None), (2, None), (3, future)):

@@ -459,3 +459,63 @@ def test_reverse_show_merge_raises_if_already_reversed(conn):
     show_merge.reverse_show_merge(conn, merge_id, "data")
     with pytest.raises(ValueError, match="already reversed"):
         show_merge.reverse_show_merge(conn, merge_id, "data")
+
+
+def test_merge_clears_season_external_id_for_skipped_seasons(conn):
+    """A skipped season (winner already has the same season_number) has its
+    episodes repointed to the winner's season and becomes a ghost row. Its
+    season_external_id rows must be deleted so _apply_remote_list's dup-id
+    guard is never triggered by the leftover ghost mapping."""
+    _show(conn, "s-winsid", "Winner")
+    _season(conn, "z-seawid", "s-winsid", 1)
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES ('z-seawid', 'anilist', 999, 'x')"
+    )
+    _show(conn, "s-lossid", "Loser", tracking_space="tv")
+    _season(conn, "z-sealid", "s-lossid", 1)  # conflicts with winner's season 1
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES ('z-sealid', 'anilist', 999, 'x')"  # same external_id — would trigger dup guard
+    )
+    conn.commit()
+
+    show_merge.merge_shows(conn, "s-winsid", "s-lossid", "test")
+
+    # Loser's skipped season mapping must be gone
+    loser_mapping = conn.execute(
+        "SELECT COUNT(*) FROM season_external_id WHERE season_id = 'z-sealid'"
+    ).fetchone()[0]
+    assert loser_mapping == 0, "ghost season's season_external_id rows should have been deleted"
+
+    # Winner's own mapping must be untouched
+    winner_mapping = conn.execute(
+        "SELECT external_id FROM season_external_id WHERE season_id = 'z-seawid'"
+    ).fetchone()
+    assert winner_mapping is not None and winner_mapping["external_id"] == 999
+
+
+def test_merge_preserves_season_external_id_for_moved_seasons(conn):
+    """A non-conflicting season that moves to the winner must carry its
+    season_external_id rows with it — they reference season.id, which is
+    unchanged by the show_id UPDATE, so they follow for free."""
+    _show(conn, "s-winmid", "Winner")
+    _show(conn, "s-losmid", "Loser", tracking_space="tv")
+    _season(conn, "z-sealmd", "s-losmid", 1)
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES ('z-sealmd', 'anilist', 888, 'x')"
+    )
+    conn.commit()
+
+    show_merge.merge_shows(conn, "s-winmid", "s-losmid", "test")
+
+    # Season moved to winner
+    moved_season = conn.execute("SELECT show_id FROM season WHERE id = 'z-sealmd'").fetchone()
+    assert moved_season["show_id"] == "s-winmid"
+
+    # Mapping row is still there, now pointing at the moved season (which is on the winner)
+    mapping = conn.execute(
+        "SELECT external_id FROM season_external_id WHERE season_id = 'z-sealmd'"
+    ).fetchone()
+    assert mapping is not None and mapping["external_id"] == 888

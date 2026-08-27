@@ -70,7 +70,7 @@ def reconcile_mal_progress(conn) -> dict:
     }
     now = util.now_utc_iso()
     stats, changed_status, changed_progress_season_ids = watch_reconcile._apply_remote_list(
-        conn, entries_by_ext_id=entries, id_key="mal_id", source="mal_reconcile", now=now
+        conn, entries_by_ext_id=entries, service="mal", source="mal_reconcile", now=now
     )
     # Hub model: a MAL change has now landed in LCARS -> mirror it onward
     # to AniList (never back to MAL). Only the seasons/shows that actually

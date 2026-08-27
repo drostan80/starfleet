@@ -56,6 +56,20 @@ def _add_season(conn, season_id, show_id, season_number, mal_id, anilist_id=None
         " created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'manual', 1, 'x', 'x')",
         (season_id, show_id, season_number, mal_id, anilist_id),
     )
+    # S3: _apply_remote_list reads from season_external_id, not season.{mal_id,anilist_id} —
+    # mirror into the table so test fixtures are found by the reconciler.
+    if mal_id is not None:
+        conn.execute(
+            "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+            " VALUES (?, 'mal', ?, 'x')",
+            (season_id, mal_id),
+        )
+    if anilist_id is not None:
+        conn.execute(
+            "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+            " VALUES (?, 'anilist', ?, 'x')",
+            (season_id, anilist_id),
+        )
 
 
 def _add_episode(conn, ep_id, show_id, season, episode, state="unwatched", air_date=None):

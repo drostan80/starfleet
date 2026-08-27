@@ -148,16 +148,20 @@ def _push_status_onward(conn, service: str, show_id: str, lcars_status: str) -> 
     than aborting the reconcile (LCARS is already correct; the push is
     the mirror). No-op when that service isn't authenticated."""
     cfg = config.get_current()
-    id_col = "anilist_id" if service == "anilist" else "mal_id"
     if service == "anilist":
         token, remote_status = cfg.anilist_access_token, _STATUS_TO_ANILIST.get(lcars_status)
     else:
         token, remote_status = cfg.mal_access_token, _STATUS_TO_MAL.get(lcars_status)
     if not token or remote_status is None:
         return
+    # S3: read from season_external_id (the table _apply_remote_list now reads too)
+    # rather than the legacy season.{anilist_id,mal_id} columns — both are kept
+    # in sync by the S2 dual-write, but reading from one source avoids drift.
     seasons = conn.execute(
-        f"SELECT id, {id_col} AS ext_id FROM season WHERE show_id = ? AND {id_col} IS NOT NULL",
-        (show_id,),
+        "SELECT s.id, sei.external_id AS ext_id"
+        " FROM season_external_id sei JOIN season s ON s.id = sei.season_id"
+        " WHERE s.show_id = ? AND sei.service = ?",
+        (show_id, service),
     ).fetchall()
     for season in seasons:
         try:
@@ -176,10 +180,13 @@ def _push_progress_onward(conn, service: str, season_id: str) -> None:
     high-water mark) to the OTHER service. Best-effort, same shape as
     `_push_status_onward`."""
     cfg = config.get_current()
-    id_col = "anilist_id" if service == "anilist" else "mal_id"
+    # S3: read ext_id from season_external_id (same source as _apply_remote_list).
     season = conn.execute(
-        f"SELECT id, show_id, season_number, {id_col} AS ext_id FROM season WHERE id = ?",
-        (season_id,),
+        "SELECT s.id, s.show_id, s.season_number, sei.external_id AS ext_id"
+        " FROM season s LEFT JOIN season_external_id sei"
+        " ON sei.season_id = s.id AND sei.service = ?"
+        " WHERE s.id = ?",
+        (service, season_id),
     ).fetchone()
     if season is None or season["ext_id"] is None:
         return
@@ -200,11 +207,13 @@ def _push_progress_onward(conn, service: str, season_id: str) -> None:
         )
 
 
-def _apply_remote_list(conn, *, entries_by_ext_id, id_key, source, now):
+def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     """The shared reconcile core (2026-08-26 — extracted from
     `reconcile_watch_progress` so the MAL reverse-sync reuses the exact
-    same hardening rather than a drift-prone second copy). `id_key` is
-    `anilist_id` or `mal_id`; `entries_by_ext_id` maps that id to
+    same hardening rather than a drift-prone second copy). `service` is
+    `"anilist"` or `"mal"` — used to join `season_external_id`
+    (S3: replaces the old `id_key` f-string column lookup on `season`).
+    `entries_by_ext_id` maps an external id to
     `{"lcars_status": <LCARS status or None>, "progress": int}` (the
     caller normalizes each service's own status/progress vocabulary to
     these before calling). `source` is the `changed_by`/pending_review
@@ -227,9 +236,16 @@ def _apply_remote_list(conn, *, entries_by_ext_id, id_key, source, now):
         "episodes_backfilled": 0,
         "ambiguous_id_conflicts": 0,
     }
+    # S3: read from season_external_id rather than season.{anilist_id,mal_id}.
+    # The legacy columns stay live (dual-write from S2 keeps them in sync),
+    # but the mapping table is the authoritative read source from here on —
+    # it will also express the coarse-source / multi-fine-season case once S4
+    # introduces real subdivision, which the column can't represent.
     seasons = conn.execute(
-        f"SELECT id, show_id, season_number, {id_key} AS ext_id"
-        f" FROM season WHERE {id_key} IS NOT NULL"
+        "SELECT s.id, s.show_id, s.season_number, sei.external_id AS ext_id"
+        " FROM season_external_id sei JOIN season s ON s.id = sei.season_id"
+        " WHERE sei.service = ?",
+        (service,),
     ).fetchall()
 
     # Duplicate external id claimed by more than one season — excluded
@@ -250,10 +266,10 @@ def _apply_remote_list(conn, *, entries_by_ext_id, id_key, source, now):
                 conn,
                 "season",
                 season["id"],
-                f"{id_key}_conflict",
+                f"{service}_id_conflict",
                 source,
                 None,
-                f"{id_key} {ext_id} also claimed by show(s): {other_shows}",
+                f"{service}_id {ext_id} also claimed by show(s): {other_shows}",
             )
     stats["ambiguous_id_conflicts"] = len(conflicted_season_ids)
 
@@ -425,7 +441,7 @@ def reconcile_watch_progress(conn) -> dict:
     }
     now = util.now_utc_iso()
     stats, changed_status, changed_progress_season_ids = _apply_remote_list(
-        conn, entries_by_ext_id=entries, id_key="anilist_id", source="anilist_reconcile", now=now
+        conn, entries_by_ext_id=entries, service="anilist", source="anilist_reconcile", now=now
     )
     # Hub model: an AniList change has now landed in LCARS -> mirror it
     # onward to MAL (never back to AniList). Only the seasons/shows that
