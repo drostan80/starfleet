@@ -425,6 +425,28 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       D7 trigger = flag-for-confirmation via pending_review, never auto-split. D6 (Sonarr→sub-season
       routing) and D8 (audit shipped paths) are implementation, folded into S4/S3. Design note
       artifact updated to match.
+      **Slice 2 built 2026-08-27** — range population + hybrid backfill (D4/D5). Three parts:
+      (a) `scripts/backfill_season_ranges.py` (`--dry-run`/`--apply`): fills `season.abs_start`/
+      `abs_end` from observed integer `episode.absolute_number` values (MIN/MAX per season — the
+      real data, not accumulated AniList counts); mirrors `season.anilist_id`/`mal_id` into
+      `season_external_id`; prints validation report: numbering gaps (range width vs observed
+      episode count), AniList width validation (batch-fetches AniList's per-entry `episodes` count
+      and compares to range width — flags Mushoku Tensei / Fire Force shape), and range integrity
+      (ascending, non-overlapping, gap-free ranges + no cross-boundary episodes). Season 0 gets
+      NULL (specials
+      have no meaningful absolute numbering). (b) Dual-write hooks in the three sites that write
+      `season.anilist_id`/`mal_id` (`season_mapping.reconcile_season`, `metadata._upsert_season`,
+      `resolvers.setSeasonMapping`) → `season_ranges.upsert_season_external_id()` so the mapping
+      table stays current going forward without S3 needing its own backfill. (c) Lazy range-fill
+      hook after `_synthesize_absolute_numbers` in both `_fetch_sonarr` and
+      `_fetch_sonarr_multi_show` → `season_ranges.fill_season_ranges()` for D5's long-tail
+      coverage. New module `season_ranges.py`. 26 tests (`test_season_ranges.py`, including
+      5 AniList-mocked width validation tests + TV-show exclusion), full suite green (961).
+      Still inert — nothing
+      reads `abs_start`/`abs_end` or `season_external_id` yet (S3 switches reconcile reads).
+      **Before deploy**: run `--dry-run` against a copy of the production DB and review the
+      validation report (especially the AniList width mismatches for Bookworm / Mushoku Tensei /
+      Fire Force), then `--apply`.
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;

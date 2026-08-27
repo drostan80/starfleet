@@ -12,7 +12,7 @@ confirmed by the pre-existing `test_server.py`/`test_fribb.py` coverage
 still passing unchanged.
 """
 
-from lcars import fribb, ids, pending_review, util
+from lcars import fribb, ids, pending_review, season_ranges, util
 
 
 def reconcile_season(conn, show_id: str, season_number: int) -> dict:
@@ -129,6 +129,10 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
             pending_review.open_or_extend(
                 conn, "season", season_id, "anilist_id", "fribb", None, None
             )
+
+    # S2 dual-write: mirror into season_external_id so the mapping table
+    # stays current going forward (S3 reads from it; see season_ranges.py).
+    season_ranges.upsert_season_external_id(conn, season_id, anilist_id, mal_id, now)
 
     conn.commit()
     return get_season(conn, season_id)

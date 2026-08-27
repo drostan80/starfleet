@@ -57,6 +57,7 @@ from lcars import (
     pending_review,
     radarr_client,
     season_mapping,
+    season_ranges,
     service_health,
     sonarr_client,
     tmdb_client,
@@ -675,6 +676,8 @@ def _upsert_season(
             " WHERE id = ?",
             (anilist_id, mal_id, now, existing["id"]),
         )
+        # S2 dual-write (see season_ranges.py)
+        season_ranges.upsert_season_external_id(conn, existing["id"], anilist_id, mal_id, now)
         return
     season_id = ids.generate_id(conn, "z")
     conn.execute(
@@ -684,6 +687,8 @@ def _upsert_season(
         " VALUES (?, ?, ?, ?, ?, 'manual', 1, 1, ?, ?)",
         (season_id, show_id, season_number, anilist_id, mal_id, now, now),
     )
+    # S2 dual-write (see season_ranges.py)
+    season_ranges.upsert_season_external_id(conn, season_id, anilist_id, mal_id, now)
 
 
 def _link_studio(conn, show_id: str, studio: dict, role_type: str) -> None:
@@ -1068,6 +1073,9 @@ def _fetch_sonarr(conn, show: dict) -> None:
     # else here — not a separate background pass.
     _derive_episode_numbering(conn, show["id"], series, episodes)
     _synthesize_absolute_numbers(conn, show["id"])
+    # S2 lazy range-fill: absolute numbers are final, derive season ranges
+    # for any season that doesn't have them yet (see season_ranges.py).
+    season_ranges.fill_season_ranges(conn, show["id"])
 
 
 _MULTI_SHOW_MAX_CONTINUATION_GAP_DAYS = 45
@@ -1281,6 +1289,8 @@ def _fetch_sonarr_multi_show(conn, sibling_ids: list[str], episodes: list[dict])
     conn.commit()
     for sid in touched_shows:
         _synthesize_absolute_numbers(conn, sid)
+        # S2 lazy range-fill (see season_ranges.py)
+        season_ranges.fill_season_ranges(conn, sid)
 
 
 def _synthesize_absolute_numbers(conn, show_id: str) -> None:

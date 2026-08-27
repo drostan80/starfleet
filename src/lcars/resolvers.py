@@ -43,6 +43,7 @@ from lcars import (
     pending_review,
     radarr_client,
     season_mapping,
+    season_ranges,
     service_health,
     service_presence,
     show_backfill,
@@ -3253,6 +3254,8 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
         # watching" (user's own rule); only this one of the five real
         # season-INSERT call sites, see _reopen_show_if_completed's docstring.
         _reopen_show_if_completed(conn, show_id, client)
+    # S2 dual-write (see season_ranges.py)
+    season_ranges.upsert_season_external_id(conn, season_id, anilist_id, mal_id, now)
     conn.execute(
         "UPDATE pending_review"
         " SET resolved_at = ?, resolved_by_client = ?,"
