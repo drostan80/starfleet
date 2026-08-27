@@ -357,6 +357,18 @@ class LcarsClient:
         data = await self._query(query)
         return data["pollAnimeSchedule"]
 
+    async def poll_season_subdivision(self) -> dict:
+        """S5 — the global AniList width sweep (pollSeasonSubdivision):
+        no per-item argument, one call checks every ranged season at
+        once. Rides the same hourly tick as pollAnimeSchedule — a
+        ranged season count change on AniList between ticks is rare,
+        and the flag is for human confirmation anyway."""
+        query = """
+        mutation { pollSeasonSubdivision { checked flagged } }
+        """
+        data = await self._query(query)
+        return data["pollSeasonSubdivision"]
+
     async def poll_local_service_presence(self) -> dict:
         """§5.4/§6.7, B.7 — the `local` pseudo-service rollup
         (pollLocalServicePresence): pure SQL aggregate, no external

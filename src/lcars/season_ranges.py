@@ -13,11 +13,55 @@ Two responsibilities, both inert until S3 switches reconcile reads:
    season of the show that has episodes but no range yet. This is
    D5's "lazy for the long tail" — the one-time backfill script
    handles the bulk, this catches everything on its next Sonarr touch.
+
+3. **Subdivision width check** (S5, 2026-08-27): `check_subdivision_widths`
+   is the `pollSeasonSubdivision` mutation's own implementation. For
+   every season that has an abs range + an AniList link, it batch-fetches
+   AniList episode counts and opens/extends a `pending_review` row
+   (field `season_subdivision`) when range width ≠ AniList's count.
+   Skips airing seasons (AniList returns null episodes) and seasons whose
+   AniList id isn't in the response at all (dead/wrong link — a separate
+   concern). Idempotent: `pending_review.open_or_extend` extends an
+   existing open row rather than opening a duplicate, and
+   `pending_review.already_resolved_with` suppresses re-opening when a
+   human just resolved the same mismatch value.
 """
 
 import sqlite3
 
-from lcars import util
+from lcars import anilist_client, pending_review, util
+
+# ---------------------------------------------------------------------------
+# Width-check internals (ported from scripts/backfill_season_ranges.py so
+# the same logic is reachable from the live server, not only the one-time
+# script).  The script now imports these instead of keeping its own copy.
+# ---------------------------------------------------------------------------
+
+_BATCH = 50
+_ANILIST_EPISODES_QUERY = """
+query ($ids: [Int]) {
+  Page(perPage: 50) {
+    media(id_in: $ids, type: ANIME) { id episodes }
+  }
+}
+"""
+
+
+def _fetch_anilist_episode_counts(anilist_ids: list[int]) -> dict[int, int | None]:
+    """{anilist_id -> episodes} in batches of 50.
+
+    A missing key means AniList returned no `media` row for that id —
+    dead or wrong link, distinct from `episodes: null` (still airing).
+    """
+    result: dict[int, int | None] = {}
+    for start in range(0, len(anilist_ids), _BATCH):
+        batch = anilist_ids[start : start + _BATCH]
+        data = anilist_client._graphql_request(
+            _ANILIST_EPISODES_QUERY, {"ids": batch}, token=None, client=None
+        )
+        for media in data["Page"]["media"]:
+            result[media["id"]] = media.get("episodes")
+    return result
 
 
 def upsert_season_external_id(
@@ -99,3 +143,67 @@ def fill_season_ranges(conn: sqlite3.Connection, show_id: str) -> None:
             " WHERE id = ?",
             (int(range_row["abs_min"]), int(range_row["abs_max"]), now, season["id"]),
         )
+
+
+def check_subdivision_widths(conn: sqlite3.Connection) -> dict[str, int]:
+    """S5 — the `pollSeasonSubdivision` mutation's implementation.
+
+    For every season that has both an abs range and an AniList link (via
+    `season_external_id`), batch-fetch AniList's `episodes` count and
+    compare to the season's range width (`abs_end - abs_start + 1`).
+
+    Opens/extends a `pending_review` row (entity_type='season',
+    field='season_subdivision') for each mismatch.  Idempotent:
+    `pending_review.open_or_extend` extends an existing open row rather
+    than opening a duplicate; `pending_review.already_resolved_with`
+    suppresses re-opening when a human resolved the same mismatch value.
+
+    Skips:
+    - Airing seasons (AniList returns ``episodes: null``).
+    - Seasons whose AniList id isn't in the response (dead/wrong link —
+      `pending_review` field ``anilist_dead_link`` is a separate concern).
+
+    Returns ``{"checked": int, "flagged": int}``.
+    """
+    rows = conn.execute(
+        "SELECT s.id, s.abs_start, s.abs_end, sex.external_id AS anilist_id"
+        " FROM season s"
+        " JOIN season_external_id sex"
+        "   ON sex.season_id = s.id AND sex.service = 'anilist'"
+        " WHERE s.abs_start IS NOT NULL AND s.abs_end IS NOT NULL",
+    ).fetchall()
+    if not rows:
+        return {"checked": 0, "flagged": 0}
+
+    unique_ids = sorted({r["anilist_id"] for r in rows})
+    anilist_counts = _fetch_anilist_episode_counts(unique_ids)
+
+    checked = 0
+    flagged = 0
+    for r in rows:
+        anilist_eps = anilist_counts.get(r["anilist_id"])
+        if anilist_eps is None:
+            # null (airing) or not returned by AniList — skip both
+            continue
+        checked += 1
+        range_width = r["abs_end"] - r["abs_start"] + 1
+        if range_width == anilist_eps:
+            continue
+        # Mismatch — flag if not already resolved with this exact value
+        mismatch_str = f"anilist={anilist_eps},range_width={range_width}"
+        if pending_review.already_resolved_with(
+            conn, "season", r["id"], "season_subdivision", mismatch_str
+        ):
+            continue
+        pending_review.open_or_extend(
+            conn,
+            "season",
+            r["id"],
+            "season_subdivision",
+            "anilist_width_check",
+            None,
+            mismatch_str,
+        )
+        flagged += 1
+    conn.commit()
+    return {"checked": checked, "flagged": flagged}

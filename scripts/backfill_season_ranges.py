@@ -58,7 +58,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from lcars import anilist_client, config, util
+from lcars import config, season_ranges, util
 
 # ---------------------------------------------------------------------------
 # Core logic — also importable by tests
@@ -203,30 +203,11 @@ def _check_numbering_gaps(conn: sqlite3.Connection) -> list[dict]:
     return mismatches
 
 
-_BATCH = 50
-_EPISODES_QUERY = """
-query ($ids: [Int]) {
-  Page(perPage: 50) {
-    media(id_in: $ids, type: ANIME) { id episodes }
-  }
-}
-"""
-
-
-def _fetch_anilist_episode_counts(anilist_ids: list[int]) -> dict[int, int | None]:
-    """{anilist_id -> episodes} in batches of 50.  Same pattern as
-    backfill_titles.py's _titles_by_id."""
-    result: dict[int, int | None] = {}
-    for start in range(0, len(anilist_ids), _BATCH):
-        batch = anilist_ids[start : start + _BATCH]
-        data = anilist_client._graphql_request(
-            _EPISODES_QUERY, {"ids": batch}, token=None, client=None
-        )
-        for media in data["Page"]["media"]:
-            result[media["id"]] = media.get("episodes")
-        done = min(start + _BATCH, len(anilist_ids))
-        print(f"  fetched {done}/{len(anilist_ids)} anilist episode counts")
-    return result
+# _fetch_anilist_episode_counts ported to src/lcars/season_ranges.py (S5,
+# 2026-08-27) so the live server can call it too.  Import from there to avoid
+# a duplicate definition — this script is now a thin wrapper around the
+# shared module function.
+_fetch_anilist_episode_counts = season_ranges._fetch_anilist_episode_counts
 
 
 def check_anilist_width(conn: sqlite3.Connection) -> list[dict]:

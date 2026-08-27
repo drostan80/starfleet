@@ -574,3 +574,200 @@ class TestCheckAnilistWidth:
 
         assert len(mismatches) == 0  # can't compare without a count
         assert not_found == [99999]
+
+
+# ---------------------------------------------------------------------------
+# check_subdivision_widths (S5 — live-server width check + pending_review)
+# ---------------------------------------------------------------------------
+
+
+def _season_with_range_and_ext(
+    conn,
+    season_id,
+    show_id,
+    season_number,
+    anilist_id,
+    abs_start,
+    abs_end,
+):
+    """Insert a season with an abs range + season_external_id anilist row."""
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, anilist_id,"
+        " abs_start, abs_end, source, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, 'manual', 'x', 'x')",
+        (season_id, show_id, season_number, anilist_id, abs_start, abs_end),
+    )
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES (?, 'anilist', ?, 'x')",
+        (season_id, anilist_id),
+    )
+
+
+class TestCheckSubdivisionWidths:
+    def test_no_ranged_seasons_returns_zero(self, conn):
+        """No seasons with ranges → nothing to check."""
+        result = season_ranges.check_subdivision_widths(conn)
+        assert result == {"checked": 0, "flagged": 0}
+
+    def test_clean_match_no_pending_review(self, conn):
+        """AniList episode count == range width → no pending_review opened."""
+        _show(conn, "s-aaaaaa")
+        _season_with_range_and_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, 1, 12)
+        conn.commit()
+
+        fake_response = {"Page": {"media": [{"id": 100, "episodes": 12}]}}
+        with mock.patch(
+            "lcars.anilist_client._graphql_request", return_value=fake_response
+        ):
+            result = season_ranges.check_subdivision_widths(conn)
+
+        assert result == {"checked": 1, "flagged": 0}
+        pr_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+        ).fetchone()[0]
+        assert pr_count == 0
+
+    def test_mismatch_opens_pending_review(self, conn):
+        """AniList says 23 eps but range is 11 → opens pending_review."""
+        _show(conn, "s-aaaaaa")
+        _season_with_range_and_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, 1, 11)
+        conn.commit()
+
+        fake_response = {"Page": {"media": [{"id": 100, "episodes": 23}]}}
+        with mock.patch(
+            "lcars.anilist_client._graphql_request", return_value=fake_response
+        ):
+            result = season_ranges.check_subdivision_widths(conn)
+
+        assert result == {"checked": 1, "flagged": 1}
+        pr = conn.execute(
+            "SELECT field, source, proposed_value_chain FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+            "   AND resolved_at IS NULL"
+        ).fetchone()
+        assert pr is not None
+        assert pr["field"] == "season_subdivision"
+        assert pr["source"] == "anilist_width_check"
+        import json
+        chain = json.loads(pr["proposed_value_chain"])
+        assert chain == ["anilist=23,range_width=11"]
+
+    def test_idempotent_extends_not_duplicates(self, conn):
+        """Second run with same mismatch → extends chain, no duplicate row."""
+        _show(conn, "s-aaaaaa")
+        _season_with_range_and_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, 1, 11)
+        conn.commit()
+
+        fake_response = {"Page": {"media": [{"id": 100, "episodes": 23}]}}
+        with mock.patch(
+            "lcars.anilist_client._graphql_request", return_value=fake_response
+        ):
+            season_ranges.check_subdivision_widths(conn)
+            result2 = season_ranges.check_subdivision_widths(conn)
+
+        assert result2["flagged"] == 1  # still flagged (extended), not zero
+        pr_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+            "   AND resolved_at IS NULL"
+        ).fetchone()[0]
+        assert pr_count == 1  # one row, not two
+
+    def test_already_resolved_suppresses_reopen(self, conn):
+        """If a human resolved the same mismatch value, don't reopen."""
+        import json
+
+        _show(conn, "s-aaaaaa")
+        _season_with_range_and_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, 1, 11)
+        conn.commit()
+
+        # Simulate a previously-resolved review with the same chain tail
+        mismatch_str = "anilist=23,range_width=11"
+        conn.execute(
+            "INSERT INTO pending_review"
+            " (id, entity_type, entity_id, field, previous_value,"
+            "  proposed_value_chain, source, created_at, resolved_at)"
+            " VALUES ('r-aaaaaa', 'season', 'z-aaaaaa', 'season_subdivision',"
+            "  NULL, ?, 'anilist_width_check', 'x', 'x')",
+            (json.dumps([mismatch_str]),),
+        )
+        conn.commit()
+
+        fake_response = {"Page": {"media": [{"id": 100, "episodes": 23}]}}
+        with mock.patch(
+            "lcars.anilist_client._graphql_request", return_value=fake_response
+        ):
+            result = season_ranges.check_subdivision_widths(conn)
+
+        assert result == {"checked": 1, "flagged": 0}
+        # No new open row
+        open_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+            "   AND resolved_at IS NULL"
+        ).fetchone()[0]
+        assert open_count == 0
+
+    def test_airing_null_episodes_skipped(self, conn):
+        """AniList returns null episodes (airing) → not counted, not flagged."""
+        _show(conn, "s-aaaaaa")
+        _season_with_range_and_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, 1, 12)
+        conn.commit()
+
+        # AniList says episodes: null (still airing)
+        fake_response = {"Page": {"media": [{"id": 100, "episodes": None}]}}
+        with mock.patch(
+            "lcars.anilist_client._graphql_request", return_value=fake_response
+        ):
+            result = season_ranges.check_subdivision_widths(conn)
+
+        assert result == {"checked": 0, "flagged": 0}
+
+    def test_not_found_in_anilist_skipped(self, conn):
+        """AniList returns no entry for the id → skip (dead/wrong link)."""
+        _show(conn, "s-aaaaaa")
+        _season_with_range_and_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 99999, 1, 12)
+        conn.commit()
+
+        fake_response = {"Page": {"media": []}}
+        with mock.patch(
+            "lcars.anilist_client._graphql_request", return_value=fake_response
+        ):
+            result = season_ranges.check_subdivision_widths(conn)
+
+        assert result == {"checked": 0, "flagged": 0}
+
+    def test_multiple_seasons_mixed(self, conn):
+        """Two seasons: one clean, one mismatch → checked=2, flagged=1."""
+        _show(conn, "s-aaaaaa")
+        _season_with_range_and_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, 1, 12)
+        _season_with_range_and_ext(conn, "z-bbbbbb", "s-aaaaaa", 2, 101, 13, 23)
+        conn.commit()
+
+        fake_response = {
+            "Page": {
+                "media": [
+                    {"id": 100, "episodes": 12},   # clean
+                    {"id": 101, "episodes": 13},   # mismatch: range=11, anilist=13
+                ]
+            }
+        }
+        with mock.patch(
+            "lcars.anilist_client._graphql_request", return_value=fake_response
+        ):
+            result = season_ranges.check_subdivision_widths(conn)
+
+        assert result == {"checked": 2, "flagged": 1}
+        pr_s1 = conn.execute(
+            "SELECT COUNT(*) FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+        ).fetchone()[0]
+        assert pr_s1 == 0
+
+        pr_s2 = conn.execute(
+            "SELECT COUNT(*) FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-bbbbbb'"
+        ).fetchone()[0]
+        assert pr_s2 == 1

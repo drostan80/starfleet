@@ -168,6 +168,17 @@ async def run_animeschedule_once(client: LcarsClient) -> int:
     return result["episodesUpdated"] + result["flagged"]
 
 
+async def run_season_subdivision_once(client: LcarsClient) -> int:
+    """S5 — one global AniList width sweep (pollSeasonSubdivision):
+    same "no per-item loop, the mutation itself covers everything"
+    shape as run_animeschedule_once above. Returns the combined
+    checked+flagged count — checked is the more meaningful signal on a
+    quiet tick (confirmed ranges, no mismatch), flagged is the alert
+    signal when a pending_review was opened or extended."""
+    result = await client.poll_season_subdivision()
+    return result["checked"] + result["flagged"]
+
+
 async def run_local_presence_once(client: LcarsClient) -> int:
     """§5.4/§6.7, B.7 — the `local` pseudo-service rollup
     (pollLocalServicePresence): pure SQL aggregate, no external
@@ -224,11 +235,11 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     """B.1's daily tier, B.2's weekly tier, B.5's animeschedule sweep,
     B.7's local-presence rollup, B.8b's episode_movie_link
     reconciliation, B.10's MAL token refresh check, B.11e's
-    untracked-show sweep, and the 2026-08-18 Fribb tvdb_id backfill
-    share one loop/interval (run_forever's own docstring explains why
-    the weekly tier doesn't need its own timer; B.5's own module
-    docstring explains why animeschedule can't wait for a daily one;
-    B.7's local rollup and B.8b's reconciliation are both
+    untracked-show sweep, the 2026-08-18 Fribb tvdb_id backfill, and
+    S5's AniList width sweep share one loop/interval (run_forever's own
+    docstring explains why the weekly tier doesn't need its own timer;
+    B.5's own module docstring explains why animeschedule can't wait for
+    a daily one; B.7's local rollup and B.8b's reconciliation are both
     negligible-cost, no-external-HTTP SQL; B.10's refresh check
     self-gates on its own 7-day checkpoint, so an hourly tick just means
     "checked cheaply, acted rarely"; B.11e's sweep is a handful of
@@ -236,8 +247,10 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     fetch), not per-show, cheap enough to share too; the tvdb backfill
     is the same shape again — one SQL query plus an already-cached
     dataset lookup, no live outbound call — no reason at all not to
-    share this tick) — this is the single unit that loop actually calls
-    each tick. Returns the combined count, for the caller to log."""
+    share this tick; S5's width check is a single batched AniList call
+    over all ranged seasons, same negligible-relative-to-the-daily-tier
+    cost) — this is the single unit that loop actually calls each tick.
+    Returns the combined count, for the caller to log."""
     daily = await run_once(client)
     weekly = await run_weekly_once(client)
     animeschedule = await run_animeschedule_once(client)
@@ -246,6 +259,7 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     mal_token_refresh = await run_mal_token_refresh_once(client)
     untracked_shows = await run_untracked_shows_once(client)
     tvdb_backfill = await run_tvdb_backfill_once(client)
+    season_subdivision = await run_season_subdivision_once(client)
     return (
         daily
         + weekly
@@ -255,6 +269,7 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
         + mal_token_refresh
         + untracked_shows
         + tvdb_backfill
+        + season_subdivision
     )
 
 

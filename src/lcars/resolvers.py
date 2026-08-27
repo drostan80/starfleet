@@ -2113,6 +2113,15 @@ def resolve_poll_anime_schedule(_, info):
     return animeschedule.poll_anime_schedule(conn)
 
 
+@mutation.field("pollSeasonSubdivision")
+def resolve_poll_season_subdivision(_, info):
+    """S5 — season_ranges.check_subdivision_widths's global AniList
+    width sweep. No require_client() — same passive reasoning as
+    pollAnimeSchedule: not a user-facing write, no changed_by column."""
+    conn = db.get_connection()
+    return season_ranges.check_subdivision_widths(conn)
+
+
 @mutation.field("pollLocalServicePresence")
 def resolve_poll_local_service_presence(_, info):
     """§5.4/§6.7, B.7 — service_presence.py's own local rollup. No

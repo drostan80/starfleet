@@ -424,6 +424,10 @@ type Season {
   startedAt: DateTime
   "Write-mirror function set, todo.md (2026-08-16) — the date show.status transitioned to 'completed', written onto the show's highest-numbered linked season only (show.status is show-wide; this mirrors watch_reconcile.py's own highest-season convention for that asymmetry). Null until then."
   completedAt: DateTime
+  "S5 — absolute episode range for this season, from the season-subdivision model (D4/D5). Null for season 0 (specials) and any season whose range hasn't been filled yet (lazy fill on next Sonarr touch, or via the one-time backfill script)."
+  absStart: Int
+  "S5 — see absStart."
+  absEnd: Int
   source: SeasonSource!
   matched: Boolean!
   manualOverride: Boolean!
@@ -926,6 +930,12 @@ type AnimeSchedulePollResult {
   flagged: Int!
 }
 
+"pollSeasonSubdivision's own confirmation summary (S5, 2026-08-27). checked: seasons with a fully-aired AniList entry whose range width was actually compared (airing seasons — null episodes — are excluded). flagged: seasons where range width ≠ AniList episode count and a pending_review row was opened or extended (field \"season_subdivision\"); zero on a quiet tick."
+type SeasonSubdivisionPollResult {
+  checked: Int!
+  flagged: Int!
+}
+
 # ---------------------------------------------------------------------------
 # §5.1's movie <-> bonus_movie addendum, automatic tmdb_match derivation (B.8b)
 # ---------------------------------------------------------------------------
@@ -1396,6 +1406,19 @@ type Mutation {
   than a day, so this can't share B.1/B.4's daily due-gated cadence.
   """
   pollAnimeSchedule: AnimeSchedulePollResult!
+  """
+  S5 — batch-checks every season that has an abs range + AniList link:
+  fetches AniList's episode count and opens/extends a pending_review
+  row (field "season_subdivision") for each range-width mismatch.
+  Skips airing seasons (AniList episodes: null). Idempotent — extends
+  an existing open row rather than opening a duplicate, and suppresses
+  re-opening when a human has resolved the same mismatch value. Rides
+  the same hourly tick as pollAnimeSchedule (no new interval): a ranged
+  season count change on AniList between ticks is rare, and the flag is
+  for human confirmation anyway — hourly is more than prompt enough.
+  No require_client() — same passive reasoning as pollAnimeSchedule.
+  """
+  pollSeasonSubdivision: SeasonSubdivisionPollResult!
   """
   §6.1/§6.8, A.9 — clamps/rounds silently to the 0-20 quarter-point
   scale rather than rejecting out-of-range input. Also pushes to
