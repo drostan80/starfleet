@@ -511,11 +511,45 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `setSeasonScore` before calling `resolvePendingReview` — no new mutation needed.
       `pollScoreSync` mutation + `ScoreSyncPollResult { anilistChecked anilistFlagged }` type.
       Ops: `poll_score_sync()` method + `run_score_sync_once()` wired into
-      `run_daily_and_weekly_once` (same hourly tick). MAL score drift not yet covered (no
-      activity-feed equivalent; future slice). 13 new tests.
+      `run_daily_and_weekly_once` (same hourly tick). 13 new tests.
+      **Score reverse-sync — MAL direction (v0.1.45, 2026-08-27)**: `check_mal_score_drift(conn)`
+      in `score_sync.py`. Pulls the viewer's full MAL list (`mal_client.get_user_anime_list`), joins
+      against `season.mal_id`, compares `round(effective_lcars / 2)` against the stored MAL integer
+      (0–10 scale). Banker's-rounding guard: LCARS 17.0 → `round(17/2) = round(8.5) = 8` (rounds
+      to even in Python) — MAL stores 8 → consistent, no false positive. Opens `pending_review`
+      (field "score") on drift; same `already_resolved_with` + `open_or_extend` guards as the
+      AniList side. `ScoreSyncPollResult` extended with `malChecked: Int!` and `malFlagged: Int!`;
+      `pollScoreSync` now covers both directions in one call. Skips quietly when
+      `mal_access_token` not configured. 5 new test classes.
+      **Data review `a: apply score` (2026-08-27, `~/repos/data`)**: `review_screen.py`. When the
+      focused pending_review has `entityType == "season"` and `field == "score"`, pressing `a`
+      prompts for an optional note (blank = no note, Enter applies immediately, no cancel path),
+      then calls `setSeasonScore(entityId, proposed)` + `resolvePendingReview`. Score-type hint
+      shown in the detail panel; silently no-ops for non-score reviews. 5 new tests.
+      **Drop `parent_season`/`sub_ordinal` (migration 28cbe21e9b6e, v0.1.47, 2026-08-27)**:
+      both columns were dead (zero rows written; D1 ended up using real `season_number` directly).
+      Safe recreate pattern: `CREATE TABLE season_new` (full schema minus the two columns),
+      `INSERT INTO season_new SELECT …`, `DROP TABLE season`, `ALTER TABLE season_new RENAME TO
+      season` — avoids SQLite 3.26.0+ FK-rewrite behaviour that corrupts `episode`/
+      `season_external_id` FK text when the original table is renamed first. `PRAGMA foreign_keys
+      = OFF` wraps the whole block. `downgrade()` adds both columns back as nullable.
       **Remaining**: expose sub-seasons in Data UI (check what Data actually renders for Bookworm
-      post-collapse before deciding if client work is needed). `parent_season`/`sub_ordinal` columns
-      are dead (zero rows written; D1 ended up using real season_number directly).
+      post-collapse before deciding if client work is needed).
+- [x] Recent grabs screen (`G` key, v0.1.47 / `~/repos/data`, 2026-08-27): two-column modal
+      (Sonarr left, Radarr right), 20 events per page, `[` goes back (older), `]` goes forward
+      (only active when page > 1), `r` resets to page 1 + reloads, `q`/Esc closes. Both columns
+      share a single page counter. New `recentGrabs(service, page, pageSize)` query in LCARS schema
+      + resolver (`resolve_recent_grabs`) — proxies Sonarr/Radarr `/history?eventType=grabbed` via
+      the existing `sonarr_client`/`radarr_client`, returns empty list on unconfigured service or
+      API error. Two Ariadne quirks hit in deploy: (1) `pageSize` arg arrives as `page_size` in the
+      Python resolver (Ariadne converts all GraphQL camelCase args to snake_case before dispatch);
+      (2) `convert_names_case=True` in `server.py` means resolver return-dict keys must also be
+      snake_case (`release_title`, `season_number`, `episode_number`) even though the GraphQL
+      response is camelCase. Both fixed by v0.1.47. `GrabsScreen(ModalScreen)` in `grabs_screen.py`;
+      `DataApp` wires `G` binding + `action_recent_grabs`. `LcarsClient.recent_grabs()` sends the
+      GraphQL query and maps camelCase response keys. `asyncio.gather` runs both service fetches
+      concurrently. 17 tests (7 pure-helper, 10 screen-behaviour). Deployed as v0.1.45→v0.1.47
+      (three deploys: schema, pageSize fix, dict-key fix).
 - [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
       IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
