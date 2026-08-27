@@ -24,9 +24,13 @@ Scale guard:
   A `0` AniList score means "unscored" per AniList convention; we
   skip those entries entirely — they are not an external change.
 
-  MAL (0–10 integer) is not yet handled here: MAL has no activity-feed
-  equivalent and the round-trip is lossier (÷2 with banker's rounding).
-  A future slice can add `check_mal_score_drift` in this module.
+  MAL (0–10 integer): `check_mal_score_drift` below.  MAL has no
+  activity-feed equivalent so the full list is fetched every tick.
+  Scale: MAL 0–10 integer, LCARS 0–20.  LCARS pushes
+  `round(effective_lcars / 2)` (banker's rounding).  Guard: if
+  `mal_score == round(effective_lcars / 2)` the round-trip is clean —
+  no false positive even when 17.0 → 8 (bankers rounds 8.5 → 8) then
+  8 reads back.  A `0` MAL score means "unscored"; we skip those.
 
 `already_resolved_with` guard:
   The mismatch value stored in `proposed_value_chain` is the
@@ -40,7 +44,7 @@ Scale guard:
 
 import sqlite3
 
-from lcars import anilist_client, config, pending_review
+from lcars import anilist_client, config, mal_client, pending_review
 
 
 def check_anilist_score_drift(conn: sqlite3.Connection) -> dict[str, int]:
@@ -129,6 +133,99 @@ def check_anilist_score_drift(conn: sqlite3.Connection) -> dict[str, int]:
             r["id"],
             "score",
             "anilist_score_drift",
+            previous_str,
+            proposed_lcars,
+        )
+        flagged += 1
+
+    conn.commit()
+    return {"checked": checked, "flagged": flagged}
+
+
+def check_mal_score_drift(conn: sqlite3.Connection) -> dict[str, int]:
+    """Detect MAL score drift vs LCARS's current effective score.
+
+    MAL has no activity-feed equivalent, so the full list is fetched on
+    every call (same cadence as `check_anilist_score_drift`).  For each
+    MAL-linked LCARS season, checks whether the MAL score is consistent
+    with what LCARS would have pushed (`round(effective_lcars / 2)`, the
+    same banker's-rounding formula `_push_mal_season_score` uses).
+    Opens a `pending_review` (field "score") when they disagree.
+
+    Returns {"checked": N, "flagged": M} — same shape as
+    `check_anilist_score_drift`.
+
+    No-ops (returns zeros) when no MAL token is configured."""
+    cfg = config.get_current()
+    if not cfg.mal_access_token:
+        return {"checked": 0, "flagged": 0}
+
+    # One batched call — pages internally, returns the whole list flat.
+    entries = mal_client.fetch_my_list(cfg.mal_access_token)
+
+    # Build lookup: mal_id → integer score.  MAL score 0 means "unscored"
+    # by MAL's own convention; skip those (same reasoning as AniList's 0).
+    mal_scores: dict[int, int] = {
+        e["mal_id"]: int(e["score"])
+        for e in entries
+        if e.get("score")  # falsy catches 0 and None
+    }
+
+    if not mal_scores:
+        return {"checked": 0, "flagged": 0}
+
+    # Every LCARS season with a MAL link (mal_id is a direct column on season).
+    rows = conn.execute(
+        "SELECT s.id, s.score AS season_score, sh.score AS show_score, s.mal_id"
+        " FROM season s"
+        " JOIN show sh ON sh.id = s.show_id"
+        " WHERE s.mal_id IS NOT NULL",
+    ).fetchall()
+
+    checked = 0
+    flagged = 0
+
+    for r in rows:
+        mal_id = int(r["mal_id"])
+        mal_score = mal_scores.get(mal_id)
+        if mal_score is None:
+            continue  # not on the MAL list or unscored
+
+        checked += 1
+
+        # Effective LCARS score: season's own, else show's.
+        effective_lcars = (
+            r["season_score"] if r["season_score"] is not None else r["show_score"]
+        )
+
+        # What would LCARS have pushed to MAL?  round() is banker's rounding,
+        # matching `_push_mal_season_score` exactly.
+        expected_mal = (
+            round(effective_lcars / 2) if effective_lcars is not None else None
+        )
+
+        if expected_mal is not None and mal_score == expected_mal:
+            continue  # consistent — LCARS pushed this, round-trip is clean
+
+        # Discrepancy: either LCARS has no score and MAL does, or the MAL
+        # score no longer matches what LCARS pushed.
+        # Reverse: MAL 0–10 → LCARS 0–20 (integer × 2; always exact).
+        proposed_lcars = str(float(mal_score * 2))
+
+        if pending_review.already_resolved_with(
+            conn, "season", r["id"], "score", proposed_lcars
+        ):
+            continue  # human already reviewed and resolved this exact value
+
+        previous_str = (
+            str(effective_lcars) if effective_lcars is not None else None
+        )
+        pending_review.open_or_extend(
+            conn,
+            "season",
+            r["id"],
+            "score",
+            "mal_score_drift",
             previous_str,
             proposed_lcars,
         )

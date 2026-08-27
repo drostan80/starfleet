@@ -936,10 +936,12 @@ type SeasonSubdivisionPollResult {
   flagged: Int!
 }
 
-"pollScoreSync's own confirmation summary (2026-08-27). anilistChecked: AniList-linked seasons where a non-zero AniList score was fetched and compared against what LCARS would have pushed (round(effective_lcars × 5)). anilistFlagged: seasons where the AniList score no longer matched — a pending_review (field \"score\") was opened or extended for human confirmation; zero on a quiet tick."
+"pollScoreSync's own confirmation summary (2026-08-27). anilistChecked: AniList-linked seasons where a non-zero AniList score was fetched and compared against what LCARS would have pushed (round(effective_lcars × 5)). anilistFlagged: seasons where the AniList score no longer matched — a pending_review (field \"score\") was opened or extended for human confirmation; zero on a quiet tick. malChecked/malFlagged: same for MAL (score 0–10 integer; push formula round(effective_lcars / 2); 0 = unscored, skipped); both zero when no MAL token is configured."
 type ScoreSyncPollResult {
   anilistChecked: Int!
   anilistFlagged: Int!
+  malChecked: Int!
+  malFlagged: Int!
 }
 
 # ---------------------------------------------------------------------------

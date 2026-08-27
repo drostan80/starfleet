@@ -2125,16 +2125,20 @@ def resolve_poll_season_subdivision(_, info):
 
 @mutation.field("pollScoreSync")
 def resolve_poll_score_sync(_, info):
-    """2026-08-27 — score_sync.check_anilist_score_drift's full-list
-    AniList score sweep.  No require_client() — same passive/Ops-internal
-    reasoning as pollSeasonSubdivision: not a user-facing write, opens
-    pending_review for human confirmation rather than applying anything
-    automatically."""
+    """2026-08-27 — score_sync drift sweeps for both AniList and MAL.
+    Runs check_anilist_score_drift then check_mal_score_drift in sequence
+    (both read-heavy, no contention), returns combined counts.  No
+    require_client() — same passive/Ops-internal reasoning as
+    pollSeasonSubdivision: opens pending_review for human confirmation
+    rather than applying anything automatically."""
     conn = db.get_connection()
-    result = score_sync.check_anilist_score_drift(conn)
+    al = score_sync.check_anilist_score_drift(conn)
+    mal = score_sync.check_mal_score_drift(conn)
     return {
-        "anilistChecked": result["checked"],
-        "anilistFlagged": result["flagged"],
+        "anilistChecked": al["checked"],
+        "anilistFlagged": al["flagged"],
+        "malChecked": mal["checked"],
+        "malFlagged": mal["flagged"],
     }
 
 

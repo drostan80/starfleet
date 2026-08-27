@@ -1,4 +1,5 @@
-"""Score reverse-sync (2026-08-27) — check_anilist_score_drift unit tests.
+"""Score reverse-sync — check_anilist_score_drift and check_mal_score_drift
+unit tests (2026-08-27).
 
 Same real-migrated-SQLite-DB approach as test_season_ranges.py.
 """
@@ -321,6 +322,300 @@ class TestMultiple:
         # season z-bbbbbb: push=80, AniList=90 → drift
         with _fake_list([_al(100, 85), _al(101, 90)]):
             result = score_sync.check_anilist_score_drift(conn)
+
+        assert result == {"checked": 2, "flagged": 1}
+        flagged_id = conn.execute(
+            "SELECT entity_id FROM pending_review WHERE resolved_at IS NULL"
+        ).fetchone()
+        assert flagged_id["entity_id"] == "z-bbbbbb"
+
+
+# ===========================================================================
+# check_mal_score_drift
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Helpers (MAL-specific)
+# ---------------------------------------------------------------------------
+
+
+def _season_with_mal(conn, season_id, show_id, season_number, mal_id, score=None):
+    """Insert a season with mal_id set directly on the season row."""
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, mal_id,"
+        " score, source, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, 'manual', 'x', 'x')",
+        (season_id, show_id, season_number, mal_id, score),
+    )
+
+
+def _fake_mal_list(entries):
+    """Return a mock target for mal_client.fetch_my_list with given entries."""
+    return mock.patch(
+        "lcars.mal_client.fetch_my_list",
+        return_value=entries,
+    )
+
+
+def _mal(mal_id, score):
+    """Shorthand for a MAL list entry dict."""
+    return {"mal_id": mal_id, "score": score, "status": "watching", "num_watched_episodes": 0}
+
+
+# ---------------------------------------------------------------------------
+# No MAL token
+# ---------------------------------------------------------------------------
+
+
+class TestMalNoToken:
+    def test_no_token_returns_zero(self, conn):
+        """No MAL token → immediate zero return, no MAL call."""
+        config.get_current().mal_access_token = None
+        with mock.patch("lcars.mal_client.fetch_my_list") as m:
+            result = score_sync.check_mal_score_drift(conn)
+        m.assert_not_called()
+        assert result == {"checked": 0, "flagged": 0}
+
+    def test_with_token_calls_fetch(self, conn):
+        """MAL token present → fetch_my_list is called."""
+        config.get_current().mal_access_token = "mal-token"
+        with _fake_mal_list([]) as m:
+            score_sync.check_mal_score_drift(conn)
+        m.assert_called_once_with("mal-token")
+
+
+# ---------------------------------------------------------------------------
+# Clean / no drift (MAL)
+# ---------------------------------------------------------------------------
+
+
+class TestMalClean:
+    def setup_method(self, _):
+        # Ensure MAL token is set for each test in this class.
+        config.get_current().mal_access_token = "mal-token"
+
+    def test_consistent_season_score_no_flag(self, conn):
+        """MAL score matches round(effective_lcars / 2) → no flag."""
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=16.0)
+        conn.commit()
+
+        # LCARS 16.0 / 2 = 8 → expected_mal = 8; MAL returns 8 → consistent
+        with _fake_mal_list([_mal(200, 8)]):
+            result = score_sync.check_mal_score_drift(conn)
+
+        assert result == {"checked": 1, "flagged": 0}
+        pr_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_review WHERE entity_type = 'season'"
+        ).fetchone()[0]
+        assert pr_count == 0
+
+    def test_show_score_fallback_consistent(self, conn):
+        """Season has no score; show's score / 2 matches MAL → no flag."""
+        _show(conn, "s-aaaaaa", score=14.0)
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=None)
+        conn.commit()
+
+        # show score 14.0 / 2 = 7 → expected_mal = 7; MAL returns 7
+        with _fake_mal_list([_mal(200, 7)]):
+            result = score_sync.check_mal_score_drift(conn)
+
+        assert result == {"checked": 1, "flagged": 0}
+
+    def test_banker_rounding_no_false_positive(self, conn):
+        """LCARS 17.0 / 2 = 8.5 → banker's rounds to 8.
+        MAL stores 8 → consistent, no false positive."""
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=17.0)
+        conn.commit()
+
+        # round(17.0 / 2) = round(8.5) = 8 (banker's rounds to even)
+        with _fake_mal_list([_mal(200, 8)]):
+            result = score_sync.check_mal_score_drift(conn)
+
+        assert result == {"checked": 1, "flagged": 0}
+
+    def test_unscored_externally_skipped(self, conn):
+        """MAL score = 0 (unscored by convention) → skip, no flag."""
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=16.0)
+        conn.commit()
+
+        with _fake_mal_list([_mal(200, 0)]):
+            result = score_sync.check_mal_score_drift(conn)
+
+        assert result == {"checked": 0, "flagged": 0}
+
+    def test_not_on_mal_list_skipped(self, conn):
+        """Season has mal_id but isn't in the fetched list → skip."""
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=16.0)
+        conn.commit()
+
+        with _fake_mal_list([]):
+            result = score_sync.check_mal_score_drift(conn)
+
+        assert result == {"checked": 0, "flagged": 0}
+
+
+# ---------------------------------------------------------------------------
+# Drift detected (MAL)
+# ---------------------------------------------------------------------------
+
+
+class TestMalDrift:
+    def setup_method(self, _):
+        config.get_current().mal_access_token = "mal-token"
+
+    def test_drift_opens_pending_review(self, conn):
+        """MAL score changed externally → opens pending_review.
+        proposed_value_chain entry = str(mal_score * 2)."""
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=16.0)
+        conn.commit()
+
+        # LCARS would push round(16/2)=8; MAL now shows 9 (user changed it)
+        with _fake_mal_list([_mal(200, 9)]):
+            result = score_sync.check_mal_score_drift(conn)
+
+        assert result == {"checked": 1, "flagged": 1}
+        pr = conn.execute(
+            "SELECT field, source, previous_value, proposed_value_chain FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+            "   AND resolved_at IS NULL"
+        ).fetchone()
+        assert pr is not None
+        assert pr["field"] == "score"
+        assert pr["source"] == "mal_score_drift"
+        assert pr["previous_value"] == "16.0"  # was the LCARS season score
+        chain = json.loads(pr["proposed_value_chain"])
+        assert chain == ["18.0"]  # 9 * 2 = 18.0
+
+    def test_lcars_no_score_mal_has_score(self, conn):
+        """LCARS has no score, MAL does → flag as inbound score."""
+        _show(conn, "s-aaaaaa", score=None)
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=None)
+        conn.commit()
+
+        with _fake_mal_list([_mal(200, 7)]):
+            result = score_sync.check_mal_score_drift(conn)
+
+        assert result == {"checked": 1, "flagged": 1}
+        pr = conn.execute(
+            "SELECT previous_value, proposed_value_chain FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+            "   AND resolved_at IS NULL"
+        ).fetchone()
+        assert pr is not None
+        assert pr["previous_value"] is None
+        chain = json.loads(pr["proposed_value_chain"])
+        assert chain == ["14.0"]  # 7 * 2 = 14.0
+
+
+# ---------------------------------------------------------------------------
+# Idempotency (MAL)
+# ---------------------------------------------------------------------------
+
+
+class TestMalIdempotency:
+    def setup_method(self, _):
+        config.get_current().mal_access_token = "mal-token"
+
+    def test_second_run_extends_not_duplicates(self, conn):
+        """Same MAL drift on back-to-back calls → chain extended, no duplicate row."""
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=16.0)
+        conn.commit()
+
+        with _fake_mal_list([_mal(200, 9)]):
+            score_sync.check_mal_score_drift(conn)
+            result = score_sync.check_mal_score_drift(conn)
+
+        assert result == {"checked": 1, "flagged": 1}
+        pr_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+        ).fetchone()[0]
+        assert pr_count == 1
+        pr = conn.execute(
+            "SELECT proposed_value_chain FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+        ).fetchone()
+        chain = json.loads(pr["proposed_value_chain"])
+        assert chain == ["18.0", "18.0"]
+
+    def test_already_resolved_suppresses_reopen(self, conn):
+        """Human resolved the exact proposed MAL value → no re-open on next tick."""
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=16.0)
+        conn.commit()
+
+        with _fake_mal_list([_mal(200, 9)]):
+            score_sync.check_mal_score_drift(conn)
+
+        conn.execute(
+            "UPDATE pending_review SET resolved_at = 'now'"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+        )
+        conn.commit()
+
+        with _fake_mal_list([_mal(200, 9)]):
+            result = score_sync.check_mal_score_drift(conn)
+
+        assert result == {"checked": 1, "flagged": 0}
+        open_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+            "   AND resolved_at IS NULL"
+        ).fetchone()[0]
+        assert open_count == 0
+
+    def test_new_value_after_resolve_reopens(self, conn):
+        """A genuinely different MAL score after resolving reopens the review."""
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=16.0)
+        conn.commit()
+
+        with _fake_mal_list([_mal(200, 9)]):
+            score_sync.check_mal_score_drift(conn)
+        conn.execute(
+            "UPDATE pending_review SET resolved_at = 'now'"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+        )
+        conn.commit()
+
+        with _fake_mal_list([_mal(200, 10)]):
+            result = score_sync.check_mal_score_drift(conn)
+
+        assert result == {"checked": 1, "flagged": 1}
+        open_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_review"
+            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
+            "   AND resolved_at IS NULL"
+        ).fetchone()[0]
+        assert open_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Multiple seasons (MAL)
+# ---------------------------------------------------------------------------
+
+
+class TestMalMultiple:
+    def setup_method(self, _):
+        config.get_current().mal_access_token = "mal-token"
+
+    def test_mixed_clean_and_drift(self, conn):
+        """Two MAL-linked seasons: one clean, one drifted → only the drifted one flagged."""
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=16.0)
+        _season_with_mal(conn, "z-bbbbbb", "s-aaaaaa", 2, 201, score=14.0)
+        conn.commit()
+
+        # z-aaaaaa: push=round(16/2)=8, MAL=8 → clean
+        # z-bbbbbb: push=round(14/2)=7, MAL=9 → drift
+        with _fake_mal_list([_mal(200, 8), _mal(201, 9)]):
+            result = score_sync.check_mal_score_drift(conn)
 
         assert result == {"checked": 2, "flagged": 1}
         flagged_id = conn.execute(
