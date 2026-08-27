@@ -2282,6 +2282,106 @@ def resolve_service_health(_, info):
 
 
 @query.field("recentGrabs")
+def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
+    """Batch-looks up file_path_sonarr for a list of Sonarr grab records.
+
+    Returns a dict of record-index → file_path_sonarr (or None when the
+    episode isn't in LCARS or hasn't been imported yet).  Two queries:
+    one to resolve tvdb_id → show_id, one to fetch all matching episode
+    rows from that set of shows.  Both run against the LCARS DB the
+    resolver already has open — no extra connections."""
+    keys: list[tuple[str, int | None, int | None]] = []
+    for r in grabbed:
+        tvdb_id = str((r.get("series") or {}).get("tvdbId", "") or "")
+        ep = r.get("episode") or {}
+        keys.append((tvdb_id, ep.get("seasonNumber"), ep.get("episodeNumber")))
+
+    tvdb_id_set = list({k[0] for k in keys if k[0]})
+    if not tvdb_id_set:
+        return {}
+
+    rows = conn.execute(
+        "SELECT external_id, show_id FROM show_external_id"
+        " WHERE source = 'tvdb' AND external_id IN ({})".format(
+            ",".join("?" * len(tvdb_id_set))
+        ),
+        tvdb_id_set,
+    ).fetchall()
+    tvdb_to_show = {str(r_["external_id"]): r_["show_id"] for r_ in rows}
+
+    show_ids = list(set(tvdb_to_show.values()))
+    if not show_ids:
+        return {}
+
+    ep_rows = conn.execute(
+        "SELECT show_id, sonarr_season, sonarr_episode, file_path_sonarr"
+        " FROM episode"
+        " WHERE show_id IN ({}) AND sonarr_season IS NOT NULL AND file_path_sonarr IS NOT NULL".format(
+            ",".join("?" * len(show_ids))
+        ),
+        show_ids,
+    ).fetchall()
+    fp_map: dict[tuple[str, int, int], str] = {
+        (r_["show_id"], r_["sonarr_season"], r_["sonarr_episode"]): r_["file_path_sonarr"]
+        for r_ in ep_rows
+    }
+
+    result: dict[int, str | None] = {}
+    for i, (tvdb_id, s_num, e_num) in enumerate(keys):
+        show_id = tvdb_to_show.get(tvdb_id)
+        if show_id and s_num is not None and e_num is not None:
+            result[i] = fp_map.get((show_id, s_num, e_num))
+    return result
+
+
+def _grab_file_paths_radarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
+    """Batch-looks up file_path_radarr for a list of Radarr grab records.
+
+    Radarr movies are tracked as single-episode movie shows in LCARS.
+    Resolves tmdb_id → show_id → file_path_radarr from the episode row
+    that has the file (kind='movie' or the first row with a non-null
+    file_path_radarr for that show)."""
+    tmdb_ids: list[str] = []
+    for r in grabbed:
+        tmdb_id = str((r.get("movie") or {}).get("tmdbId", "") or "")
+        tmdb_ids.append(tmdb_id)
+
+    tmdb_id_set = list({t for t in tmdb_ids if t})
+    if not tmdb_id_set:
+        return {}
+
+    rows = conn.execute(
+        "SELECT external_id, show_id FROM show_external_id"
+        " WHERE source = 'tmdb' AND external_id IN ({})".format(
+            ",".join("?" * len(tmdb_id_set))
+        ),
+        tmdb_id_set,
+    ).fetchall()
+    tmdb_to_show = {str(r_["external_id"]): r_["show_id"] for r_ in rows}
+
+    show_ids = list(set(tmdb_to_show.values()))
+    if not show_ids:
+        return {}
+
+    # Grab one file_path_radarr per show (there's typically exactly one
+    # movie episode per movie show).
+    ep_rows = conn.execute(
+        "SELECT show_id, file_path_radarr FROM episode"
+        " WHERE show_id IN ({}) AND file_path_radarr IS NOT NULL".format(
+            ",".join("?" * len(show_ids))
+        ),
+        show_ids,
+    ).fetchall()
+    show_to_fp: dict[str, str] = {r_["show_id"]: r_["file_path_radarr"] for r_ in ep_rows}
+
+    result: dict[int, str | None] = {}
+    for i, tmdb_id in enumerate(tmdb_ids):
+        show_id = tmdb_to_show.get(tmdb_id)
+        if show_id:
+            result[i] = show_to_fp.get(show_id)
+    return result
+
+
 def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 20):
     """2026-08-27 — recent grab events from Sonarr or Radarr, used by
     Data's G screen.  Proxies Sonarr/Radarr's own /history endpoint
@@ -2291,15 +2391,23 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
     Returns empty list (no error) when the service is not configured or
     the client raises — the screen degrades gracefully rather than
     blowing up the whole query.  No require_client(): read-only, Ops-
-    internal, same reasoning serviceHealth uses."""
+    internal, same reasoning serviceHealth uses.
+
+    airDate: episode.airDateUtc from Sonarr; null for Radarr (movies don't
+    have a single "air date" in the same sense, and the Radarr history record
+    doesn't reliably surface release dates).  filePath: looked up in the LCARS
+    DB via _grab_file_paths_{sonarr,radarr} — null when the file hasn't been
+    imported yet or the show isn't tracked in LCARS."""
     cfg = config.get_current()
+    conn = db.get_connection()
     try:
         if service == "sonarr":
             if not cfg.sonarr_url or not cfg.sonarr_api_key:
                 return []
             with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
                 data = client.history_page(page=page, page_size=page_size)
-            records = data.get("records") or []
+            grabbed = [r for r in (data.get("records") or []) if r.get("eventType") == "grabbed"]
+            fp_by_idx = _grab_file_paths_sonarr(conn, grabbed)
             return [
                 {
                     "service": "sonarr",
@@ -2309,16 +2417,18 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
                     "quality": ((r.get("quality") or {}).get("quality") or {}).get("name"),
                     "season_number": (r.get("episode") or {}).get("seasonNumber"),
                     "episode_number": (r.get("episode") or {}).get("episodeNumber"),
+                    "air_date": (r.get("episode") or {}).get("airDateUtc"),
+                    "file_path": fp_by_idx.get(i),
                 }
-                for r in records
-                if r.get("eventType") == "grabbed"
+                for i, r in enumerate(grabbed)
             ]
         if service == "radarr":
             if not cfg.radarr_url or not cfg.radarr_api_key:
                 return []
             with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
                 data = client.history_page(page=page, page_size=page_size)
-            records = data.get("records") or []
+            grabbed = [r for r in (data.get("records") or []) if r.get("eventType") == "grabbed"]
+            fp_by_idx = _grab_file_paths_radarr(conn, grabbed)
             return [
                 {
                     "service": "radarr",
@@ -2328,9 +2438,10 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
                     "quality": ((r.get("quality") or {}).get("quality") or {}).get("name"),
                     "season_number": None,
                     "episode_number": None,
+                    "air_date": None,
+                    "file_path": fp_by_idx.get(i),
                 }
-                for r in records
-                if r.get("eventType") == "grabbed"
+                for i, r in enumerate(grabbed)
             ]
     except (sonarr_client.SonarrError, radarr_client.RadarrError):
         pass
