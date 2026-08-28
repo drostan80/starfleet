@@ -2336,10 +2336,10 @@ def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
 def _grab_file_paths_radarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
     """Batch-looks up file_path_radarr for a list of Radarr grab records.
 
-    Radarr movies are tracked as single-episode movie shows in LCARS.
-    Resolves tmdb_id → show_id → file_path_radarr from the episode row
-    that has the file (kind='movie' or the first row with a non-null
-    file_path_radarr for that show)."""
+    Radarr movies live in LCARS as single-show entries whose file path is
+    stored on the `show` row itself (set by local_audit / availability
+    webhook), not on an episode row.  Resolves tmdb_id → show_id →
+    show.file_path_radarr."""
     tmdb_ids: list[str] = []
     for r in grabbed:
         tmdb_id = str((r.get("movie") or {}).get("tmdbId", "") or "")
@@ -2362,16 +2362,17 @@ def _grab_file_paths_radarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
     if not show_ids:
         return {}
 
-    # Grab one file_path_radarr per show (there's typically exactly one
-    # movie episode per movie show).
-    ep_rows = conn.execute(
-        "SELECT show_id, file_path_radarr FROM episode"
-        " WHERE show_id IN ({}) AND file_path_radarr IS NOT NULL".format(
+    # Movie path lives on the show row (set by local_audit / availability
+    # webhook), not on episode.file_path_radarr (that column is only used
+    # for the bonus-movie-episode linking case in episode_movie_link.py).
+    show_rows = conn.execute(
+        "SELECT id, file_path_radarr FROM show"
+        " WHERE id IN ({}) AND file_path_radarr IS NOT NULL".format(
             ",".join("?" * len(show_ids))
         ),
         show_ids,
     ).fetchall()
-    show_to_fp: dict[str, str] = {r_["show_id"]: r_["file_path_radarr"] for r_ in ep_rows}
+    show_to_fp: dict[str, str] = {r_["id"]: r_["file_path_radarr"] for r_ in show_rows}
 
     result: dict[int, str | None] = {}
     for i, tmdb_id in enumerate(tmdb_ids):
