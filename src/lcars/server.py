@@ -21,14 +21,16 @@ unchanged), matched last so the two `/webhooks/*` routes take priority.
 import hmac
 import logging
 from importlib import resources
+from pathlib import Path
 
 from ariadne import make_executable_schema
 from ariadne.asgi import GraphQL
 from ariadne.asgi.handlers import GraphQLTransportWSHandler
 from starlette.datastructures import Headers
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.routing import Mount, Route, Router
+from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocketClose
 
@@ -155,6 +157,7 @@ def build_app(
     bearer_token: str | None,
     sonarr_webhook_secret: str | None = None,
     radarr_webhook_secret: str | None = None,
+    web_root: Path | None = None,
 ) -> ASGIApp:
     schema = build_schema()
     # websocket_handler: explicit, not the default. Ariadne's own default
@@ -184,8 +187,19 @@ def build_app(
             ),
             methods=["POST"],
         ),
-        Mount("/", app=protected_graphql),  # last — catch-all, must not shadow the two above
     ]
+
+    # Static web client — mounted at /ui if web_root is configured and exists.
+    # Same-origin as the GraphQL endpoint, so no CORS needed. Redirect / → /ui/.
+    if web_root is not None and web_root.is_dir():
+        routes.append(Mount("/ui", app=StaticFiles(directory=str(web_root), html=True)))
+        routes.append(Route("/", lambda _req: RedirectResponse("/ui/"), methods=["GET"]))
+        logger.info("Web client served at /ui/ from %s", web_root)
+    else:
+        if web_root is not None:
+            logger.warning("web_root %s does not exist — web client not served", web_root)
+
+    routes.append(Mount("/", app=protected_graphql))  # catch-all, must come last
     return Router(routes)
 
 
@@ -195,4 +209,9 @@ def create_app() -> ASGIApp:
     cfg = config.load_config()
     db.connect(cfg.db_path)
     config.set_current(cfg)  # A.8 — Sonarr/Radarr credentials for metadata.py
-    return build_app(cfg.bearer_token, cfg.sonarr_webhook_secret, cfg.radarr_webhook_secret)
+    return build_app(
+        cfg.bearer_token,
+        cfg.sonarr_webhook_secret,
+        cfg.radarr_webhook_secret,
+        cfg.web_root,
+    )

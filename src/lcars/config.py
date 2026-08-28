@@ -182,6 +182,11 @@ class Config:
     # this dataclass — checked in server.py, not here.
     sonarr_webhook_secret: str | None = None
     radarr_webhook_secret: str | None = None
+    # Path to the Starfleet web client's `src/` directory — mounted at /ui
+    # by server.py so the browser app is served from the same origin as the
+    # GraphQL endpoint (no CORS needed). Not a secret — plain env var only,
+    # same treatment as sonarr_url/home_timezone. Not set means no /ui route.
+    web_root: Path | None = None
 
 
 def _resolve_secret(value: str | None, env_var: str) -> str | None:
@@ -312,6 +317,18 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     cfg.mal_token_refreshed_at = os.environ.get(
         "LCARS_MAL_TOKEN_REFRESHED_AT", cfg.mal_token_refreshed_at
     )
+    # web_root — not a secret, plain ini key + env var override.
+    # (ini read inline here since parser is scoped to the config_path.exists() block above)
+    if config_path.exists():
+        _p = configparser.ConfigParser()
+        _p.read(config_path)
+        if _p.has_section("lcars"):
+            raw = _p["lcars"].get("web_root", fallback=None)
+            if raw:
+                cfg.web_root = Path(raw).expanduser()
+    env_web_root = os.environ.get("LCARS_WEB_ROOT")
+    if env_web_root:
+        cfg.web_root = Path(env_web_root).expanduser()
     return cfg
 
 
