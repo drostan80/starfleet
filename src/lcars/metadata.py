@@ -868,6 +868,26 @@ def _fetch_sonarr(conn, show: dict) -> None:
     if series is None:
         return  # not (yet) in Sonarr's own library — not an error, §5.1
 
+    # Save poster URL from Sonarr's own image list (same COALESCE pattern as
+    # _fetch_radarr: keeps any URL already set by AniList; fills the gap for
+    # TV shows that have no AniList link and would otherwise need a TMDB lookup
+    # from the browser on every page load).  Sonarr returns remoteUrl pointing
+    # at TVDB's image CDN which is publicly accessible with no auth — same as
+    # the AniList CDN links anime shows already use.
+    poster = next(
+        (
+            img.get("remoteUrl")
+            for img in series.get("images") or []
+            if img.get("coverType") == "poster"
+        ),
+        None,
+    )
+    if poster:
+        conn.execute(
+            "UPDATE show SET poster_url = COALESCE(?, poster_url), updated_at = ? WHERE id = ?",
+            (poster, util.now_utc_iso(), show["id"]),
+        )
+
     # 2026-08-15 — Ascendance of a Bookworm, real live bug, user-caught:
     # Sonarr/TVDB tracks a whole multi-part franchise as one flat series
     # while AniList splits it into a separate media entry (and therefore
