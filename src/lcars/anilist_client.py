@@ -79,7 +79,7 @@ query ($mediaId: Int) {
   Media(id: $mediaId) {
     title { romaji english native }
     synonyms
-    coverImage { large }
+    coverImage { large extraLarge }
     bannerImage
     description(asHtml: false)
     genres

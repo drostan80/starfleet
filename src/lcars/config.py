@@ -159,6 +159,10 @@ class Config:
     # Optional, same "not configured = same as not linked, no failure to
     # report" treatment metadata.py already gives Sonarr/Radarr.
     tmdb_api_key: str | None = None
+    # Art asset fetch — TVDB v4 API key for artwork retrieval (posters,
+    # banners, backgrounds). JWT auth: a login call mints a ~1-month
+    # token; the client caches it and refreshes on 401.
+    tvdb_api_key: str | None = None
     # B.10 — mal_client_secret is genuinely optional even once configured
     # (module docstring above); mal_access_token/mal_refresh_token are
     # LCARS's own, minted via `lcars mal-login` (cli.py) and kept fresh by
@@ -252,6 +256,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.anilist_access_token = parser["lcars"].get("anilist_access_token", fallback=None)
             cfg.home_timezone = parser["lcars"].get("home_timezone", fallback=cfg.home_timezone)
             cfg.tmdb_api_key = parser["lcars"].get("tmdb_api_key", fallback=None)
+            cfg.tvdb_api_key = parser["lcars"].get("tvdb_api_key", fallback=None)
             cfg.mal_client_id = parser["lcars"].get("mal_client_id", fallback=None)
             cfg.mal_client_secret = parser["lcars"].get("mal_client_secret", fallback=None)
             cfg.mal_access_token = parser["lcars"].get("mal_access_token", fallback=None)
@@ -302,6 +307,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     )
     cfg.home_timezone = os.environ.get("LCARS_HOME_TIMEZONE", cfg.home_timezone)  # not a secret
     cfg.tmdb_api_key = _resolve_secret(cfg.tmdb_api_key, "LCARS_TMDB_API_KEY")
+    cfg.tvdb_api_key = _resolve_secret(cfg.tvdb_api_key, "LCARS_TVDB_API_KEY")
     cfg.mal_client_id = _resolve_secret(cfg.mal_client_id, "LCARS_MAL_CLIENT_ID")
     cfg.mal_client_secret = _resolve_secret(cfg.mal_client_secret, "LCARS_MAL_CLIENT_SECRET")
     cfg.mal_access_token = _resolve_secret(cfg.mal_access_token, "LCARS_MAL_ACCESS_TOKEN")

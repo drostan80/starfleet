@@ -245,6 +245,9 @@ type Show {
   scoreHistory(first: Int, after: String, last: Int, before: String): ScoreChangeConnection!
   trackedHistory(first: Int, after: String, last: Int, before: String): TrackedChangeConnection!
 
+  "All art assets for this show (posters, banners, backgrounds from all sources — show-level and season-level)."
+  artAssets: [ArtAsset!]!
+
   "Replaces one show can have multiple AniList entries, one per season (§5.5) — see Season.anilistId/malId, not a show-level field anymore."
   seasons(first: Int, after: String, last: Int, before: String): SeasonConnection!
   "Nullable until A.8's on-demand fetch or A.4's reconciliation seeds it (or the show predates seeding) — §5.5."
@@ -428,6 +431,10 @@ type Season {
   absStart: Int
   "S5 — see absStart."
   absEnd: Int
+  "Resolved: selected art_asset poster for this season → show's own posterUrl fallback. Null when neither exists."
+  posterUrl: String
+  "All art assets linked to this season (posters, banners, backgrounds from all sources)."
+  artAssets: [ArtAsset!]!
   source: SeasonSource!
   matched: Boolean!
   manualOverride: Boolean!
@@ -444,6 +451,37 @@ type SeasonEdge {
 type SeasonConnection {
   edges: [SeasonEdge!]!
   pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------------------
+# Art assets — multi-source artwork storage (posters, banners, backgrounds)
+# ---------------------------------------------------------------------------
+
+"""
+An art asset URL from an external source (AniList, TVDB, TMDB, etc.),
+linked to a show and optionally to a specific season. The `selected`
+flag marks the user's chosen art for each (show, season, kind) slot;
+resolvers use it to populate Show.posterUrl / Season.posterUrl.
+"""
+type ArtAsset {
+  id: ID!
+  showId: ID!
+  seasonId: ID
+  kind: ArtKind!
+  source: String!
+  url: String!
+  width: Int
+  height: Int
+  language: String
+  sourceScore: Int
+  selected: Boolean!
+  createdAt: DateTime!
+}
+
+enum ArtKind {
+  POSTER
+  BANNER
+  BACKGROUND
 }
 
 type EpisodeNumberingMapping {
@@ -1756,6 +1794,14 @@ type Mutation {
   createFilterPreset(name: String!, filterJson: String!): FilterPreset!
   updateFilterPreset(id: ID!, name: String, filterJson: String): FilterPreset!
   deleteFilterPreset(id: ID!): Boolean!
+
+  # -- Art asset selection -------------------------------------------------------
+  "Fetch artwork from all available sources (AniList per-season, TVDB) and store in art_asset table. Returns the show with updated artAssets."
+  fetchShowArt(showId: ID!): Show!
+  "Select an art asset as the active poster/banner/background for its (show, season, kind) slot. Deselects the previous selection in the same slot."
+  selectArtAsset(id: ID!): ArtAsset!
+  "Clear the selected art asset for a slot, reverting to the source-data fallback (show.poster_url column)."
+  deselectArtAsset(id: ID!): ArtAsset!
 
   # -- 6.12 data import (export is a query — read-only, no side effect) --------
   "Rejects on any schema_version mismatch (§6.12) — a thrown GraphQL error, no auto-migration."

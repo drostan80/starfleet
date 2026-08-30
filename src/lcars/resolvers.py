@@ -27,6 +27,7 @@ from graphql import GraphQLError
 from lcars import (
     anilist_client,
     animeschedule,
+    art,
     availability,
     config,
     db,
@@ -73,6 +74,7 @@ score_change_type = ObjectType("ScoreChange")
 air_date_change_type = ObjectType("AirDateChange")
 tracked_change_type = ObjectType("TrackedChange")
 show_service_presence_type = ObjectType("ShowServicePresence")
+art_asset_type = ObjectType("ArtAsset")
 person_type = ObjectType("Person")
 studio_type = ObjectType("Studio")
 cast_credit_type = ObjectType("CastCredit")
@@ -116,6 +118,7 @@ ENUMS = [
     # (synthesized for a never-contacted service), and this mapping is
     # purely GraphQL<->Python, independent of what the DB will store.
     _enum("ServiceHealthStatus", "ok", "unreachable", "unknown"),
+    _enum("ArtKind", "poster", "banner", "background"),
 ]
 
 BINDABLES = [
@@ -135,6 +138,7 @@ BINDABLES = [
     air_date_change_type,
     tracked_change_type,
     show_service_presence_type,
+    art_asset_type,
     person_type,
     studio_type,
     cast_credit_type,
@@ -1612,6 +1616,52 @@ def resolve_show_tags(obj, info, **page_args):
     )
 
 
+@show_type.field("artAssets")
+def resolve_show_art_assets(obj, info):
+    return art.get_art_assets_for_show(db.get_connection(), obj["id"])
+
+
+@show_type.field("posterUrl")
+def resolve_show_poster_url(obj, info):
+    """Selected art_asset poster → existing show.poster_url fallback.
+
+    Only queries art_asset when the show-detail page requests it (not on
+    list/calendar pages where N shows would fire N extra queries).  The
+    heuristic: if the client also asked for artAssets in this selection
+    set, they're on the show page — check the table; otherwise return
+    the plain column.  Gracefully handles pre-migration (table missing).
+    """
+    # Fast path for list/calendar — no art_asset lookup
+    field_node = info.field_nodes[0]
+    parent_set = field_node.loc.source.body if field_node.loc else ""
+    if "artAssets" not in parent_set:
+        return obj.get("poster_url")
+    try:
+        conn = db.get_connection()
+        url = art.get_selected_url(conn, obj["id"], None, "poster")
+        return url or obj.get("poster_url")
+    except Exception:
+        return obj.get("poster_url")
+
+
+@show_type.field("bannerUrl")
+def resolve_show_banner_url(obj, info):
+    """Selected art_asset banner → existing show.banner_url fallback.
+
+    Same show-page-only gating as posterUrl above.
+    """
+    field_node = info.field_nodes[0]
+    parent_set = field_node.loc.source.body if field_node.loc else ""
+    if "artAssets" not in parent_set:
+        return obj.get("banner_url")
+    try:
+        conn = db.get_connection()
+        url = art.get_selected_url(conn, obj["id"], None, "banner")
+        return url or obj.get("banner_url")
+    except Exception:
+        return obj.get("banner_url")
+
+
 # --- Episode fields ------------------------------------------------------
 
 
@@ -1679,6 +1729,31 @@ def resolve_show_external_id_show(obj, info):
 
 
 # --- Season / EpisodeNumberingMapping / EpisodeMovieLink fields ------------
+
+
+@season_type.field("posterUrl")
+def resolve_season_poster_url(obj, info):
+    """Selected season art → selected show art → show.poster_url column."""
+    try:
+        conn = db.get_connection()
+        # 1. Season-specific selected poster
+        url = art.get_selected_url(conn, obj["show_id"], obj["id"], "poster")
+        if url:
+            return url
+        # 2. Show-level selected poster
+        url = art.get_selected_url(conn, obj["show_id"], None, "poster")
+        if url:
+            return url
+    except Exception:
+        pass
+    # 3. Fall back to show's own poster_url column
+    show = _get_show(conn, obj["show_id"])
+    return show["poster_url"] if show else None
+
+
+@season_type.field("artAssets")
+def resolve_season_art_assets(obj, info):
+    return art.get_art_assets_for_season(db.get_connection(), obj["id"])
 
 
 @season_type.field("show")
@@ -3773,6 +3848,50 @@ def resolve_import_data(_, info, json):
         "episodes_imported": counts.get("episode", 0),
         "watch_events_imported": counts.get("watch_event", 0),
     }
+
+
+# -- Art asset mutations ----------------------------------------------------
+
+
+@mutation.field("fetchShowArt")
+def resolve_fetch_show_art(_, info, showId):
+    conn = db.get_connection()
+    show = _get_show(conn, showId)
+    if not show:
+        raise GraphQLError(f"Show {showId} not found")
+    metadata.fetch_show_art(conn, showId)
+    # Return refreshed show
+    return _get_show(conn, showId)
+
+
+@mutation.field("selectArtAsset")
+def resolve_select_art_asset(_, info, id):
+    conn = db.get_connection()
+    try:
+        return art.select_asset(conn, id)
+    except ValueError as e:
+        raise GraphQLError(str(e)) from e
+
+
+@mutation.field("deselectArtAsset")
+def resolve_deselect_art_asset(_, info, id):
+    conn = db.get_connection()
+    try:
+        return art.deselect_asset(conn, id)
+    except ValueError as e:
+        raise GraphQLError(str(e)) from e
+
+
+# -- ArtAsset field resolvers -----------------------------------------------
+# kind enum: the ArtKind EnumType binding handles the DB's lowercase
+# "poster"/"banner"/"background" → GraphQL POSTER/BANNER/BACKGROUND
+# conversion automatically.  Only `selected` needs explicit conversion
+# (SQLite stores 0/1, GraphQL expects Boolean).
+
+
+@art_asset_type.field("selected")
+def resolve_art_asset_selected(obj, info):
+    return bool(obj.get("selected"))
 
 
 # -- outbound push, "webhook push to clients" design, 2026-08-25 ------------

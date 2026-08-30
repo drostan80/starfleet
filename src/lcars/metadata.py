@@ -52,6 +52,7 @@ from datetime import datetime
 
 from lcars import (
     anilist_client,
+    art,
     fribb,
     ids,
     pending_review,
@@ -297,6 +298,14 @@ def _fetch_anilist(conn, show: dict) -> None:
             now,
             show["id"],
         ),
+    )
+
+    # Store AniList cover/banner as art assets
+    cover_img = media.get("coverImage") or {}
+    art.store_anilist_art(
+        conn, show["id"], None,
+        cover_img.get("large"), cover_img.get("extraLarge"),
+        media.get("bannerImage"),
     )
 
     _sync_synonyms(conn, show["id"], media.get("synonyms") or [], now)
@@ -1518,3 +1527,86 @@ def _fetch_radarr(conn, show: dict) -> None:
         " WHERE id = ?",
         (poster, movie.get("overview"), json.dumps(genres) if genres else None, now, show["id"]),
     )
+
+
+# ---------------------------------------------------------------------------
+# Art asset fetch — TVDB artwork
+# ---------------------------------------------------------------------------
+
+def fetch_show_art(conn, show_id: str) -> int:
+    """Fetch artwork from TVDB (and AniList per-season) for a show,
+    storing results in the art_asset table. Returns total assets stored.
+
+    TVDB art is only available for shows with a ``tvdb`` external id
+    link. Movies have no TVDB art path (Fribb maps only episodic shows).
+
+    Also fetches per-season AniList cover art — each season with its own
+    ``anilist_id`` gets a separate AniList fetch for cover/banner images.
+    """
+    from lcars import tvdb_client as tvdb_mod
+
+    cfg = get_current()
+    show = dict(conn.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone())
+    count = 0
+
+    # -- Per-season AniList art -------------------------------------------------
+    seasons = conn.execute(
+        "SELECT id, season_number, anilist_id FROM season WHERE show_id = ?",
+        (show_id,),
+    ).fetchall()
+
+    for sn_row in seasons:
+        al_id = sn_row["anilist_id"]
+        if al_id is None:
+            continue
+        try:
+            media = anilist_client.fetch_media(al_id)
+        except Exception:
+            log.debug("AniList art fetch failed for anilist_id=%s", al_id)
+            continue
+        if not media:
+            continue
+        cover = media.get("coverImage") or {}
+        art.store_anilist_art(
+            conn, show_id, sn_row["id"],
+            cover.get("large"), cover.get("extraLarge"),
+            media.get("bannerImage"),
+        )
+        count += 2  # approximate
+
+    # -- TVDB art ---------------------------------------------------------------
+    if cfg.tvdb_api_key:
+        tvdb_id_row = conn.execute(
+            "SELECT external_id FROM show_external_id"
+            " WHERE show_id = ? AND service = 'tvdb'",
+            (show_id,),
+        ).fetchone()
+        if tvdb_id_row:
+            try:
+                tvdb_id = int(tvdb_id_row["external_id"])
+            except (TypeError, ValueError):
+                tvdb_id = None
+            if tvdb_id is not None:
+                client = tvdb_mod.TvdbClient(cfg.tvdb_api_key)
+                try:
+                    if show["media_shape"] == "movie":
+                        artworks = client.movie_artworks(tvdb_id)
+                    else:
+                        artworks = client.series_artworks(tvdb_id)
+                except Exception:
+                    log.debug("TVDB art fetch failed for tvdb_id=%s", tvdb_id)
+                    artworks = []
+                finally:
+                    client.close()
+
+                # Build season_number → LCARS season_id map
+                season_map = {}
+                for sn_row in seasons:
+                    season_map[sn_row["season_number"]] = sn_row["id"]
+
+                count += art.store_tvdb_art(conn, show_id, artworks, season_map)
+
+    # Auto-select best candidates for slots that don't have one yet
+    art.auto_select_best(conn, show_id)
+    conn.commit()
+    return count

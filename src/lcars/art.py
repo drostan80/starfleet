@@ -1,0 +1,254 @@
+"""Art asset storage and retrieval (2026-08-30).
+
+Manages the ``art_asset`` table: inserting candidates from external
+sources (AniList, TVDB, TMDB), querying by show/season, and selecting/
+deselecting art for display.
+
+The "selected" art for a (show, season, kind) slot is what resolvers
+surface as ``Show.posterUrl``, ``Season.posterUrl``, etc.  When no
+selected asset exists, resolvers fall back to the existing
+``show.poster_url`` / ``show.banner_url`` columns (legacy data that
+predates this table).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+
+from lcars import db, ids, util
+
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Write
+# ---------------------------------------------------------------------------
+
+def upsert_asset(
+    conn,
+    show_id: str,
+    season_id: str | None,
+    kind: str,
+    source: str,
+    url: str,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+    language: str | None = None,
+    source_score: int | None = None,
+) -> str:
+    """Insert or update an art asset row.  Returns the asset id.
+
+    Uniqueness is on (show_id, season_id, kind, source, url) — a
+    second call with the same key updates width/height/language/score
+    but never touches the ``selected`` flag.
+    """
+    now = util.now_utc_iso()
+    existing = conn.execute(
+        "SELECT id FROM art_asset"
+        " WHERE show_id = ? AND season_id IS ? AND kind = ? AND source = ? AND url = ?",
+        (show_id, season_id, kind, source, url),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE art_asset SET width = ?, height = ?, language = ?,"
+            "  source_score = ? WHERE id = ?",
+            (width, height, language, source_score, existing["id"]),
+        )
+        return existing["id"]
+
+    asset_id = ids.generate_id(conn, "h")
+    conn.execute(
+        "INSERT INTO art_asset"
+        " (id, show_id, season_id, kind, source, url,"
+        "  width, height, language, source_score, selected, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+        (asset_id, show_id, season_id, kind, source, url,
+         width, height, language, source_score, now),
+    )
+    return asset_id
+
+
+def select_asset(conn, asset_id: str) -> dict:
+    """Mark an asset as the selected art for its (show, season, kind)
+    slot, deselecting whatever was previously selected in that slot.
+    Returns the updated asset row."""
+    asset = conn.execute("SELECT * FROM art_asset WHERE id = ?", (asset_id,)).fetchone()
+    if not asset:
+        raise ValueError(f"Art asset {asset_id} not found")
+    asset = dict(asset)
+
+    # Deselect any existing selection in the same slot
+    if asset["season_id"] is None:
+        conn.execute(
+            "UPDATE art_asset SET selected = 0"
+            " WHERE show_id = ? AND season_id IS NULL AND kind = ? AND selected = 1",
+            (asset["show_id"], asset["kind"]),
+        )
+    else:
+        conn.execute(
+            "UPDATE art_asset SET selected = 0"
+            " WHERE show_id = ? AND season_id = ? AND kind = ? AND selected = 1",
+            (asset["show_id"], asset["season_id"], asset["kind"]),
+        )
+
+    conn.execute("UPDATE art_asset SET selected = 1 WHERE id = ?", (asset_id,))
+    conn.commit()
+    asset["selected"] = 1
+    return asset
+
+
+def deselect_asset(conn, asset_id: str) -> dict:
+    """Clear the selected flag on an asset.  Returns the updated row."""
+    asset = conn.execute("SELECT * FROM art_asset WHERE id = ?", (asset_id,)).fetchone()
+    if not asset:
+        raise ValueError(f"Art asset {asset_id} not found")
+    conn.execute("UPDATE art_asset SET selected = 0 WHERE id = ?", (asset_id,))
+    conn.commit()
+    asset = dict(asset)
+    asset["selected"] = 0
+    return asset
+
+
+# ---------------------------------------------------------------------------
+# Read
+# ---------------------------------------------------------------------------
+
+def get_art_assets_for_show(conn, show_id: str) -> list[dict]:
+    """All art assets for a show (both show-level and season-level)."""
+    rows = conn.execute(
+        "SELECT * FROM art_asset WHERE show_id = ? ORDER BY kind, source_score DESC, created_at",
+        (show_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_art_assets_for_season(conn, season_id: str) -> list[dict]:
+    """Art assets scoped to a specific season."""
+    rows = conn.execute(
+        "SELECT * FROM art_asset WHERE season_id = ? ORDER BY kind, source_score DESC, created_at",
+        (season_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_selected_url(conn, show_id: str, season_id: str | None, kind: str) -> str | None:
+    """Return the URL of the selected art asset for a slot, or None."""
+    if season_id is None:
+        row = conn.execute(
+            "SELECT url FROM art_asset"
+            " WHERE show_id = ? AND season_id IS NULL AND kind = ? AND selected = 1",
+            (show_id, kind),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT url FROM art_asset"
+            " WHERE show_id = ? AND season_id = ? AND kind = ? AND selected = 1",
+            (show_id, season_id, kind),
+        ).fetchone()
+    return row["url"] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Populate from sources
+# ---------------------------------------------------------------------------
+
+def store_anilist_art(
+    conn,
+    show_id: str,
+    season_id: str | None,
+    cover_large: str | None,
+    cover_extra_large: str | None,
+    banner_image: str | None,
+) -> None:
+    """Store AniList cover/banner images as art assets.
+
+    Called during metadata fetch — each AniList entry (per-season or
+    show-level) provides a cover image and optionally a banner.
+    """
+    if cover_extra_large:
+        upsert_asset(conn, show_id, season_id, "poster", "anilist",
+                      cover_extra_large)
+    if cover_large and cover_large != cover_extra_large:
+        upsert_asset(conn, show_id, season_id, "poster", "anilist",
+                      cover_large)
+    if banner_image:
+        upsert_asset(conn, show_id, season_id, "banner", "anilist",
+                      banner_image)
+
+
+def store_tvdb_art(
+    conn,
+    show_id: str,
+    artworks: list[dict],
+    season_map: dict[int, str],
+) -> int:
+    """Store TVDB artwork as art assets.
+
+    ``artworks`` is the normalized list from ``TvdbClient.series_artworks``
+    or ``movie_artworks``.  ``season_map`` maps season_number → LCARS
+    season_id (for season-scoped art).
+
+    Returns the number of new assets inserted.
+    """
+    count = 0
+    for art in artworks:
+        season_id = None
+        sn = art.get("season_number")
+        if sn is not None:
+            season_id = season_map.get(sn)
+            if season_id is None:
+                continue  # no matching LCARS season — skip
+
+        upsert_asset(
+            conn, show_id, season_id,
+            art["kind"], "tvdb", art["url"],
+            width=art.get("width"),
+            height=art.get("height"),
+            language=art.get("language"),
+            source_score=art.get("source_score"),
+        )
+        count += 1
+    return count
+
+
+def auto_select_best(conn, show_id: str) -> None:
+    """For each (show, season, kind) slot that has no selection yet,
+    auto-select the highest-scored candidate.  Called after a bulk
+    art fetch to seed initial selections without overriding user
+    choices.
+
+    Prefers anilist posters (they match what the user already sees),
+    then tvdb by source_score descending.
+    """
+    # Find slots with no selection
+    unselected = conn.execute(
+        """
+        SELECT show_id, season_id, kind
+        FROM art_asset
+        WHERE show_id = ?
+        GROUP BY show_id, season_id, kind
+        HAVING SUM(selected) = 0
+        """,
+        (show_id,),
+    ).fetchall()
+
+    for slot in unselected:
+        # Pick best candidate: anilist first, then by source_score desc
+        best = conn.execute(
+            """
+            SELECT id FROM art_asset
+            WHERE show_id = ? AND season_id IS ? AND kind = ?
+            ORDER BY
+                CASE source WHEN 'anilist' THEN 0 ELSE 1 END,
+                COALESCE(source_score, 0) DESC,
+                created_at ASC
+            LIMIT 1
+            """,
+            (slot["show_id"], slot["season_id"], slot["kind"]),
+        ).fetchone()
+        if best:
+            conn.execute("UPDATE art_asset SET selected = 1 WHERE id = ?", (best["id"],))
+
+    conn.commit()
