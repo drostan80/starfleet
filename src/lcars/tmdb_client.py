@@ -93,7 +93,7 @@ class TmdbClient:
         Returns list of ``{season, episode, overview}`` dicts for episodes
         that have a non-empty ``overview``.
         """
-        data = self._get(f"tv/{tmdb_id}/season/{season_number}")
+        data = self._get(f"tv/{tmdb_id}/season/{season_number}", params={"language": "en-US"})
         if not data:
             return []
         results = []
@@ -108,8 +108,8 @@ class TmdbClient:
         return results
 
     def tv_synopsis(self, tmdb_id: int) -> str | None:
-        """Fetch the show-level overview from TMDB."""
-        data = self._get(f"tv/{tmdb_id}")
+        """Fetch the show-level overview from TMDB (English)."""
+        data = self._get(f"tv/{tmdb_id}", params={"language": "en-US"})
         if not data:
             return None
         return (data.get("overview") or "").strip() or None

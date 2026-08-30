@@ -161,18 +161,22 @@ class TvdbClient:
 
         return results
 
-    def series_episode_synopses(self, tvdb_id: int) -> list[dict]:
+    def series_episode_synopses(self, tvdb_id: int, lang: str = "eng") -> list[dict]:
         """Fetch episode overviews for a series.
 
         Returns list of ``{season, episode, overview}`` dicts for episodes
         that have a non-empty ``overview``.  Uses the default (aired-order)
         season type; paginates until exhausted.
+
+        ``lang`` selects the translation language (TVDB v4 3-letter code,
+        e.g. ``eng``, ``jpn``).  Defaults to English so anime shows get
+        English overviews instead of the series' primary language.
         """
         results = []
         page = 0
         while True:
             data = self._get(
-                f"/series/{tvdb_id}/episodes/default",
+                f"/series/{tvdb_id}/episodes/default/{lang}",
                 params={"page": page},
             )
             if not data:
@@ -200,8 +204,21 @@ class TvdbClient:
                 break
         return results
 
-    def series_synopsis(self, tvdb_id: int) -> str | None:
-        """Fetch the series-level overview from TVDB."""
+    def series_synopsis(self, tvdb_id: int, lang: str = "eng") -> str | None:
+        """Fetch the series-level overview from TVDB.
+
+        Uses the ``/series/{id}/translations/{lang}`` endpoint to get
+        the overview in the requested language (default English).
+        Falls back to the untranslated overview if the translation
+        endpoint returns nothing.
+        """
+        # Try translated overview first
+        data = self._get(f"/series/{tvdb_id}/translations/{lang}")
+        if data:
+            overview = ((data.get("data") or {}).get("overview") or "").strip()
+            if overview:
+                return overview
+        # Fall back to default (may be non-English)
         data = self._get(f"/series/{tvdb_id}")
         if not data:
             return None
