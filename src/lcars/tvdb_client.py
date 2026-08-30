@@ -44,7 +44,7 @@ class TvdbClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "TvdbClient":
+    def __enter__(self) -> TvdbClient:
         return self
 
     def __exit__(self, *exc_info: object) -> None:

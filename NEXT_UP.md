@@ -533,8 +533,10 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       season` — avoids SQLite 3.26.0+ FK-rewrite behaviour that corrupts `episode`/
       `season_external_id` FK text when the original table is renamed first. `PRAGMA foreign_keys
       = OFF` wraps the whole block. `downgrade()` adds both columns back as nullable.
-      **Remaining**: expose sub-seasons in Data UI (check what Data actually renders for Bookworm
-      post-collapse before deciding if client work is needed).
+      **S5 done, 2026-08-28**: checked what Data actually renders for Bookworm post-collapse —
+      `show_seasons_and_episodes` fetches `seasonNumber` (not `absStart`/`absEnd`); the 4 seasons
+      display as distinct numbered seasons in the show-detail screen, which is correct and fully
+      navigable. No client work needed — sub-season display is not required for usability.
 - [x] Recent grabs screen (`G` key, v0.1.47 / `~/repos/data`, 2026-08-27): two-column modal
       (Sonarr left, Radarr right), 20 events per page, `[` goes back (older), `]` goes forward
       (only active when page > 1), `r` resets to page 1 + reloads, `q`/Esc closes. Both columns
@@ -563,8 +565,6 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       via tmdb_id→file_path_radarr; both null-safe, return None when not imported). 21 tests;
       `~/repos/starfleet` 1004 passed, `~/repos/data` 21/21 grabs tests passed. Deployed as
       v0.1.49.
-- [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` (workaround via LAN
-      IP in place).
 - [ ] B.5.3a — scoped/targeted reconcile instead of always sweeping the full AniList list;
       good-to-have, not urgent.
 - [x] Open-in-Sonarr/Radarr/AniList, correctly this time: LCARS stores real deep links
@@ -600,9 +600,6 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       per-instance override) — hardcoded default for now per the user's own "for now let's
       hardcode the local 192.168.0.152" call. 2026-08-20 built, 2026-08-25 committed
       (`~/repos/data` commit `7d5fb99`) — had sat uncommitted in the working tree since build.
-- [ ] Verify the real Sonarr/Radarr `/add/new?term=...` search-and-prefill behavior specifically
-      (host:port reachability is now curl-confirmed; the exact query-param contract is still
-      assumed from standard Servarr frontend convention, not yet clicked through behind auth).
 - [x] `backfillTvdbIds` — TV-only tvdb_id backfill via a reverse lookup (anilist_id -> tvdb_id)
       against the same Fribb dataset already cached for the forward direction (A.4/B.2). Upgrades
       `?term=<title>` to the more precise `?term=tvdb:{id}` for shows never added to Sonarr.
@@ -772,29 +769,24 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       fetch-side logic fill it properly — confirmed `AVAILABLE` with the real file path.
       `~/repos/starfleet`, deployed as v0.1.33.
 
-## Cutover (in progress, 2026-08-25)
+## TBC / ongoing (validate as you go)
 
-- [ ] Switch actual daily use over to Data, once proven reliable day-to-day — ongoing: daily use
-      has already shifted over to Data, not yet declared fully proven/complete.
-- [ ] Archive aniq — don't delete, keep as emergency fallback. User's explicit call, 2026-08-25:
-      keep it around as-is for now (costs nothing) until Data is 100% to their liking — no fixed
-      timeline, not tied to any specific remaining item above.
-- [ ] Data becomes the permanent front-end under its own name — ongoing, same as the daily-use
-      item above.
-- [ ] Rotate Sonarr/Radarr keys, MAL client_id, LCARS's own AniList client_secret (all pasted in
-      chat during build, intentionally left live until now) — user's explicit call, 2026-08-25:
-      still held for once everything above is worked out, not now.
+- [ ] Daily use — Data is the active front-end; declaring it "done" is ongoing, no fixed bar.
+      aniq stays untouched as emergency fallback until you're 100% happy, costs nothing.
+- [ ] Verify Sonarr/Radarr `/add/new?term=...` prefill — host:port curl-confirmed; exact
+      query-param contract still assumed, not clicked through behind auth. Validate next time
+      you naturally use `A` to add a show.
+- [ ] Rotate Sonarr/Radarr keys, MAL client_id, LCARS's own AniList client_secret — in
+      progress in the background; reminder only, no action needed from this list.
 
 ## Ideas / open questions
 
-- [ ] LCARS absorbs the AniList↔MAL mirroring the user currently runs as a separate external tool
-      (2026-08-26). **Largely superseded by the MAL bidirectional sync (v0.1.37, Build above)**:
-      LCARS now mirrors status + episode progress both ways (AniList↔LCARS↔MAL), forward and
-      reverse, on its own loops. **Score reverse-sync — AniList direction done (v0.1.43)**:
-      `pollScoreSync` detects AniList score drift, queues as `pending_review` for human
-      confirmation → Data calls `setSeasonScore` + `resolvePendingReview`. MAL score reverse-sync
-      still missing (no activity-feed equivalent; future slice). Retiring the external tool
-      entirely requires both directions plus MAL.
+- [x] LCARS absorbs the AniList↔MAL mirroring the user currently runs as a separate external tool
+      (2026-08-26). **Done, 2026-08-28 (confirmed)**: status + episode progress both ways
+      (AniList↔LCARS↔MAL, v0.1.37); score reverse-sync AniList direction (v0.1.43,
+      `check_anilist_score_drift` → `pending_review` → Data `setSeasonScore`); score reverse-sync
+      MAL direction (v0.1.45, `check_mal_score_drift`, same `pollScoreSync` + ops hourly loop).
+      Both directions, all three dimensions — retiring the external tool is now unblocked.
 - [x] Catalog-wide `title_english`/`title_romaji` backfill — done 2026-08-26,
       `scripts/backfill_titles.py` (`~/repos/starfleet` `10c0983`). Batch-fetches AniList's own
       `title{romaji,english,native}` for the 1457 anime shows with an AniList link but NULL
@@ -807,17 +799,52 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       exactly (the dry-run counts were the audit re-verification). Snapshot
       `lcars.db.bak-20260826-pre-title-backfill`; stop/apply/restart; override preserved, verified
       live. Same one-time-script pattern as `backfill_synonyms.py`/`import_anilist_scores.py`.
-- [ ] `refreshTitlesFromAniList(showId)` mutation — a client-facing way to re-pull AniList's
-      authoritative titles for one show post-creation (title fields are still caller-input-at-
-      creation only; `_fetch_anilist` never touches them). The catalog-wide backfill above handled
-      the bulk via direct SQL and didn't need it; build this when a client actually wants per-show
-      correction. Deliberately deferred out of the backfill change (advisor: separate deliverable,
-      no current caller).
-- [ ] Move all secrets/passwords to a safer place (plaintext `config.ini` today).
+- [x] `refreshTitlesFromAniList(showId)` mutation — built (confirmed 2026-08-28):
+      `schema.graphql:1480` + `resolvers.py:2540`. Per-show AniList title re-pull, same
+      corrected-precedence logic as the catalog backfill script.
+- [ ] Move all secrets/passwords to a safer place (plaintext `config.ini` today) — deferred,
+      reminder only; in progress in the background alongside key rotation.
 - [ ] Design the HTML client's UI properly.
 - [ ] HTML client: add a login/password gate, keep it safe.
+- [ ] Add `watchedEpisodeCount: Int!` and `availableEpisodeCount: Int!` to the `Show` type —
+      needed by the web client calendar cards to display accurate per-show progress and
+      availability without a separate query. `watchedEpisodeCount` = count of episodes with at
+      least one WatchEvent; `availableEpisodeCount` = count of episodes whose
+      `availableViaSonarr`/`availableViaRadarr` is AVAILABLE (whichever applies to the
+      show's mediaShape).
 - [ ] HTML client video playback: local player vs. browser — undecided (native mpv only
       works from the media machine itself, browser `<video>` has real format limits).
+- [ ] **New ShowStatus: SKIP** — a lightweight tombstone status meaning "seen, not interested".
+      Distinct from DROPPED (started and abandoned) and PLANNING (intend to watch). A show at
+      SKIP would need no Sonarr/Radarr entry; just a stub in LCARS so the same title doesn't
+      resurface as a suggestion again. AniList/MAL push behaviour: probably no push (the external
+      lists don't have an equivalent "skip" bucket). May also need a `skipList` query field so
+      clients can browse what has been dismissed.
+- [ ] **Upcoming-show catalog / proactive discovery** — two overlapping shapes, both worth
+      exploring before committing to one:
+      - *Passive import*: an Ops loop (daily or weekly) pulls upcoming seasons from AniList
+        (seasonal endpoint) and/or TMDB (discover with `first_air_date_year`, `with_status=0`)
+        and ingests them as LCARS stubs — `tracked = false`, status = null or a new UPCOMING
+        pseudo-status, minimal metadata (title, external IDs, poster, premiere date, episode
+        count if known). The user then browses these stubs in the web client's "Upcoming" page,
+        can promote to PLANNING (full add + Sonarr/Radarr prompt) or dismiss as SKIP. Past
+        seasons not yet in LCARS stay addable via the existing `addShow`/backfill flow.
+      - *Active search*: the web client gets a "Browse / Discover" page sourcing directly from
+        TMDB (covers both anime and non-anime in one API, simpler than juggling AniList +
+        TMDB). Results are grouped by premiere year/season (Winter/Spring/Summer/Fall) or by
+        release month, displaying cover art, title, and air date. Per entry, two actions:
+        - **Plan** → calls existing `addShow` (or a new `planShow` shortcut) — full LCARS row,
+          prompts/auto-triggers Sonarr or Radarr add.
+        - **Skip** → adds a lightweight LCARS stub (title, TMDB link, poster, air dates) under
+          the new SKIP status; no Sonarr/Radarr interaction, no episode/season correctness
+          required at stub time.
+      The two shapes are complementary: passive import fills the inbox automatically; active
+      search handles targeted lookup. Either requires the SKIP status above and a stub-ingestion
+      path in LCARS that doesn't enforce the same completeness as a full `addShow`.
+- [ ] **Web client — Statistics page** (details TBD). Likely surface: episode/show counts by
+      status, watch history over time (episodes watched per day/week/month), score distribution,
+      genre breakdown, total runtime. Needs `watchedEpisodeCount` and date-bucketed watch-event
+      aggregates from LCARS — design the queries when building the page.
 - [ ] Open question: should linkage to external DBs (TMDB, AniList…) hang off `show` or
       `episode`? First read: `season` already answers most of this.
 - [ ] Open question: does `show.studio` deserve an id-prefix like other entities, for
@@ -829,6 +856,8 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       end.
 - [ ] AniList indexes a not-yet-aired season under its romaji title only — handle case-by-case
       as each season airs, not automated.
+- [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` — deferred, LAN IP
+      workaround is fine for now.
 - [x] Client changes now sent to LCARS immediately, not buffered (2026-08-26, `~/repos/data`
       `7148d70`). The queue-then-flush buffer dated from when Data wrote to Sonarr/AniList directly;
       Data only talks to LCARS now, so `w`/`m`-status/`S` flush the moment they're made instead of

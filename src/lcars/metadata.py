@@ -1562,7 +1562,6 @@ def fetch_show_art(conn, show_id: str) -> int:
         try:
             media = anilist_client.fetch_media(al_id)
         except Exception:
-            log.debug("AniList art fetch failed for anilist_id=%s", al_id)
             continue
         if not media:
             continue
@@ -1594,7 +1593,6 @@ def fetch_show_art(conn, show_id: str) -> int:
                     else:
                         artworks = client.series_artworks(tvdb_id)
                 except Exception:
-                    log.debug("TVDB art fetch failed for tvdb_id=%s", tvdb_id)
                     artworks = []
                 finally:
                     client.close()

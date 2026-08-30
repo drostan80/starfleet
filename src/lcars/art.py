@@ -13,10 +13,9 @@ predates this table).
 
 from __future__ import annotations
 
-import json
 import logging
 
-from lcars import db, ids, util
+from lcars import ids, util
 
 log = logging.getLogger(__name__)
 
