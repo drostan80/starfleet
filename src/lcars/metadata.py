@@ -1710,3 +1710,115 @@ def fetch_episode_synopses(conn, show_id: str) -> int:
     if updated or show_synopsis:
         conn.commit()
     return updated
+
+
+# --- Synopsis candidates (read-only fetch for comparison) -------------------
+
+
+def fetch_synopsis_candidates(
+    conn, show_id: str, episode_id: str | None = None,
+) -> list[dict]:
+    """Fetch synopses from all configured external sources WITHOUT saving.
+
+    Returns a list of {"source": str, "text": str|None} dicts for
+    side-by-side comparison in the UI.
+
+    When episode_id is None: fetches show-level synopsis from AniList
+    (via show-level 'anilist' external ID), TVDB, and TMDB.
+
+    When episode_id is given: fetches that episode's synopsis from TVDB
+    and TMDB only (AniList has no per-episode descriptions).
+    """
+    from lcars import tvdb_client as tvdb_mod
+
+    cfg = get_current()
+    show = dict(conn.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone())
+    candidates: list[dict] = []
+
+    if episode_id is not None:
+        # --- Episode-level candidates ---
+        ep = conn.execute(
+            "SELECT season, episode FROM episode WHERE id = ?",
+            (episode_id,),
+        ).fetchone()
+        if ep is None:
+            return candidates
+        ep_season, ep_number = ep["season"], ep["episode"]
+
+        # TVDB
+        tvdb_id_str = _external_id(conn, show_id, "tvdb")
+        if tvdb_id_str and cfg.tvdb_api_key:
+            text = None
+            try:
+                client = tvdb_mod.TvdbClient(cfg.tvdb_api_key)
+                try:
+                    for ep_data in client.series_episode_synopses(int(tvdb_id_str)):
+                        if ep_data["season"] == ep_season and ep_data["episode"] == ep_number:
+                            text = ep_data["overview"]
+                            break
+                finally:
+                    client.close()
+            except Exception:
+                pass
+            candidates.append({"source": "tvdb", "text": text})
+
+        # TMDB
+        if cfg.tmdb_api_key:
+            tmdb_id_str = _external_id(conn, show_id, "tmdb")
+            text = None
+            try:
+                with tmdb_client.TmdbClient(cfg.tmdb_api_key) as client:
+                    if tmdb_id_str is None:
+                        tmdb_id_str = _resolve_and_store_tmdb_id(conn, show, client)
+                    if tmdb_id_str is not None:
+                        for ep_data in client.tv_season_synopses(int(tmdb_id_str), ep_season):
+                            if ep_data["season"] == ep_season and ep_data["episode"] == ep_number:
+                                text = ep_data["overview"]
+                                break
+            except Exception:
+                pass
+            candidates.append({"source": "tmdb", "text": text})
+
+    else:
+        # --- Show-level candidates ---
+        # AniList (anime shows have an anilist external ID)
+        al_id_str = _external_id(conn, show_id, "anilist")
+        if al_id_str:
+            text = None
+            try:
+                media = anilist_client.fetch_media(int(al_id_str))
+                if media:
+                    text = media.get("description")
+            except Exception:
+                pass
+            candidates.append({"source": "anilist", "text": text})
+
+        # TVDB
+        tvdb_id_str = _external_id(conn, show_id, "tvdb")
+        if tvdb_id_str and cfg.tvdb_api_key:
+            text = None
+            try:
+                client = tvdb_mod.TvdbClient(cfg.tvdb_api_key)
+                try:
+                    text = client.series_synopsis(int(tvdb_id_str))
+                finally:
+                    client.close()
+            except Exception:
+                pass
+            candidates.append({"source": "tvdb", "text": text})
+
+        # TMDB
+        if cfg.tmdb_api_key:
+            tmdb_id_str = _external_id(conn, show_id, "tmdb")
+            text = None
+            try:
+                with tmdb_client.TmdbClient(cfg.tmdb_api_key) as client:
+                    if tmdb_id_str is None:
+                        tmdb_id_str = _resolve_and_store_tmdb_id(conn, show, client)
+                    if tmdb_id_str is not None:
+                        text = client.tv_synopsis(int(tmdb_id_str))
+            except Exception:
+                pass
+            candidates.append({"source": "tmdb", "text": text})
+
+    return candidates

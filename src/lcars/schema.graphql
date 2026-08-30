@@ -1053,6 +1053,14 @@ enum ServiceHealthStatus {
 }
 
 "One grab event from Sonarr or Radarr's /history feed (2026-08-27). title: the series or movie title as Sonarr/Radarr knows it. releaseTitle: the release name (Sonarr/Radarr's own sourceTitle — the full filename before download). date: ISO 8601 UTC timestamp of the grab. quality: quality profile name (e.g. 'Bluray-1080p'); null when the quality object is absent in the history record. seasonNumber/episodeNumber: populated for Sonarr, null for Radarr. airDate: episode air date (Sonarr: episode.airDateUtc); null for Radarr or when absent. filePath: local file path for mpv launch — looked up from the LCARS episode table by tvdb/tmdb ID + sonarr numbering; null when the file hasn't been imported yet or the show isn't in LCARS."
+"A synopsis fetched from an external source, for side-by-side comparison."
+type SynopsisCandidate {
+  "Source name: 'anilist', 'tvdb', or 'tmdb'."
+  source: String!
+  "Synopsis text (may be null if the source had no synopsis)."
+  text: String
+}
+
 type GrabEvent {
   service: String!
   title: String!
@@ -1805,6 +1813,14 @@ type Mutation {
   selectArtAsset(id: ID!): ArtAsset!
   "Clear the selected art asset for a slot, reverting to the source-data fallback (show.poster_url column)."
   deselectArtAsset(id: ID!): ArtAsset!
+
+  # -- Synopsis editing --------------------------------------------------------
+  "Set (overwrite) the show-level synopsis text. Returns the updated show."
+  setShowSynopsis(showId: ID!, synopsis: String!): Show!
+  "Set (overwrite) an individual episode's synopsis text. Returns the updated episode."
+  setEpisodeSynopsis(episodeId: ID!, synopsis: String!): Episode!
+  "Fetch synopsis text from all configured external sources WITHOUT saving. Returns candidates for side-by-side comparison. Pass episodeId to get episode-level candidates (TVDB/TMDB only); omit for show-level (AniList/TVDB/TMDB)."
+  fetchSynopsisCandidates(showId: ID!, episodeId: ID): [SynopsisCandidate!]!
 
   # -- 6.12 data import (export is a query — read-only, no side effect) --------
   "Rejects on any schema_version mismatch (§6.12) — a thrown GraphQL error, no auto-migration."

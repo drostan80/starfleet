@@ -3874,6 +3874,41 @@ def resolve_fetch_episode_synopses(_, info, show_id):
     return _get_show(conn, show_id)
 
 
+@mutation.field("setShowSynopsis")
+def resolve_set_show_synopsis(_, info, show_id, synopsis):
+    conn = db.get_connection()
+    show = _require_show(conn, show_id)
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE show SET synopsis = ?, updated_at = ? WHERE id = ?",
+        (synopsis, now, show_id),
+    )
+    conn.commit()
+    return _get_show(conn, show_id)
+
+
+@mutation.field("setEpisodeSynopsis")
+def resolve_set_episode_synopsis(_, info, episode_id, synopsis):
+    conn = db.get_connection()
+    ep = _require_episode(conn, episode_id)
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE episode SET synopsis = ?, updated_at = ? WHERE id = ?",
+        (synopsis, now, episode_id),
+    )
+    conn.commit()
+    return _get_episode(conn, episode_id)
+
+
+@mutation.field("fetchSynopsisCandidates")
+def resolve_fetch_synopsis_candidates(_, info, show_id, episode_id=None):
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    if episode_id is not None:
+        _require_episode(conn, episode_id)
+    return metadata.fetch_synopsis_candidates(conn, show_id, episode_id)
+
+
 @mutation.field("selectArtAsset")
 def resolve_select_art_asset(_, info, id):
     conn = db.get_connection()
