@@ -3877,7 +3877,7 @@ def resolve_fetch_episode_synopses(_, info, show_id):
 @mutation.field("setShowSynopsis")
 def resolve_set_show_synopsis(_, info, show_id, synopsis):
     conn = db.get_connection()
-    show = _require_show(conn, show_id)
+    _require_show(conn, show_id)
     now = util.now_utc_iso()
     conn.execute(
         "UPDATE show SET synopsis = ?, updated_at = ? WHERE id = ?",
@@ -3890,7 +3890,7 @@ def resolve_set_show_synopsis(_, info, show_id, synopsis):
 @mutation.field("setEpisodeSynopsis")
 def resolve_set_episode_synopsis(_, info, episode_id, synopsis):
     conn = db.get_connection()
-    ep = _require_episode(conn, episode_id)
+    _require_episode(conn, episode_id)
     now = util.now_utc_iso()
     conn.execute(
         "UPDATE episode SET synopsis = ?, updated_at = ? WHERE id = ?",
