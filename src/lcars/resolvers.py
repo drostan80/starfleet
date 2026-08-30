@@ -3854,14 +3854,14 @@ def resolve_import_data(_, info, json):
 
 
 @mutation.field("fetchShowArt")
-def resolve_fetch_show_art(_, info, showId):
+def resolve_fetch_show_art(_, info, show_id):
     conn = db.get_connection()
-    show = _get_show(conn, showId)
+    show = _get_show(conn, show_id)
     if not show:
-        raise GraphQLError(f"Show {showId} not found")
-    metadata.fetch_show_art(conn, showId)
+        raise GraphQLError(f"Show {show_id} not found")
+    metadata.fetch_show_art(conn, show_id)
     # Return refreshed show
-    return _get_show(conn, showId)
+    return _get_show(conn, show_id)
 
 
 @mutation.field("selectArtAsset")
