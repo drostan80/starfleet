@@ -1053,14 +1053,6 @@ enum ServiceHealthStatus {
 }
 
 "One grab event from Sonarr or Radarr's /history feed (2026-08-27). title: the series or movie title as Sonarr/Radarr knows it. releaseTitle: the release name (Sonarr/Radarr's own sourceTitle — the full filename before download). date: ISO 8601 UTC timestamp of the grab. quality: quality profile name (e.g. 'Bluray-1080p'); null when the quality object is absent in the history record. seasonNumber/episodeNumber: populated for Sonarr, null for Radarr. airDate: episode air date (Sonarr: episode.airDateUtc); null for Radarr or when absent. filePath: local file path for mpv launch — looked up from the LCARS episode table by tvdb/tmdb ID + sonarr numbering; null when the file hasn't been imported yet or the show isn't in LCARS."
-"A synopsis fetched from an external source, for side-by-side comparison."
-type SynopsisCandidate {
-  "Source name: 'anilist', 'tvdb', or 'tmdb'."
-  source: String!
-  "Synopsis text (may be null if the source had no synopsis)."
-  text: String
-}
-
 type GrabEvent {
   service: String!
   title: String!
@@ -1071,6 +1063,14 @@ type GrabEvent {
   episodeNumber: Int
   airDate: String
   filePath: String
+}
+
+"A synopsis fetched from an external source, for side-by-side comparison."
+type SynopsisCandidate {
+  "Source name: 'anilist', 'tvdb', or 'tmdb'."
+  source: String!
+  "Synopsis text (may be null if the source had no synopsis)."
+  text: String
 }
 
 "Reachability only, not rate-limit awareness — confirmed with the user, 2026-08-09 (B.6): none of the four client modules currently distinguish a 429 from any other error, so a rateLimited field would be a lie today; deliberately deferred, not modeled here."
