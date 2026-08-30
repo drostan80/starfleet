@@ -161,6 +161,52 @@ class TvdbClient:
 
         return results
 
+    def series_episode_synopses(self, tvdb_id: int) -> list[dict]:
+        """Fetch episode overviews for a series.
+
+        Returns list of ``{season, episode, overview}`` dicts for episodes
+        that have a non-empty ``overview``.  Uses the default (aired-order)
+        season type; paginates until exhausted.
+        """
+        results = []
+        page = 0
+        while True:
+            data = self._get(
+                f"/series/{tvdb_id}/episodes/default",
+                params={"page": page},
+            )
+            if not data:
+                break
+            episodes = (data.get("data") or {}).get("episodes") or []
+            if not episodes:
+                break
+            for ep in episodes:
+                overview = (ep.get("overview") or "").strip()
+                if overview:
+                    results.append({
+                        "season": ep.get("seasonNumber"),
+                        "episode": ep.get("number"),
+                        "overview": overview,
+                    })
+            # No more pages?
+            links = data.get("links") or {}
+            if page >= (links.get("total_items", 0) // max(len(episodes), 1)):
+                # TVDB v4 pagination: check if next page exists
+                next_url = links.get("next")
+                if not next_url:
+                    break
+            page += 1
+            if page > 50:  # safety cap
+                break
+        return results
+
+    def series_synopsis(self, tvdb_id: int) -> str | None:
+        """Fetch the series-level overview from TVDB."""
+        data = self._get(f"/series/{tvdb_id}")
+        if not data:
+            return None
+        return ((data.get("data") or {}).get("overview") or "").strip() or None
+
     def movie_artworks(self, tvdb_id: int) -> list[dict]:
         """Fetch all artwork for a movie, returning normalized dicts.
 

@@ -3864,6 +3864,16 @@ def resolve_fetch_show_art(_, info, show_id):
     return _get_show(conn, show_id)
 
 
+@mutation.field("fetchEpisodeSynopses")
+def resolve_fetch_episode_synopses(_, info, show_id):
+    conn = db.get_connection()
+    show = _get_show(conn, show_id)
+    if not show:
+        raise GraphQLError(f"Show {show_id} not found")
+    metadata.fetch_episode_synopses(conn, show_id)
+    return _get_show(conn, show_id)
+
+
 @mutation.field("selectArtAsset")
 def resolve_select_art_asset(_, info, id):
     conn = db.get_connection()

@@ -285,6 +285,7 @@ type Episode {
   absoluteNumber: Float
   "The last irreducible direct-Sonarr-read blocker for the Data thin-client swap, closed 2026-08-16 — sourced from Sonarr's own episode.title, go-forward capture only (null on every episode that existed before this field did, until its show's next real Sonarr fetch). No Radarr/movie equivalent — media_shape = MOVIE has no episode row at all, a movie's own title lives on Show."
   title: String
+  synopsis: String
 
   airDateUtc: DateTime
   airDateSource: AirDateSource
@@ -1798,6 +1799,8 @@ type Mutation {
   # -- Art asset selection -------------------------------------------------------
   "Fetch artwork from all available sources (AniList per-season, TVDB) and store in art_asset table. Returns the show with updated artAssets."
   fetchShowArt(showId: ID!): Show!
+  "Lazy-fetch episode synopses (and show synopsis if missing) from external sources. Tries TVDB first, falls back to TMDB. Saves to DB for caching."
+  fetchEpisodeSynopses(showId: ID!): Show!
   "Select an art asset as the active poster/banner/background for its (show, season, kind) slot. Deselects the previous selection in the same slot."
   selectArtAsset(id: ID!): ArtAsset!
   "Clear the selected art asset for a slot, reverting to the source-data fallback (show.poster_url column)."

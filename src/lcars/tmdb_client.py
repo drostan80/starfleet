@@ -87,6 +87,33 @@ class TmdbClient:
         data = self._get(f"movie/{tmdb_id}")
         return (data or {}).get("runtime") or None
 
+    def tv_season_synopses(self, tmdb_id: int, season_number: int) -> list[dict]:
+        """Fetch episode overviews for one season of a TV show.
+
+        Returns list of ``{season, episode, overview}`` dicts for episodes
+        that have a non-empty ``overview``.
+        """
+        data = self._get(f"tv/{tmdb_id}/season/{season_number}")
+        if not data:
+            return []
+        results = []
+        for ep in data.get("episodes") or []:
+            overview = (ep.get("overview") or "").strip()
+            if overview:
+                results.append({
+                    "season": ep.get("season_number", season_number),
+                    "episode": ep.get("episode_number"),
+                    "overview": overview,
+                })
+        return results
+
+    def tv_synopsis(self, tmdb_id: int) -> str | None:
+        """Fetch the show-level overview from TMDB."""
+        data = self._get(f"tv/{tmdb_id}")
+        if not data:
+            return None
+        return (data.get("overview") or "").strip() or None
+
     def tv_episode_runtime(self, tmdb_id: int) -> int | None:
         """TMDB's own odd shape: `episode_run_time` is a list (it can
         track runtime changes across a long-running show's history),

@@ -1608,3 +1608,105 @@ def fetch_show_art(conn, show_id: str) -> int:
     art.auto_select_best(conn, show_id)
     conn.commit()
     return count
+
+
+# --- Episode synopses (lazy-fetch) -------------------------------------------
+
+
+def fetch_episode_synopses(conn, show_id: str) -> int:
+    """Lazy-fetch episode synopses (and show synopsis if missing) from
+    external sources.  Tries TVDB first, falls back to TMDB.  Only
+    fetches for episodes that don't already have a synopsis.  Returns
+    the number of episodes updated.
+
+    Also fills the show-level synopsis from TVDB/TMDB if it's NULL
+    (anime shows already get theirs from AniList via _fetch_anilist).
+    """
+    from lcars import tvdb_client as tvdb_mod
+
+    cfg = get_current()
+    show = dict(conn.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone())
+    now = util.now_utc_iso()
+
+    # Gather episodes missing synopses: {(season, episode): row_id}
+    missing = {}
+    for row in conn.execute(
+        "SELECT id, season, episode FROM episode"
+        " WHERE show_id = ? AND synopsis IS NULL",
+        (show_id,),
+    ).fetchall():
+        missing[(row["season"], row["episode"])] = row["id"]
+
+    need_show_synopsis = show["synopsis"] is None
+    if not missing and not need_show_synopsis:
+        return 0  # nothing to do
+
+    # Collect synopses: {(season, episode): text}
+    synopses: dict[tuple[int, int], str] = {}
+    show_synopsis: str | None = None
+
+    # --- Try TVDB first -------------------------------------------------------
+    tvdb_id_str = _external_id(conn, show_id, "tvdb")
+    if tvdb_id_str and cfg.tvdb_api_key:
+        try:
+            tvdb_id = int(tvdb_id_str)
+            client = tvdb_mod.TvdbClient(cfg.tvdb_api_key)
+            try:
+                if missing:
+                    for ep_data in client.series_episode_synopses(tvdb_id):
+                        key = (ep_data["season"], ep_data["episode"])
+                        if key in missing and key not in synopses:
+                            synopses[key] = ep_data["overview"]
+                if need_show_synopsis:
+                    show_synopsis = client.series_synopsis(tvdb_id)
+            finally:
+                client.close()
+        except Exception:
+            pass  # fall through to TMDB
+
+    # --- Fall back to TMDB for anything still missing -------------------------
+    still_missing = {k for k in missing if k not in synopses}
+    need_tmdb = bool(still_missing) or (need_show_synopsis and show_synopsis is None)
+
+    if need_tmdb and cfg.tmdb_api_key:
+        tmdb_id_str = _external_id(conn, show_id, "tmdb")
+        try:
+            with tmdb_client.TmdbClient(cfg.tmdb_api_key) as client:
+                # Resolve TMDB id if needed
+                if tmdb_id_str is None:
+                    tmdb_id_str = _resolve_and_store_tmdb_id(conn, show, client)
+                if tmdb_id_str is not None:
+                    tmdb_id = int(tmdb_id_str)
+                    if still_missing:
+                        # Group by season to minimize API calls
+                        seasons_needed = {s for s, _ in still_missing}
+                        for sn in sorted(seasons_needed):
+                            for ep_data in client.tv_season_synopses(tmdb_id, sn):
+                                key = (ep_data["season"], ep_data["episode"])
+                                if key in still_missing and key not in synopses:
+                                    synopses[key] = ep_data["overview"]
+                    if need_show_synopsis and show_synopsis is None:
+                        show_synopsis = client.tv_synopsis(tmdb_id)
+        except Exception:
+            pass  # best-effort
+
+    # --- Persist to DB --------------------------------------------------------
+    updated = 0
+    for key, text in synopses.items():
+        ep_id = missing.get(key)
+        if ep_id:
+            conn.execute(
+                "UPDATE episode SET synopsis = ?, updated_at = ? WHERE id = ?",
+                (text, now, ep_id),
+            )
+            updated += 1
+
+    if show_synopsis and need_show_synopsis:
+        conn.execute(
+            "UPDATE show SET synopsis = ?, updated_at = ? WHERE id = ?",
+            (show_synopsis, now, show_id),
+        )
+
+    if updated or show_synopsis:
+        conn.commit()
+    return updated
