@@ -8594,10 +8594,11 @@ async def test_backlog_excludes_episodes_of_a_non_watching_show(client, migrated
     assert "e-bl0007" not in ids
 
 
-async def test_backlog_excludes_a_fully_released_non_airing_watching_show(client, migrated_db):
-    # A completed-but-still-bingeing (paced-mode-style) show: watching, but
-    # every episode already aired — §6.2's own _show_is_airing predicate,
-    # reused verbatim here, says this show is not airing.
+async def test_backlog_includes_fully_released_watching_show(client, migrated_db):
+    # A watching show where every episode already aired (no future/null air
+    # dates) should still appear in the backlog if it has unwatched available
+    # episodes — e.g. a weekly show where you fell one episode behind after
+    # the finale aired.
     show = await _watching_show(client, titleRomaji="Fully Released Show")
     _insert_backlog_episode(
         migrated_db, "e-bl0009", show["id"], _iso(-10), episode=1, available_via_sonarr="available"
@@ -8605,15 +8606,11 @@ async def test_backlog_excludes_a_fully_released_non_airing_watching_show(client
 
     data = await gql(client, BACKLOG_QUERY, headers=auth_headers())
     ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
-    assert "e-bl0009" not in ids
+    assert "e-bl0009" in ids
 
 
-async def test_backlog_is_empty_with_no_watching_airing_shows(client, migrated_db):
-    # No watching+airing shows at all — the resolver's own short-circuit
-    # branch (pagination.paginate over a "1 = 0" where clause). Queries
-    # pageInfo too, not just edges — pagination.py's own docstring documents
-    # a real bug (pageInfo silently null) that went unnoticed for exactly
-    # this reason: no end-to-end test had ever queried a pageInfo sub-field.
+async def test_backlog_is_empty_with_no_watching_shows(client, migrated_db):
+    # No watching shows at all — only a planned show with no episodes.
     await add_show(client, titleRomaji="Planned Show")  # planned, no episodes at all
     data = await gql(
         client,
