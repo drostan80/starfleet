@@ -993,29 +993,17 @@ def resolve_episodes_in_range(_, info, start, end, **page_args):
 @query.field("backlog")
 def resolve_backlog(_, info, **page_args):
     """§6.3, B.9 — the backlog: unwatched, locally-available episodes on
-    watching-status, actively-airing shows. "Locally-available" matches
-    nextUp's own precedent (§6.4, A.11: "unwatched, locally-available
-    episode"), not merely aired — a `downloading` episode isn't
-    backlog yet either. Distinct from nextUp: this is every qualifying
-    episode (real table-backed pagination, same shape episodesAiringSoon
-    already established), not one row per show. Airing check reuses
-    `_show_is_airing` (A.10) verbatim rather than re-deriving the same
-    predicate a third time — same "not a single-column SQL comparison"
-    reasoning `dueForMetadataRefresh`/`dueForSeasonReconciliation`
-    already give, so eligible show_ids are computed in Python first,
-    same pattern those two use, then handed to pagination.paginate()'s
-    real table scan."""
+    watching-status shows. Any watching show with available-but-unwatched
+    episodes qualifies — the previous _show_is_airing gate excluded
+    shows whose last episode had already aired (e.g. a weekly show where
+    you're one episode behind after the finale airs)."""
     conn = db.get_connection()
-    watching_shows = conn.execute("SELECT id FROM show WHERE status = 'watching'").fetchall()
-    airing_show_ids = [s["id"] for s in watching_shows if _show_is_airing(conn, s["id"])]
-    if not airing_show_ids:
-        return pagination.paginate(conn, "episode", "1 = 0", (), **page_args)
-    placeholders = ", ".join("?" for _ in airing_show_ids)
     return pagination.paginate(
         conn,
         "episode",
-        f"state = 'unwatched' AND available_locally = 1 AND show_id IN ({placeholders})",
-        tuple(airing_show_ids),
+        "state = 'unwatched' AND available_locally = 1"
+        " AND show_id IN (SELECT id FROM show WHERE status = 'watching')",
+        (),
         **page_args,
     )
 
