@@ -260,18 +260,20 @@ def _push_show_score(conn, show_id: str, show_score) -> None:
 
 
 def _push_show_status(conn, show_id: str, status: str) -> None:
-    """Every one of the show's linked seasons get the same status —
-    unlike score, there's no per-season status concept (only
-    `show.status` exists)."""
+    """Push status to AniList for every linked season.  Each season uses
+    its own per-season status when set (2.1c), falling back to the
+    show-level status passed in."""
     cfg = config.get_current()
     if not cfg.anilist_access_token:
         return
-    anilist_status = _STATUS_TO_ANILIST[status]
     seasons = conn.execute(
-        "SELECT id, anilist_id FROM season WHERE show_id = ? AND anilist_id IS NOT NULL",
+        "SELECT id, anilist_id, status AS season_status"
+        " FROM season WHERE show_id = ? AND anilist_id IS NOT NULL",
         (show_id,),
     ).fetchall()
     for season in seasons:
+        effective = season["season_status"] or status
+        anilist_status = _STATUS_TO_ANILIST[effective]
         try:
             anilist_client.save_media_list_entry(
                 cfg.anilist_access_token, season["anilist_id"], status=anilist_status
@@ -280,6 +282,45 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
             pending_review.open_or_extend(
                 conn, "season", season["id"], "anilist_push", "anilist", None, str(e)
             )
+
+
+def _push_season_status(conn, season: dict, status: str) -> None:
+    """Per-season AniList status push (2.1c) — pushes this one season's
+    own status, rather than fanning out the show-level status to all
+    seasons as _push_show_status does.  Used by setSeasonStatus."""
+    if season.get("anilist_id") is None:
+        return
+    cfg = config.get_current()
+    if not cfg.anilist_access_token:
+        return
+    anilist_status = _STATUS_TO_ANILIST[status]
+    try:
+        anilist_client.save_media_list_entry(
+            cfg.anilist_access_token, season["anilist_id"], status=anilist_status
+        )
+    except anilist_client.AniListError as e:
+        pending_review.open_or_extend(
+            conn, "season", season["id"], "anilist_push", "anilist", None, str(e)
+        )
+
+
+def _push_mal_season_status(conn, season: dict, status: str) -> None:
+    """Per-season MAL status push (2.1c) — mirrors _push_season_status
+    for MAL, using mal_id."""
+    if season.get("mal_id") is None:
+        return
+    cfg = config.get_current()
+    if not cfg.mal_access_token:
+        return
+    mal_status = _STATUS_TO_MAL[status]
+    try:
+        mal_client.update_my_list_status(
+            cfg.mal_access_token, season["mal_id"], status=mal_status
+        )
+    except mal_client.MALError as e:
+        pending_review.open_or_extend(
+            conn, "season", season["id"], "mal_push", "mal", None, str(e)
+        )
 
 
 def _push_season_started_at(conn, season_id: str, anilist_id: int | None, started_at: str) -> None:
@@ -474,16 +515,20 @@ def _try_complete_season(conn, show_id: str, season_number: int, completed_at: s
         return False
     if _season_still_airing(conn, show_id, season_number):
         return False
+    now = util.now_utc_iso()
     conn.execute(
-        "UPDATE season SET completed_at = ?, updated_at = ? WHERE id = ?",
-        (completed_at, util.now_utc_iso(), season["id"]),
+        "UPDATE season SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
+        (completed_at, now, season["id"]),
     )
     _push_season_completed_at(conn, season["id"], season["anilist_id"], completed_at)
     return True
 
 
-def _try_complete_show(conn, show_id: str, completed_at: str) -> None:
-    """The show-wide half: every episode across every season is
+def _try_complete_show(conn, show_id: str, completed_at: str) -> None:  # noqa: dead code
+    """DEPRECATED (2.1c) — superseded by _recompute_show_status +
+    _compute_show_status.  Retained as reference; no callers remain.
+
+    Original: The show-wide half: every episode across every season is
     'watched'/'skipped', there's at least one episode row, and nothing
     more is expected (`_show_is_airing`, whole-show — deliberately
     the unscoped check here, unlike `_try_complete_season`'s own: the
@@ -532,6 +577,94 @@ def _try_complete_show(conn, show_id: str, completed_at: str) -> None:
     )
     _push_show_status(conn, show_id, "completed")
     _push_mal_show_status(conn, show_id, "completed")
+
+
+def _compute_show_status(conn, show_id: str) -> str | None:
+    """Derive what show.status should be from episode state and season
+    statuses.  Returns the status string, or None if it can't determine
+    one (no seasons / no episodes → caller should keep current status).
+
+    Rules (user's own, 2026-09-02):
+    1. COMPLETED — episode-derived: every episode across every season is
+       'watched' or 'skipped', at least one episode exists, and the show
+       is not airing (same preconditions as _try_complete_show).
+    2. Otherwise — season-status-derived: the highest-numbered season's
+       status, with one exception: if the highest season is PLANNED and
+       at least one other season exists, the show is WATCHING (the user
+       is watching the show overall, just planning the next season)."""
+    # Gather non-special seasons (season 0 = specials, excluded from
+    # status derivation — specials don't represent show progress).
+    seasons = conn.execute(
+        "SELECT season_number, status FROM season"
+        " WHERE show_id = ? AND season_number > 0"
+        " ORDER BY season_number",
+        (show_id,),
+    ).fetchall()
+    if not seasons:
+        return None
+
+    # Rule 1: episode-derived COMPLETED (single authority for completion)
+    has_episodes = conn.execute(
+        "SELECT 1 FROM episode WHERE show_id = ? LIMIT 1", (show_id,)
+    ).fetchone()
+    if has_episodes is not None:
+        any_unwatched = conn.execute(
+            "SELECT 1 FROM episode WHERE show_id = ? AND state = 'unwatched' LIMIT 1",
+            (show_id,),
+        ).fetchone()
+        if any_unwatched is None and not _show_is_airing(conn, show_id):
+            return "completed"
+
+    # Rule 2: highest season's status, with PLANNED exception
+    highest = seasons[-1]
+    highest_status = highest["status"] or "planned"  # null = inherits, treat as planned
+    if highest_status == "planned" and len(seasons) > 1:
+        return "watching"
+    return highest_status
+
+
+def _recompute_show_status(
+    conn, show_id: str, changed_by: str, *, _from_bulk_mark: bool = False
+) -> None:
+    """Derive show.status from seasons/episodes and apply side effects
+    when it changes.  The single place that updates show.status after
+    the initial setStatus/setSeasonStatus write — all callers converge
+    here instead of maintaining separate writers.
+
+    _from_bulk_mark: True when called from inside _bulk_mark_all_aired_
+    episodes_watched's call tree, to prevent the cycle: recompute →
+    COMPLETED → bulk-mark → recompute.  When True, skips the bulk-mark
+    and per-season _try_complete_season calls (the caller already handled
+    episode state)."""
+    show = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
+    if show is None:
+        return
+    old_status = show["status"]
+    new_status = _compute_show_status(conn, show_id)
+    if new_status is None or new_status == old_status:
+        return
+
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE show SET status = ?, updated_at = ? WHERE id = ?",
+        (new_status, now, show_id),
+    )
+    conn.execute(
+        "INSERT INTO status_change"
+        " (id, show_id, previous_status, new_status, changed_at, changed_by)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (ids.generate_id(conn, "c"), show_id, old_status, new_status, now, changed_by),
+    )
+    _push_show_status(conn, show_id, new_status)
+    _push_mal_show_status(conn, show_id, new_status)
+
+    if new_status == "completed" and not _from_bulk_mark:
+        _stamp_completed_at_if_highest_season(conn, show_id, new_status)
+        _bulk_mark_all_aired_episodes_watched(conn, show_id)
+        for season_row in conn.execute(
+            "SELECT season_number FROM season WHERE show_id = ?", (show_id,)
+        ).fetchall():
+            _try_complete_season(conn, show_id, season_row["season_number"], now)
 
 
 def _bulk_mark_all_aired_episodes_watched(conn, show_id: str) -> None:
@@ -792,16 +925,20 @@ def _push_mal_show_score(conn, show_id: str, show_score) -> None:
 
 
 def _push_mal_show_status(conn, show_id: str, status: str) -> None:
-    """Mirrors _push_show_status above — same show_id-wide push (no
-    per-season status concept), keyed on mal_id instead of anilist_id."""
+    """Push status to MAL for every linked season.  Each season uses
+    its own per-season status when set (2.1c), falling back to the
+    show-level status passed in."""
     cfg = config.get_current()
     if not cfg.mal_access_token:
         return
-    mal_status = _STATUS_TO_MAL[status]
     seasons = conn.execute(
-        "SELECT id, mal_id FROM season WHERE show_id = ? AND mal_id IS NOT NULL", (show_id,)
+        "SELECT id, mal_id, status AS season_status"
+        " FROM season WHERE show_id = ? AND mal_id IS NOT NULL",
+        (show_id,),
     ).fetchall()
     for season in seasons:
+        effective = season["season_status"] or status
+        mal_status = _STATUS_TO_MAL[effective]
         try:
             mal_client.update_my_list_status(
                 cfg.mal_access_token, season["mal_id"], status=mal_status
@@ -2514,16 +2651,16 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
 
 @mutation.field("setStatus")
 def resolve_set_status(_, info, show_id, status, confirmed=False):
-    """`confirmed` — auto-sync warning gate, todo.md 2026-08-16, user's
+    """Show-level status — fans out to ALL seasons (sets each season's
+    own status), then writes show.status directly and fires the usual
+    side effects.  This is the "bulk set" path: calendar radial, TUI
+    status picker, and any client that wants a single-gesture status
+    change for the whole show.
+
+    `confirmed` — auto-sync warning gate, todo.md 2026-08-16, user's
     own "y/n" framing: setting COMPLETED on a show that's still airing
     (`_show_is_airing`) refuses with a GraphQLError unless `confirmed:
-    true` is also passed. A stateless API has no interactive prompt of
-    its own — this refuse-then-retry-with-confirmed shape is that
-    prompt's actual mechanism; a client (Data) surfaces the error text
-    as the y/n itself. Confirming only unblocks the *status* change —
-    _bulk_mark_all_aired_episodes_watched below never marks an unaired
-    episode watched regardless, confirmed or not (see its own
-    docstring)."""
+    true` is also passed."""
     conn = db.get_connection()
     client = require_client(info)
     row = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
@@ -2535,6 +2672,12 @@ def resolve_set_status(_, info, show_id, status, confirmed=False):
             "yet — mark it completed anyway? pass confirmed: true to proceed"
         )
     now = util.now_utc_iso()
+    # Fanout: set every season's status to match
+    conn.execute(
+        "UPDATE season SET status = ?, updated_at = ? WHERE show_id = ?",
+        (status, now, show_id),
+    )
+    # Write show.status directly (this is the explicit-set path, not derived)
     conn.execute("UPDATE show SET status = ?, updated_at = ? WHERE id = ?", (status, now, show_id))
     conn.execute(
         "INSERT INTO status_change"
@@ -2641,11 +2784,11 @@ def resolve_set_season_score(_, info, season_id, score):
 
 @mutation.field("setSeasonStatus")
 def resolve_set_season_status(_, info, season_id, status=None):
-    """Per-season status — updates season.status only. Does NOT recompute
-    show.status (that comes in step 2.1c). status=None clears the
-    per-season override (falls back to show-level status)."""
+    """Per-season status — updates season.status and recomputes the
+    derived show.status (2.1c).  status=None clears the per-season
+    override (falls back to show-level status for derivation)."""
     conn = db.get_connection()
-    require_client(info)
+    client = require_client(info)
     season = season_mapping.get_season(conn, season_id)
     if season is None:
         raise GraphQLError(f"no such season: {season_id}")
@@ -2654,6 +2797,15 @@ def resolve_set_season_status(_, info, season_id, status=None):
         "UPDATE season SET status = ?, updated_at = ? WHERE id = ?",
         (status, now, season_id),
     )
+    # Push this season's own status to AniList/MAL
+    effective = status or conn.execute(
+        "SELECT status FROM show WHERE id = ?", (season["show_id"],)
+    ).fetchone()["status"]
+    if effective:
+        _push_season_status(conn, season, effective)
+        _push_mal_season_status(conn, season, effective)
+    # Recompute derived show.status
+    _recompute_show_status(conn, season["show_id"], client)
     conn.commit()
     return season_mapping.get_season(conn, season_id)
 
@@ -3096,7 +3248,7 @@ def resolve_add_watch_event(
     _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
     if season is not None:
         _try_complete_season(conn, show_id, season, watched_at)  # auto-sync, todo.md
-        _try_complete_show(conn, show_id, watched_at)  # auto-sync, todo.md
+        _recompute_show_status(conn, show_id, "auto_complete")  # derived status, 2.1c
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
@@ -3186,7 +3338,7 @@ def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
         )
         _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
         _try_complete_season(conn, show_id, season, watched_at)  # auto-sync, todo.md
-        _try_complete_show(conn, show_id, watched_at)  # auto-sync, todo.md
+        _recompute_show_status(conn, show_id, "auto_complete")  # derived status, 2.1c
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
@@ -3225,7 +3377,7 @@ def resolve_mark_episode_range_watched(
     )
     _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
     _try_complete_season(conn, show_id, season, watched_at)  # auto-sync, todo.md
-    _try_complete_show(conn, show_id, watched_at)  # auto-sync, todo.md
+    _recompute_show_status(conn, show_id, "auto_complete")  # derived status, 2.1c
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
@@ -3250,7 +3402,7 @@ def resolve_mark_episode_skipped(_, info, episode_id):
     # auto-sync, todo.md — a skip counts as done for completion purposes
     # (rule #1: stays 'skipped' in the DB, never rewritten to 'watched').
     _try_complete_season(conn, row["show_id"], row["season"], now)
-    _try_complete_show(conn, row["show_id"], now)
+    _recompute_show_status(conn, row["show_id"], "auto_complete")  # derived status, 2.1c
     conn.commit()
     # write-mirror gap #2, todo.md — a skip can complete a previously-gapped
     # contiguous run (_compute_season_episode_progress counts skipped as

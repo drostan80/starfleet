@@ -5877,7 +5877,7 @@ async def test_multi_season_show_only_completes_once_every_season_is_done(client
         headers=auth_headers(),
     )
     assert (await _season_dates(client, season1))["completedAt"] is not None
-    assert (await _show_status(client, show["id"])) == "PLANNED"  # season 2 still unwatched
+    assert (await _show_status(client, show["id"])) == "WATCHING"  # 2.1c: highest season PLANNED + len>1 → WATCHING
 
     await gql(
         client,
