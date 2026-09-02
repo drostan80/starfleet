@@ -502,11 +502,14 @@ def _try_complete_season(conn, show_id: str, season_number: int, completed_at: s
     `_stamp_completed_at_if_highest_season` (setStatus's manual path)
     it fires for every completing season, not just the highest one."""
     season = conn.execute(
-        "SELECT id, anilist_id, completed_at FROM season"
+        "SELECT id, anilist_id, completed_at, status FROM season"
         " WHERE show_id = ? AND season_number = ?",
         (show_id, season_number),
     ).fetchone()
     if season is None or season["completed_at"] is not None:
+        return False
+    # Don't override a deliberate PAUSED/DROPPED set by the user
+    if season["status"] in ("paused", "dropped"):
         return False
     episodes = conn.execute(
         "SELECT state FROM episode WHERE show_id = ? AND season = ?", (show_id, season_number)
@@ -2672,10 +2675,16 @@ def resolve_set_status(_, info, show_id, status, confirmed=False):
             "yet — mark it completed anyway? pass confirmed: true to proceed"
         )
     now = util.now_utc_iso()
-    # Fanout: set every season's status to match
+    # Fanout: only stomp the highest season's status — earlier seasons
+    # keep their own deliberate per-season status (user rule: "show
+    # level only stomp last season if needed").
     conn.execute(
-        "UPDATE season SET status = ?, updated_at = ? WHERE show_id = ?",
-        (status, now, show_id),
+        "UPDATE season SET status = ?, updated_at = ?"
+        " WHERE show_id = ? AND season_number = ("
+        "   SELECT MAX(season_number) FROM season"
+        "   WHERE show_id = ? AND season_number > 0"
+        " )",
+        (status, now, show_id, show_id),
     )
     # Write show.status directly (this is the explicit-set path, not derived)
     conn.execute("UPDATE show SET status = ?, updated_at = ? WHERE id = ?", (status, now, show_id))
