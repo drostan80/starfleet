@@ -697,7 +697,7 @@ async def test_sequel_relation_suppressed_when_already_mapped_to_season(client, 
     monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
 
     # First: create a show whose S1 has anilist_id=777 (the sequel target)
-    existing = await add_show(client, anilistId=777, titleRomaji="Golden Kamuy 2")
+    await add_show(client, anilistId=777, titleRomaji="Golden Kamuy 2")
 
     # Now add the show with the sequel edge — 777 is already a season
     show = await add_show(client, anilistId=111)
