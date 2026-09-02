@@ -689,13 +689,19 @@ def _propose_sequel_seasons(conn, show: dict, media: dict) -> None:
         ):
             continue
 
-        # previous_value carries the sequel's title so the review queue
-        # is actionable without a manual AniList lookup.  Not used by
+        # previous_value carries a JSON blob with the sequel's title and
+        # MAL id so the web review queue can create the season mapping in
+        # one click without a manual lookup.  Not used by
         # already_resolved_with (that reads only chain[-1]), so it's
         # safe even if the title changes upstream.
         sequel_title = (node.get("title") or {}).get("romaji") or sequel_al_id_str
+        sequel_mal = node.get("idMal")
+        prev_blob = json.dumps(
+            {"title": sequel_title, "mal": sequel_mal},
+            ensure_ascii=False,
+        )
         pending_review.open_or_extend(
-            conn, "show", show["id"], field, "anilist", sequel_title, value,
+            conn, "show", show["id"], field, "anilist", prev_blob, value,
         )
 
 
