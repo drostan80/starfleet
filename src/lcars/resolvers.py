@@ -1379,7 +1379,10 @@ def resolve_show_by_external_id(_, info, service, external_id):
     show_id = shows.find_existing_show(conn, {f"{svc}_id": external_id})
     if show_id is None:
         return None
-    return _get_show(conn, show_id)
+    show = _get_show(conn, show_id)
+    if show is None or not show.get("tracked"):
+        return None
+    return show
 
 
 @query.field("stats")
