@@ -6044,6 +6044,7 @@ async def test_set_status_completed_confirmed_never_overwrites_a_skipped_episode
 
 async def test_set_season_mapping_new_season_reopens_a_completed_show(client, migrated_db):
     show = await add_show(client)
+    await _create_season(client, show["id"], 1)  # season 1 must exist first (2.2 gap validation)
     await gql(
         client,
         "mutation($id: ID!) { setStatus(showId: $id, status: COMPLETED) { status } }",
@@ -6082,6 +6083,80 @@ async def test_set_season_mapping_update_of_existing_season_does_not_reopen(clie
         headers=auth_headers(),
     )
     assert (await _show_status(client, show["id"])) == "COMPLETED"  # unchanged — not a new season
+
+
+async def test_set_season_mapping_gap_validation_rejects_missing_predecessors(
+    client, migrated_db
+):
+    """2.2 — adding season N without seasons 1..N-1 errors."""
+    show = await add_show(client)
+    resp = await client.post(
+        "/",
+        json={
+            "query": "mutation($id: ID!, $s: Int!) {"
+            " setSeasonMapping(showId: $id, seasonNumber: $s) { id } }",
+            "variables": {"id": show["id"], "s": 3},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "Cannot add Season 3" in body["errors"][0]["message"]
+    assert "Seasons 1, 2 do not exist" in body["errors"][0]["message"]
+
+
+async def test_set_season_mapping_gap_validation_allows_season_1(client, migrated_db):
+    """Season 1 never has predecessors to check."""
+    show = await add_show(client)
+    data = await gql(
+        client,
+        "mutation($id: ID!, $s: Int!) {"
+        " setSeasonMapping(showId: $id, seasonNumber: $s) { id } }",
+        {"id": show["id"], "s": 1},
+        headers=auth_headers(),
+    )
+    assert data["setSeasonMapping"]["id"]
+
+
+async def test_set_season_status_completion_guard_blocks_airing_season(
+    client, migrated_db
+):
+    """2.3 — setting COMPLETED on a still-airing season requires
+    confirmed: true."""
+    show = await add_show(client)
+    season_id = await _create_season(client, show["id"], 1)
+    # Insert an unaired episode (air date in the future)
+    db.get_connection().execute(
+        "INSERT INTO episode"
+        " (id, show_id, season, episode, kind, state, air_date_utc,"
+        "  created_at, updated_at)"
+        " VALUES (?, ?, 1, 1, 'regular', 'unwatched', '2099-01-01T00:00:00Z',"
+        "  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        ("e-futr01", show["id"]),
+    )
+    db.get_connection().commit()
+    # Without confirmed: should fail
+    resp = await client.post(
+        "/",
+        json={
+            "query": "mutation($sid: ID!) {"
+            " setSeasonStatus(seasonId: $sid, status: COMPLETED) { id } }",
+            "variables": {"sid": season_id},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "still has an episode" in body["errors"][0]["message"]
+    assert "confirmed: true" in body["errors"][0]["message"]
+    # With confirmed: true — should succeed
+    data = await gql(
+        client,
+        "mutation($sid: ID!) {"
+        " setSeasonStatus(seasonId: $sid, status: COMPLETED, confirmed: true)"
+        " { id status } }",
+        {"sid": season_id},
+        headers=auth_headers(),
+    )
+    assert data["setSeasonStatus"]["status"] == "COMPLETED"
 
 
 async def test_reconcile_watch_progress_is_a_no_op_right_after_auto_completing(
@@ -7027,6 +7102,7 @@ async def test_set_episode_number_leaves_season_entity_unmatched_with_no_season_
 async def test_set_episode_number_matches_an_existing_season_row(client, migrated_db):
     show = await add_show(client)
     episode_id = await _insert_episode(migrated_db, show["id"])  # season 1, episode 1
+    await _create_season(client, show["id"], 1)  # season 1 must exist first (2.2 gap validation)
     season2_id = await gql(
         client,
         "mutation($id: ID!, $s: Int!) { setSeasonMapping(showId: $id, seasonNumber: $s) { id } }",

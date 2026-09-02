@@ -2792,15 +2792,26 @@ def resolve_set_season_score(_, info, season_id, score):
 
 
 @mutation.field("setSeasonStatus")
-def resolve_set_season_status(_, info, season_id, status=None):
+def resolve_set_season_status(_, info, season_id, status=None, confirmed=False):
     """Per-season status — updates season.status and recomputes the
     derived show.status (2.1c).  status=None clears the per-season
-    override (falls back to show-level status for derivation)."""
+    override (falls back to show-level status for derivation).
+
+    Completion guard (2.3): setting COMPLETED on a season that's still
+    airing (has unaired or undated episodes) requires confirmed=True,
+    same pattern as setStatus's own guard."""
     conn = db.get_connection()
     client = require_client(info)
     season = season_mapping.get_season(conn, season_id)
     if season is None:
         raise GraphQLError(f"no such season: {season_id}")
+    if status == "completed" and not confirmed:
+        if _season_still_airing(conn, season["show_id"], season["season_number"]):
+            raise GraphQLError(
+                f"Season {season['season_number']} of {season['show_id']} still has an episode "
+                "with no known air date, or one that hasn't aired yet — mark it completed anyway? "
+                "pass confirmed: true to proceed"
+            )
     now = util.now_utc_iso()
     conn.execute(
         "UPDATE season SET status = ?, updated_at = ? WHERE id = ?",
@@ -3699,6 +3710,25 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
         )
         season_id = existing["id"]
     else:
+        # 2.2 — gap validation: adding season N > 1 requires 1..N-1 to exist
+        if season_number > 1:
+            existing_numbers = {
+                r["season_number"]
+                for r in conn.execute(
+                    "SELECT season_number FROM season"
+                    " WHERE show_id = ? AND season_number > 0 AND season_number < ?",
+                    (show_id, season_number),
+                ).fetchall()
+            }
+            missing = sorted(set(range(1, season_number)) - existing_numbers)
+            if missing:
+                missing_str = ", ".join(str(n) for n in missing)
+                raise GraphQLError(
+                    f"Cannot add Season {season_number} — "
+                    f"Season{'s' if len(missing) > 1 else ''} {missing_str} "
+                    f"do{'es' if len(missing) == 1 else ''} not exist. "
+                    "Add previous seasons first."
+                )
         season_id = ids.generate_id(conn, "z")
         conn.execute(
             "INSERT INTO season"
