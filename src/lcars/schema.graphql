@@ -1209,6 +1209,14 @@ type Query {
   """
   searchArrCandidates(mediaShape: MediaShape!, title: String!): [ArrCandidate!]!
 
+  """
+  2026-09-02 — look up a show by external-service identity (anilist, tvdb,
+  tmdb, imdb, mal). Returns null if no tracked show carries that external
+  id. Used by the web client's Add page to pre-mark search candidates as
+  "already tracked" before the user triggers addShowWithArr.
+  """
+  showByExternalId(service: String!, externalId: String!): Show
+
   "§8/§6.4 — cross-show next-up, across watching-status and paced/catch-up shows, soonest-available-first by default."
   nextUp(first: Int, after: String, last: Int, before: String): NextUpEntryConnection!
 

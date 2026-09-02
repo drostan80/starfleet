@@ -1366,6 +1366,22 @@ def resolve_search_arr_candidates(_, info, media_shape, title):
     ]
 
 
+@query.field("showByExternalId")
+def resolve_show_by_external_id(_, info, service, external_id):
+    """2026-09-02 — look up a tracked show by external-service identity.
+    Thin wrapper over shows.find_existing_show, exposed so the web
+    client's Add page can pre-check candidates before addShowWithArr."""
+    valid = {"anilist", "tvdb", "tmdb", "imdb", "mal"}
+    svc = service.lower()
+    if svc not in valid:
+        raise GraphQLError(f"unknown service: {service} (valid: {', '.join(sorted(valid))})")
+    conn = db.get_connection()
+    show_id = shows.find_existing_show(conn, {f"{svc}_id": external_id})
+    if show_id is None:
+        return None
+    return _get_show(conn, show_id)
+
+
 @query.field("stats")
 def resolve_stats(_, info):
     """§6.6, A.13 — no ObjectType binding needed for `Stats`/
