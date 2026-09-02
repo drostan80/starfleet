@@ -788,9 +788,9 @@ def _upsert_season(
     season_id = ids.generate_id(conn, "z")
     conn.execute(
         "INSERT INTO season"
-        " (id, show_id, season_number, anilist_id, mal_id, source, matched,"
+        " (id, show_id, season_number, status, anilist_id, mal_id, source, matched,"
         "  manual_override, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, 'manual', 1, 1, ?, ?)",
+        " VALUES (?, ?, ?, 'planned', ?, ?, 'manual', 1, 1, ?, ?)",
         (season_id, show_id, season_number, anilist_id, mal_id, now, now),
     )
     # S2 dual-write (see season_ranges.py)
@@ -1506,9 +1506,9 @@ def _ensure_seasons(conn, show_id: str, season_numbers: set) -> dict:
             now = util.now_utc_iso()
             conn.execute(
                 "INSERT INTO season"
-                " (id, show_id, season_number, source, matched, manual_override,"
+                " (id, show_id, season_number, status, source, matched, manual_override,"
                 "  created_at, updated_at)"
-                " VALUES (?, ?, ?, 'unmatched', 0, 0, ?, ?)",
+                " VALUES (?, ?, ?, 'planned', 'unmatched', 0, 0, ?, ?)",
                 (season_id, show_id, season_number, now, now),
             )
             pending_review.open_or_extend(

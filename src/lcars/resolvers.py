@@ -3751,9 +3751,9 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
         season_id = ids.generate_id(conn, "z")
         conn.execute(
             "INSERT INTO season"
-            " (id, show_id, season_number, anilist_id, mal_id, source, matched,"
+            " (id, show_id, season_number, status, anilist_id, mal_id, source, matched,"
             "  manual_override, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, 'manual', 1, 1, ?, ?)",
+            " VALUES (?, ?, ?, 'planned', ?, ?, 'manual', 1, 1, ?, ?)",
             (season_id, show_id, season_number, anilist_id, mal_id, now, now),
         )
         # auto-sync, todo.md — "if a new season is added then move back to
