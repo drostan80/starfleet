@@ -524,7 +524,7 @@ def _try_complete_season(conn, show_id: str, season_number: int, completed_at: s
     return True
 
 
-def _try_complete_show(conn, show_id: str, completed_at: str) -> None:  # noqa: dead code
+def _try_complete_show(conn, show_id: str, completed_at: str) -> None:
     """DEPRECATED (2.1c) — superseded by _recompute_show_status +
     _compute_show_status.  Retained as reference; no callers remain.
 
