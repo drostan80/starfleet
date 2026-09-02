@@ -1515,6 +1515,8 @@ type Mutation {
   setScore(showId: ID!, score: Float!): Show!
   "A.9, §6.1/§5.5 addendum — same push as setScore, scoped to one season and its own AniList entry only."
   setSeasonScore(seasonId: ID!, score: Float!): Season!
+  "Per-season status. Updates season.status; does NOT recompute show.status (that comes in a later step). Pass status: null to clear (falls back to show-level status)."
+  setSeasonStatus(seasonId: ID!, status: ShowStatus): Season!
   "Pins displayTitle to any string (a synonym, a romaji/native title, or a hand-typed one), overriding the write-once primaryTitle default. title: null (or all-whitespace) clears it. Local-only, no AniList/MAL push."
   setDisplayTitle(showId: ID!, title: String): Show!
   """

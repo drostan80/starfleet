@@ -2639,6 +2639,25 @@ def resolve_set_season_score(_, info, season_id, score):
     return season_mapping.get_season(conn, season_id)
 
 
+@mutation.field("setSeasonStatus")
+def resolve_set_season_status(_, info, season_id, status=None):
+    """Per-season status — updates season.status only. Does NOT recompute
+    show.status (that comes in step 2.1c). status=None clears the
+    per-season override (falls back to show-level status)."""
+    conn = db.get_connection()
+    require_client(info)
+    season = season_mapping.get_season(conn, season_id)
+    if season is None:
+        raise GraphQLError(f"no such season: {season_id}")
+    now = util.now_utc_iso()
+    conn.execute(
+        "UPDATE season SET status = ?, updated_at = ? WHERE id = ?",
+        (status, now, season_id),
+    )
+    conn.commit()
+    return season_mapping.get_season(conn, season_id)
+
+
 @mutation.field("markSeasonRewatch")
 def resolve_mark_season_rewatch(_, info, season_id, repeat_count):
     """Write-mirror function set, todo.md (2026-08-16) — pure push, no
