@@ -310,7 +310,16 @@ def _fetch_anilist(conn, show: dict) -> None:
 
     _sync_synonyms(conn, show["id"], media.get("synonyms") or [], now)
 
-    _upsert_season(conn, show["id"], 1, int(anilist_id_str), media.get("idMal"))
+    # Only promote S1 to manual on the *initial* addShow fetch — not on
+    # refresh, where _upsert_season would silently convert every fribb-
+    # matched S1 to manual (batch 4.1 bug, 2026-09-02).
+    # metadata_last_refreshed_at is stamped at the end of
+    # fetch_and_populate, so it's still NULL on the very first call
+    # (addShow's own inline fetch) and set on every subsequent refresh.
+    if show.get("metadata_last_refreshed_at") is None:
+        _upsert_season(
+            conn, show["id"], 1, int(anilist_id_str), media.get("idMal"),
+        )
 
     for studio in (media.get("studios") or {}).get("nodes") or []:
         if studio.get("id") is not None and studio.get("name"):
