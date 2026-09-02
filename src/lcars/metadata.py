@@ -689,9 +689,13 @@ def _propose_sequel_seasons(conn, show: dict, media: dict) -> None:
         ):
             continue
 
-        sequel_title = (node.get("title") or {}).get("romaji") or ""
+        # previous_value carries the sequel's title so the review queue
+        # is actionable without a manual AniList lookup.  Not used by
+        # already_resolved_with (that reads only chain[-1]), so it's
+        # safe even if the title changes upstream.
+        sequel_title = (node.get("title") or {}).get("romaji") or sequel_al_id_str
         pending_review.open_or_extend(
-            conn, "show", show["id"], field, "anilist", None, value,
+            conn, "show", show["id"], field, "anilist", sequel_title, value,
         )
 
 

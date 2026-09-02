@@ -655,6 +655,7 @@ async def test_sequel_relation_opens_pending_review_for_unmapped_sequel(client, 
     assert len(sequel_reviews) == 1
     assert sequel_reviews[0]["entityType"] == "show"
     assert sequel_reviews[0]["source"] == "anilist"
+    assert sequel_reviews[0]["previousValue"] == "Golden Kamuy 2"  # actionable title
     assert sequel_reviews[0]["proposedValueChain"] == ["anilist:777"]
 
     # Second refresh must NOT append a duplicate entry to the chain
