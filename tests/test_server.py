@@ -620,6 +620,91 @@ async def test_add_show_anilist_fetch_relation_reuses_existing_show(client, monk
     assert len(all_shows["shows"]["edges"]) == 3  # existing + the new show + the one real stub
 
 
+FAKE_ANILIST_MEDIA_WITH_SEQUEL = {
+    **FAKE_ANILIST_MEDIA,
+    "relations": {
+        "edges": [
+            {
+                "relationType": "SEQUEL",
+                "node": {
+                    "id": 777,
+                    "idMal": 877,
+                    "format": "TV",
+                    "title": {"romaji": "Golden Kamuy 2", "english": None, "native": None},
+                },
+            },
+        ]
+    },
+}
+
+
+async def test_sequel_relation_opens_pending_review_for_unmapped_sequel(client, monkeypatch):
+    """B.4.2 — when a SEQUEL relation edge points to an AniList id that
+    isn't mapped to any season anywhere, open a pending_review suggesting
+    the user add it as a new season. The review must not duplicate on a
+    second refresh, and must not reopen after being resolved."""
+    monkeypatch.setattr(
+        anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_SEQUEL
+    )
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+    show = await add_show(client, anilistId=111)
+
+    # First fetch (addShow) should create a pending_review for the unmapped sequel
+    reviews = await _pending_reviews_for(client, show["id"])
+    sequel_reviews = [r for r in reviews if r["field"] == "sequel_season:777"]
+    assert len(sequel_reviews) == 1
+    assert sequel_reviews[0]["entityType"] == "show"
+    assert sequel_reviews[0]["source"] == "anilist"
+    assert sequel_reviews[0]["proposedValueChain"] == ["anilist:777"]
+
+    # Second refresh must NOT append a duplicate entry to the chain
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    reviews2 = await _pending_reviews_for(client, show["id"])
+    sequel_reviews2 = [r for r in reviews2 if r["field"] == "sequel_season:777"]
+    assert len(sequel_reviews2) == 1
+    assert sequel_reviews2[0]["proposedValueChain"] == ["anilist:777"]  # still one entry
+
+    # Resolve the review, then refresh again — must NOT reopen
+    await gql(
+        client,
+        'mutation($id: ID!) { resolvePendingReview(id: $id, resolutionNote: "not needed") { id } }',
+        {"id": sequel_reviews2[0]["id"]},
+        headers=auth_headers("captains_log"),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    reviews3 = await _pending_reviews_for(client, show["id"])
+    sequel_reviews3 = [r for r in reviews3 if r["field"] == "sequel_season:777"]
+    assert len(sequel_reviews3) == 0  # no new unresolved review
+
+
+async def test_sequel_relation_suppressed_when_already_mapped_to_season(client, monkeypatch):
+    """B.4.2 — if the sequel's AniList id is already mapped to a season
+    (on any show), no pending_review is opened."""
+    monkeypatch.setattr(
+        anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_SEQUEL
+    )
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+
+    # First: create a show whose S1 has anilist_id=777 (the sequel target)
+    existing = await add_show(client, anilistId=777, titleRomaji="Golden Kamuy 2")
+
+    # Now add the show with the sequel edge — 777 is already a season
+    show = await add_show(client, anilistId=111)
+    reviews = await _pending_reviews_for(client, show["id"])
+    sequel_reviews = [r for r in reviews if r["field"].startswith("sequel_season:")]
+    assert len(sequel_reviews) == 0
+
+
 async def test_add_show_promotes_an_existing_untracked_stub_instead_of_duplicating(
     client, monkeypatch
 ):

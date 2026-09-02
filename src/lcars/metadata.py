@@ -337,6 +337,15 @@ def _fetch_anilist(conn, show: dict) -> None:
         if node.get("id") is not None and is_trackable:
             _link_relation(conn, show["id"], node, edge.get("relationType"))
 
+    # B.4.2 — sequel-season review queue.  For each SEQUEL edge on a
+    # tracked show, check whether the sequel's AniList id is already
+    # mapped to ANY season (not just on this show — a DIFF case where
+    # the sequel is S1 on another show is already handled, not a useful
+    # proposal).  If unmapped, open a pending_review so a human can
+    # decide whether to add it as a new season.
+    if show.get("tracked"):
+        _propose_sequel_seasons(conn, show, media)
+
 
 def _reconcile_air_dates(conn, show: dict) -> None:
     """§5.2/§6.7, B.4 — AniList `airingSchedule` air-date reconciliation.
@@ -620,6 +629,70 @@ def _link_relation(
         " WHERE excluded.relation_type IS NOT NULL",
         (show_id, related_show_id, relation_type, now),
     )
+
+
+def _propose_sequel_seasons(conn, show: dict, media: dict) -> None:
+    """B.4.2 — sequel-season review queue.
+
+    For each SEQUEL relation edge, if the sequel's AniList id isn't
+    already mapped to any season anywhere in LCARS, open a pending_review
+    suggesting the user add it as a new season on this show.  The global
+    season lookup (not show-scoped) suppresses both "same show" cases
+    (already mapped as S2+) and "DIFF" cases (sequel is S1 on a
+    *different* show — proposing it here would be wrong advice).
+
+    Guards:
+    - Global ``SELECT 1 FROM season WHERE anilist_id = ?`` — kills same-
+      show AND cross-show duplicates in one check.
+    - Existing unresolved review for this (show, sequel) — prevents
+      ``open_or_extend`` from appending an identical entry on every
+      refresh cycle.
+    - ``already_resolved_with`` — prevents re-opening after the user
+      resolved the review (sequel edges are permanent facts).
+    """
+    for edge in (media.get("relations") or {}).get("edges") or []:
+        if edge.get("relationType") != "SEQUEL":
+            continue
+        node = edge.get("node") or {}
+        sequel_al_id = node.get("id")
+        if sequel_al_id is None:
+            continue
+        if node.get("format") not in anilist_client.ANIME_RELATION_FORMATS:
+            continue
+
+        sequel_al_id_str = str(sequel_al_id)
+
+        # Already mapped to a season somewhere? Nothing to propose.
+        already_mapped = conn.execute(
+            "SELECT 1 FROM season WHERE anilist_id = ?", (sequel_al_id,)
+        ).fetchone()
+        if already_mapped is not None:
+            continue
+
+        field = f"sequel_season:{sequel_al_id_str}"
+        value = f"anilist:{sequel_al_id_str}"
+
+        # Already an unresolved review for this exact sequel? Skip —
+        # open_or_extend would blindly append the same value again.
+        existing_unresolved = conn.execute(
+            "SELECT 1 FROM pending_review"
+            " WHERE entity_type = 'show' AND entity_id = ? AND field = ?"
+            "   AND resolved_at IS NULL",
+            (show["id"], field),
+        ).fetchone()
+        if existing_unresolved is not None:
+            continue
+
+        # Previously resolved with the same value? Don't reopen.
+        if pending_review.already_resolved_with(
+            conn, "show", show["id"], field, value
+        ):
+            continue
+
+        sequel_title = (node.get("title") or {}).get("romaji") or ""
+        pending_review.open_or_extend(
+            conn, "show", show["id"], field, "anilist", None, value,
+        )
 
 
 def _create_relation_stub(conn, related_media: dict, related_anilist_id: str) -> str:
