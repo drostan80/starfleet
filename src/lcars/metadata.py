@@ -580,7 +580,9 @@ def _existing_related_show(conn, anilist_id: str, mal_id) -> str | None:
     return None
 
 
-def _link_relation(conn, show_id: str, related_media: dict, relation_type: str | None = None) -> None:
+def _link_relation(
+    conn, show_id: str, related_media: dict, relation_type: str | None = None,
+) -> None:
     """§5.9 — `show_relation` is directed, written whenever a show's
     AniList data reports a relation, one row for this direction only;
     the other show's own fetch (if/when it happens) writes its own
