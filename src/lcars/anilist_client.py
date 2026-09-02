@@ -96,6 +96,7 @@ query ($mediaId: Int) {
     }
     relations {
       edges {
+        relationType
         node {
           id
           idMal

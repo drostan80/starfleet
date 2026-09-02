@@ -326,7 +326,7 @@ def _fetch_anilist(conn, show: dict) -> None:
         node = edge.get("node") or {}
         is_trackable = node.get("format") in anilist_client.ANIME_RELATION_FORMATS
         if node.get("id") is not None and is_trackable:
-            _link_relation(conn, show["id"], node)
+            _link_relation(conn, show["id"], node, edge.get("relationType"))
 
 
 def _reconcile_air_dates(conn, show: dict) -> None:
@@ -580,7 +580,7 @@ def _existing_related_show(conn, anilist_id: str, mal_id) -> str | None:
     return None
 
 
-def _link_relation(conn, show_id: str, related_media: dict) -> None:
+def _link_relation(conn, show_id: str, related_media: dict, relation_type: str | None = None) -> None:
     """§5.9 — `show_relation` is directed, written whenever a show's
     AniList data reports a relation, one row for this direction only;
     the other show's own fetch (if/when it happens) writes its own
@@ -602,9 +602,12 @@ def _link_relation(conn, show_id: str, related_media: dict) -> None:
 
     now = util.now_utc_iso()
     conn.execute(
-        "INSERT OR IGNORE INTO show_relation (show_id, related_show_id, created_at)"
-        " VALUES (?, ?, ?)",
-        (show_id, related_show_id, now),
+        "INSERT INTO show_relation (show_id, related_show_id, relation_type, created_at)"
+        " VALUES (?, ?, ?, ?)"
+        " ON CONFLICT(show_id, related_show_id) DO UPDATE"
+        " SET relation_type = excluded.relation_type"
+        " WHERE excluded.relation_type IS NOT NULL",
+        (show_id, related_show_id, relation_type, now),
     )
 
 

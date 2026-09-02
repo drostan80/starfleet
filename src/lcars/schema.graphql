@@ -237,7 +237,7 @@ type Show {
   cast(first: Int, after: String, last: Int, before: String): CastCreditConnection!
   studioCredits(first: Int, after: String, last: Int, before: String): StudioCreditConnection!
   tags(first: Int, after: String, last: Int, before: String): TagConnection!
-  "§5.9 show_relation, either direction, as a plain Show list (the link itself carries no extra data — §5.9)."
+  "§5.9 show_relation, either direction, as a plain Show list. The link now carries relation_type internally (batch 4.1, 2026-09-02) but the GraphQL connection is still plain Shows."
   relatedShows(first: Int, after: String, last: Int, before: String): ShowConnection!
   franchiseMemberships(first: Int, after: String, last: Int, before: String): FranchiseEntryConnection!
 
