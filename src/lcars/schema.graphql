@@ -422,6 +422,8 @@ type Season {
   seasonNumber: Int!
   anilistId: Int
   malId: Int
+  "Per-season status; nullable (null = inherits show.status). Set via setSeasonStatus mutation."
+  status: ShowStatus
   "A.9 — this season's own personal score (0-20 quarter-point scale, same as Show.score); nullable, falls back to Show.score for the AniList push when unset (§6.1)."
   score: Float
   "Write-mirror function set, todo.md (2026-08-16) — the watchedAt of this season's first-ever watch_event, captured once (never moves on a later delete/re-mark of that same episode). Null for every season that existed before this field did, and for any season not yet started — see the migration's own docstring for the historical-backfill note."
