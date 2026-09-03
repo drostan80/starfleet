@@ -1,20 +1,20 @@
 # Starfleet Web — Claude session instructions
 
-HTML client for the LCARS anime/media tracker. Read `DESIGN.md` first —
+HTML client for the LCARS anime/media tracker, living inside the main
+starfleet repo as `ui/`. Read `DESIGN.md` (in this directory) first —
 it is the source of truth for build plan, design tokens, GraphQL query
 shapes, and page specs.
 
 ## What this is
 
-A browser-based client for LCARS (`~/repos/starfleet`), connecting via
-GraphQL over HTTP and WebSocket. Companion to `~/repos/data` (TUI client).
-Phase 1: Calendar screen + Settings skeleton, local mpv playback.
+A browser-based client for LCARS, connecting via GraphQL over HTTP and
+WebSocket. Companion to `~/repos/data` (TUI client).
 
 ## Key references
 
 - `DESIGN.md` — full spec; read before writing any feature
 - `mockups/calendar.html` — approved calendar mockup (open in browser)
-- `~/repos/starfleet/src/lcars/schema.graphql` — live GraphQL schema
+- `../src/lcars/schema.graphql` — live GraphQL schema (same repo)
 - `~/repos/data/src/data/lcars_client.py` — reference for query shapes
 - `~/repos/data/src/data/links.py` — `rewrite_host` for Sonarr/Radarr URLs
 
@@ -66,6 +66,16 @@ Settings UI is lowest priority — functional over pretty.
 
 ## Deployment
 
-Same stack as `~/repos/starfleet` once it exists — tag push → GHCR build.
-For now: serve as static files or a minimal HTTP server.
-See `~/repos/starfleet-archive` / `MEMORY.md` for deploy details.
+The web client is **not baked into the LCARS Docker image** — it is served
+by the nginx reverse-proxy container from a host bind mount
+(`/home/tiny/repos/web/src:/ui`). Deploy with `./deploy.sh` from this
+directory, which rsyncs `src/` to the remote host over SSH. No container
+restart needed.
+
+```
+cd ui && ./deploy.sh
+# → deployed → http://192.168.0.152:8888/ui/index.html
+```
+
+The nginx config (`nginx.conf`) serves static files at `/ui/` and proxies
+everything else to LCARS at `http://lcars:8000`.

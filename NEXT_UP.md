@@ -769,6 +769,19 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       fetch-side logic fill it properly — confirmed `AVAILABLE` with the real file path.
       `~/repos/starfleet`, deployed as v0.1.33.
 
+## Web client (`ui/`)
+
+The HTML/CSS/JS web client (formerly `~/repos/web`) now lives in `ui/` in
+this repo. It is a vanilla static site — **not** part of the Python package
+or Docker image. nginx serves it from a host bind mount at `:8888/ui/`.
+Deploy with `cd ui && ./deploy.sh`.
+
+See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
+
+**Note:** the remote deploy target (`/home/tiny/repos/web/src`) is still
+named `web` on the server. Renaming it would require editing the
+docker-compose bind mount and restarting nginx — left as-is for now.
+
 ## TBC / ongoing (validate as you go)
 
 - [ ] Daily use — Data is the active front-end; declaring it "done" is ongoing, no fixed bar.
