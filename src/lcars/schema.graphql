@@ -977,6 +977,16 @@ type SeasonSubdivisionPollResult {
   flagged: Int!
 }
 
+"Result of splitSeason — both halves of the split."
+type SplitSeasonResult {
+  "The original season (episodes 1..afterEpisode, updated abs range)."
+  lower: Season!
+  "The newly created season (episodes renumbered from 1, with supplied external ids)."
+  upper: Season!
+  "Number of subsequent seasons that were shifted up to make room (0 if the split season was the last one)."
+  seasonsShifted: Int!
+}
+
 "pollScoreSync's own confirmation summary (2026-08-27). anilistChecked: AniList-linked seasons where a non-zero AniList score was fetched and compared against what LCARS would have pushed (round(effective_lcars × 5)). anilistFlagged: seasons where the AniList score no longer matched — a pending_review (field \"score\") was opened or extended for human confirmation; zero on a quiet tick. malChecked/malFlagged: same for MAL (score 0–10 integer; push formula round(effective_lcars / 2); 0 = unscored, skipped); both zero when no MAL token is configured."
 type ScoreSyncPollResult {
   anilistChecked: Int!
@@ -1670,6 +1680,23 @@ type Mutation {
   not. Upserts the season row same as setSeasonMapping.
   """
   reconcileSeasonMapping(showId: ID!, seasonNumber: Int!): Season!
+  """
+  Split a season into two at the given episode boundary. Episodes 1..afterEpisode
+  stay in the original season; episodes (afterEpisode+1)..last are moved to a new
+  season inserted at seasonNumber+1 (renumbered starting from E1). All subsequent
+  seasons are shifted up by one to make room.
+
+  Both halves get their abs_start/abs_end ranges recomputed. The new season is
+  created with manual_override=1 and the supplied AniList/MAL ids (optional).
+  The original season's open season_subdivision pending_review, if any, is
+  auto-resolved.
+
+  Does NOT call _reopen_show_if_completed — a split re-partitions already-watched
+  episodes, it does not represent a genuinely new season airing.
+
+  Binary split only. For a 3-way split (e.g. Dr. STONE S4), call twice.
+  """
+  splitSeason(showId: ID!, seasonNumber: Int!, afterEpisode: Int!, newAnilistId: Int, newMalId: Int): SplitSeasonResult!
   setEpisodeNumberingScheme(showId: ID!, scheme: NumberingScheme!): EpisodeNumberingMapping!
   "§5.1/§5.9 addendum — manually confirm/correct which movie show a bonus_movie-kind episode represents."
   setEpisodeMovieLink(episodeId: ID!, movieShowId: ID!): EpisodeMovieLink!

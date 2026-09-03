@@ -19,8 +19,8 @@ import {
   fetchShowArt, selectArtAsset, deselectArtAsset, fetchEpisodeSynopses,
   setShowSynopsis, setEpisodeSynopsis, fetchSynopsisCandidates,
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
-  setEpisodeNumber,
-} from './api.js?v=11';
+  setEpisodeNumber, splitSeason,
+} from './api.js?v=12';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv,
   buildStatusBtn,
@@ -1747,6 +1747,148 @@ function openBulkRemapEditor(card, sn, episodes, show, cfg) {
   hdr.after(editor);
 }
 
+/* ── Split season editor (subdivision) ─────────────────── */
+
+function openSplitSeasonEditor(card, sn, episodes, show, cfg) {
+  card.querySelector('.sp-split-editor')?.remove();
+
+  const seasonData = show.seasons.find(s => s.seasonNumber === sn);
+  const seasonEps = show.episodes
+    .filter(ep => ep.season === sn)
+    .sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
+
+  if (seasonEps.length < 2) {
+    showBanner('Need at least 2 episodes to split', 'error');
+    return;
+  }
+
+  const editor = el('div', 'sp-split-editor');
+  editor.appendChild(el('div', 'sp-mapping-editor-title', `Split season ${sn}`));
+
+  const fields = el('div', 'sp-mapping-editor-fields');
+
+  // After-episode input
+  const afterGroup = el('div', 'sp-mapping-field-group');
+  afterGroup.appendChild(el('label', 'sp-mapping-label', 'After ep'));
+  const afterInput = document.createElement('input');
+  afterInput.type = 'number';
+  afterInput.className = 'sp-mapping-input';
+  afterInput.min = String(seasonEps[0].episode);
+  afterInput.max = String(seasonEps[seasonEps.length - 1].episode - 1);
+  afterInput.placeholder = `${seasonEps[0].episode}–${seasonEps[seasonEps.length - 1].episode - 1}`;
+  afterGroup.appendChild(afterInput);
+  fields.appendChild(afterGroup);
+
+  // New AniList ID
+  const alGroup = el('div', 'sp-mapping-field-group');
+  alGroup.appendChild(el('label', 'sp-mapping-label', 'New AL id'));
+  const alInput = document.createElement('input');
+  alInput.type = 'number';
+  alInput.className = 'sp-mapping-input';
+  alInput.placeholder = 'AniList';
+  alGroup.appendChild(alInput);
+  fields.appendChild(alGroup);
+
+  // New MAL ID
+  const malGroup = el('div', 'sp-mapping-field-group');
+  malGroup.appendChild(el('label', 'sp-mapping-label', 'New MAL id'));
+  const malInput = document.createElement('input');
+  malInput.type = 'number';
+  malInput.className = 'sp-mapping-input';
+  malInput.placeholder = 'MAL';
+  malGroup.appendChild(malInput);
+  fields.appendChild(malGroup);
+
+  editor.appendChild(fields);
+
+  // Preview area
+  const preview = el('div', 'sp-split-preview');
+  preview.style.cssText = 'font-size:.85em;color:var(--muted);padding:.3rem .5rem;white-space:pre-line';
+
+  function updatePreview() {
+    const after = parseInt(afterInput.value, 10);
+    if (isNaN(after)) { preview.textContent = ''; return; }
+    const lower = seasonEps.filter(e => e.episode <= after);
+    const upper = seasonEps.filter(e => e.episode > after);
+    if (!lower.length || !upper.length) { preview.textContent = 'Split must leave episodes in both halves'; return; }
+
+    const absS = seasonData?.absStart, absE = seasonData?.absEnd;
+    const lines = [];
+    if (absS != null && absE != null) {
+      const lEnd = absS + lower.length - 1;
+      const uStart = lEnd + 1;
+      lines.push(`S${sn} keeps E1–E${after} (abs ${absS}–${lEnd}${seasonData.anilistId ? ', AL ' + seasonData.anilistId : ''})`);
+      lines.push(`New S${sn + 1}: E${after + 1}–E${seasonEps[seasonEps.length - 1].episode} → E1–E${upper.length} (abs ${uStart}–${absE}${alInput.value ? ', AL ' + alInput.value : ''})`);
+    } else {
+      lines.push(`S${sn} keeps E1–E${after} (${lower.length} eps)`);
+      lines.push(`New S${sn + 1}: ${upper.length} eps (renumbered from E1)`);
+    }
+
+    // Show shifted seasons
+    const shifted = show.seasons.filter(s => s.seasonNumber > sn);
+    if (shifted.length) {
+      lines.push(`${shifted.length} season${shifted.length > 1 ? 's' : ''} shifted: ${shifted.map(s => `S${s.seasonNumber} → S${s.seasonNumber + 1}`).join(', ')}`);
+    }
+    preview.textContent = lines.join('\n');
+  }
+  afterInput.addEventListener('input', updatePreview);
+  alInput.addEventListener('input', updatePreview);
+  editor.appendChild(preview);
+
+  // Buttons
+  const btnRow = el('div', 'sp-mapping-editor-btns');
+  const splitBtn = el('button', 'sp-mapping-save', 'Split');
+  const cancelBtn = el('button', 'sp-mapping-cancel', 'Cancel');
+
+  cancelBtn.addEventListener('click', () => editor.remove());
+
+  splitBtn.addEventListener('click', async () => {
+    const after = parseInt(afterInput.value, 10);
+    const newAlId = alInput.value ? parseInt(alInput.value, 10) : null;
+    const newMalId = malInput.value ? parseInt(malInput.value, 10) : null;
+
+    if (isNaN(after)) {
+      showBanner('"After ep" is required', 'error');
+      return;
+    }
+
+    const lower = seasonEps.filter(e => e.episode <= after);
+    const upper = seasonEps.filter(e => e.episode > after);
+    if (!lower.length || !upper.length) {
+      showBanner('Split must leave episodes in both halves', 'error');
+      return;
+    }
+
+    if (!confirm(`Split season ${sn} after episode ${after}?\n${lower.length} eps stay, ${upper.length} eps move to new S${sn + 1}.`)) {
+      return;
+    }
+
+    splitBtn.disabled = true;
+    showBanner('Splitting…', 'loading');
+    try {
+      const result = await splitSeason(show.id, sn, after, newAlId, newMalId);
+      showBanner(
+        `✓ Split complete — S${result.lower.seasonNumber} (${result.lower.absStart ?? '?'}–${result.lower.absEnd ?? '?'}) + S${result.upper.seasonNumber} (${result.upper.absStart ?? '?'}–${result.upper.absEnd ?? '?'})` +
+        (result.seasonsShifted ? `, ${result.seasonsShifted} season${result.seasonsShifted > 1 ? 's' : ''} shifted` : ''),
+        'ok'
+      );
+      // Full reload to pick up all renumbered seasons + episodes
+      setTimeout(() => location.reload(), 1500);
+    } catch (err) {
+      showBanner(`Split failed: ${err.message}`, 'error');
+    } finally {
+      splitBtn.disabled = false;
+    }
+  });
+
+  btnRow.appendChild(splitBtn);
+  btnRow.appendChild(cancelBtn);
+  editor.appendChild(btnRow);
+
+  const hdr = card.querySelector('.sp-season-hdr');
+  hdr.after(editor);
+}
+
 function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startOpen, opts = {}) {
   const { idSuffix = '', rangeLabel = null, scoreSpans = null, minisodes = [] } = opts;
   const card = el('div', `sp-season-card${startOpen ? ' open' : ''}`);
@@ -1858,6 +2000,15 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
       openBulkRemapEditor(card, sn, episodes, show, cfg);
     });
     meta.appendChild(remapBtn);
+
+    // Split season button
+    const splitBtn = el('button', 'sp-season-edit-btn sp-split-btn', '✂');
+    splitBtn.title = 'Split season (subdivision)';
+    splitBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      openSplitSeasonEditor(card, sn, episodes, show, cfg);
+    });
+    meta.appendChild(splitBtn);
   }
 
   // Reconcile button — only for mapped seasons

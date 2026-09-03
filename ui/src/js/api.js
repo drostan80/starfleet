@@ -668,6 +668,30 @@ export async function setEpisodeNumber(episodeId, season, episode) {
   return data.setEpisodeNumber;
 }
 
+/**
+ * Split a season into two at the given episode boundary. Episodes 1..afterEpisode
+ * stay; the rest move to a new season at seasonNumber+1 (renumbered from E1).
+ * Subsequent seasons are shifted up.
+ * @param {string} showId
+ * @param {number} seasonNumber
+ * @param {number} afterEpisode - last episode that stays in the lower half
+ * @param {number|null} newAnilistId - AniList id for the new (upper) season
+ * @param {number|null} newMalId - MAL id for the new (upper) season
+ * @returns {Promise<{lower: object, upper: object, seasonsShifted: number}>}
+ */
+export async function splitSeason(showId, seasonNumber, afterEpisode, newAnilistId, newMalId) {
+  const data = await gql(`
+    mutation SplitSeason($showId: ID!, $sn: Int!, $after: Int!, $alId: Int, $malId: Int) {
+      splitSeason(showId: $showId, seasonNumber: $sn, afterEpisode: $after, newAnilistId: $alId, newMalId: $malId) {
+        lower { id seasonNumber anilistId malId absStart absEnd source }
+        upper { id seasonNumber anilistId malId absStart absEnd source }
+        seasonsShifted
+      }
+    }
+  `, { showId, sn: seasonNumber, after: afterEpisode, alId: newAnilistId || null, malId: newMalId || null });
+  return data.splitSeason;
+}
+
 /* ── Add-show queries & mutations ────────────────────────── */
 
 /**

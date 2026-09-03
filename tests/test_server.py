@@ -10349,3 +10349,245 @@ async def test_poll_mal_list_no_op_when_mal_not_authenticated(client, monkeypatc
     )
     data = await gql(client, "mutation { pollMalList { seasonsChecked } }", headers=auth_headers())
     assert data["pollMalList"]["seasonsChecked"] == 0
+
+
+# --- splitSeason (S6, 2026-09-03) ------------------------------------------
+
+
+async def _setup_show_for_split(client, monkeypatch, *, n_seasons=1, eps_per_season=6):
+    """Create a show with n_seasons, each having eps_per_season episodes with
+    absolute numbers, abs ranges set, and AniList IDs mapped."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=[])
+
+    episodes = []
+    abs_num = 1
+    for sn in range(1, n_seasons + 1):
+        for ep in range(1, eps_per_season + 1):
+            episodes.append({
+                "seasonNumber": sn,
+                "episodeNumber": ep,
+                "absoluteEpisodeNumber": abs_num,
+                "airDateUtc": None,
+                "runtime": 24,
+            })
+            abs_num += 1
+
+    fake = _FakeSonarrClient(series={"id": 42, "seriesType": "anime"}, episodes=episodes)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="ANIME", tvdbId=555)
+
+    # Set season mappings with AniList IDs and fill abs ranges
+    for sn in range(1, n_seasons + 1):
+        al_id = 100000 + sn
+        await gql(
+            client,
+            "mutation($id: ID!, $sn: Int!, $al: Int!) {"
+            " setSeasonMapping(showId: $id, seasonNumber: $sn, anilistId: $al) { id } }",
+            {"id": show["id"], "sn": sn, "al": al_id},
+            headers=auth_headers(),
+        )
+
+    # Fill abs ranges via direct DB write (simulates backfill)
+    conn = db.get_connection()
+    abs_num = 1
+    for sn in range(1, n_seasons + 1):
+        conn.execute(
+            "UPDATE season SET abs_start = ?, abs_end = ? WHERE show_id = ? AND season_number = ?",
+            (abs_num, abs_num + eps_per_season - 1, show["id"], sn),
+        )
+        abs_num += eps_per_season
+    conn.commit()
+
+    return show
+
+
+SPLIT_MUTATION = (
+    "mutation($id: ID!, $sn: Int!, $after: Int!, $al: Int, $mal: Int) {"
+    " splitSeason(showId: $id, seasonNumber: $sn, afterEpisode: $after,"
+    "   newAnilistId: $al, newMalId: $mal) {"
+    "   lower { seasonNumber absStart absEnd anilistId }"
+    "   upper { seasonNumber absStart absEnd anilistId }"
+    "   seasonsShifted"
+    " }"
+    "}"
+)
+
+
+async def test_split_season_basic_no_cascade(client, monkeypatch):
+    """Split the only season — no subsequent seasons to shift."""
+    show = await _setup_show_for_split(client, monkeypatch, n_seasons=1, eps_per_season=6)
+
+    data = await gql(
+        client, SPLIT_MUTATION,
+        {"id": show["id"], "sn": 1, "after": 3, "al": 200001, "mal": None},
+        headers=auth_headers(),
+    )
+    result = data["splitSeason"]
+    assert result["seasonsShifted"] == 0
+    # Lower half: eps 1-3, abs 1-3, keeps original AL id
+    assert result["lower"]["seasonNumber"] == 1
+    assert result["lower"]["absStart"] == 1
+    assert result["lower"]["absEnd"] == 3
+    assert result["lower"]["anilistId"] == 100001  # original
+    # Upper half: eps 4-6 → renumbered E1-E3, abs 4-6, new AL id
+    assert result["upper"]["seasonNumber"] == 2
+    assert result["upper"]["absStart"] == 4
+    assert result["upper"]["absEnd"] == 6
+    assert result["upper"]["anilistId"] == 200001
+
+    # Verify episodes actually moved and renumbered
+    eps = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) {"
+        " episodes { edges { node { season episode absoluteNumber } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    by_key = {(e["node"]["season"], e["node"]["episode"]): e["node"]
+              for e in eps["show"]["episodes"]["edges"]}
+    # Lower: S1E1..S1E3 unchanged
+    assert by_key[(1, 1)]["absoluteNumber"] == 1
+    assert by_key[(1, 3)]["absoluteNumber"] == 3
+    # Upper: S2E1..S2E3 (was S1E4..S1E6)
+    assert by_key[(2, 1)]["absoluteNumber"] == 4
+    assert by_key[(2, 3)]["absoluteNumber"] == 6
+    assert (1, 4) not in by_key  # moved away
+
+
+async def test_split_season_with_cascade(client, monkeypatch):
+    """Split S1 when S2 and S3 exist — they should shift to S3 and S4."""
+    show = await _setup_show_for_split(client, monkeypatch, n_seasons=3, eps_per_season=4)
+
+    data = await gql(
+        client, SPLIT_MUTATION,
+        {"id": show["id"], "sn": 1, "after": 2, "al": 200001, "mal": None},
+        headers=auth_headers(),
+    )
+    result = data["splitSeason"]
+    assert result["seasonsShifted"] == 2
+    assert result["lower"]["seasonNumber"] == 1
+    assert result["lower"]["absEnd"] == 2
+    assert result["upper"]["seasonNumber"] == 2
+    assert result["upper"]["absStart"] == 3
+    assert result["upper"]["absEnd"] == 4
+
+    # Verify the shifted seasons kept their abs ranges and AniList IDs
+    seasons = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) {"
+        " seasons(first: 10) { edges { node { seasonNumber absStart absEnd anilistId } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    by_sn = {s["node"]["seasonNumber"]: s["node"]
+             for s in seasons["show"]["seasons"]["edges"]}
+    # S3 (was S2): abs 5-8, AL 100002
+    assert by_sn[3]["absStart"] == 5
+    assert by_sn[3]["absEnd"] == 8
+    assert by_sn[3]["anilistId"] == 100002
+    # S4 (was S3): abs 9-12, AL 100003
+    assert by_sn[4]["absStart"] == 9
+    assert by_sn[4]["absEnd"] == 12
+    assert by_sn[4]["anilistId"] == 100003
+
+
+async def test_split_season_external_id_wired(client, monkeypatch):
+    """The new season's AniList ID is written to season_external_id."""
+    show = await _setup_show_for_split(client, monkeypatch, n_seasons=1, eps_per_season=4)
+
+    await gql(
+        client, SPLIT_MUTATION,
+        {"id": show["id"], "sn": 1, "after": 2, "al": 200001, "mal": None},
+        headers=auth_headers(),
+    )
+    conn = db.get_connection()
+    new_season = conn.execute(
+        "SELECT id FROM season WHERE show_id = ? AND season_number = 2",
+        (show["id"],),
+    ).fetchone()
+    ext = conn.execute(
+        "SELECT external_id FROM season_external_id WHERE season_id = ? AND service = 'anilist'",
+        (new_season["id"],),
+    ).fetchone()
+    assert ext is not None
+    assert ext["external_id"] == 200001
+
+
+async def test_split_season_resolves_subdivision_review(client, monkeypatch):
+    """An open season_subdivision review on the split season is auto-resolved."""
+    show = await _setup_show_for_split(client, monkeypatch, n_seasons=1, eps_per_season=4)
+
+    # Create a pending review manually
+    conn = db.get_connection()
+    season_id = conn.execute(
+        "SELECT id FROM season WHERE show_id = ? AND season_number = 1",
+        (show["id"],),
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO pending_review"
+        " (id, entity_type, entity_id, field, proposed_value_chain,"
+        "  source, created_at)"
+        " VALUES ('r-test01', 'season', ?, 'season_subdivision',"
+        "  'anilist=4,range_width=6', 'test', '2026-01-01')",
+        (season_id,),
+    )
+    conn.commit()
+
+    await gql(
+        client, SPLIT_MUTATION,
+        {"id": show["id"], "sn": 1, "after": 2, "al": 200001, "mal": None},
+        headers=auth_headers(),
+    )
+    review = conn.execute(
+        "SELECT resolved_at, resolution_note FROM pending_review WHERE id = 'r-test01'",
+    ).fetchone()
+    assert review["resolved_at"] is not None
+    assert "splitSeason" in review["resolution_note"]
+
+
+async def test_split_season_rejects_invalid_boundary(client, monkeypatch):
+    """afterEpisode at the last ep or before the first ep is rejected."""
+    show = await _setup_show_for_split(client, monkeypatch, n_seasons=1, eps_per_season=4)
+
+    # afterEpisode = max episode (nothing in upper half)
+    resp = await client.post(
+        "/",
+        json={
+            "query": SPLIT_MUTATION,
+            "variables": {"id": show["id"], "sn": 1, "after": 4, "al": None, "mal": None},
+        },
+        headers=auth_headers(),
+    )
+    body = resp.json()
+    assert "errors" in body
+    assert "strictly inside" in body["errors"][0]["message"]
+
+
+async def test_split_season_watch_events_follow_episodes(client, monkeypatch):
+    """Watch events on moved episodes are updated to the new season/episode."""
+    show = await _setup_show_for_split(client, monkeypatch, n_seasons=1, eps_per_season=4)
+
+    # Add a watch event on S1E3 (will become S2E1 after split at ep 2)
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO watch_event (id, show_id, season, episode, watched_at, created_at)"
+        " VALUES ('w-test', ?, 1, 3, '2026-01-01', '2026-01-01')",
+        (show["id"],),
+    )
+    conn.commit()
+
+    await gql(
+        client, SPLIT_MUTATION,
+        {"id": show["id"], "sn": 1, "after": 2, "al": 200001, "mal": None},
+        headers=auth_headers(),
+    )
+
+    # The watch event should now point to S2E1
+    conn = db.get_connection()
+    we = conn.execute(
+        "SELECT season, episode FROM watch_event WHERE show_id = ?",
+        (show["id"],),
+    ).fetchone()
+    assert we["season"] == 2
+    assert we["episode"] == 1

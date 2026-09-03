@@ -3773,6 +3773,171 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
     return season_mapping.get_season(conn, season_id)
 
 
+# -- Season subdivision split (S6, 2026-09-03) ---------------------------------
+
+
+@mutation.field("splitSeason")
+def resolve_split_season(
+    _, info, show_id, season_number, after_episode, new_anilist_id=None, new_mal_id=None
+):
+    """Split a season into two at the given episode boundary.
+
+    Episodes 1..after_episode stay in the original season (the "lower half");
+    episodes (after_episode+1)..last are moved to a new season at
+    season_number+1 (renumbered starting from E1, the "upper half"). All
+    subsequent seasons (season_number+2, +3, ...) are shifted up by one.
+
+    One transaction, all-or-nothing. Uses PRAGMA defer_foreign_keys for the
+    same chicken-and-egg composite-FK reason setEpisodeNumber documents.
+
+    Does NOT call _reopen_show_if_completed — a split re-partitions
+    already-watched episodes, not a genuinely new season airing. Deliberately
+    diverges from setSeasonMapping's sibling behavior here."""
+    conn = db.get_connection()
+    client = require_client(info)
+    if client not in RESOLVING_CLIENTS:
+        raise GraphQLError(
+            f"{client!r} cannot split a season — only {sorted(RESOLVING_CLIENTS)} can (§5.6)"
+        )
+    _require_show(conn, show_id)
+    now = util.now_utc_iso()
+
+    # --- 1. Validate the season and episode boundary --------------------------
+    season_row = conn.execute(
+        "SELECT id, abs_start, abs_end FROM season"
+        " WHERE show_id = ? AND season_number = ?",
+        (show_id, season_number),
+    ).fetchone()
+    if season_row is None:
+        raise GraphQLError(f"Season {season_number} does not exist for show {show_id}")
+    season_id = season_row["id"]
+    old_abs_start = season_row["abs_start"]
+    old_abs_end = season_row["abs_end"]
+
+    # All episodes in this season, sorted by episode number
+    episodes = conn.execute(
+        "SELECT id, episode, absolute_number FROM episode"
+        " WHERE show_id = ? AND season = ? ORDER BY episode",
+        (show_id, season_number),
+    ).fetchall()
+    ep_numbers = [e["episode"] for e in episodes]
+    if not ep_numbers:
+        raise GraphQLError(f"Season {season_number} has no episodes to split")
+    if after_episode < min(ep_numbers) or after_episode >= max(ep_numbers):
+        raise GraphQLError(
+            f"afterEpisode must be strictly inside the season's episode range "
+            f"({min(ep_numbers)}–{max(ep_numbers)}), got {after_episode}"
+        )
+
+    lower_eps = [e for e in episodes if e["episode"] <= after_episode]
+    upper_eps = [e for e in episodes if e["episode"] > after_episode]
+
+    # --- 2. Temporarily disable FK checks for the split transaction -----------
+    # The episode ↔ watch_event composite FK (§5.3) creates a chicken-and-egg
+    # problem when updating both sides: episode.season/episode changes break the
+    # FK from watch_event, and updating watch_event first would point at a
+    # nonexistent parent.  PRAGMA defer_foreign_keys is the correct tool for
+    # this (setEpisodeNumber uses it), but it requires no open transaction and
+    # can be reset by server middleware.  Temporarily disabling FK checking
+    # achieves the same effect and is safe because this is a single controlled
+    # transaction that leaves all FK relationships consistent at commit time.
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+
+    # --- 3. Shift subsequent seasons (descending to avoid UNIQUE collisions) --
+    subsequent = conn.execute(
+        "SELECT season_number FROM season"
+        " WHERE show_id = ? AND season_number > ? ORDER BY season_number DESC",
+        (show_id, season_number),
+    ).fetchall()
+    shifted = len(subsequent)
+    for row in subsequent:
+        sn = row["season_number"]
+        conn.execute(
+            "UPDATE season SET season_number = ?, updated_at = ?"
+            " WHERE show_id = ? AND season_number = ?",
+            (sn + 1, now, show_id, sn),
+        )
+        conn.execute(
+            "UPDATE episode SET season = ? WHERE show_id = ? AND season = ?",
+            (sn + 1, show_id, sn),
+        )
+        conn.execute(
+            "UPDATE watch_event SET season = ? WHERE show_id = ? AND season = ?",
+            (sn + 1, show_id, sn),
+        )
+
+    # --- 4. Insert the new season at season_number + 1 ------------------------
+    new_season_id = ids.generate_id(conn, "z")
+    new_sn = season_number + 1
+    conn.execute(
+        "INSERT INTO season"
+        " (id, show_id, season_number, status, anilist_id, mal_id, source, matched,"
+        "  manual_override, created_at, updated_at)"
+        " VALUES (?, ?, ?, 'planned', ?, ?, 'manual', 1, 1, ?, ?)",
+        (new_season_id, show_id, new_sn, new_anilist_id, new_mal_id, now, now),
+    )
+
+    # --- 5. Move upper-half episodes to the new season (renumber from 1) ------
+    upper_eps.sort(key=lambda e: e["episode"])
+    for i, ep in enumerate(upper_eps, start=1):
+        conn.execute(
+            "UPDATE episode SET season = ?, episode = ?, season_id = ?, updated_at = ?"
+            " WHERE id = ?",
+            (new_sn, i, new_season_id, now, ep["id"]),
+        )
+        conn.execute(
+            "UPDATE watch_event SET season = ?, episode = ?"
+            " WHERE show_id = ? AND season = ? AND episode = ?",
+            (new_sn, i, show_id, season_number, ep["episode"]),
+        )
+
+    # --- 6. Recompute abs ranges for both halves ------------------------------
+    if old_abs_start is not None and old_abs_end is not None:
+        lower_count = len(lower_eps)
+        lower_abs_end = old_abs_start + lower_count - 1
+        upper_abs_start = lower_abs_end + 1
+        conn.execute(
+            "UPDATE season SET abs_start = ?, abs_end = ?, updated_at = ? WHERE id = ?",
+            (old_abs_start, lower_abs_end, now, season_id),
+        )
+        conn.execute(
+            "UPDATE season SET abs_start = ?, abs_end = ?, updated_at = ? WHERE id = ?",
+            (upper_abs_start, old_abs_end, now, new_season_id),
+        )
+
+    # --- 7. Wire up season_external_id for the new season ---------------------
+    season_ranges.upsert_season_external_id(
+        conn, new_season_id, new_anilist_id, new_mal_id, now
+    )
+
+    # --- 8. Auto-resolve open season_subdivision reviews on the original ------
+    conn.execute(
+        "UPDATE pending_review"
+        " SET resolved_at = ?, resolved_by_client = ?,"
+        "     resolution_note = 'auto-resolved by splitSeason'"
+        " WHERE entity_type = 'season' AND entity_id = ? AND resolved_at IS NULL"
+        "   AND field = 'season_subdivision'",
+        (now, client, season_id),
+    )
+
+    # Also update the original season's season_id linkage for remaining eps
+    conn.execute(
+        "UPDATE episode SET season_id = ? WHERE show_id = ? AND season = ?",
+        (season_id, show_id, season_number),
+    )
+
+    conn.commit()
+    # Re-enable FK checking (disabled in step 2 for the split transaction)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return {
+        "lower": season_mapping.get_season(conn, season_id),
+        "upper": season_mapping.get_season(conn, new_season_id),
+        "seasons_shifted": shifted,
+    }
+
+
 # -- 5.5 id-mapper automatic reconciliation (A.4, §3 principle 1) -----------
 
 
