@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starfleet — Backlog</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <!-- Poster art hosts — opens the connection before the first <img> is parsed -->
+  <link rel="preconnect" href="https://artworks.thetvdb.com">
+  <link rel="preconnect" href="https://s4.anilist.co">
+  <link rel="preconnect" href="https://image.tmdb.org">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="css/main.css?v=4">
+  <style>
+    /* ── Backlog card size — 20% larger than calendar default ── */
+    #backlog-grid {
+      --card-w: 222px;
+      --art-h:  306px;
+    }
+
+    /* ── Backlog show header — override calendar's giant Syne heading ── */
+    .bl-header {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding-bottom: 2px;
+      border-bottom: 1px solid var(--border);
+    }
+    .bl-show-name {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.3;
+      /* allow wrapping — long anime titles need room */
+      white-space: normal;
+      word-break: break-word;
+      flex: 1;
+    }
+    .bl-ep-count {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    /* ── Group card — collapsed multi-episode show ─────────── */
+
+    .group-card {
+      width: var(--card-w);
+      flex-shrink: 0;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      position: relative;
+    }
+    .group-card:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    .group-card .group-art {
+      width: 100%;
+      height: var(--art-h);
+      position: relative;
+      overflow: hidden;
+      background: var(--surface-2);
+    }
+    .group-card .group-art img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: brightness(0.6);
+      transition: filter 0.15s;
+    }
+    .group-card:hover .group-art img {
+      filter: brightness(0.75);
+    }
+    .group-card .group-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .group-card .group-count {
+      font-family: 'DM Mono', monospace;
+      font-size: 28px;
+      font-weight: 700;
+      color: #fff;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+      line-height: 1;
+    }
+    .group-card .group-label {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 11px;
+      color: rgba(255,255,255,0.8);
+      text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .group-card .group-footer {
+      padding: 8px 10px;
+    }
+    .group-card .group-title {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .group-card .group-meta {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    /* ── Expanded group wrapper ──────────────────────────────── */
+
+    .group-expanded {
+      width: 100%;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--surface);
+      flex-basis: 100%;
+    }
+    .group-expanded-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-bottom: 8px;
+      margin-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .group-expanded-header:hover {
+      opacity: 0.8;
+    }
+    .group-expanded-header img {
+      width: 36px;
+      height: 52px;
+      object-fit: cover;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .group-expanded-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .group-expanded-title {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .group-expanded-meta {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .group-expanded-collapse {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .group-expanded-collapse:hover {
+      background: var(--surface-3);
+      color: var(--text);
+    }
+    .group-expanded-cards {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Top nav ─────────────────────────────────────────── -->
+<nav class="top-nav">
+  <a href="index.html" class="nav-brand">Starfleet</a>
+  <ul class="nav-links">
+    <li><a href="index.html">Calendar</a></li>
+    <li><a href="backlog.html" class="active">Backlog</a></li>
+    <li><a href="list.html">List</a></li>
+    <li><a href="grabs.html">Grabs</a></li>
+    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
+    <li><a href="add.html">Add</a></li>
+  </ul>
+  <div class="nav-spacer"></div>
+  <div class="status-filter" id="status-filter">
+    <span class="status-filter-label">Show:</span>
+    <button class="sf-pill active" data-status="WATCHING" style="--pill-color:var(--st-watching)">
+      <span class="sf-dot" style="background:var(--st-watching)"></span>Watching
+    </button>
+    <button class="sf-pill active" data-status="COMPLETED" style="--pill-color:var(--st-completed)">
+      <span class="sf-dot" style="background:var(--st-completed)"></span>Completed
+    </button>
+    <button class="sf-pill active" data-status="PLANNED" style="--pill-color:var(--st-planning)">
+      <span class="sf-dot" style="background:var(--st-planning)"></span>Planned
+    </button>
+    <button class="sf-pill active" data-status="PAUSED" style="--pill-color:var(--st-paused)">
+      <span class="sf-dot" style="background:var(--st-paused)"></span>Paused
+    </button>
+    <button class="sf-pill active" data-status="DROPPED" style="--pill-color:var(--st-dropped)">
+      <span class="sf-dot" style="background:var(--st-dropped)"></span>Dropped
+    </button>
+  </div>
+  <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
+  <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
+</nav>
+
+<div id="status-banner" class="status-banner hidden"></div>
+
+<!-- ── Backlog controls ──────────────────────────────────── -->
+<div class="view-controls">
+  <span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--muted);letter-spacing:0.04em">
+    Available · unwatched
+  </span>
+  <div class="ctrl-sep"></div>
+  <span class="date-range-label" id="backlog-count-label">—</span>
+</div>
+
+<!-- ── Backlog card grid ─────────────────────────────────── -->
+<div class="calendar" id="backlog-grid"></div>
+
+<script type="module">
+  import { getConfig, requireConfig } from './js/config.js?v=2';
+  import { initSearch } from './js/search.js?v=2';
+  import { fetchBacklog } from './js/api.js?v=11';
+  import {
+    buildCard,
+    showBanner, hideBanner,
+    fetchTmdbPoster,
+  } from './js/calendar.js?v=18';
+
+  requireConfig();
+
+  const STATUSES = ['WATCHING','COMPLETED','PLANNED','PAUSED','DROPPED'];
+  const STATUS_FILTER_KEY = 'starfleet_status_filter';
+
+  /* ── Status filter ──────────────────────────────────────── */
+  let activeStatuses = loadStatusFilter();
+
+  function loadStatusFilter() {
+    try {
+      const stored = localStorage.getItem(STATUS_FILTER_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return new Set(parsed);
+      }
+    } catch {}
+    return new Set(STATUSES);
+  }
+
+  function saveStatusFilter() {
+    try {
+      localStorage.setItem(STATUS_FILTER_KEY, JSON.stringify([...activeStatuses]));
+    } catch {}
+  }
+
+  let _lastEpisodes = [];
+
+  function toggleStatus(status) {
+    if (activeStatuses.has(status)) {
+      activeStatuses.delete(status);
+    } else {
+      activeStatuses.add(status);
+    }
+    saveStatusFilter();
+    document.querySelectorAll('.sf-pill').forEach(pill => {
+      pill.classList.toggle('active', activeStatuses.has(pill.dataset.status));
+    });
+    renderGrid(_lastEpisodes, getConfig());
+  }
+
+  // Wire up status filter pills
+  document.querySelectorAll('.sf-pill').forEach(pill => {
+    const status = pill.dataset.status;
+    pill.classList.toggle('active', activeStatuses.has(status));
+    pill.addEventListener('click', () => toggleStatus(status));
+  });
+
+  /* ── Rendering ──────────────────────────────────────────── */
+
+  const GROUP_THRESHOLD = 4; // collapse shows with ≥ this many episodes
+  const expandedShows = new Set(); // track which shows are expanded
+
+  function renderGrid(episodes, cfg) {
+    const grid = document.getElementById('backlog-grid');
+    const countLabel = document.getElementById('backlog-count-label');
+    grid.innerHTML = '';
+
+    // Group episodes by show, filter by status
+    const byShow = new Map();
+    for (const ep of episodes) {
+      if (!ep.show.tracked) continue;
+      const epStatus = ep.seasonEntity?.status || ep.show.status;
+      if (!activeStatuses.has(epStatus)) continue;
+      const sid = ep.show.id;
+      if (!byShow.has(sid)) byShow.set(sid, { show: ep.show, episodes: [] });
+      byShow.get(sid).episodes.push(ep);
+    }
+
+    const totalVisible = [...byShow.values()].reduce((n, g) => n + g.episodes.length, 0);
+    countLabel.textContent = `${totalVisible} episode${totalVisible !== 1 ? 's' : ''} · ${byShow.size} show${byShow.size !== 1 ? 's' : ''}`;
+
+    if (byShow.size === 0) {
+      grid.innerHTML = `<div class="calendar-empty">${
+        activeStatuses.size === 0
+          ? 'All statuses hidden — enable some in the Show filter.'
+          : 'Backlog is empty.'
+      }</div>`;
+      return;
+    }
+
+    // Sort shows: most recent air date first, then alphabetical
+    const groups = [...byShow.values()];
+    for (const g of groups) {
+      g.episodes.sort((a, b) => {
+        if (a.season !== b.season) return (a.season ?? 0) - (b.season ?? 0);
+        return (a.episode ?? 0) - (b.episode ?? 0);
+      });
+    }
+    groups.sort((a, b) => {
+      const aDate = latestAirDate(a.episodes);
+      const bDate = latestAirDate(b.episodes);
+      if (aDate !== bDate) return bDate.localeCompare(aDate); // most recent first
+      return a.show.displayTitle.localeCompare(b.show.displayTitle);
+    });
+
+    // Render — shows with many episodes get a group card (collapsed/expanded)
+    const row = document.createElement('div');
+    row.className = 'card-row';
+    row.style.flexWrap = 'wrap';
+
+    for (const group of groups) {
+      const isExpanded = expandedShows.has(group.show.id);
+
+      if (group.episodes.length >= GROUP_THRESHOLD && !isExpanded) {
+        // Collapsed group card
+        row.appendChild(buildGroupCard(group, cfg));
+      } else if (group.episodes.length >= GROUP_THRESHOLD && isExpanded) {
+        // Expanded group — full-width wrapper with all episode cards
+        row.appendChild(buildExpandedGroup(group, cfg));
+      } else {
+        // Fewer episodes — render individual cards inline
+        for (const ep of group.episodes) {
+          row.appendChild(buildCard(ep, cfg));
+        }
+      }
+    }
+
+    grid.appendChild(row);
+
+    // Kick off TMDB poster fetches for shows without art
+    if (cfg.tmdb_api_key) {
+      const seen = new Set();
+      for (const ep of episodes) {
+        if (!ep.show.posterUrl && !seen.has(ep.show.id)) {
+          seen.add(ep.show.id);
+          fetchTmdbPoster(ep.show, cfg.tmdb_api_key);
+        }
+      }
+    }
+  }
+
+  /** Get the most recent air date from a list of episodes. */
+  function latestAirDate(episodes) {
+    let latest = '';
+    for (const ep of episodes) {
+      if (ep.airDateUtc && ep.airDateUtc > latest) latest = ep.airDateUtc;
+    }
+    return latest || '1970-01-01';
+  }
+
+  /** Build a collapsed group card for a show with many backlog episodes. */
+  function buildGroupCard(group, cfg) {
+    const card = document.createElement('div');
+    card.className = 'group-card';
+
+    // Art
+    const artDiv = document.createElement('div');
+    artDiv.className = 'group-art';
+    const posterUrl = group.show.posterUrl;
+    if (posterUrl) {
+      const img = document.createElement('img');
+      img.src = posterUrl;
+      img.alt = group.show.displayTitle;
+      if (cfg.tmdb_api_key) {
+        img.onerror = () => { img.remove(); fetchTmdbPoster(group.show, cfg.tmdb_api_key); };
+      }
+      artDiv.appendChild(img);
+    }
+
+    // Overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'group-overlay';
+    const count = document.createElement('div');
+    count.className = 'group-count';
+    count.textContent = group.episodes.length;
+    overlay.appendChild(count);
+    const label = document.createElement('div');
+    label.className = 'group-label';
+    label.textContent = 'episodes';
+    overlay.appendChild(label);
+    artDiv.appendChild(overlay);
+    card.appendChild(artDiv);
+
+    // Footer
+    const footer = document.createElement('div');
+    footer.className = 'group-footer';
+    const title = document.createElement('div');
+    title.className = 'group-title';
+    title.textContent = group.show.displayTitle;
+    title.title = group.show.displayTitle;
+    footer.appendChild(title);
+
+    const meta = document.createElement('div');
+    meta.className = 'group-meta';
+    const firstEp = group.episodes[0];
+    const lastEp = group.episodes[group.episodes.length - 1];
+    const range = `S${String(firstEp.season ?? 0).padStart(2, '0')}E${String(firstEp.episode ?? 0).padStart(2, '0')}–E${String(lastEp.episode ?? 0).padStart(2, '0')}`;
+    meta.textContent = `${range} · click to expand`;
+    footer.appendChild(meta);
+    card.appendChild(footer);
+
+    card.addEventListener('click', () => {
+      expandedShows.add(group.show.id);
+      renderGrid(_lastEpisodes, cfg);
+    });
+
+    return card;
+  }
+
+  /** Build an expanded group wrapper with all episode cards visible. */
+  function buildExpandedGroup(group, cfg) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'group-expanded';
+
+    // Header — click to collapse
+    const header = document.createElement('div');
+    header.className = 'group-expanded-header';
+
+    if (group.show.posterUrl) {
+      const img = document.createElement('img');
+      img.src = group.show.posterUrl;
+      img.alt = '';
+      img.onerror = () => { img.style.display = 'none'; };
+      header.appendChild(img);
+    }
+
+    const info = document.createElement('div');
+    info.className = 'group-expanded-info';
+    const title = document.createElement('div');
+    title.className = 'group-expanded-title';
+    title.textContent = group.show.displayTitle;
+    info.appendChild(title);
+    const meta = document.createElement('div');
+    meta.className = 'group-expanded-meta';
+    meta.textContent = `${group.episodes.length} episodes in backlog`;
+    info.appendChild(meta);
+    header.appendChild(info);
+
+    const collapseBtn = document.createElement('button');
+    collapseBtn.className = 'group-expanded-collapse';
+    collapseBtn.textContent = '▴ Collapse';
+    header.appendChild(collapseBtn);
+
+    const collapse = () => {
+      expandedShows.delete(group.show.id);
+      renderGrid(_lastEpisodes, cfg);
+    };
+    header.addEventListener('click', collapse);
+    wrapper.appendChild(header);
+
+    // Cards
+    const cardsDiv = document.createElement('div');
+    cardsDiv.className = 'group-expanded-cards';
+    for (const ep of group.episodes) {
+      cardsDiv.appendChild(buildCard(ep, cfg));
+    }
+    wrapper.appendChild(cardsDiv);
+
+    return wrapper;
+  }
+
+  /* ── Load ────────────────────────────────────────────────── */
+  async function load() {
+    const grid = document.getElementById('backlog-grid');
+    const cfg = getConfig();
+    grid.innerHTML = '<div class="calendar-empty"><span class="spinner" style="width:18px;height:18px;border-width:2.5px"></span></div>';
+
+    try {
+      showBanner('Loading backlog…', 'loading');
+      const episodes = await fetchBacklog();
+      _lastEpisodes = episodes;
+      renderGrid(episodes, cfg);
+      hideBanner();
+    } catch (err) {
+      grid.innerHTML = `<div class="calendar-empty" style="color:var(--st-dropped)">${err.message}</div>`;
+      showBanner(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  load();
+  initSearch();
+</script>
+
+</body>
+</html>

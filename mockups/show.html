@@ -1,0 +1,1164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starfleet — Show Page Mockup</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+<style>
+/* ── Existing Starfleet tokens (from main.css) ──────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d0f14;
+  --surface:   #141720;
+  --surface-2: #1b2030;
+  --surface-3: #222840;
+  --border:    #202540;
+  --accent:    #5b8cff;
+  --accent-d:  #2a3f80;
+  --text:      #dde2f0;
+  --muted:     #6b7494;
+  --faint:     #363d5a;
+
+  --st-watching:  #22c55e;
+  --st-completed: #3b82f6;
+  --st-planning:  #f59e0b;
+  --st-paused:    #f97316;
+  --st-dropped:   #ef4444;
+
+  --svc-al:     #e85d04;
+  --svc-mal:    #2e51a2;
+  --svc-sonarr: #35c5f4;
+  --svc-radarr: #ffc230;
+  --svc-tvdb:   #6cd491;
+  --svc-tmdb:   #01b4e4;
+  --svc-player: #22c55e;
+
+  --av-ready:       #22c55e;
+  --av-downloading: #f59e0b;
+  --av-missing:     #ef4444;
+  --av-future:      #6b7494;
+
+  --nav-h: 48px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:        #eef0f8;
+    --surface:   #ffffff;
+    --surface-2: #e2e5f2;
+    --surface-3: #d4d8ec;
+    --border:    #c8cde4;
+    --text:      #1a1e30;
+    --muted:     #5a6080;
+    --faint:     #b0b8d0;
+  }
+}
+:root[data-theme="light"] {
+  --bg:        #eef0f8;
+  --surface:   #ffffff;
+  --surface-2: #e2e5f2;
+  --surface-3: #d4d8ec;
+  --border:    #c8cde4;
+  --text:      #1a1e30;
+  --muted:     #5a6080;
+  --faint:     #b0b8d0;
+}
+
+body {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* ── Top nav (matches existing pages) ───────────────────── */
+.top-nav {
+  height: var(--nav-h);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 24px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.nav-brand {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 17px;
+  color: var(--accent);
+  text-decoration: none;
+  letter-spacing: -0.02em;
+}
+.nav-links {
+  list-style: none;
+  display: flex;
+  gap: 4px;
+}
+.nav-links a {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition: color .15s, background .15s;
+}
+.nav-links a:hover { color: var(--text); background: var(--surface-3); }
+.nav-back {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.nav-back:hover { color: var(--text); background: var(--surface-3); }
+
+/* ── Banner + hero ──────────────────────────────────────── */
+.show-banner {
+  position: relative;
+  height: 220px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.show-banner img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.45;
+}
+.show-banner::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 30%, var(--bg) 100%);
+}
+
+.show-hero {
+  max-width: 1200px;
+  margin: -120px auto 0;
+  padding: 0 28px;
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 28px;
+}
+
+.show-poster {
+  width: 180px;
+  height: 260px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.show-poster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.show-header {
+  padding-top: 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.show-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.show-title {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+.show-alt-title {
+  font-size: 14px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.show-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Status picker */
+.status-picker {
+  position: relative;
+  display: inline-flex;
+}
+.status-current {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: border-color .15s;
+}
+.status-current:hover { border-color: currentColor; }
+.status-current .dot {
+  width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+}
+.status-current[data-status="WATCHING"]  { color: var(--st-watching);  background: rgba(34,197,94,0.12); }
+.status-current[data-status="COMPLETED"] { color: var(--st-completed); background: rgba(59,130,246,0.12); }
+.status-current[data-status="PLANNED"]   { color: var(--st-planning);  background: rgba(245,158,11,0.12); }
+.status-current[data-status="PAUSED"]    { color: var(--st-paused);    background: rgba(249,115,22,0.12); }
+.status-current[data-status="DROPPED"]   { color: var(--st-dropped);   background: rgba(239,68,68,0.12); }
+
+.status-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  z-index: 10;
+  min-width: 140px;
+}
+.status-picker.open .status-dropdown { display: block; }
+.status-opt {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border-radius: 5px;
+  font-size: 12px; font-weight: 500; cursor: pointer; color: var(--text);
+}
+.status-opt:hover { background: var(--surface-3); }
+.status-opt .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.ts-badge {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px; font-weight: 500;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 4px;
+}
+.ts-anime { background: rgba(249,115,22,0.15); color: var(--st-paused); }
+.ts-tv    { background: rgba(91,140,255,0.15); color: var(--accent); }
+
+.show-score { display: flex; align-items: center; gap: 6px; }
+.show-score-value {
+  font-family: 'DM Mono', monospace; font-size: 20px; font-weight: 500;
+}
+.show-score-max {
+  font-family: 'DM Mono', monospace; font-size: 12px; color: var(--faint);
+}
+.show-score-edit {
+  font-size: 11px; color: var(--accent); cursor: pointer; opacity: 0.6;
+}
+.show-score-edit:hover { opacity: 1; }
+
+.meta-sep { width: 1px; height: 18px; background: var(--border); }
+.meta-label { font-size: 11px; color: var(--muted); }
+.meta-value { font-family: 'DM Mono', monospace; font-size: 12px; }
+
+/* ── Show body (2-col below hero) ───────────────────────── */
+.show-body {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 28px;
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 28px;
+}
+
+.section-label {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700; font-size: 13px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); margin-bottom: 10px;
+}
+.synopsis {
+  font-size: 14px; line-height: 1.65;
+  color: var(--text); opacity: 0.88; max-width: 72ch;
+}
+
+/* ── Info sidebar ───────────────────────────────────────── */
+.info-sidebar { display: flex; flex-direction: column; gap: 20px; }
+
+.info-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px;
+}
+.info-card-title {
+  font-family: 'Syne', sans-serif; font-weight: 700;
+  font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--muted); margin-bottom: 12px;
+}
+.info-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 5px 0; border-bottom: 1px solid var(--border);
+}
+.info-row:last-child { border-bottom: none; }
+.info-row-label { font-size: 12px; color: var(--muted); }
+.info-row-value { font-family: 'DM Mono', monospace; font-size: 12px; }
+
+/* ── External IDs ───────────────────────────────────────── */
+.ext-id-list { display: flex; flex-direction: column; gap: 6px; }
+.ext-id-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; transition: background .12s;
+}
+.ext-id-row:hover { background: var(--surface-3); }
+.ext-svc-icon {
+  width: 22px; height: 22px; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500;
+  color: #fff; flex-shrink: 0;
+}
+.ext-svc-name { font-size: 12px; min-width: 55px; }
+.ext-id-value {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  color: var(--muted); flex: 1;
+}
+.ext-id-edit {
+  font-size: 10px; color: var(--accent); cursor: pointer;
+  opacity: 0; transition: opacity .12s;
+}
+.ext-id-row:hover .ext-id-edit { opacity: 0.7; }
+.ext-id-edit:hover { opacity: 1 !important; }
+.ext-id-add {
+  font-size: 11px; color: var(--accent); cursor: pointer;
+  padding: 6px 8px; border-radius: 6px;
+  display: flex; align-items: center; gap: 6px; opacity: 0.7;
+}
+.ext-id-add:hover { opacity: 1; background: var(--surface-3); }
+
+/* ── Seasons ────────────────────────────────────────────── */
+.seasons-section { grid-column: 1 / -1; }
+
+.season-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.season-header {
+  padding: 14px 18px;
+  display: flex; align-items: center; gap: 14px;
+  cursor: pointer; transition: background .12s;
+}
+.season-header:hover { background: var(--surface-2); }
+
+.season-number {
+  font-family: 'Syne', sans-serif; font-weight: 700; font-size: 16px;
+  white-space: nowrap;
+}
+.season-range-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px; color: var(--faint); white-space: nowrap;
+}
+.season-meta {
+  display: flex; align-items: center; gap: 12px; flex: 1;
+  flex-wrap: wrap;
+}
+.season-score {
+  font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted);
+}
+.season-score-edit {
+  font-size: 10px; color: var(--accent); cursor: pointer;
+  opacity: 0; transition: opacity .12s;
+}
+.season-header:hover .season-score-edit { opacity: 0.7; }
+.season-dates {
+  font-family: 'DM Mono', monospace; font-size: 11px; color: var(--faint);
+}
+.season-abs-range {
+  font-family: 'DM Mono', monospace; font-size: 10px; color: var(--faint);
+  padding: 2px 7px; background: var(--surface-3); border-radius: 4px;
+}
+.season-abs-range-edit {
+  font-size: 9px; color: var(--accent); cursor: pointer;
+  opacity: 0; transition: opacity .12s;
+}
+.season-header:hover .season-abs-range-edit { opacity: 0.7; }
+.season-al-id, .season-mal-id {
+  font-family: 'DM Mono', monospace; font-size: 10px; color: var(--faint);
+}
+.season-ep-count {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  color: var(--muted); margin-left: auto;
+}
+.season-toggle {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--faint); transition: transform .2s; font-size: 12px;
+}
+.season-card.open .season-toggle { transform: rotate(180deg); }
+
+/* ── Season body: poster + episode list side by side ────── */
+.season-body {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  border-top: 1px solid var(--border);
+}
+.season-body[hidden] { display: none !important; }
+
+.season-poster {
+  width: 130px;
+  min-height: 190px;
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12px 0;
+}
+.season-poster img {
+  width: 110px;
+  height: 160px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.episode-list {
+  min-width: 0; /* prevent grid blowout */
+}
+
+.ep-row {
+  display: grid;
+  grid-template-columns: 60px 44px 1fr 90px 34px 34px;
+  align-items: center;
+  padding: 9px 14px;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  transition: background .1s;
+}
+.ep-row:last-child { border-bottom: none; }
+.ep-row:hover { background: var(--surface-2); }
+
+.ep-number {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  font-weight: 500;
+}
+.ep-abs {
+  font-family: 'DM Mono', monospace; font-size: 10px; color: var(--faint);
+}
+.ep-title-cell {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.ep-title {
+  font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ep-synopsis-toggle {
+  font-size: 10px; color: var(--accent); cursor: pointer; opacity: 0.6;
+}
+.ep-synopsis-toggle:hover { opacity: 1; }
+.ep-synopsis {
+  font-size: 11px; color: var(--muted); line-height: 1.5;
+  padding: 6px 14px 10px 114px;
+  border-bottom: 1px solid var(--border);
+}
+.ep-synopsis[hidden] { display: none !important; }
+
+.ep-airdate {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  color: var(--muted); text-align: right;
+}
+
+.ep-mpv { display: flex; align-items: center; justify-content: center; }
+.mpv-icon {
+  width: 20px; height: 20px; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; cursor: pointer; transition: opacity .12s;
+}
+.mpv-icon.available {
+  background: rgba(34,197,94,0.15); color: var(--svc-player);
+}
+.mpv-icon.unavailable {
+  background: var(--surface-3); color: var(--faint); cursor: default;
+}
+
+.ep-watch { display: flex; align-items: center; justify-content: center; }
+.watch-btn {
+  width: 20px; height: 20px; border-radius: 50%;
+  border: 2px solid var(--faint); background: transparent;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: transparent; transition: all .12s;
+}
+.watch-btn:hover { border-color: var(--av-ready); color: var(--av-ready); }
+.watch-btn.watched {
+  border-color: var(--av-ready); background: var(--av-ready); color: var(--bg);
+}
+
+/* Availability state icons (in episode rows) */
+.ep-avail-icon { font-size: 13px; }
+.ep-avail-icon.ready { color: var(--av-ready); }
+.ep-avail-icon.downloading { color: var(--av-downloading); }
+.ep-avail-icon.missing { color: var(--av-missing); }
+.ep-avail-icon.future { color: var(--av-future); }
+
+/* ── Special/film card (inline between seasons) ─────────── */
+.special-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  overflow: hidden;
+}
+.special-poster {
+  width: 80px;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+}
+.special-poster img {
+  width: 64px;
+  height: 94px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.special-info {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+}
+.special-top-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.special-badge {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 3px 8px; border-radius: 4px;
+  flex-shrink: 0;
+}
+.special-badge.film {
+  background: rgba(59,130,246,0.15); color: var(--st-completed);
+}
+.special-badge.special {
+  background: rgba(245,158,11,0.15); color: var(--st-planning);
+}
+.special-badge.ova {
+  background: rgba(249,115,22,0.15); color: var(--st-paused);
+}
+.special-title {
+  font-size: 14px; font-weight: 500; flex: 1;
+}
+.special-bottom-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.special-bottom-row .ep-abs,
+.special-bottom-row .ep-airdate {
+  font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted);
+}
+
+/* ── Mockup annotation markers (purple, non-interactive) ── */
+.note {
+  position: relative;
+}
+.note::after {
+  content: attr(data-note);
+  position: absolute; top: -6px; right: -6px;
+  font-family: 'DM Mono', monospace; font-size: 7.5px;
+  background: #7c3aed; color: #fff;
+  padding: 1px 5px; border-radius: 3px;
+  pointer-events: none; white-space: nowrap; z-index: 5;
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .show-hero { grid-template-columns: 130px 1fr; gap: 18px; }
+  .show-poster { width: 130px; height: 190px; }
+  .show-header { padding-top: 50px; }
+  .show-title { font-size: 22px; }
+  .show-body { grid-template-columns: 1fr; }
+  .season-body { grid-template-columns: 100px 1fr; }
+  .season-poster { width: 100px; }
+  .season-poster img { width: 84px; height: 122px; }
+  .ep-row { grid-template-columns: 60px 40px 1fr 80px 28px 28px; gap: 6px; padding: 8px 10px; }
+}
+@media (max-width: 600px) {
+  .season-body { grid-template-columns: 1fr; }
+  .season-poster { width: 100%; min-height: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 12px; flex-direction: row; gap: 12px; }
+  .season-poster img { width: 70px; height: 102px; }
+  .special-card { grid-template-columns: 1fr; }
+  .special-poster { width: 100%; border-bottom: 1px solid var(--border); }
+}
+</style>
+</head>
+<body>
+
+<!-- ── Top nav ─────────────────────────────────────────── -->
+<nav class="top-nav">
+  <a href="#" class="nav-brand">Starfleet</a>
+  <ul class="nav-links">
+    <li><a href="#">Calendar</a></li>
+    <li><a href="#">Backlog</a></li>
+    <li><a href="#">List</a></li>
+    <li><a href="#">Grabs</a></li>
+    <li><a href="#">Reviews</a></li>
+  </ul>
+  <a href="#" class="nav-back">← Back to List</a>
+</nav>
+
+<!-- ── Banner ──────────────────────────────────────────── -->
+<div class="show-banner">
+  <img src="https://s4.anilist.co/file/anilistcdn/media/anime/banner/21087-sHb9zUZFsHe1.jpg" alt=""
+       onerror="this.style.display='none'">
+</div>
+
+<!-- ── Hero: poster + title + status + score ───────────── -->
+<div class="show-hero">
+  <div class="show-poster">
+    <img src="https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21087-UV2tu6aDrfj5.jpg"
+         alt="One Punch Man"
+         onerror="this.parentElement.style.background='var(--surface-3)'">
+  </div>
+
+  <div class="show-header">
+    <div class="show-title-row">
+      <h1 class="show-title">One Punch Man</h1>
+      <span class="show-alt-title">ワンパンマン</span>
+    </div>
+
+    <div class="show-meta-row">
+      <!-- Status picker -->
+      <div class="status-picker" onclick="this.classList.toggle('open')">
+        <div class="status-current" data-status="WATCHING">
+          <span class="dot"></span> Watching
+        </div>
+        <div class="status-dropdown">
+          <div class="status-opt"><span class="dot" style="background:var(--st-watching)"></span> Watching</div>
+          <div class="status-opt"><span class="dot" style="background:var(--st-completed)"></span> Completed</div>
+          <div class="status-opt"><span class="dot" style="background:var(--st-planning)"></span> Planned</div>
+          <div class="status-opt"><span class="dot" style="background:var(--st-paused)"></span> Paused</div>
+          <div class="status-opt"><span class="dot" style="background:var(--st-dropped)"></span> Dropped</div>
+        </div>
+      </div>
+
+      <span class="ts-badge ts-anime">ANIME</span>
+      <div class="meta-sep"></div>
+
+      <div class="show-score">
+        <span class="show-score-value">17</span>
+        <span class="show-score-max">/20</span>
+        <span class="show-score-edit" title="Change score">✎</span>
+      </div>
+      <div class="meta-sep"></div>
+
+      <span class="meta-label">First aired</span>
+      <span class="meta-value">2015-10-05</span>
+      <div class="meta-sep"></div>
+
+      <span class="meta-label">Started</span>
+      <span class="meta-value">2024-03-12</span>
+      <div class="meta-sep"></div>
+
+      <span class="meta-label">Episodes</span>
+      <span class="meta-value">24 / 36</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Body: synopsis + sidebar ─────────────────────────── -->
+<div class="show-body">
+
+  <!-- Main column: synopsis -->
+  <div>
+    <div class="section-label">Synopsis</div>
+    <p class="synopsis">
+      The seemingly ordinary and unimpressive Saitama has a rather unique hobby: being a hero. In order to pursue his childhood dream, he trained relentlessly for three years — and lost all of his hair in the process. Now, Saitama is incredibly powerful, so much so that no enemy is able to defeat him in battle. In fact, all it takes to defeat evildoers with just one punch has led to an unexpected problem — he is no longer able to enjoy the thrill of battling and has become quite bored.
+    </p>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="info-sidebar">
+    <div class="info-card">
+      <div class="info-card-title">Details</div>
+      <div class="info-row">
+        <span class="info-row-label">Format</span>
+        <span class="info-row-value">Episodic</span>
+      </div>
+      <div class="info-row">
+        <span class="info-row-label">Total Episodes</span>
+        <span class="info-row-value">36</span>
+      </div>
+      <div class="info-row">
+        <span class="info-row-label">Duration</span>
+        <span class="info-row-value">24 min</span>
+      </div>
+      <div class="info-row">
+        <span class="info-row-label">Started</span>
+        <span class="info-row-value">2024-03-12</span>
+      </div>
+      <div class="info-row">
+        <span class="info-row-label">Completed</span>
+        <span class="info-row-value" style="color:var(--faint)">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-row-label">Genres</span>
+        <span class="info-row-value" style="font-family:'DM Sans';font-size:11px">Action, Comedy, Parody</span>
+      </div>
+      <div class="info-row note" data-note="NEW: studioCredits in web query">
+        <span class="info-row-label">Studio</span>
+        <span class="info-row-value" style="font-family:'DM Sans';font-size:11px">Madhouse</span>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <div class="info-card-title">Tracking &amp; IDs</div>
+      <div class="ext-id-list">
+        <div class="ext-id-row">
+          <div class="ext-svc-icon" style="background:var(--svc-al)">AL</div>
+          <span class="ext-svc-name">AniList</span>
+          <span class="ext-id-value">21087</span>
+          <span class="ext-id-edit" title="Edit AniList ID">✎</span>
+        </div>
+        <div class="ext-id-row">
+          <div class="ext-svc-icon" style="background:var(--svc-mal)">ML</div>
+          <span class="ext-svc-name">MAL</span>
+          <span class="ext-id-value">30276</span>
+          <span class="ext-id-edit" title="Edit MAL ID">✎</span>
+        </div>
+        <div class="ext-id-row">
+          <div class="ext-svc-icon" style="background:var(--svc-tmdb)">TM</div>
+          <span class="ext-svc-name">TMDB</span>
+          <span class="ext-id-value">63926</span>
+          <span class="ext-id-edit" title="Edit TMDB ID">✎</span>
+        </div>
+        <div class="ext-id-row">
+          <div class="ext-svc-icon" style="background:var(--svc-tvdb)">TV</div>
+          <span class="ext-svc-name">TVDB</span>
+          <span class="ext-id-value">293088</span>
+          <span class="ext-id-edit" title="Edit TVDB ID">✎</span>
+        </div>
+        <div class="ext-id-row">
+          <div class="ext-svc-icon" style="background:var(--svc-sonarr)">S</div>
+          <span class="ext-svc-name">Sonarr</span>
+          <span class="ext-id-value">series/142</span>
+          <span class="ext-id-edit" title="Open in Sonarr">↗</span>
+        </div>
+        <div class="ext-id-add">+ Add tracking source</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Seasons & Episodes (reverse chron) ─────────────── -->
+  <div class="seasons-section">
+    <div class="section-label">Seasons &amp; Episodes</div>
+
+    <!-- ═══ Season 3 (newest, currently airing — open by default) ═══ -->
+    <div class="season-card open" id="s3">
+      <div class="season-header" onclick="toggleSeason('s3')">
+        <span class="season-number">Season 3</span>
+        <div class="season-meta">
+          <span class="season-score">score: —</span>
+          <span class="season-score-edit">✎</span>
+          <span class="season-dates">started —</span>
+          <span class="season-abs-range">abs 25–36</span>
+          <span class="season-abs-range-edit">✎</span>
+          <span class="season-al-id">AL: 140439</span>
+          <span class="season-mal-id">MAL: 50949</span>
+        </div>
+        <span class="season-ep-count">12 eps</span>
+        <span class="season-toggle">▾</span>
+      </div>
+
+      <div class="season-body" id="s3-eps">
+        <div class="season-poster note" data-note="NEW: Season.posterUrl needed">
+          <img src="https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx140439-dqXmMxDHY0PP.png"
+               alt="Season 3 cover"
+               onerror="this.parentElement.style.background='var(--surface-3)'">
+        </div>
+        <div class="episode-list">
+          <div class="ep-row">
+            <span class="ep-number">S03E01</span>
+            <span class="ep-abs">#25</span>
+            <div class="ep-title-cell">
+              <span class="ep-title">The Strongest Hero</span>
+              <span class="ep-synopsis-toggle" onclick="toggleSynopsis(this)">▸ synopsis</span>
+            </div>
+            <span class="ep-airdate">2025-04-03</span>
+            <div class="ep-mpv"><span class="mpv-icon available" title="Play in mpv">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn watched" title="Watched">✓</button></div>
+          </div>
+          <div class="ep-synopsis" hidden>The Hero Association faces a new threat as Saitama reluctantly joins a special team assembled to confront the Monster Association.</div>
+
+          <div class="ep-row">
+            <span class="ep-number">S03E02</span>
+            <span class="ep-abs">#26</span>
+            <div class="ep-title-cell">
+              <span class="ep-title">Human Monster</span>
+              <span class="ep-synopsis-toggle" onclick="toggleSynopsis(this)">▸ synopsis</span>
+            </div>
+            <span class="ep-airdate">2025-04-10</span>
+            <div class="ep-mpv"><span class="mpv-icon available" title="Play in mpv">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn watched" title="Watched">✓</button></div>
+          </div>
+          <div class="ep-synopsis" hidden>Garou continues his rampage against the heroes, while Saitama finds himself dragged into a martial arts tournament.</div>
+
+          <div class="ep-row">
+            <span class="ep-number">S03E03</span>
+            <span class="ep-abs">#27</span>
+            <div class="ep-title-cell">
+              <span class="ep-title">The Hunt Begins</span>
+              <span class="ep-synopsis-toggle" onclick="toggleSynopsis(this)">▸ synopsis</span>
+            </div>
+            <span class="ep-airdate">2025-04-17</span>
+            <div class="ep-mpv"><span class="mpv-icon available" title="Play in mpv">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn" title="Mark watched">✓</button></div>
+          </div>
+          <div class="ep-synopsis" hidden>The heroes split into teams to infiltrate the Monster Association's underground lair.</div>
+
+          <div class="ep-row">
+            <span class="ep-number">S03E04</span>
+            <span class="ep-abs">#28</span>
+            <div class="ep-title-cell"><span class="ep-title">Subterranean Tremors</span></div>
+            <span class="ep-airdate">2025-04-24</span>
+            <div class="ep-mpv"><span class="mpv-icon unavailable" title="Downloading">⬇</span></div>
+            <div class="ep-watch"><button class="watch-btn" title="Mark watched">✓</button></div>
+          </div>
+
+          <div class="ep-row" style="opacity:0.5">
+            <span class="ep-number">S03E05</span>
+            <span class="ep-abs">#29</span>
+            <div class="ep-title-cell"><span class="ep-title">TBA</span></div>
+            <span class="ep-airdate">2025-05-01</span>
+            <div class="ep-mpv"><span class="mpv-icon unavailable">◷</span></div>
+            <div class="ep-watch"></div>
+          </div>
+
+          <div class="ep-row" style="opacity:0.35">
+            <span class="ep-number">S03E06</span>
+            <span class="ep-abs">#30</span>
+            <div class="ep-title-cell"><span class="ep-title">TBA</span></div>
+            <span class="ep-airdate">2025-05-08</span>
+            <div class="ep-mpv"><span class="mpv-icon unavailable">◷</span></div>
+            <div class="ep-watch"></div>
+          </div>
+
+          <div class="ep-row" style="opacity:0.25; text-align:center; grid-template-columns:1fr; justify-items:center">
+            <span style="font-family:'DM Mono',monospace; font-size:10px; color:var(--faint)">… 6 more episodes (S03E07–S03E12, #31–#36)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Film between S2 and S3 (by air date) ═══ -->
+    <div class="special-card">
+      <div class="special-poster">
+        <img src="https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx110733-k16hIX9lCnOa.jpg"
+             alt="OPM OVA"
+             onerror="this.parentElement.style.background='var(--surface-3)'">
+      </div>
+      <div class="special-info">
+        <div class="special-top-row">
+          <span class="special-badge ova">OVA</span>
+          <span class="special-title">Road to Hero (OVA)</span>
+        </div>
+        <div class="special-bottom-row">
+          <span class="ep-abs">#24.5</span>
+          <span class="ep-airdate">2019-04-02</span>
+          <div class="ep-mpv"><span class="mpv-icon available" title="Play in mpv">▶</span></div>
+          <div class="ep-watch"><button class="watch-btn watched" title="Watched">✓</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Season 2 ═══ -->
+    <div class="season-card" id="s2">
+      <div class="season-header" onclick="toggleSeason('s2')">
+        <span class="season-number">Season 2</span>
+        <div class="season-meta">
+          <span class="season-score">score: 14.5</span>
+          <span class="season-score-edit">✎</span>
+          <span class="season-dates">started 2024-06-01 · completed 2024-07-20</span>
+          <span class="season-abs-range">abs 13–24</span>
+          <span class="season-abs-range-edit">✎</span>
+          <span class="season-al-id">AL: 97986</span>
+          <span class="season-mal-id">MAL: 34134</span>
+        </div>
+        <span class="season-ep-count">12 eps</span>
+        <span class="season-toggle">▾</span>
+      </div>
+      <div class="season-body" id="s2-eps" hidden>
+        <div class="season-poster">
+          <img src="https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx97986-KIhMKsJMmGKm.jpg"
+               alt="Season 2 cover"
+               onerror="this.parentElement.style.background='var(--surface-3)'">
+        </div>
+        <div class="episode-list">
+          <div class="ep-row">
+            <span class="ep-number">S02E01</span>
+            <span class="ep-abs">#13</span>
+            <div class="ep-title-cell"><span class="ep-title">Return of the Hero</span></div>
+            <span class="ep-airdate">2019-04-10</span>
+            <div class="ep-mpv"><span class="mpv-icon available">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn watched">✓</button></div>
+          </div>
+          <div class="ep-row">
+            <span class="ep-number">S02E02</span>
+            <span class="ep-abs">#14</span>
+            <div class="ep-title-cell"><span class="ep-title">The Human Monster</span></div>
+            <span class="ep-airdate">2019-04-17</span>
+            <div class="ep-mpv"><span class="mpv-icon available">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn watched">✓</button></div>
+          </div>
+          <div class="ep-row">
+            <span class="ep-number">S02E03</span>
+            <span class="ep-abs">#15</span>
+            <div class="ep-title-cell"><span class="ep-title">The Hunt Begins</span></div>
+            <span class="ep-airdate">2019-04-24</span>
+            <div class="ep-mpv"><span class="mpv-icon available">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn watched">✓</button></div>
+          </div>
+          <div class="ep-row" style="opacity:0.35; text-align:center; grid-template-columns:1fr; justify-items:center">
+            <span style="font-family:'DM Mono',monospace; font-size:10px; color:var(--faint)">… 9 more episodes (S02E04–S02E12, #16–#24) — all watched ✓</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Season 1 ═══ -->
+    <div class="season-card" id="s1">
+      <div class="season-header" onclick="toggleSeason('s1')">
+        <span class="season-number">Season 1</span>
+        <div class="season-meta">
+          <span class="season-score">score: 18</span>
+          <span class="season-score-edit">✎</span>
+          <span class="season-dates">started 2024-03-12 · completed 2024-05-28</span>
+          <span class="season-abs-range">abs 1–12</span>
+          <span class="season-abs-range-edit">✎</span>
+          <span class="season-al-id">AL: 21087</span>
+          <span class="season-mal-id">MAL: 30276</span>
+        </div>
+        <span class="season-ep-count">12 eps</span>
+        <span class="season-toggle">▾</span>
+      </div>
+      <div class="season-body" id="s1-eps" hidden>
+        <div class="season-poster">
+          <img src="https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21087-UV2tu6aDrfj5.jpg"
+               alt="Season 1 cover"
+               onerror="this.parentElement.style.background='var(--surface-3)'">
+        </div>
+        <div class="episode-list">
+          <div class="ep-row">
+            <span class="ep-number">S01E01</span>
+            <span class="ep-abs">#1</span>
+            <div class="ep-title-cell">
+              <span class="ep-title">The Strongest Man</span>
+              <span class="ep-synopsis-toggle" onclick="toggleSynopsis(this)">▸ synopsis</span>
+            </div>
+            <span class="ep-airdate">2015-10-05</span>
+            <div class="ep-mpv"><span class="mpv-icon available">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn watched">✓</button></div>
+          </div>
+          <div class="ep-synopsis" hidden>A man named Saitama, who can defeat any opponent with a single punch, grows bored from a lack of challenge.</div>
+          <div class="ep-row">
+            <span class="ep-number">S01E02</span>
+            <span class="ep-abs">#2</span>
+            <div class="ep-title-cell"><span class="ep-title">The Lone Cyborg</span></div>
+            <span class="ep-airdate">2015-10-12</span>
+            <div class="ep-mpv"><span class="mpv-icon available">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn watched">✓</button></div>
+          </div>
+          <div class="ep-row" style="opacity:0.35; text-align:center; grid-template-columns:1fr; justify-items:center">
+            <span style="font-family:'DM Mono',monospace; font-size:10px; color:var(--faint)">… 10 more episodes (S01E03–S01E12, #3–#12) — all watched ✓</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Demo: split season (film mid-season) ═══
+         This shows how a season splits when a movie falls between its episodes.
+         Using a fictional example to demonstrate the layout. -->
+
+    <div style="margin-top:24px; margin-bottom:10px; padding:8px 12px; background:var(--surface-3); border-radius:6px; border-left:3px solid #7c3aed;">
+      <span style="font-family:'DM Mono',monospace; font-size:10px; color:#c4b5fd; letter-spacing:0.04em">
+        MOCKUP NOTE — below demonstrates a split season: a franchise film's absolute number falls between S01E06 (#6) and S01E07 (#7), so the season card appears twice with the relevant episode ranges and the film card between them.
+      </span>
+    </div>
+
+    <div class="season-card" id="s1-split-a">
+      <div class="season-header" onclick="toggleSeason('s1-split-a')">
+        <span class="season-number">Season 1</span>
+        <span class="season-range-label">(ep 1–6)</span>
+        <div class="season-meta">
+          <span class="season-score">score: 16</span>
+          <span class="season-abs-range">abs 1–6</span>
+          <span class="season-al-id">AL: 12345</span>
+        </div>
+        <span class="season-ep-count">6 of 12</span>
+        <span class="season-toggle">▾</span>
+      </div>
+      <div class="season-body" id="s1-split-a-eps" hidden>
+        <div class="season-poster">
+          <img src="https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21087-UV2tu6aDrfj5.jpg"
+               alt="Season 1 cover"
+               onerror="this.parentElement.style.background='var(--surface-3)'">
+        </div>
+        <div class="episode-list">
+          <div class="ep-row">
+            <span class="ep-number">S01E01</span><span class="ep-abs">#1</span>
+            <div class="ep-title-cell"><span class="ep-title">Episode One</span></div>
+            <span class="ep-airdate">2020-01-05</span>
+            <div class="ep-mpv"><span class="mpv-icon available">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn watched">✓</button></div>
+          </div>
+          <div class="ep-row" style="opacity:0.35; text-align:center; grid-template-columns:1fr; justify-items:center">
+            <span style="font-family:'DM Mono',monospace; font-size:10px; color:var(--faint)">… episodes S01E02–S01E06, #2–#6</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Film splitting the season -->
+    <div class="special-card">
+      <div class="special-poster">
+        <img src="https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx110733-k16hIX9lCnOa.jpg"
+             alt="Franchise Film"
+             onerror="this.parentElement.style.background='var(--surface-3)'">
+      </div>
+      <div class="special-info">
+        <div class="special-top-row">
+          <span class="special-badge film">FILM</span>
+          <span class="special-title">Franchise Movie: The Awakening</span>
+        </div>
+        <div class="special-bottom-row">
+          <span class="ep-abs">#6.5</span>
+          <span class="ep-airdate">2020-03-20</span>
+          <div class="ep-mpv"><span class="mpv-icon available" title="Play in mpv">▶</span></div>
+          <div class="ep-watch"><button class="watch-btn watched" title="Watched">✓</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Same season continues after the film -->
+    <div class="season-card" id="s1-split-b">
+      <div class="season-header" onclick="toggleSeason('s1-split-b')">
+        <span class="season-number">Season 1</span>
+        <span class="season-range-label">(ep 7–12)</span>
+        <div class="season-meta">
+          <span class="season-score">score: 16</span>
+          <span class="season-abs-range">abs 7–12</span>
+        </div>
+        <span class="season-ep-count">6 of 12</span>
+        <span class="season-toggle">▾</span>
+      </div>
+      <div class="season-body" id="s1-split-b-eps" hidden>
+        <div class="season-poster">
+          <img src="https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21087-UV2tu6aDrfj5.jpg"
+               alt="Season 1 cover"
+               onerror="this.parentElement.style.background='var(--surface-3)'">
+        </div>
+        <div class="episode-list">
+          <div class="ep-row">
+            <span class="ep-number">S01E07</span><span class="ep-abs">#7</span>
+            <div class="ep-title-cell"><span class="ep-title">Episode Seven — After the Film</span></div>
+            <span class="ep-airdate">2020-04-05</span>
+            <div class="ep-mpv"><span class="mpv-icon available">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn watched">✓</button></div>
+          </div>
+          <div class="ep-row" style="opacity:0.35; text-align:center; grid-template-columns:1fr; justify-items:center">
+            <span style="font-family:'DM Mono',monospace; font-size:10px; color:var(--faint)">… episodes S01E08–S01E12, #8–#12</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Specials (Season 0) ═══ -->
+    <div class="season-card" id="s0">
+      <div class="season-header" onclick="toggleSeason('s0')">
+        <span class="season-number">Specials</span>
+        <div class="season-meta">
+          <span class="season-score">score: —</span>
+          <span class="season-dates" style="color:var(--faint)">no AniList/MAL link</span>
+        </div>
+        <span class="season-ep-count">6 eps</span>
+        <span class="season-toggle">▾</span>
+      </div>
+      <div class="season-body" id="s0-eps" hidden>
+        <div class="season-poster" style="background:var(--surface-3); align-items:center">
+          <!-- Season 0 typically has no distinct poster -->
+          <span style="font-family:'DM Mono',monospace; font-size:9px; color:var(--faint); text-align:center; padding:8px">No<br>cover</span>
+        </div>
+        <div class="episode-list">
+          <div class="ep-row">
+            <span class="ep-number">S00E01</span>
+            <span class="ep-abs">—</span>
+            <div class="ep-title-cell"><span class="ep-title">The Pupil Who is an Extremely Poor Talker</span></div>
+            <span class="ep-airdate">2015-12-24</span>
+            <div class="ep-mpv"><span class="mpv-icon available">▶</span></div>
+            <div class="ep-watch"><button class="watch-btn">✓</button></div>
+          </div>
+          <div class="ep-row" style="opacity:0.35; text-align:center; grid-template-columns:1fr; justify-items:center">
+            <span style="font-family:'DM Mono',monospace; font-size:10px; color:var(--faint)">… 5 more specials</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /seasons-section -->
+</div><!-- /show-body -->
+
+<script>
+function toggleSeason(id) {
+  const card = document.getElementById(id);
+  const body = document.getElementById(id + '-eps');
+  if (!card || !body) return;
+  card.classList.toggle('open');
+  body.hidden = !body.hidden;
+}
+
+function toggleSynopsis(el) {
+  const row = el.closest('.ep-row');
+  if (!row) return;
+  const syn = row.nextElementSibling;
+  if (syn && syn.classList.contains('ep-synopsis')) {
+    syn.hidden = !syn.hidden;
+    el.textContent = syn.hidden ? '▸ synopsis' : '▾ synopsis';
+  }
+}
+
+document.addEventListener('click', (e) => {
+  document.querySelectorAll('.status-picker.open').forEach(p => {
+    if (!p.contains(e.target)) p.classList.remove('open');
+  });
+});
+</script>
+
+</body>
+</html>

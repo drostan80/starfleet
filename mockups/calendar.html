@@ -1,0 +1,1013 @@
+<title>Starfleet</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+
+<style>
+/* ── Design plan ────────────────────────────────────────────
+   Palette (dark-first — this is a media/night-use app):
+     bg        #0d0f14  cool near-black
+     surface   #141720  card ground
+     surface-2 #1b2030  sidebar / raised panels
+     surface-3 #222840  hover / selected
+     border    #202540  hairline separators
+     accent    #5b8cff  navigation, links, active state
+     text      #dde2f0  cool off-white
+     muted     #6b7494  secondary labels
+     faint     #363d5a  very quiet elements
+
+   Type:
+     Syne 800   — day headers, brand (geometric, distinctive)
+     DM Sans    — UI chrome, card text, body
+     DM Mono    — episode badges, counters, timestamps (data)
+
+   Layout:
+     Sticky top nav (48px) + view-controls bar (44px).
+     Calendar scrolls vertically; day groups stack with Syne
+     headers. Cards in flex-wrap rows, portrait 148×200px art,
+     max 10/row. Service icons left strip, status tab right edge
+     (6px → expands on hover), episode meta bar above art.
+──────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d0f14;
+  --surface:   #141720;
+  --surface-2: #1b2030;
+  --surface-3: #222840;
+  --border:    #202540;
+  --accent:    #5b8cff;
+  --accent-d:  #2a3f80;
+  --text:      #dde2f0;
+  --muted:     #6b7494;
+  --faint:     #363d5a;
+
+  --st-watching:  #22c55e;
+  --st-completed: #3b82f6;
+  --st-planning:  #f59e0b;
+  --st-paused:    #f97316;
+  --st-dropped:   #ef4444;
+
+  --svc-al:     #e85d04;
+  --svc-mal:    #2e51a2;
+  --svc-sonarr: #35c5f4;
+  --svc-radarr: #ffc230;
+  --svc-player: #22c55e;
+
+  --av-ready:  #22c55e;
+  --av-wait:   #f59e0b;
+  --av-future: #6b7494;
+
+  --nav-h:  48px;
+  --ctrl-h: 44px;
+  --card-w: 150px;
+  --art-h:  200px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:       #eef0f8;
+    --surface:  #ffffff;
+    --surface-2:#e2e5f2;
+    --surface-3:#d4d8ec;
+    --border:   #c8cde4;
+    --text:     #1a1e30;
+    --muted:    #5a6080;
+    --faint:    #b0b8d0;
+  }
+}
+:root[data-theme="light"] {
+  --bg:       #eef0f8;
+  --surface:  #ffffff;
+  --surface-2:#e2e5f2;
+  --surface-3:#d4d8ec;
+  --border:   #c8cde4;
+  --text:     #1a1e30;
+  --muted:    #5a6080;
+  --faint:    #b0b8d0;
+}
+
+body {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Top nav ─────────────────────────────────────────────── */
+.top-nav {
+  height: var(--nav-h);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  flex-shrink: 0;
+}
+
+.nav-brand {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: 0.15em;
+  color: var(--accent);
+  text-transform: uppercase;
+  text-decoration: none;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+.nav-links {
+  display: flex;
+  gap: 2px;
+  list-style: none;
+}
+
+.nav-links a {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 5px 11px;
+  border-radius: 6px;
+  transition: color 0.12s, background 0.12s;
+  letter-spacing: 0.01em;
+}
+.nav-links a:hover { color: var(--text); background: var(--surface-3); }
+.nav-links a.active { color: var(--text); background: var(--surface-3); }
+
+.nav-spacer { flex: 1; }
+
+.nav-icon-btn {
+  width: 32px; height: 32px;
+  border-radius: 7px;
+  background: var(--surface-3);
+  border: none;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted);
+  font-size: 15px;
+  transition: color 0.12s;
+}
+.nav-icon-btn:hover { color: var(--text); }
+
+/* ── View controls ───────────────────────────────────────── */
+.view-controls {
+  height: var(--ctrl-h);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.view-modes {
+  display: flex;
+  gap: 2px;
+  background: var(--surface-2);
+  border-radius: 7px;
+  padding: 3px;
+}
+
+.view-mode {
+  font-family: 'DM Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  background: transparent;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+.view-mode:hover { color: var(--text); }
+.view-mode.active { background: var(--surface-3); color: var(--text); }
+
+.ctrl-sep { width: 1px; height: 20px; background: var(--border); }
+
+.date-nav { display: flex; align-items: center; gap: 8px; }
+
+.date-btn {
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.12s;
+}
+.date-btn:hover { color: var(--text); background: var(--surface-3); }
+
+.date-range-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  min-width: 190px;
+  text-align: center;
+}
+
+.today-btn {
+  margin-left: auto;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 13px;
+  border-radius: 6px;
+  background: var(--accent-d);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 0.12s;
+  letter-spacing: 0.02em;
+}
+.today-btn:hover { background: var(--accent); color: #fff; }
+
+/* ── Calendar body ───────────────────────────────────────── */
+.calendar {
+  flex: 1;
+  padding: 24px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  overflow-x: hidden;
+}
+
+.day-group { display: flex; flex-direction: column; gap: 14px; }
+
+.day-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.day-name {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 26px;
+  color: var(--text);
+  line-height: 1;
+  text-wrap: nowrap;
+}
+
+.day-date {
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.day-today .day-name { color: var(--accent); }
+.day-today .day-date { color: var(--accent); opacity: 0.65; }
+.day-today .day-header { border-bottom-color: var(--accent-d); }
+
+.card-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* ── Show card ───────────────────────────────────────────── */
+.show-card {
+  width: var(--card-w);
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.show-card:hover {
+  border-color: var(--faint);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+}
+
+/* meta bar above art */
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.ep-badge {
+  font-family: 'DM Mono', monospace;
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.airtime {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  color: var(--muted);
+  flex: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.avail-icon {
+  font-size: 10px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.avail-ready  { color: var(--av-ready); }
+.avail-wait   { color: var(--av-wait); }
+.avail-future { color: var(--av-future); }
+
+/* body = service strip + art + status tab */
+.card-body {
+  position: relative;
+  display: flex;
+  height: var(--art-h);
+  flex-shrink: 0;
+}
+
+/* left service icons */
+.svc-strip {
+  width: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 0;
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+  flex-shrink: 0;
+  z-index: 1;
+}
+
+.svc {
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'DM Mono', monospace;
+  font-size: 6.5px;
+  font-weight: 500;
+  color: #fff;
+  cursor: pointer;
+  opacity: 0.18;
+  transition: opacity 0.12s, transform 0.1s;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.svc:hover { transform: scale(1.2); }
+.svc.on { opacity: 1; }
+
+.svc-al     { background: var(--svc-al); }
+.svc-mal    { background: var(--svc-mal); }
+.svc-sonarr { background: var(--svc-sonarr); }
+.svc-radarr { background: var(--svc-radarr); color: #1a1000; }
+.svc-player { background: var(--svc-player); font-size: 8px; }
+
+/* cover art */
+.card-art {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.art-score {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.9);
+  background: rgba(0,0,0,0.5);
+  padding: 2px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+  z-index: 1;
+}
+
+/* right status tab */
+.status-tab {
+  position: absolute;
+  right: 0; top: 0; bottom: 0;
+  width: 6px;
+  overflow: hidden;
+  transition: width 0.22s cubic-bezier(0.4,0,0.2,1);
+  z-index: 3;
+  cursor: pointer;
+}
+.status-tab:hover { width: 118px; }
+
+.st-bar {
+  position: absolute;
+  right: 0; top: 0; bottom: 0;
+  width: 6px;
+}
+
+.st-panel {
+  position: absolute;
+  right: 6px; top: 0; bottom: 0;
+  width: 112px;
+  background: rgba(12,14,20,0.96);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 6px 0;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 0.12s 0.08s;
+  backdrop-filter: blur(4px);
+}
+.status-tab:hover .st-panel { opacity: 1; }
+
+.st-opt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.1s, background 0.1s;
+  white-space: nowrap;
+}
+.st-opt:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.st-opt.cur   { color: var(--text); }
+
+.st-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* status color classes */
+.st-watching  .st-bar { background: var(--st-watching); }
+.st-completed .st-bar { background: var(--st-completed); }
+.st-planning  .st-bar { background: var(--st-planning); }
+.st-paused    .st-bar { background: var(--st-paused); }
+.st-dropped   .st-bar { background: var(--st-dropped); }
+
+/* card footer */
+.card-footer {
+  padding: 7px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.show-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.show-title:hover { color: var(--accent); }
+
+.ep-counts {
+  font-family: 'DM Mono', monospace;
+  font-size: 9.5px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0;
+  letter-spacing: 0.01em;
+}
+.ep-counts .c-avail { color: var(--av-ready); font-weight: 500; }
+.ep-counts .c-sep   { color: var(--faint); margin: 0 1px; }
+.ep-counts .c-total { color: var(--faint); }
+
+/* mark-as-watched button — meta bar, right edge */
+.watch-btn {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+  padding: 0;
+}
+.watch-btn:hover {
+  border-color: var(--av-ready);
+  color: var(--av-ready);
+}
+.watch-btn.watched {
+  border-color: var(--av-ready);
+  background: var(--av-ready);
+  color: #fff;
+}
+/* hide button for episodes not yet aired */
+.avail-future ~ .watch-btn,
+.watch-btn.hidden { display: none; }
+</style>
+
+<!-- ── TOP NAV ─────────────────────────────────────────── -->
+<nav class="top-nav">
+  <a href="#" class="nav-brand">Starfleet</a>
+  <ul class="nav-links">
+    <li><a href="#" class="active">Calendar</a></li>
+    <li><a href="#">Shows</a></li>
+    <li><a href="#">Grabs</a></li>
+    <li><a href="#">Reviews</a></li>
+  </ul>
+  <div class="nav-spacer"></div>
+  <button class="nav-icon-btn" title="Settings">⚙</button>
+</nav>
+
+<!-- ── VIEW CONTROLS ─────────────────────────────────── -->
+<div class="view-controls">
+  <div class="view-modes">
+    <button class="view-mode">Today</button>
+    <button class="view-mode">1D</button>
+    <button class="view-mode active">3D</button>
+    <button class="view-mode">Week</button>
+  </div>
+  <div class="ctrl-sep"></div>
+  <div class="date-nav">
+    <button class="date-btn">‹</button>
+    <span class="date-range-label">Mon 25 — Wed 27 Aug 2026</span>
+    <button class="date-btn">›</button>
+  </div>
+  <button class="today-btn">Today</button>
+</div>
+
+<!-- ── CALENDAR ──────────────────────────────────────── -->
+<div class="calendar">
+
+  <!-- Monday -->
+  <section class="day-group day-today">
+    <h2 class="day-header">
+      <span class="day-name">Mon</span>
+      <span class="day-date">25 Aug 2026</span>
+    </h2>
+    <div class="card-row">
+
+      <!-- 1. Frieren — watching, ready, already watched -->
+      <article class="show-card">
+        <div class="card-meta">
+          <span class="ep-badge">S02E08</span>
+          <span class="airtime">17:00 JST</span>
+          <span class="avail-icon avail-ready" title="Available">▶</span>
+          <button class="watch-btn watched" title="Watched — click to unmark">✓</button>
+        </div>
+        <div class="card-body">
+          <div class="svc-strip">
+            <a href="#" class="svc svc-al on" title="AniList">AL</a>
+            <a href="#" class="svc svc-mal on" title="MAL">M</a>
+            <a href="#" class="svc svc-sonarr on" title="Sonarr">S</a>
+            <a href="#" class="svc svc-radarr" title="Radarr">R</a>
+            <a href="#" class="svc svc-player on" title="Play">▶</a>
+          </div>
+          <div class="card-art" style="background:
+            linear-gradient(to bottom, rgba(0,0,0,0) 45%, rgba(0,0,0,0.55) 100%),
+            repeating-linear-gradient(0deg,rgba(255,255,255,0.018) 0,rgba(255,255,255,0.018) 1px,transparent 1px,transparent 5px),
+            linear-gradient(155deg,#0e1a40 0%,#1e3a8a 45%,#2d5fa8 70%,#3b82c4 100%)">
+            <span class="art-score">★ 19.5</span>
+          </div>
+          <div class="status-tab st-watching">
+            <div class="st-bar"></div>
+            <div class="st-panel">
+              <div class="st-opt cur"><span class="st-dot" style="background:var(--st-watching)"></span>Watching</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-completed)"></span>Completed</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-planning)"></span>Planning</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-paused)"></span>Paused</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-dropped)"></span>Dropped</div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <a href="#" class="show-title">Frieren: Beyond Journey's End</a>
+          <div class="ep-counts">
+            <span class="c-avail">8</span><span class="c-sep"> / </span><span>8</span><span class="c-sep"> / </span><span class="c-total">28</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- 2. Dungeon Meshi — completed, ready -->
+      <article class="show-card">
+        <div class="card-meta">
+          <span class="ep-badge">S01E24</span>
+          <span class="airtime">00:00 JST</span>
+          <span class="avail-icon avail-ready" title="Available">▶</span>
+          <button class="watch-btn" title="Mark as watched">✓</button>
+        </div>
+        <div class="card-body">
+          <div class="svc-strip">
+            <a href="#" class="svc svc-al on" title="AniList">AL</a>
+            <a href="#" class="svc svc-mal on" title="MAL">M</a>
+            <a href="#" class="svc svc-sonarr on" title="Sonarr">S</a>
+            <a href="#" class="svc svc-radarr" title="Radarr">R</a>
+            <a href="#" class="svc svc-player on" title="Play">▶</a>
+          </div>
+          <div class="card-art" style="background:
+            linear-gradient(to bottom,rgba(0,0,0,0) 45%,rgba(0,0,0,0.55) 100%),
+            repeating-linear-gradient(0deg,rgba(255,255,255,0.018) 0,rgba(255,255,255,0.018) 1px,transparent 1px,transparent 5px),
+            linear-gradient(155deg,#0a2210 0%,#155230 45%,#1e7a48 70%,#2a9e60 100%)">
+            <span class="art-score">★ 18.0</span>
+          </div>
+          <div class="status-tab st-completed">
+            <div class="st-bar"></div>
+            <div class="st-panel">
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-watching)"></span>Watching</div>
+              <div class="st-opt cur"><span class="st-dot" style="background:var(--st-completed)"></span>Completed</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-planning)"></span>Planning</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-paused)"></span>Paused</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-dropped)"></span>Dropped</div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <a href="#" class="show-title">Delicious in Dungeon</a>
+          <div class="ep-counts">
+            <span class="c-avail">24</span><span class="c-sep"> / </span><span>24</span><span class="c-sep"> / </span><span class="c-total">24</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- 3. Kaiju No. 8 — watching, aired not downloaded -->
+      <article class="show-card">
+        <div class="card-meta">
+          <span class="ep-badge">S02E04</span>
+          <span class="airtime">23:30 JST</span>
+          <span class="avail-icon avail-wait" title="Aired — not yet downloaded">⬇</span>
+          <button class="watch-btn" title="Mark as watched">✓</button>
+        </div>
+        <div class="card-body">
+          <div class="svc-strip">
+            <a href="#" class="svc svc-al on" title="AniList">AL</a>
+            <a href="#" class="svc svc-mal on" title="MAL">M</a>
+            <a href="#" class="svc svc-sonarr on" title="Sonarr">S</a>
+            <a href="#" class="svc svc-radarr" title="Radarr">R</a>
+            <a href="#" class="svc svc-player" title="No file yet">▶</a>
+          </div>
+          <div class="card-art" style="background:
+            linear-gradient(to bottom,rgba(0,0,0,0) 45%,rgba(0,0,0,0.55) 100%),
+            repeating-linear-gradient(0deg,rgba(255,255,255,0.018) 0,rgba(255,255,255,0.018) 1px,transparent 1px,transparent 5px),
+            linear-gradient(155deg,#200a0a 0%,#5a1010 45%,#8b2020 70%,#b83030 100%)">
+            <span class="art-score">★ 17.0</span>
+          </div>
+          <div class="status-tab st-watching">
+            <div class="st-bar"></div>
+            <div class="st-panel">
+              <div class="st-opt cur"><span class="st-dot" style="background:var(--st-watching)"></span>Watching</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-completed)"></span>Completed</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-planning)"></span>Planning</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-paused)"></span>Paused</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-dropped)"></span>Dropped</div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <a href="#" class="show-title">Kaiju No. 8</a>
+          <div class="ep-counts">
+            <span class="c-avail">3</span><span class="c-sep"> / </span><span>4</span><span class="c-sep"> / </span><span class="c-total">12</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- 4. Blue Box — watching, ready -->
+      <article class="show-card">
+        <div class="card-meta">
+          <span class="ep-badge">S01E08</span>
+          <span class="airtime">17:30 JST</span>
+          <span class="avail-icon avail-ready" title="Available">▶</span>
+          <button class="watch-btn" title="Mark as watched">✓</button>
+        </div>
+        <div class="card-body">
+          <div class="svc-strip">
+            <a href="#" class="svc svc-al on" title="AniList">AL</a>
+            <a href="#" class="svc svc-mal on" title="MAL">M</a>
+            <a href="#" class="svc svc-sonarr on" title="Sonarr">S</a>
+            <a href="#" class="svc svc-radarr" title="Radarr">R</a>
+            <a href="#" class="svc svc-player on" title="Play">▶</a>
+          </div>
+          <div class="card-art" style="background:
+            linear-gradient(to bottom,rgba(0,0,0,0) 45%,rgba(0,0,0,0.55) 100%),
+            repeating-linear-gradient(0deg,rgba(255,255,255,0.018) 0,rgba(255,255,255,0.018) 1px,transparent 1px,transparent 5px),
+            linear-gradient(155deg,#0a1830 0%,#1a3a6e 45%,#2060a0 70%,#3080c0 100%)">
+            <span class="art-score">★ 15.5</span>
+          </div>
+          <div class="status-tab st-watching">
+            <div class="st-bar"></div>
+            <div class="st-panel">
+              <div class="st-opt cur"><span class="st-dot" style="background:var(--st-watching)"></span>Watching</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-completed)"></span>Completed</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-planning)"></span>Planning</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-paused)"></span>Paused</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-dropped)"></span>Dropped</div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <a href="#" class="show-title">Blue Box</a>
+          <div class="ep-counts">
+            <span class="c-avail">8</span><span class="c-sep"> / </span><span>8</span><span class="c-sep"> / </span><span class="c-total">25</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- 5. DAN DA DAN — planning, not aired -->
+      <article class="show-card">
+        <div class="card-meta">
+          <span class="ep-badge">S02E01</span>
+          <span class="airtime">01:00 JST</span>
+          <span class="avail-icon avail-future" title="Not yet aired">◷</span>
+        </div>
+        <div class="card-body">
+          <div class="svc-strip">
+            <a href="#" class="svc svc-al on" title="AniList">AL</a>
+            <a href="#" class="svc svc-mal on" title="MAL">M</a>
+            <a href="#" class="svc svc-sonarr" title="Not in Sonarr">S</a>
+            <a href="#" class="svc svc-radarr" title="Radarr">R</a>
+            <a href="#" class="svc svc-player" title="No file yet">▶</a>
+          </div>
+          <div class="card-art" style="background:
+            linear-gradient(to bottom,rgba(0,0,0,0) 45%,rgba(0,0,0,0.55) 100%),
+            repeating-linear-gradient(0deg,rgba(255,255,255,0.018) 0,rgba(255,255,255,0.018) 1px,transparent 1px,transparent 5px),
+            linear-gradient(155deg,#200a30 0%,#4a1070 45%,#7020a0 70%,#9030c0 100%)">
+            <span class="art-score">★ 18.5</span>
+          </div>
+          <div class="status-tab st-planning">
+            <div class="st-bar"></div>
+            <div class="st-panel">
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-watching)"></span>Watching</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-completed)"></span>Completed</div>
+              <div class="st-opt cur"><span class="st-dot" style="background:var(--st-planning)"></span>Planning</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-paused)"></span>Paused</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-dropped)"></span>Dropped</div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <a href="#" class="show-title">DAN DA DAN</a>
+          <div class="ep-counts">
+            <span class="c-avail">0</span><span class="c-sep"> / </span><span>0</span><span class="c-sep"> / </span><span class="c-total">13</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- 6. Sakamoto Days — paused, ready -->
+      <article class="show-card">
+        <div class="card-meta">
+          <span class="ep-badge">S01E05</span>
+          <span class="airtime">22:00 JST</span>
+          <span class="avail-icon avail-ready" title="Available">▶</span>
+          <button class="watch-btn" title="Mark as watched">✓</button>
+        </div>
+        <div class="card-body">
+          <div class="svc-strip">
+            <a href="#" class="svc svc-al on" title="AniList">AL</a>
+            <a href="#" class="svc svc-mal" title="MAL">M</a>
+            <a href="#" class="svc svc-sonarr on" title="Sonarr">S</a>
+            <a href="#" class="svc svc-radarr" title="Radarr">R</a>
+            <a href="#" class="svc svc-player on" title="Play">▶</a>
+          </div>
+          <div class="card-art" style="background:
+            linear-gradient(to bottom,rgba(0,0,0,0) 45%,rgba(0,0,0,0.55) 100%),
+            repeating-linear-gradient(0deg,rgba(255,255,255,0.018) 0,rgba(255,255,255,0.018) 1px,transparent 1px,transparent 5px),
+            linear-gradient(155deg,#1a1000 0%,#4a2a00 45%,#7a4a10 70%,#a06020 100%)">
+            <span class="art-score">★ 16.5</span>
+          </div>
+          <div class="status-tab st-paused">
+            <div class="st-bar"></div>
+            <div class="st-panel">
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-watching)"></span>Watching</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-completed)"></span>Completed</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-planning)"></span>Planning</div>
+              <div class="st-opt cur"><span class="st-dot" style="background:var(--st-paused)"></span>Paused</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-dropped)"></span>Dropped</div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <a href="#" class="show-title">Sakamoto Days</a>
+          <div class="ep-counts">
+            <span class="c-avail">5</span><span class="c-sep"> / </span><span>5</span><span class="c-sep"> / </span><span class="c-total">26</span>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- Tuesday -->
+  <section class="day-group">
+    <h2 class="day-header">
+      <span class="day-name">Tue</span>
+      <span class="day-date">26 Aug 2026</span>
+    </h2>
+    <div class="card-row">
+
+      <!-- Solo Leveling — watching, ready -->
+      <article class="show-card">
+        <div class="card-meta">
+          <span class="ep-badge">S02E03</span>
+          <span class="airtime">22:30 JST</span>
+          <span class="avail-icon avail-ready">▶</span>
+          <button class="watch-btn" title="Mark as watched">✓</button>
+        </div>
+        <div class="card-body">
+          <div class="svc-strip">
+            <a href="#" class="svc svc-al on">AL</a>
+            <a href="#" class="svc svc-mal on">M</a>
+            <a href="#" class="svc svc-sonarr on">S</a>
+            <a href="#" class="svc svc-radarr">R</a>
+            <a href="#" class="svc svc-player on">▶</a>
+          </div>
+          <div class="card-art" style="background:
+            linear-gradient(to bottom,rgba(0,0,0,0) 45%,rgba(0,0,0,0.55) 100%),
+            repeating-linear-gradient(0deg,rgba(255,255,255,0.018) 0,rgba(255,255,255,0.018) 1px,transparent 1px,transparent 5px),
+            linear-gradient(155deg,#080c20 0%,#101a40 40%,#1a2e70 70%,#203880 100%)">
+            <span class="art-score">★ 17.5</span>
+          </div>
+          <div class="status-tab st-watching">
+            <div class="st-bar"></div>
+            <div class="st-panel">
+              <div class="st-opt cur"><span class="st-dot" style="background:var(--st-watching)"></span>Watching</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-completed)"></span>Completed</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-planning)"></span>Planning</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-paused)"></span>Paused</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-dropped)"></span>Dropped</div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <a href="#" class="show-title">Solo Leveling</a>
+          <div class="ep-counts">
+            <span class="c-avail">3</span><span class="c-sep"> / </span><span>3</span><span class="c-sep"> / </span><span class="c-total">13</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- Oshi no Ko — planning, not aired -->
+      <article class="show-card">
+        <div class="card-meta">
+          <span class="ep-badge">S02E06</span>
+          <span class="airtime">00:00 JST</span>
+          <span class="avail-icon avail-future">◷</span>
+        </div>
+        <div class="card-body">
+          <div class="svc-strip">
+            <a href="#" class="svc svc-al on">AL</a>
+            <a href="#" class="svc svc-mal on">M</a>
+            <a href="#" class="svc svc-sonarr">S</a>
+            <a href="#" class="svc svc-radarr">R</a>
+            <a href="#" class="svc svc-player">▶</a>
+          </div>
+          <div class="card-art" style="background:
+            linear-gradient(to bottom,rgba(0,0,0,0) 45%,rgba(0,0,0,0.55) 100%),
+            repeating-linear-gradient(0deg,rgba(255,255,255,0.018) 0,rgba(255,255,255,0.018) 1px,transparent 1px,transparent 5px),
+            linear-gradient(155deg,#200a18 0%,#501030 50%,#801850 70%,#a02060 100%)">
+            <span class="art-score">★ 19.0</span>
+          </div>
+          <div class="status-tab st-planning">
+            <div class="st-bar"></div>
+            <div class="st-panel">
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-watching)"></span>Watching</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-completed)"></span>Completed</div>
+              <div class="st-opt cur"><span class="st-dot" style="background:var(--st-planning)"></span>Planning</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-paused)"></span>Paused</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-dropped)"></span>Dropped</div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <a href="#" class="show-title">Oshi no Ko</a>
+          <div class="ep-counts">
+            <span class="c-avail">0</span><span class="c-sep"> / </span><span>5</span><span class="c-sep"> / </span><span class="c-total">13</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- Apothecary — planning, aired not dl -->
+      <article class="show-card">
+        <div class="card-meta">
+          <span class="ep-badge">S02E01</span>
+          <span class="airtime">23:00 JST</span>
+          <span class="avail-icon avail-wait">⬇</span>
+          <button class="watch-btn" title="Mark as watched">✓</button>
+        </div>
+        <div class="card-body">
+          <div class="svc-strip">
+            <a href="#" class="svc svc-al on">AL</a>
+            <a href="#" class="svc svc-mal on">M</a>
+            <a href="#" class="svc svc-sonarr on">S</a>
+            <a href="#" class="svc svc-radarr">R</a>
+            <a href="#" class="svc svc-player">▶</a>
+          </div>
+          <div class="card-art" style="background:
+            linear-gradient(to bottom,rgba(0,0,0,0) 45%,rgba(0,0,0,0.55) 100%),
+            repeating-linear-gradient(0deg,rgba(255,255,255,0.018) 0,rgba(255,255,255,0.018) 1px,transparent 1px,transparent 5px),
+            linear-gradient(155deg,#181008 0%,#3a2810 45%,#5a4020 70%,#7a5a30 100%)">
+            <span class="art-score">★ 18.0</span>
+          </div>
+          <div class="status-tab st-planning">
+            <div class="st-bar"></div>
+            <div class="st-panel">
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-watching)"></span>Watching</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-completed)"></span>Completed</div>
+              <div class="st-opt cur"><span class="st-dot" style="background:var(--st-planning)"></span>Planning</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-paused)"></span>Paused</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-dropped)"></span>Dropped</div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <a href="#" class="show-title">The Apothecary Diaries</a>
+          <div class="ep-counts">
+            <span class="c-avail">0</span><span class="c-sep"> / </span><span>1</span><span class="c-sep"> / </span><span class="c-total">24</span>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- Wednesday -->
+  <section class="day-group">
+    <h2 class="day-header">
+      <span class="day-name">Wed</span>
+      <span class="day-date">27 Aug 2026</span>
+    </h2>
+    <div class="card-row">
+
+      <!-- Vinland Saga — watching, ready -->
+      <article class="show-card">
+        <div class="card-meta">
+          <span class="ep-badge">S03E01</span>
+          <span class="airtime">00:30 JST</span>
+          <span class="avail-icon avail-future">◷</span>
+        </div>
+        <div class="card-body">
+          <div class="svc-strip">
+            <a href="#" class="svc svc-al on">AL</a>
+            <a href="#" class="svc svc-mal on">M</a>
+            <a href="#" class="svc svc-sonarr">S</a>
+            <a href="#" class="svc svc-radarr">R</a>
+            <a href="#" class="svc svc-player">▶</a>
+          </div>
+          <div class="card-art" style="background:
+            linear-gradient(to bottom,rgba(0,0,0,0) 45%,rgba(0,0,0,0.55) 100%),
+            repeating-linear-gradient(0deg,rgba(255,255,255,0.018) 0,rgba(255,255,255,0.018) 1px,transparent 1px,transparent 5px),
+            linear-gradient(155deg,#0c0c0e 0%,#282830 40%,#404050 65%,#506070 100%)">
+            <span class="art-score">★ 20.0</span>
+          </div>
+          <div class="status-tab st-watching">
+            <div class="st-bar"></div>
+            <div class="st-panel">
+              <div class="st-opt cur"><span class="st-dot" style="background:var(--st-watching)"></span>Watching</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-completed)"></span>Completed</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-planning)"></span>Planning</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-paused)"></span>Paused</div>
+              <div class="st-opt"><span class="st-dot" style="background:var(--st-dropped)"></span>Dropped</div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <a href="#" class="show-title">Vinland Saga</a>
+          <div class="ep-counts">
+            <span class="c-avail">0</span><span class="c-sep"> / </span><span>0</span><span class="c-sep"> / </span><span class="c-total">24</span>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+</div>

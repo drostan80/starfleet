@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starfleet — Grabs</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="css/main.css?v=4">
+  <style>
+    /* ── Grabs page ──────────────────────────────────────────── */
+    .grabs-layout {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      min-height: 0;
+    }
+
+    .grabs-col {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .grabs-col:first-child {
+      border-right: 1px solid var(--border);
+    }
+
+    .grabs-col-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      position: sticky;
+      top: var(--nav-h);
+      z-index: 50;
+    }
+
+    .col-service-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .col-sonarr { color: var(--svc-sonarr); }
+    .col-radarr { color: var(--svc-radarr); }
+
+    .col-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .col-pager {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }
+    .page-btn {
+      width: 24px; height: 24px;
+      border-radius: 5px;
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.12s;
+    }
+    .page-btn:hover:not(:disabled) { color: var(--text); background: var(--surface-3); border-color: var(--faint); }
+    .page-btn:disabled { opacity: 0.35; cursor: default; }
+    .page-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+      min-width: 40px;
+      text-align: center;
+    }
+
+    .grabs-table {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* ── Grab card ─────────────────────────────────────────── */
+    .grab-card {
+      display: flex;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      overflow: visible;   /* allow status radial to fan out if we add it later */
+      cursor: pointer;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      position: relative;
+    }
+    .grab-card:hover {
+      border-color: var(--faint);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+    }
+
+    /* ── Left mini-card (reuses calendar card structure) ───── */
+    /* Width is fixed so the art is portrait; matches --card-w proportions */
+    .gc-mini-card {
+      flex-shrink: 0;
+      width: 200px;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      border-radius: 7px 0 0 7px;
+      overflow: hidden;
+      background: var(--surface);
+    }
+
+    /* Meta bar — ep badge + quality */
+    .gc-meta {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 6px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border);
+      height: 22px;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .gc-ep {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      font-weight: 500;
+      color: var(--text);
+      letter-spacing: 0.02em;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    .gc-quality {
+      font-family: 'DM Mono', monospace;
+      font-size: 8.5px;
+      color: var(--muted);
+      background: var(--surface-3);
+      padding: 1px 4px;
+      border-radius: 3px;
+      white-space: nowrap;
+    }
+
+    /* Card body: service strip + art (same height proportions as calendar) */
+    .gc-body {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      height: 255px;
+    }
+
+    /* Mini service strip — just the one relevant service */
+    .gc-svc-strip {
+      width: 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 0;
+      background: var(--surface-2);
+      border-right: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    /* Art fills the rest of the body */
+    .gc-art {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      background: linear-gradient(155deg, #141c2e 0%, #1a2340 50%, #202840 100%);
+    }
+    .gc-art img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* Footer: show title */
+    .gc-footer {
+      padding: 5px 6px 6px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .gc-title {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.3;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    /* Right panel: file details — narrow, text wraps freely */
+    .gc-detail {
+      flex: 1;
+      padding: 10px 10px 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 0;
+      justify-content: center;
+    }
+
+    .gc-filename {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--text);
+      word-break: break-all;
+      line-height: 1.4;
+    }
+
+    .gc-path {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      color: var(--faint);
+      word-break: break-all;
+      line-height: 1.4;
+    }
+
+    .gc-dates {
+      display: flex;
+      gap: 12px;
+      margin-top: 2px;
+      flex-wrap: wrap;
+    }
+
+    .gc-date-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+    }
+
+    .gc-date-key {
+      text-transform: uppercase;
+      font-size: 8px;
+      letter-spacing: 0.06em;
+      color: var(--faint);
+      font-weight: 500;
+    }
+
+    .gc-date-val {
+      color: var(--muted);
+    }
+
+    /* Play button on the far right */
+    .gc-play {
+      flex-shrink: 0;
+      width: 36px;
+      background: transparent;
+      border: none;
+      border-left: 1px solid var(--border);
+      cursor: pointer;
+      color: var(--faint);
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.12s, background 0.12s;
+    }
+    .gc-play:hover { color: var(--av-ready); background: var(--surface-2); }
+    .gc-play.no-file { opacity: 0.3; cursor: default; }
+
+    .grabs-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 40px;
+    }
+
+    .grabs-loading {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 40px;
+    }
+
+    /* mpv launch toast */
+    .mpv-toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(8px);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 12px;
+      color: var(--muted);
+      z-index: 200;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    .mpv-toast.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Top nav ─────────────────────────────────────────── -->
+<nav class="top-nav">
+  <a href="index.html" class="nav-brand">Starfleet</a>
+  <ul class="nav-links">
+    <li><a href="index.html">Calendar</a></li>
+    <li><a href="backlog.html">Backlog</a></li>
+    <li><a href="list.html">List</a></li>
+    <li><a href="grabs.html" class="active">Grabs</a></li>
+    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
+    <li><a href="add.html">Add</a></li>
+  </ul>
+  <div class="nav-spacer"></div>
+  <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
+  <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
+</nav>
+
+<div id="status-banner" class="status-banner hidden"></div>
+
+<!-- ── Grabs layout: two columns ────────────────────────── -->
+<div class="grabs-layout">
+
+  <!-- Sonarr column -->
+  <div class="grabs-col" id="sonarr-col">
+    <div class="grabs-col-header">
+      <span class="col-service-badge col-sonarr">
+        <span class="col-dot" style="background:var(--svc-sonarr)"></span>
+        Sonarr
+      </span>
+      <div class="col-pager">
+        <button class="page-btn" id="sonarr-prev" title="Previous page [">‹</button>
+        <span class="page-label" id="sonarr-page-label">p 1</span>
+        <button class="page-btn" id="sonarr-next" title="Next page ]">›</button>
+      </div>
+    </div>
+    <div class="grabs-table" id="sonarr-table">
+      <div class="grabs-loading"><span class="spinner"></span>Loading…</div>
+    </div>
+  </div>
+
+  <!-- Radarr column -->
+  <div class="grabs-col" id="radarr-col">
+    <div class="grabs-col-header">
+      <span class="col-service-badge col-radarr">
+        <span class="col-dot" style="background:var(--svc-radarr)"></span>
+        Radarr
+      </span>
+      <div class="col-pager">
+        <button class="page-btn" id="radarr-prev" title="Previous page">‹</button>
+        <span class="page-label" id="radarr-page-label">p 1</span>
+        <button class="page-btn" id="radarr-next" title="Next page">›</button>
+      </div>
+    </div>
+    <div class="grabs-table" id="radarr-table">
+      <div class="grabs-loading"><span class="spinner"></span>Loading…</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="mpv-toast" id="mpv-toast"></div>
+
+<script type="module">
+  import { requireConfig, getConfig } from './js/config.js?v=2';
+  import { initSearch } from './js/search.js?v=2';
+  import { fetchRecentGrabs } from './js/api.js?v=11';
+
+  requireConfig();
+  initSearch();
+
+  const PAGE_SIZE = 20;
+  const state = {
+    sonarr: { page: 1, rows: [], loading: false },
+    radarr: { page: 1, rows: [], loading: false },
+  };
+
+  const banner = document.getElementById('status-banner');
+
+  function showBanner(msg, type = 'error') {
+    banner.className = `status-banner ${type}`;
+    banner.textContent = msg;
+  }
+  function hideBanner() { banner.className = 'status-banner hidden'; }
+
+  /* ── Formatting helpers ─────────────────────────────────── */
+
+  function fmtDate(dateStr) {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+    } catch { return dateStr; }
+  }
+
+  function fmtEp(grab) {
+    if (grab.seasonNumber != null && grab.episodeNumber != null) {
+      const s = String(grab.seasonNumber).padStart(2, '0');
+      const e = String(grab.episodeNumber).padStart(2, '0');
+      return `S${s}E${e}`;
+    }
+    return '';
+  }
+
+  /* ── Toast ──────────────────────────────────────────────── */
+
+  const toast = document.getElementById('mpv-toast');
+  let _toastTimer = null;
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add('visible');
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => toast.classList.remove('visible'), 3000);
+  }
+
+  /* ── mpv launch ─────────────────────────────────────────── */
+
+  async function launchMpv(filePath) {
+    if (!filePath) { showToast('No file path for this grab'); return; }
+    const cfg = getConfig();
+    const helperUrl = (cfg.mpv_helper_url || 'http://localhost:19450').replace(/\/$/, '');
+
+    // filePathSonarr/Radarr is the path inside the server container (/data/…).
+    // nginx serves /data/ at /files/, so strip the /data prefix to form the URL.
+    const mediaPath = filePath.startsWith('/data') ? filePath.slice('/data'.length) : filePath;
+    const mediaUrl  = `${cfg.lcars_url}/files${mediaPath}`;
+
+    showToast(`▶ Launching…`);
+    try {
+      const res = await fetch(`${helperUrl}/play`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ url: mediaUrl }),
+      });
+      if (!res.ok) throw new Error(`helper returned ${res.status}`);
+      showToast(`▶ ${filePath.split('/').pop()}`);
+    } catch (err) {
+      const isNetErr = err instanceof TypeError;
+      showToast(isNetErr
+        ? 'mpv helper not running — start mpv-helper.py on this machine'
+        : `mpv error: ${err.message}`);
+    }
+  }
+
+  /* ── Service icon SVG (Sonarr/Radarr roundabout) ─────────── */
+
+  function _svcIcon(accent) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100%" height="100%">
+      <circle cx="100" cy="100" r="100" fill="#2B2E4A"/>
+      <rect x="76" y="0"   width="48" height="70" rx="7" fill="#3D4169"/>
+      <rect x="76" y="130" width="48" height="70" rx="7" fill="#3D4169"/>
+      <rect x="0"   y="76" width="70" height="48" rx="7" fill="#3D4169"/>
+      <rect x="130" y="76" width="70" height="48" rx="7" fill="#3D4169"/>
+      <rect x="98" y="10"  width="4" height="16" rx="2" fill="${accent}" opacity="0.55"/>
+      <rect x="98" y="32"  width="4" height="16" rx="2" fill="${accent}" opacity="0.55"/>
+      <rect x="98" y="154" width="4" height="16" rx="2" fill="${accent}" opacity="0.55"/>
+      <rect x="98" y="176" width="4" height="16" rx="2" fill="${accent}" opacity="0.55"/>
+      <rect x="10"  y="98" width="16" height="4" rx="2" fill="${accent}" opacity="0.55"/>
+      <rect x="32"  y="98" width="16" height="4" rx="2" fill="${accent}" opacity="0.55"/>
+      <rect x="154" y="98" width="16" height="4" rx="2" fill="${accent}" opacity="0.55"/>
+      <rect x="176" y="98" width="16" height="4" rx="2" fill="${accent}" opacity="0.55"/>
+      <circle cx="100" cy="100" r="33" fill="${accent}"/>
+    </svg>`;
+  }
+
+  const SONARR_SVG = _svcIcon('#00C8FF');
+  const RADARR_SVG = _svcIcon('#FFC230');
+
+  /* ── TMDB poster cache (keyed by title) ─────────────────── */
+
+  const _posterCache = new Map(); // title → url | null
+  const TMDB_BASE = 'https://image.tmdb.org/t/p/w300';
+
+  /**
+   * Fetch a poster for a grab by:
+   *  1. LCARS full-text search → get the show's TMDB externalId
+   *  2. Direct TMDB /movie/{id} or /tv/{id} lookup with that ID
+   *  3. Fallback: TMDB title search scoped to the right media type
+   *
+   * @param {string} title   - grab.title
+   * @param {string} service - 'sonarr' | 'radarr'
+   * @param {object} cfg     - config
+   */
+  async function fetchGrabPoster(title, service, cfg) {
+    if (!cfg.tmdb_api_key) return;
+    if (_posterCache.has(title)) {
+      const url = _posterCache.get(title);
+      if (url) _patchArt(title, url);
+      return;
+    }
+    _posterCache.set(title, null); // in-flight marker
+
+    const apiKey = cfg.tmdb_api_key;
+    const isJwt  = apiKey.startsWith('eyJ');
+    const headers = isJwt ? { Authorization: `Bearer ${apiKey}` } : {};
+    const tmdbFetch = (path, params = {}) => {
+      const p = new URLSearchParams(params);
+      if (!isJwt) p.set('api_key', apiKey);
+      return fetch(`https://api.themoviedb.org/3${path}?${p}`, { headers });
+    };
+
+    // Radarr → movie, Sonarr → tv
+    const mediaType = service === 'radarr' ? 'movie' : 'tv';
+
+    try {
+      let posterPath = null;
+
+      // ── Step 1: look up show in LCARS to get its TMDB ID ──
+      try {
+        const { gql } = await import('./js/api.js?v=11');
+        const data = await gql(`
+          query GrabPoster($q: String!) {
+            search(query: $q, first: 3) {
+              edges { node {
+                displayTitle mediaShape
+                externalIds(first: 10) { edges { node { service externalId } } }
+              }}
+            }
+          }
+        `, { q: title });
+
+        const results = data.search?.edges ?? [];
+        // Pick the result whose displayTitle best matches the grab title
+        const match = results.find(e => {
+          const t = e.node.displayTitle.toLowerCase();
+          return t === title.toLowerCase() || title.toLowerCase().includes(t) || t.includes(title.toLowerCase());
+        }) ?? results[0];
+
+        if (match) {
+          const extIds = match.node.externalIds.edges.map(e => e.node);
+          const tmdbExt = extIds.find(n => n.service === 'tmdb');
+          if (tmdbExt) {
+            const type = match.node.mediaShape === 'MOVIE' ? 'movie' : 'tv';
+            const res = await tmdbFetch(`/${type}/${tmdbExt.externalId}`);
+            if (res.ok) {
+              const d = await res.json();
+              posterPath = d.poster_path ?? null;
+            }
+          }
+        }
+      } catch {
+        // LCARS lookup failed (network, auth) — fall through to TMDB search
+      }
+
+      // ── Step 2: TMDB title search (scoped to correct media type) ──
+      if (!posterPath) {
+        const res = await tmdbFetch(`/search/${mediaType}`, { query: title, page: 1 });
+        if (res.ok) {
+          const d = await res.json();
+          posterPath = d.results?.[0]?.poster_path ?? null;
+        }
+      }
+
+      if (!posterPath) return;
+      const url = TMDB_BASE + posterPath;
+      _posterCache.set(title, url);
+      _patchArt(title, url);
+    } catch {
+      // Network error — leave null, no retry
+    }
+  }
+
+  function _patchArt(title, url) {
+    document.querySelectorAll(`.gc-art[data-title="${CSS.escape(title)}"]`).forEach(art => {
+      if (!art.querySelector('img')) {
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = title;
+        img.loading = 'lazy';
+        art.appendChild(img);
+      }
+    });
+  }
+
+  /* ── Render ──────────────────────────────────────────────── */
+
+  function renderTable(service, rows, page) {
+    const tableEl = document.getElementById(`${service}-table`);
+    if (!rows.length) {
+      tableEl.innerHTML = '<div class="grabs-empty">No grabs found</div>';
+      return;
+    }
+
+    const svcSvg   = service === 'sonarr' ? SONARR_SVG : RADARR_SVG;
+    const svcClass = service === 'sonarr' ? 'svc-sonarr' : 'svc-radarr';
+
+    tableEl.innerHTML = rows.map(grab => {
+      const ep      = fmtEp(grab);
+      const grabbed = fmtDate(grab.date);
+      const aired   = fmtDate(grab.airDate);
+
+      // Split filePath into filename + directory for separate display
+      const fullPath = grab.filePath || '';
+      const lastSlash = fullPath.lastIndexOf('/');
+      const filename  = lastSlash >= 0 ? fullPath.slice(lastSlash + 1) : fullPath;
+      const dir       = lastSlash >= 0 ? fullPath.slice(0, lastSlash) : '';
+
+      // Escape title for use as a data attribute
+      const titleAttr = grab.title.replace(/"/g, '&quot;');
+
+      return `
+        <div class="grab-card" data-path="${fullPath}">
+
+          <!-- Left mini-card: meta + service strip + art + title footer -->
+          <div class="gc-mini-card">
+            <div class="gc-meta">
+              ${ep             ? `<span class="gc-ep">${ep}</span>` : ''}
+              ${grab.quality   ? `<span class="gc-quality">${grab.quality}</span>` : ''}
+            </div>
+            <div class="gc-body">
+              <div class="gc-svc-strip">
+                <div class="svc ${svcClass} on" title="${service}" style="width:15px;height:15px;border-radius:50%;overflow:hidden;flex-shrink:0">${svcSvg}</div>
+              </div>
+              <div class="gc-art" data-title="${titleAttr}"></div>
+            </div>
+            <div class="gc-footer">
+              <div class="gc-title" title="${titleAttr}">${grab.title}</div>
+            </div>
+          </div>
+
+          <!-- Right panel: file details -->
+          <div class="gc-detail">
+            ${filename ? `<div class="gc-filename" title="${fullPath}">${filename}</div>` : ''}
+            ${dir      ? `<div class="gc-path" title="${fullPath}">${dir}</div>` : ''}
+            <div class="gc-dates">
+              ${aired   ? `<span class="gc-date-item"><span class="gc-date-key">Air</span><span class="gc-date-val">${aired}</span></span>` : ''}
+              ${grabbed ? `<span class="gc-date-item"><span class="gc-date-key">Grabbed</span><span class="gc-date-val">${grabbed}</span></span>` : ''}
+            </div>
+          </div>
+
+          <button class="gc-play${fullPath ? '' : ' no-file'}" title="${fullPath ? 'Play in mpv' : 'No file path'}">▶</button>
+        </div>
+      `;
+    }).join('');
+
+    // Click handlers — play button OR card body launches mpv.
+    // stopPropagation on the play button prevents the card handler from also firing.
+    // Per-card cooldown (3 s) prevents accidental double-launch.
+    tableEl.querySelectorAll('.grab-card').forEach(card => {
+      const path = card.dataset.path;
+      let _busy = false;
+
+      const fire = () => {
+        if (_busy) return;
+        _busy = true;
+        launchMpv(path).finally(() => {
+          setTimeout(() => { _busy = false; }, 3000);
+        });
+      };
+
+      // Play button: handle here only, stop the event climbing to the card
+      const playBtn = card.querySelector('.gc-play');
+      if (playBtn) {
+        playBtn.addEventListener('click', e => { e.stopPropagation(); fire(); });
+      }
+
+      // Card body (anywhere except the play button)
+      card.addEventListener('click', () => fire());
+    });
+
+    // Kick off TMDB poster fetches for all rendered cards
+    const cfg = getConfig();
+    const seen = new Set();
+    rows.forEach(grab => {
+      if (!seen.has(grab.title)) {
+        seen.add(grab.title);
+        fetchGrabPoster(grab.title, service, cfg);
+      }
+    });
+  }
+
+  function updatePager(service) {
+    const { page, rows } = state[service];
+    const prevBtn = document.getElementById(`${service}-prev`);
+    const nextBtn = document.getElementById(`${service}-next`);
+    const label   = document.getElementById(`${service}-page-label`);
+    prevBtn.disabled = page <= 1;
+    nextBtn.disabled = rows.length < PAGE_SIZE;
+    label.textContent = `p ${page}`;
+  }
+
+  /* ── Load ────────────────────────────────────────────────── */
+
+  async function loadGrabs(service) {
+    if (state[service].loading) return;
+    state[service].loading = true;
+
+    const tableEl = document.getElementById(`${service}-table`);
+    tableEl.innerHTML = '<div class="grabs-loading"><span class="spinner"></span>Loading…</div>';
+
+    try {
+      const rows = await fetchRecentGrabs(service, state[service].page, PAGE_SIZE);
+      state[service].rows = rows;
+      renderTable(service, rows, state[service].page);
+      updatePager(service);
+      hideBanner();
+    } catch (err) {
+      tableEl.innerHTML = `<div class="grabs-empty" style="color:var(--st-dropped)">${err.message}</div>`;
+      showBanner(`${service}: ${err.message}`);
+    } finally {
+      state[service].loading = false;
+    }
+  }
+
+  /* ── Pager buttons ──────────────────────────────────────── */
+
+  function bindPager(service) {
+    document.getElementById(`${service}-prev`).addEventListener('click', () => {
+      if (state[service].page > 1) {
+        state[service].page--;
+        loadGrabs(service);
+      }
+    });
+    document.getElementById(`${service}-next`).addEventListener('click', () => {
+      if (state[service].rows.length >= PAGE_SIZE) {
+        state[service].page++;
+        loadGrabs(service);
+      }
+    });
+  }
+
+  /* ── Keyboard shortcuts ─────────────────────────────────── */
+
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === '[') {
+      if (state.sonarr.page > 1) { state.sonarr.page--; loadGrabs('sonarr'); }
+    } else if (e.key === ']') {
+      if (state.sonarr.rows.length >= PAGE_SIZE) { state.sonarr.page++; loadGrabs('sonarr'); }
+    }
+  });
+
+  /* ── Init ────────────────────────────────────────────────── */
+
+  bindPager('sonarr');
+  bindPager('radarr');
+  loadGrabs('sonarr');
+  loadGrabs('radarr');
+</script>
+
+</body>
+</html>

@@ -1,0 +1,1542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starfleet — Add Show</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="preconnect" href="https://artworks.thetvdb.com">
+  <link rel="preconnect" href="https://s4.anilist.co">
+  <link rel="preconnect" href="https://image.tmdb.org">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="css/main.css?v=4">
+  <style>
+    /* ── Add page controls ───────────────────────────────────── */
+
+    .add-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      flex-wrap: wrap;
+    }
+
+    /* Type buttons — EPISODIC/MOVIE × ANIME/TV */
+    .type-btn {
+      font-family: 'DM Mono', monospace;
+      font-size: 10.5px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 6px 14px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .type-btn:hover {
+      background: var(--surface-2);
+      color: var(--text);
+    }
+    .type-btn.active {
+      background: var(--accent-d);
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    /* Search row */
+    .add-search-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      min-width: 240px;
+    }
+    .add-search-input {
+      flex: 1;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 14px;
+      padding: 7px 12px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .add-search-input:focus {
+      border-color: var(--accent);
+    }
+    .add-search-input::placeholder {
+      color: var(--faint);
+    }
+    .add-search-btn {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 13px;
+      padding: 7px 16px;
+      border-radius: 5px;
+      border: 1px solid var(--accent);
+      background: var(--accent-d);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s;
+      white-space: nowrap;
+    }
+    .add-search-btn:hover {
+      background: var(--accent);
+    }
+
+    /* ── Results grid ────────────────────────────────────────── */
+
+    .add-results {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 16px;
+    }
+
+    .add-empty {
+      color: var(--muted);
+      font-size: 14px;
+      padding: 32px 16px;
+      text-align: center;
+      width: 100%;
+    }
+
+    /* ── Candidate card ──────────────────────────────────────── */
+
+    .cand-card {
+      background: var(--surface);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      width: 280px;
+      display: flex;
+      flex-direction: column;
+      transition: border-color 0.15s;
+      position: relative;
+      overflow: hidden;
+    }
+    .cand-card:hover {
+      border-color: var(--accent);
+    }
+    .cand-card.tracked {
+      border-color: color-mix(in srgb, var(--tracked-color, var(--accent)) 50%, transparent);
+    }
+
+    .cand-header {
+      padding: 10px 12px 6px;
+    }
+    .cand-title {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .cand-year {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--muted);
+      margin-left: 6px;
+    }
+    .cand-overview {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+      padding: 0 12px 8px;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      min-height: 20px;
+    }
+
+    /* IDs row */
+    .cand-ids {
+      font-family: 'DM Mono', monospace;
+      font-size: 9.5px;
+      color: var(--faint);
+      padding: 0 12px 6px;
+      letter-spacing: 0.02em;
+    }
+
+    /* Status chips row */
+    .cand-chips {
+      display: flex;
+      gap: 0;
+      padding: 0 8px 8px;
+      flex-wrap: nowrap;
+    }
+    .cand-chip {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 4px 8px;
+      border: none;
+      background: var(--surface-2);
+      color: var(--faint);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      flex: 1;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .cand-chip:first-child { border-radius: 4px 0 0 4px; }
+    .cand-chip:last-child  { border-radius: 0 4px 4px 0; }
+    .cand-chip:hover {
+      background: var(--surface-3);
+      color: var(--text);
+    }
+    .cand-chip.active {
+      color: #fff;
+      font-weight: 600;
+    }
+    .cand-chip.active[data-status="PLANNED"]   { background: var(--st-planning); }
+    .cand-chip.active[data-status="WATCHING"]   { background: var(--st-watching); }
+    .cand-chip.active[data-status="PAUSED"]     { background: var(--st-paused); }
+    .cand-chip.active[data-status="COMPLETED"]  { background: var(--st-completed); }
+    .cand-chip.active[data-status="DROPPED"]    { background: var(--st-dropped); }
+
+    /* Card loading / feedback states */
+    .cand-card.loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+    .cand-card .cand-spinner {
+      display: none;
+      position: absolute;
+      top: 8px; right: 8px;
+      width: 16px; height: 16px;
+      border: 2px solid var(--faint);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    .cand-card.loading .cand-spinner { display: block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Season-of link */
+    .cand-season-link {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 11px;
+      color: var(--accent);
+      padding: 2px 12px 8px;
+      cursor: pointer;
+      opacity: 0.7;
+      transition: opacity 0.15s;
+    }
+    .cand-season-link:hover { opacity: 1; }
+
+    /* Auto-detect banner */
+    .cand-match-banner {
+      background: rgba(91,140,255,0.08);
+      border-top: 1px solid rgba(91,140,255,0.15);
+      padding: 6px 12px;
+      font-size: 11px;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .cand-match-banner .match-title {
+      font-weight: 600;
+    }
+    .cand-match-dismiss {
+      margin-left: auto;
+      cursor: pointer;
+      opacity: 0.5;
+      font-size: 13px;
+    }
+    .cand-match-dismiss:hover { opacity: 1; }
+
+    /* ── Confirm popover (soft-delete) ───────────────────────── */
+    .cand-confirm {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      background: var(--surface-2);
+      border-top: 1px solid var(--border);
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 10;
+    }
+    .cand-confirm span {
+      font-size: 12px;
+      color: var(--text);
+      flex: 1;
+    }
+    .cand-confirm button {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 11px;
+      padding: 4px 12px;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+    }
+    .cand-confirm .confirm-yes {
+      background: var(--st-dropped);
+      color: #fff;
+    }
+    .cand-confirm .confirm-no {
+      background: var(--surface-3);
+      color: var(--text);
+    }
+
+    /* ── Season-of search overlay ────────────────────────────── */
+    .season-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 200;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 15vh;
+    }
+    .season-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 400px;
+      max-width: 90vw;
+      max-height: 60vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .season-box-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .season-box-close {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    .season-search-input {
+      width: 100%;
+      padding: 10px 14px;
+      border: none;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 13px;
+      outline: none;
+    }
+    .season-search-input::placeholder { color: var(--faint); }
+    .season-results {
+      overflow-y: auto;
+      flex: 1;
+    }
+    .season-result {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      cursor: pointer;
+      transition: background 0.1s;
+      border-bottom: 1px solid var(--border);
+    }
+    .season-result:hover { background: var(--surface-2); }
+    .season-result img {
+      width: 36px;
+      height: 52px;
+      object-fit: cover;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .season-result-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .season-result-title {
+      font-size: 13px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .season-result-meta {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    /* ── Loading bar ─────────────────────────────────────────── */
+    .add-loading-bar {
+      height: 2px;
+      background: var(--accent);
+      width: 0;
+      transition: width 0.3s;
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 100;
+    }
+    .add-loading-bar.active {
+      width: 60%;
+      animation: loading-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes loading-pulse {
+      0%, 100% { opacity: 0.7; }
+      50% { opacity: 1; }
+    }
+
+    /* ── Resolution card (season-add inline) ───────────────── */
+
+    .cand-card.resolution {
+      width: 360px;
+      border-color: var(--accent);
+    }
+    .resolution-header {
+      padding: 10px 12px;
+      font-size: 12px;
+      color: var(--accent);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .resolution-header .res-poster {
+      width: 32px;
+      height: 46px;
+      object-fit: cover;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .resolution-header .res-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .resolution-header .res-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .resolution-header .res-sub {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .resolution-seasons {
+      padding: 6px 12px;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .res-season-row {
+      font-family: 'DM Mono', monospace;
+      font-size: 10.5px;
+      color: var(--muted);
+      padding: 3px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .res-season-row .res-sn {
+      color: var(--text);
+      font-weight: 500;
+      min-width: 18px;
+    }
+    .res-season-row .res-sid {
+      color: var(--faint);
+      font-size: 9px;
+    }
+    .res-season-new {
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .season-form {
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .season-form label {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .season-form-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .season-form input[type="number"],
+    .season-form input[type="text"] {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      padding: 5px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      outline: none;
+      width: 80px;
+    }
+    .season-form input:focus {
+      border-color: var(--accent);
+    }
+    .season-form .sf-anilist { width: 90px; }
+    .season-form .sf-mal { width: 80px; }
+    .season-add-btn {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 12px;
+      padding: 6px 14px;
+      border-radius: 5px;
+      border: 1px solid var(--accent);
+      background: var(--accent-d);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-top: 4px;
+      align-self: flex-start;
+    }
+    .season-add-btn:hover { background: var(--accent); }
+    .season-add-btn:disabled {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+
+    /* Reconciliation result inline */
+    .reconcile-result {
+      padding: 6px 12px;
+      font-size: 11px;
+      border-top: 1px solid var(--border);
+    }
+    .reconcile-result.ok { color: var(--st-watching); }
+    .reconcile-result.warn { color: var(--st-paused); }
+    .reconcile-result.info { color: var(--muted); }
+    .reconcile-result.error { color: var(--st-dropped); }
+    .reconcile-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .reconcile-actions button {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      padding: 3px 10px;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .reconcile-actions button:hover {
+      background: var(--surface-3);
+    }
+
+    /* Gap validation — bulk create missing seasons */
+    .gap-resolve {
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--st-paused);
+    }
+    .gap-resolve button {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      padding: 3px 10px;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      cursor: pointer;
+      margin-top: 4px;
+    }
+    .gap-resolve button:hover { background: var(--surface-3); }
+
+    /* ── Light theme ─────────────────────────────────────────── */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        .cand-card { box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+        .cand-match-banner { background: rgba(91,140,255,0.06); }
+      }
+    }
+    :root[data-theme="light"] {
+      .cand-card { box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+      .cand-match-banner { background: rgba(91,140,255,0.06); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Top nav ─────────────────────────────────────────── -->
+<nav class="top-nav">
+  <a href="index.html" class="nav-brand">Starfleet</a>
+  <ul class="nav-links">
+    <li><a href="index.html">Calendar</a></li>
+    <li><a href="backlog.html">Backlog</a></li>
+    <li><a href="list.html">List</a></li>
+    <li><a href="grabs.html">Grabs</a></li>
+    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
+    <li><a href="add.html" class="active">Add</a></li>
+  </ul>
+  <div class="nav-spacer"></div>
+  <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
+  <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
+</nav>
+
+<!-- ── Loading bar ─────────────────────────────────────── -->
+<div class="add-loading-bar" id="loading-bar"></div>
+
+<!-- ── Controls ────────────────────────────────────────── -->
+<div class="add-controls">
+  <button class="type-btn active" data-shape="EPISODIC" data-space="ANIME">Anime</button>
+  <button class="type-btn" data-shape="EPISODIC" data-space="TV">TV</button>
+  <button class="type-btn" data-shape="MOVIE" data-space="ANIME">Anime Movie</button>
+  <button class="type-btn" data-shape="MOVIE" data-space="TV">Movie</button>
+
+  <div class="add-search-row">
+    <input type="text" class="add-search-input" id="add-search" placeholder="Search Sonarr / Radarr…" autocomplete="off" spellcheck="false">
+    <button class="add-search-btn" id="add-search-btn">Search</button>
+  </div>
+</div>
+
+<!-- ── Results ─────────────────────────────────────────── -->
+<div class="add-results" id="results"></div>
+
+<!-- ── Banner ──────────────────────────────────────────── -->
+<div id="status-banner" class="status-banner hidden"></div>
+
+<!-- ── Scripts ─────────────────────────────────────────── -->
+<script type="module">
+import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=11';
+import { requireConfig } from './js/config.js?v=2';
+import { showBanner, hideBanner } from './js/calendar.js?v=8';
+import { initSearch } from './js/search.js?v=4';
+
+requireConfig();
+initSearch();
+
+/* ── State ────────────────────────────────────────────── */
+
+let mediaShape    = 'EPISODIC';
+let trackingSpace = 'ANIME';
+let candidates    = [];   // last search results (ArrCandidate[])
+
+const resultsEl   = document.getElementById('results');
+const searchInput = document.getElementById('add-search');
+const loadingBar  = document.getElementById('loading-bar');
+
+/* ── LCARS search for auto-detect ─────────────────────── */
+
+const SEARCH_QUERY = `
+  query Search($query: String!, $first: Int) {
+    search(query: $query, first: $first) {
+      edges { node {
+        id displayTitle status score mediaShape trackingSpace
+        posterUrl totalEpisodes tracked
+      }}
+    }
+  }
+`;
+
+async function searchLcars(query) {
+  try {
+    const data = await gql(SEARCH_QUERY, { query, first: 8 });
+    return data.search.edges.map(e => e.node);
+  } catch { return []; }
+}
+
+/* ── Type buttons ─────────────────────────────────────── */
+
+const typeBtns = document.querySelectorAll('.type-btn');
+for (const btn of typeBtns) {
+  btn.addEventListener('click', () => {
+    typeBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    mediaShape    = btn.dataset.shape;
+    trackingSpace = btn.dataset.space;
+    // Update placeholder
+    const arrName = mediaShape === 'MOVIE' ? 'Radarr' : 'Sonarr';
+    searchInput.placeholder = `Search ${arrName}…`;
+  });
+}
+
+/* ── Search ───────────────────────────────────────────── */
+
+async function doSearch() {
+  const title = searchInput.value.trim();
+  if (!title) return;
+
+  loadingBar.classList.add('active');
+  resultsEl.innerHTML = '';
+
+  try {
+    candidates = await searchArrCandidates(mediaShape, title);
+    renderCandidates(candidates);
+
+    // Pre-check: batch-lookup which candidates are already tracked by external ID
+    try {
+      const tracked = await batchCheckTracked(candidates);
+      for (const [i, info] of tracked) {
+        const card = resultsEl.querySelector(`.cand-card[data-idx="${i}"]`);
+        if (!card || card.dataset.showId) continue;
+        card.dataset.showId = info.showId;
+        const banner = document.createElement('div');
+        banner.className = 'cand-match-banner';
+        banner.style.cursor = 'pointer';
+        banner.innerHTML = `
+          <span>Already tracked as <span class="match-title">${info.displayTitle}</span> — click to add season</span>
+          <span class="cand-match-dismiss" title="Dismiss">✕</span>
+        `;
+        banner.querySelector('.cand-match-dismiss').addEventListener('click', (e) => {
+          e.stopPropagation();
+          banner.remove();
+          // Clear showId so the card reverts to add-as-new-show mode
+          delete card.dataset.showId;
+          delete card.dataset.currentStatus;
+          card.classList.remove('tracked');
+        });
+        banner.addEventListener('click', () => {
+          openSeasonResolution(card, info.showId, candidates[i]);
+        });
+        const chipsRow = card.querySelector('.cand-chips');
+        card.insertBefore(banner, chipsRow);
+      }
+    } catch (err) {
+      console.warn('Pre-check tracked failed:', err);
+    }
+
+    // Auto-detect: for each candidate, check if title matches an existing show
+    for (const [i, cand] of candidates.entries()) {
+      autoDetectSeason(cand, i);
+    }
+  } catch (err) {
+    resultsEl.innerHTML = `<div class="add-empty">Search failed: ${err.message}</div>`;
+  } finally {
+    loadingBar.classList.remove('active');
+    loadingBar.style.width = '';
+  }
+}
+
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
+});
+document.getElementById('add-search-btn').addEventListener('click', doSearch);
+
+/* ── Render candidates ────────────────────────────────── */
+
+const STATUSES = ['PLANNED', 'WATCHING', 'PAUSED', 'COMPLETED', 'DROPPED'];
+const STATUS_LABELS = { PLANNED: 'Plan', WATCHING: 'Watch', PAUSED: 'Pause', COMPLETED: 'Done', DROPPED: 'Drop' };
+
+function renderCandidates(cands) {
+  resultsEl.innerHTML = '';
+
+  if (!cands.length) {
+    resultsEl.innerHTML = '<div class="add-empty">No results found</div>';
+    return;
+  }
+
+  cands.forEach((cand, idx) => {
+    const card = document.createElement('div');
+    card.className = 'cand-card';
+    card.dataset.idx = idx;
+
+    // Spinner
+    const spinner = document.createElement('div');
+    spinner.className = 'cand-spinner';
+    card.appendChild(spinner);
+
+    // Header: title + year
+    const header = document.createElement('div');
+    header.className = 'cand-header';
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'cand-title';
+    titleSpan.textContent = cand.title;
+    header.appendChild(titleSpan);
+    if (cand.year) {
+      const yearSpan = document.createElement('span');
+      yearSpan.className = 'cand-year';
+      yearSpan.textContent = cand.year;
+      header.appendChild(yearSpan);
+    }
+    card.appendChild(header);
+
+    // Overview
+    const overview = document.createElement('div');
+    overview.className = 'cand-overview';
+    overview.textContent = cand.overview || '';
+    card.appendChild(overview);
+
+    // IDs
+    const idsRow = document.createElement('div');
+    idsRow.className = 'cand-ids';
+    const idParts = [];
+    if (cand.tvdbId) idParts.push(`tvdb:${cand.tvdbId}`);
+    if (cand.tmdbId) idParts.push(`tmdb:${cand.tmdbId}`);
+    idsRow.textContent = idParts.join(' · ');
+    card.appendChild(idsRow);
+
+    // Season-of link
+    const seasonLink = document.createElement('div');
+    seasonLink.className = 'cand-season-link';
+    seasonLink.textContent = '↳ Season of…';
+    seasonLink.addEventListener('click', () => openSeasonPicker(cand, card));
+    card.appendChild(seasonLink);
+
+    // Status chips
+    const chipsRow = document.createElement('div');
+    chipsRow.className = 'cand-chips';
+    for (const st of STATUSES) {
+      const chip = document.createElement('button');
+      chip.className = 'cand-chip';
+      chip.dataset.status = st;
+      chip.textContent = STATUS_LABELS[st];
+      chip.addEventListener('click', () => onChipClick(card, cand, st));
+      chipsRow.appendChild(chip);
+    }
+    card.appendChild(chipsRow);
+
+    resultsEl.appendChild(card);
+  });
+}
+
+/* ── Chip click handler ───────────────────────────────── */
+
+async function onChipClick(card, cand, status) {
+  const trackedShowId = card.dataset.showId;
+  const currentStatus = card.dataset.currentStatus;
+
+  // Already tracked: clicking the active chip → soft-delete confirm
+  if (trackedShowId && currentStatus === status) {
+    showDeleteConfirm(card, cand, trackedShowId);
+    return;
+  }
+
+  // Already tracked: different chip → change status
+  if (trackedShowId) {
+    card.classList.add('loading');
+    try {
+      await setStatus(trackedShowId, status);
+      setCardTracked(card, trackedShowId, status);
+      showBanner(`Status → ${STATUS_LABELS[status]}`, 'ok');
+    } catch (err) {
+      showBanner(`Status change failed: ${err.message}`, 'error');
+    } finally {
+      card.classList.remove('loading');
+    }
+    return;
+  }
+
+  // New show — add it
+  card.classList.add('loading');
+  try {
+    let show;
+
+    if (status === 'COMPLETED' || status === 'DROPPED') {
+      // No arr — addShow directly
+      const input = buildAddInput(cand);
+      show = await addShow(input);
+      // addShow creates as PLANNED — need setStatus follow-up
+      if (show.status !== status) {
+        await setStatus(show.id, status);
+        show.status = status;
+      }
+    } else {
+      // PLANNED / WATCHING / PAUSED → addShowWithArr
+      const input = buildAddInput(cand);
+      if (status === 'PAUSED') {
+        input.unmonitored = true;
+      }
+      let result;
+      try {
+        result = await addShowWithArr(input);
+      } catch (err) {
+        // "already tracked (show <id>)" → inline season resolution
+        // with option to force-add as separate show (for specials/OVAs sharing TVDB ID)
+        const match = err.message.match(/already tracked \(show ([^)]+)\)/);
+        if (match) {
+          card.classList.remove('loading');
+          await openSeasonResolution(card, match[1], cand, { allowSeparateAdd: true, status });
+          return;
+        }
+        throw err;
+      }
+      show = result.show;
+      // Flatten externalIds if nested
+      if (show.externalIds?.edges) {
+        show.externalIds = show.externalIds.edges.map(e => e.node);
+      }
+      // addShowWithArr creates as PLANNED — setStatus if needed
+      if (status !== 'PLANNED' && show.status !== status) {
+        await setStatus(show.id, status);
+        show.status = status;
+      }
+    }
+
+    setCardTracked(card, show.id, show.status || status);
+    showBanner(`Added: ${show.displayTitle} [${STATUS_LABELS[status]}]`, 'ok');
+
+  } catch (err) {
+    showBanner(`Add failed: ${err.message}`, 'error');
+  } finally {
+    card.classList.remove('loading');
+  }
+}
+
+/**
+ * Build AddShowInput / AddShowWithArrInput from an ArrCandidate.
+ */
+function buildAddInput(cand) {
+  const input = {
+    mediaShape,
+    trackingSpace,
+    primaryTitle: 'ENGLISH',
+    titleEnglish: cand.title,
+  };
+  // Pass through IDs so LCARS can link them
+  if (cand.tvdbId) input.tvdbId = cand.tvdbId;
+  if (cand.tmdbId) input.tmdbId = cand.tmdbId;
+  return input;
+}
+
+/* ── Card state helpers ───────────────────────────────── */
+
+function setCardTracked(card, showId, status) {
+  card.dataset.showId = showId;
+  card.dataset.currentStatus = status || '';
+  card.classList.toggle('tracked', !!showId);
+
+  // Highlight the active chip
+  const chips = card.querySelectorAll('.cand-chip');
+  for (const chip of chips) {
+    chip.classList.toggle('active', chip.dataset.status === status);
+  }
+
+  // Set tracked color for border
+  const colorMap = {
+    WATCHING: 'var(--st-watching)', COMPLETED: 'var(--st-completed)',
+    PLANNED: 'var(--st-planning)', PAUSED: 'var(--st-paused)',
+    DROPPED: 'var(--st-dropped)',
+  };
+  card.style.setProperty('--tracked-color', colorMap[status] || 'var(--accent)');
+}
+
+function clearCardTracked(card) {
+  delete card.dataset.showId;
+  delete card.dataset.currentStatus;
+  card.classList.remove('tracked');
+  const chips = card.querySelectorAll('.cand-chip');
+  for (const chip of chips) chip.classList.remove('active');
+}
+
+/* ── Soft-delete confirmation ─────────────────────────── */
+
+function showDeleteConfirm(card, cand, showId) {
+  // Remove any existing confirm
+  const existing = card.querySelector('.cand-confirm');
+  if (existing) { existing.remove(); return; }
+
+  const confirm = document.createElement('div');
+  confirm.className = 'cand-confirm';
+
+  const msg = document.createElement('span');
+  msg.textContent = `Remove "${cand.title}"?`;
+
+  const yesBtn = document.createElement('button');
+  yesBtn.className = 'confirm-yes';
+  yesBtn.textContent = 'Remove';
+  yesBtn.addEventListener('click', async () => {
+    card.classList.add('loading');
+    confirm.remove();
+    try {
+      await softDeleteShow(showId);
+      clearCardTracked(card);
+      showBanner(`Removed: ${cand.title}`, 'ok');
+    } catch (err) {
+      showBanner(`Remove failed: ${err.message}`, 'error');
+    } finally {
+      card.classList.remove('loading');
+    }
+  });
+
+  const noBtn = document.createElement('button');
+  noBtn.className = 'confirm-no';
+  noBtn.textContent = 'Cancel';
+  noBtn.addEventListener('click', () => confirm.remove());
+
+  confirm.append(msg, noBtn, yesBtn);
+  card.appendChild(confirm);
+}
+
+/* ── Auto-detect: season matching ─────────────────────── */
+
+/**
+ * Strip common season/part suffixes to get a base title for matching.
+ */
+function stripSeasonSuffix(title) {
+  return title
+    // "Title Season 2", "Title Part 3", "Title Cour 2"
+    .replace(/\s+(Season|Part|Cour|Chapter|Arc)\s+\d+\s*$/i, '')
+    // "Title 2nd Season", "Title 3rd Season"
+    .replace(/\s+\d+(st|nd|rd|th)\s+(Season|Part|Cour)\s*$/i, '')
+    // "Title II", "Title III", "Title IV" (Roman numerals at end)
+    .replace(/\s+(II|III|IV|V|VI|VII|VIII|IX|X)\s*$/, '')
+    // "Title S2", "Title S02"
+    .replace(/\s+S\d+\s*$/i, '')
+    .trim();
+}
+
+async function autoDetectSeason(cand, cardIdx) {
+  const base = stripSeasonSuffix(cand.title);
+  // Only search if something was actually stripped
+  if (base === cand.title || base.length < 3) return;
+
+  const matches = await searchLcars(base);
+  if (!matches.length) return;
+
+  // Find first tracked match that isn't a movie when we're adding episodic, etc.
+  const match = matches.find(m => m.tracked);
+  if (!match) return;
+
+  const card = resultsEl.querySelector(`.cand-card[data-idx="${cardIdx}"]`);
+  if (!card) return;
+
+  // Don't show if already tracked
+  if (card.dataset.showId) return;
+
+  const banner = document.createElement('div');
+  banner.className = 'cand-match-banner';
+  banner.style.cursor = 'pointer';
+  banner.innerHTML = `
+    <span>Possible season of <span class="match-title">${match.displayTitle}</span> — click to add</span>
+    <span class="cand-match-dismiss" title="Dismiss">✕</span>
+  `;
+  banner.querySelector('.cand-match-dismiss').addEventListener('click', (e) => {
+    e.stopPropagation();
+    banner.remove();
+  });
+  banner.addEventListener('click', () => {
+    openSeasonResolution(card, match.id, cand);
+  });
+
+  // Insert before chips row
+  const chipsRow = card.querySelector('.cand-chips');
+  card.insertBefore(banner, chipsRow);
+}
+
+/* ── Season-of picker overlay ─────────────────────────── */
+
+function openSeasonPicker(cand, card) {
+  // Create overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'season-overlay';
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  const box = document.createElement('div');
+  box.className = 'season-box';
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'season-box-header';
+  header.innerHTML = `<span>Season of which show?</span><span class="season-box-close">✕</span>`;
+  header.querySelector('.season-box-close').addEventListener('click', () => overlay.remove());
+
+  // Search input
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'season-search-input';
+  input.placeholder = 'Search tracked shows…';
+
+  // Results
+  const resultsDiv = document.createElement('div');
+  resultsDiv.className = 'season-results';
+
+  box.append(header, input, resultsDiv);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  requestAnimationFrame(() => input.focus());
+
+  // Pre-fill with stripped title
+  const base = stripSeasonSuffix(cand.title);
+  if (base !== cand.title) {
+    input.value = base;
+    doSeasonSearch(base, resultsDiv, cand, card, overlay);
+  }
+
+  let debounce = null;
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    if (debounce) clearTimeout(debounce);
+    if (q.length < 2) { resultsDiv.innerHTML = ''; return; }
+    debounce = setTimeout(() => doSeasonSearch(q, resultsDiv, cand, card, overlay), 250);
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Escape') overlay.remove();
+  });
+}
+
+async function doSeasonSearch(query, resultsDiv, cand, card, overlay) {
+  const shows = await searchLcars(query);
+  resultsDiv.innerHTML = '';
+
+  for (const show of shows) {
+    if (!show.tracked) continue;
+
+    const row = document.createElement('div');
+    row.className = 'season-result';
+
+    const img = document.createElement('img');
+    img.src = show.posterUrl || '';
+    img.alt = '';
+    img.onerror = () => { img.style.display = 'none'; };
+    row.appendChild(img);
+
+    const info = document.createElement('div');
+    info.className = 'season-result-info';
+    const title = document.createElement('div');
+    title.className = 'season-result-title';
+    title.textContent = show.displayTitle;
+    const meta = document.createElement('div');
+    meta.className = 'season-result-meta';
+    const parts = [];
+    if (show.status) parts.push(show.status.toLowerCase());
+    if (show.totalEpisodes) parts.push(`${show.totalEpisodes} ep`);
+    meta.textContent = parts.join(' · ');
+    info.append(title, meta);
+    row.appendChild(info);
+
+    row.addEventListener('click', () => {
+      overlay.remove();
+      openSeasonResolution(card, show.id, cand);
+    });
+
+    resultsDiv.appendChild(row);
+  }
+
+  if (!resultsDiv.children.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:16px;text-align:center;color:var(--muted);font-size:13px';
+    empty.textContent = 'No tracked shows found';
+    resultsDiv.appendChild(empty);
+  }
+}
+
+/* ── Season resolution card ──────────────────────────── */
+
+/**
+ * Transform a candidate card into a season-add resolution card.
+ * Called when addShowWithArr rejects with "already tracked",
+ * from the auto-detect banner click, or from the "Season of..." picker.
+ */
+async function openSeasonResolution(card, showId, cand, opts = {}) {
+  card.classList.add('loading');
+
+  let show;
+  try {
+    show = await fetchShow(showId);
+  } catch (err) {
+    showBanner(`Failed to load show: ${err.message}`, 'error');
+    card.classList.remove('loading');
+    return;
+  }
+  card.classList.remove('loading');
+
+  // Transform the card into resolution mode
+  card.classList.add('resolution');
+  card.innerHTML = '';
+
+  // Spinner for later ops
+  const spinner = document.createElement('div');
+  spinner.className = 'cand-spinner';
+  card.appendChild(spinner);
+
+  // Header: poster + show info
+  const header = document.createElement('div');
+  header.className = 'resolution-header';
+
+  if (show.posterUrl) {
+    const img = document.createElement('img');
+    img.className = 'res-poster';
+    img.src = show.posterUrl;
+    img.alt = '';
+    img.onerror = () => { img.style.display = 'none'; };
+    header.appendChild(img);
+  }
+
+  const info = document.createElement('div');
+  info.className = 'res-info';
+  info.innerHTML = `
+    <div class="res-title">${show.displayTitle}</div>
+    <div class="res-sub">Already tracked · ${show.status?.toLowerCase() || 'unknown'}</div>
+  `;
+  header.appendChild(info);
+  card.appendChild(header);
+
+  // Existing seasons list
+  const seasons = (show.seasons || []).filter(s => s.seasonNumber > 0)
+    .sort((a, b) => a.seasonNumber - b.seasonNumber);
+
+  const seasonsDiv = document.createElement('div');
+  seasonsDiv.className = 'resolution-seasons';
+  for (const s of seasons) {
+    const row = document.createElement('div');
+    row.className = 'res-season-row';
+    const alId = s.anilistId ? `AL:${s.anilistId}` : '';
+    const malId = s.malId ? `MAL:${s.malId}` : '';
+    const ids = [alId, malId].filter(Boolean).join(' ');
+    row.innerHTML = `
+      <span class="res-sn">S${s.seasonNumber}</span>
+      <span>${s.status?.toLowerCase() || '—'}</span>
+      <span class="res-sid">${ids || 'unmapped'}</span>
+    `;
+    seasonsDiv.appendChild(row);
+  }
+  card.appendChild(seasonsDiv);
+
+  // Season-add form
+  const highestSeason = seasons.length ? Math.max(...seasons.map(s => s.seasonNumber)) : 0;
+  const nextSeason = highestSeason + 1;
+
+  const form = document.createElement('div');
+  form.className = 'season-form';
+  form.innerHTML = `
+    <label>Add Season</label>
+    <div class="season-form-row">
+      <input type="number" class="sf-season" value="${nextSeason}" min="1" title="Season number">
+      <input type="text" class="sf-anilist" placeholder="AniList ID" title="AniList ID">
+      <input type="text" class="sf-mal" placeholder="MAL ID" title="MAL ID (optional)">
+    </div>
+  `;
+
+  // Status chips for the new season
+  const chipsRow = document.createElement('div');
+  chipsRow.className = 'cand-chips';
+  chipsRow.style.padding = '4px 0 0';
+  let selectedStatus = 'PLANNED';
+  for (const st of STATUSES) {
+    const chip = document.createElement('button');
+    chip.className = 'cand-chip' + (st === 'PLANNED' ? ' active' : '');
+    chip.dataset.status = st;
+    chip.textContent = STATUS_LABELS[st];
+    chip.addEventListener('click', () => {
+      selectedStatus = st;
+      chipsRow.querySelectorAll('.cand-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+    });
+    chipsRow.appendChild(chip);
+  }
+  form.appendChild(chipsRow);
+
+  // Add Season button
+  const addBtn = document.createElement('button');
+  addBtn.className = 'season-add-btn';
+  addBtn.textContent = 'Add Season';
+  form.appendChild(addBtn);
+
+  card.appendChild(form);
+
+  // Result area (for reconciliation result, gap errors, etc.)
+  const resultArea = document.createElement('div');
+  resultArea.className = 'reconcile-result';
+  resultArea.style.display = 'none';
+  card.appendChild(resultArea);
+
+  // Add Season click handler
+  addBtn.addEventListener('click', async () => {
+    const seasonNum = parseInt(form.querySelector('.sf-season').value, 10);
+    const anilistId = parseInt(form.querySelector('.sf-anilist').value, 10) || null;
+    const malId = parseInt(form.querySelector('.sf-mal').value, 10) || null;
+
+    if (!seasonNum || seasonNum < 1) {
+      showBanner('Season number must be ≥ 1', 'error');
+      return;
+    }
+
+    // Check if season already exists
+    if (seasons.some(s => s.seasonNumber === seasonNum)) {
+      showBanner(`Season ${seasonNum} already exists`, 'error');
+      return;
+    }
+
+    card.classList.add('loading');
+    addBtn.disabled = true;
+    resultArea.style.display = 'none';
+
+    try {
+      // Step 1: setSeasonMapping (creates the season row, gap-validated)
+      const newSeason = await setSeasonMapping(showId, seasonNum, anilistId, malId);
+
+      // Step 2: setSeasonStatus (set the chosen status)
+      if (selectedStatus !== 'PLANNED') {
+        await setSeasonStatus(newSeason.id, selectedStatus);
+      }
+
+      // Step 3: reconcileSeasonMapping (Fribb auto-validate — advisory only)
+      // Skip when user explicitly provided an AniList ID — Fribb's dataset
+      // may not have the new season yet and would overwrite with a stale
+      // previous-season ID.
+      let reconcileResult = null;
+      if (!anilistId) {
+        try {
+          reconcileResult = await reconcileSeasonMapping(showId, seasonNum);
+        } catch (err) {
+          // Reconciliation is advisory — don't fail the whole operation
+          console.warn('Reconciliation failed:', err);
+        }
+      }
+
+      // Add the new season to the seasons list display
+      const newRow = document.createElement('div');
+      newRow.className = 'res-season-row res-season-new';
+      const alStr = anilistId ? `AL:${anilistId}` : '';
+      const malStr = malId ? `MAL:${malId}` : '';
+      const idsStr = [alStr, malStr].filter(Boolean).join(' ') || 'unmapped';
+      newRow.innerHTML = `
+        <span class="res-sn">S${seasonNum}</span>
+        <span>${selectedStatus.toLowerCase()}</span>
+        <span class="res-sid">${idsStr}</span>
+        <span style="margin-left:auto;font-size:9px">✓ new</span>
+      `;
+      seasonsDiv.appendChild(newRow);
+      seasons.push({ seasonNumber: seasonNum, id: newSeason.id, anilistId, malId });
+
+      // Show reconciliation result
+      showReconcileResult(resultArea, reconcileResult, anilistId, showId, seasonNum, newSeason.id, card);
+
+      // Update form for next potential season
+      form.querySelector('.sf-season').value = seasonNum + 1;
+      form.querySelector('.sf-anilist').value = '';
+      form.querySelector('.sf-mal').value = '';
+
+      showBanner(`Season ${seasonNum} added to ${show.displayTitle}`, 'ok');
+
+    } catch (err) {
+      // Gap validation error: "Cannot add Season N — Season(s) X, Y do not exist"
+      const gapMatch = err.message.match(/Season(?:s)?\s+([\d,\s]+)\s+do(?:es)?\s+not exist/);
+      if (gapMatch) {
+        showGapResolution(resultArea, err.message, showId, gapMatch[1], card, () => {
+          // After bulk create, retry the add
+          addBtn.click();
+        });
+      } else {
+        showBanner(`Add season failed: ${err.message}`, 'error');
+      }
+    } finally {
+      card.classList.remove('loading');
+      addBtn.disabled = false;
+    }
+  });
+
+  // Link to show page
+  const showLink = document.createElement('div');
+  showLink.style.cssText = 'padding:4px 12px 8px;font-size:11px';
+  const a = document.createElement('a');
+  a.href = `show.html?id=${showId}`;
+  a.style.color = 'var(--accent)';
+  a.textContent = 'Open show page →';
+  showLink.appendChild(a);
+  card.appendChild(showLink);
+
+  // "Not a season" fallback — add as separate show without arr
+  // (for specials/OVAs that share a TVDB ID with the parent)
+  if (opts.allowSeparateAdd) {
+    const sepDiv = document.createElement('div');
+    sepDiv.style.cssText = 'padding:4px 12px 10px;font-size:11px;border-top:1px solid var(--border);margin-top:4px';
+    const sepLink = document.createElement('span');
+    sepLink.style.cssText = 'color:var(--muted);cursor:pointer;transition:color 0.15s';
+    sepLink.textContent = 'Not a season? Add as separate show →';
+    sepLink.addEventListener('mouseenter', () => { sepLink.style.color = 'var(--text)'; });
+    sepLink.addEventListener('mouseleave', () => { sepLink.style.color = 'var(--muted)'; });
+    sepLink.addEventListener('click', async () => {
+      card.classList.add('loading');
+      try {
+        const input = buildAddInput(cand);
+        // Drop external IDs to bypass the TVDB/TMDB collision check —
+        // this is genuinely a different show (special/OVA) sharing an ID
+        delete input.tvdbId;
+        delete input.tmdbId;
+        const newShow = await addShow(input);
+        const targetStatus = opts.status || 'PLANNED';
+        if (targetStatus !== 'PLANNED' && newShow.status !== targetStatus) {
+          await setStatus(newShow.id, targetStatus);
+          newShow.status = targetStatus;
+        }
+        // Restore the card from resolution mode
+        card.classList.remove('resolution');
+        card.innerHTML = '';
+        // Re-render as a simple tracked card
+        const idx = card.dataset.idx;
+        const origCand = candidates[parseInt(idx, 10)] || cand;
+        renderCandidates([origCand]);
+        const newCard = resultsEl.lastElementChild;
+        if (newCard) {
+          setCardTracked(newCard, newShow.id, newShow.status || targetStatus);
+          newCard.dataset.idx = idx;
+        }
+        showBanner(`Added: ${newShow.displayTitle} as separate show [${STATUS_LABELS[targetStatus]}]`, 'ok');
+      } catch (err) {
+        showBanner(`Add failed: ${err.message}`, 'error');
+      } finally {
+        card.classList.remove('loading');
+      }
+    });
+    sepDiv.appendChild(sepLink);
+    card.appendChild(sepDiv);
+  }
+}
+
+/**
+ * Display reconciliation result inline on the resolution card.
+ */
+function showReconcileResult(resultArea, reconciled, userAnilistId, showId, seasonNum, seasonId, card) {
+  resultArea.style.display = 'block';
+
+  if (!reconciled) {
+    resultArea.className = 'reconcile-result info';
+    resultArea.textContent = 'ℹ️ Reconciliation skipped';
+    return;
+  }
+
+  const fribbAnilistId = reconciled.anilistId;
+  const source = reconciled.source;
+
+  if (source === 'FRIBB' && fribbAnilistId && userAnilistId && fribbAnilistId === userAnilistId) {
+    // Fribb confirms
+    resultArea.className = 'reconcile-result ok';
+    resultArea.textContent = `✅ Fribb confirms AniList ID ${fribbAnilistId}`;
+  } else if (source === 'FRIBB' && fribbAnilistId && userAnilistId && fribbAnilistId !== userAnilistId) {
+    // Fribb disagrees
+    resultArea.className = 'reconcile-result warn';
+    resultArea.innerHTML = `⚠️ Fribb suggests AniList ID ${fribbAnilistId} (you entered ${userAnilistId})`;
+
+    const actions = document.createElement('div');
+    actions.className = 'reconcile-actions';
+
+    const keepBtn = document.createElement('button');
+    keepBtn.textContent = 'Keep mine';
+    keepBtn.addEventListener('click', async () => {
+      card.classList.add('loading');
+      try {
+        await setSeasonMapping(showId, seasonNum, userAnilistId, null);
+        resultArea.className = 'reconcile-result ok';
+        resultArea.textContent = `✅ Keeping AniList ID ${userAnilistId} (manual override)`;
+        actions.remove();
+      } catch (err) {
+        showBanner(`Failed: ${err.message}`, 'error');
+      } finally {
+        card.classList.remove('loading');
+      }
+    });
+
+    const useFribbBtn = document.createElement('button');
+    useFribbBtn.textContent = "Use Fribb's";
+    useFribbBtn.addEventListener('click', async () => {
+      card.classList.add('loading');
+      try {
+        await setSeasonMapping(showId, seasonNum, fribbAnilistId, reconciled.malId);
+        resultArea.className = 'reconcile-result ok';
+        resultArea.textContent = `✅ Updated to Fribb's AniList ID ${fribbAnilistId}`;
+        actions.remove();
+        // Update the displayed season row
+        const rows = card.querySelectorAll('.res-season-row');
+        for (const row of rows) {
+          if (row.querySelector('.res-sn')?.textContent === `S${seasonNum}`) {
+            const sid = row.querySelector('.res-sid');
+            if (sid) sid.textContent = `AL:${fribbAnilistId}` + (reconciled.malId ? ` MAL:${reconciled.malId}` : '');
+          }
+        }
+      } catch (err) {
+        showBanner(`Failed: ${err.message}`, 'error');
+      } finally {
+        card.classList.remove('loading');
+      }
+    });
+
+    actions.append(keepBtn, useFribbBtn);
+    resultArea.appendChild(actions);
+  } else if (source === 'FRIBB' && fribbAnilistId && !userAnilistId) {
+    // User didn't provide one, Fribb found one
+    resultArea.className = 'reconcile-result ok';
+    resultArea.textContent = `✅ Fribb mapped to AniList ID ${fribbAnilistId}`;
+  } else {
+    // No data from Fribb
+    resultArea.className = 'reconcile-result info';
+    resultArea.textContent = 'ℹ️ Fribb has no data for this season yet';
+  }
+}
+
+/**
+ * Show gap validation error with a bulk-create option.
+ * "Seasons 1, 2 do not exist — create them as COMPLETED?"
+ */
+function showGapResolution(resultArea, errorMsg, showId, missingStr, card, onResolved) {
+  resultArea.style.display = 'block';
+  resultArea.className = 'gap-resolve';
+
+  const missing = missingStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => n > 0);
+
+  resultArea.innerHTML = `
+    ⚠️ ${errorMsg}
+  `;
+
+  const bulkBtn = document.createElement('button');
+  bulkBtn.textContent = `Create season${missing.length > 1 ? 's' : ''} ${missing.join(', ')} as COMPLETED`;
+  bulkBtn.addEventListener('click', async () => {
+    card.classList.add('loading');
+    bulkBtn.disabled = true;
+    try {
+      for (const sn of missing.sort((a, b) => a - b)) {
+        const created = await setSeasonMapping(showId, sn, null, null);
+        await setSeasonStatus(created.id, 'COMPLETED');
+
+        // Add to displayed seasons list
+        const seasonsDiv = card.querySelector('.resolution-seasons');
+        if (seasonsDiv) {
+          const row = document.createElement('div');
+          row.className = 'res-season-row';
+          row.innerHTML = `
+            <span class="res-sn">S${sn}</span>
+            <span>completed</span>
+            <span class="res-sid">unmapped</span>
+            <span style="margin-left:auto;font-size:9px;color:var(--faint)">auto</span>
+          `;
+          seasonsDiv.appendChild(row);
+        }
+      }
+
+      resultArea.style.display = 'none';
+      showBanner(`Created ${missing.length} missing season${missing.length > 1 ? 's' : ''}`, 'ok');
+
+      // Retry the original add
+      if (onResolved) onResolved();
+    } catch (err) {
+      showBanner(`Bulk create failed: ${err.message}`, 'error');
+    } finally {
+      card.classList.remove('loading');
+      bulkBtn.disabled = false;
+    }
+  });
+
+  resultArea.appendChild(bulkBtn);
+}
+
+/* ── Focus search on load ─────────────────────────────── */
+requestAnimationFrame(() => searchInput.focus());
+
+</script>
+</body>
+</html>

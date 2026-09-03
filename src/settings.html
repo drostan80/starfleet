@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starfleet — Settings</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="css/main.css?v=4">
+</head>
+<body>
+
+<!-- ── Top nav ─────────────────────────────────────────── -->
+<nav class="top-nav">
+  <a href="index.html" class="nav-brand">Starfleet</a>
+  <ul class="nav-links">
+    <li><a href="index.html">Calendar</a></li>
+    <li><a href="backlog.html">Backlog</a></li>
+    <li><a href="list.html">List</a></li>
+    <li><a href="grabs.html">Grabs</a></li>
+    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
+    <li><a href="add.html">Add</a></li>
+  </ul>
+  <div class="nav-spacer"></div>
+  <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
+  <a href="settings.html" class="nav-icon-btn active" title="Settings">⚙</a>
+</nav>
+
+<!-- ── Settings form ───────────────────────────────────── -->
+<main class="settings-page">
+  <h1>Settings</h1>
+
+  <form class="settings-form" id="settings-form" autocomplete="off">
+    <div class="field-group">
+      <label for="lcars-url">LCARS URL</label>
+      <input type="url" id="lcars-url" name="lcars_url"
+             placeholder="http://192.168.0.152:8888"
+             spellcheck="false">
+      <span class="field-hint">Base URL of your LCARS GraphQL server.</span>
+    </div>
+
+    <div class="field-group">
+      <label for="lcars-token">Bearer Token</label>
+      <input type="password" id="lcars-token" name="lcars_token"
+             placeholder="your-token-here"
+             spellcheck="false" autocomplete="new-password">
+      <span class="field-hint">Static bearer token from your LCARS config.</span>
+    </div>
+
+    <div class="field-group">
+      <label for="home-server-host">Home Server Host</label>
+      <input type="text" id="home-server-host" name="home_server_host"
+             placeholder="192.168.0.152"
+             spellcheck="false">
+      <span class="field-hint">
+        LAN IP or hostname used to rewrite Sonarr/Radarr deep links so they
+        reach the server from your browser. Leave blank to use links verbatim.
+      </span>
+    </div>
+
+    <div class="field-group">
+      <label for="tmdb-api-key">TMDB API Key <span style="font-weight:400;text-transform:none;color:var(--faint)">(optional)</span></label>
+      <input type="password" id="tmdb-api-key" name="tmdb_api_key"
+             placeholder="your-tmdb-api-key"
+             spellcheck="false" autocomplete="new-password">
+      <span class="field-hint">
+        Enables cover art for non-anime shows (TV / movies). Accepts either
+        the v3 API Key or the Read Access Token (JWT) from
+        <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener"
+           style="color:var(--accent)">themoviedb.org/settings/api</a>.
+      </span>
+    </div>
+
+    <div class="field-group">
+      <label for="mpv-helper-url">mpv Helper URL <span style="font-weight:400;text-transform:none;color:var(--faint)">(optional)</span></label>
+      <input type="url" id="mpv-helper-url" name="mpv_helper_url"
+             placeholder="http://localhost:19450"
+             spellcheck="false">
+      <span class="field-hint">
+        URL of <code>mpv-helper.py</code> running on this machine. Clicking ▶
+        on an available episode will stream it via mpv. Leave blank if you
+        don't use local playback.
+        <a href="https://github.com/drostan80/web" target="_blank" rel="noopener"
+           style="color:var(--accent)">See mpv-helper.py</a> in the repo root.
+      </span>
+    </div>
+
+    <div class="settings-actions">
+      <button type="submit" class="btn-primary">Save</button>
+      <a href="index.html" class="btn-secondary" id="back-btn">← Back</a>
+      <span class="settings-saved" id="settings-saved">✓ Saved</span>
+    </div>
+  </form>
+</main>
+
+<script type="module">
+  import { getConfig, saveConfig } from './js/config.js';
+  import { initSearch } from './js/search.js?v=2';
+  initSearch();
+
+  const form      = document.getElementById('settings-form');
+  const savedMsg  = document.getElementById('settings-saved');
+  const backBtn   = document.getElementById('back-btn');
+
+  // Pre-populate from stored config
+  const cfg = getConfig() || {};
+  document.getElementById('lcars-url').value         = cfg.lcars_url         || '';
+  document.getElementById('lcars-token').value       = cfg.lcars_token       || '';
+  document.getElementById('home-server-host').value  = cfg.home_server_host  || '';
+  document.getElementById('tmdb-api-key').value      = cfg.tmdb_api_key      || '';
+  document.getElementById('mpv-helper-url').value    = cfg.mpv_helper_url    || '';
+
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+
+    const newCfg = {
+      lcars_url:        document.getElementById('lcars-url').value.trim().replace(/\/$/, ''),
+      lcars_token:      document.getElementById('lcars-token').value.trim(),
+      home_server_host: document.getElementById('home-server-host').value.trim(),
+      tmdb_api_key:     document.getElementById('tmdb-api-key').value.trim(),
+      mpv_helper_url:   document.getElementById('mpv-helper-url').value.trim().replace(/\/$/, ''),
+    };
+
+    saveConfig(newCfg);
+
+    savedMsg.classList.add('visible');
+    setTimeout(() => savedMsg.classList.remove('visible'), 2500);
+
+    // Show Back link in case we arrived from a redirect (no history to go back to)
+    backBtn.style.display = '';
+  });
+</script>
+
+</body>
+</html>

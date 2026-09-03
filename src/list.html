@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starfleet — List</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <!-- Poster art hosts — opens the connection before the first <img> is parsed -->
+  <link rel="preconnect" href="https://artworks.thetvdb.com">
+  <link rel="preconnect" href="https://s4.anilist.co">
+  <link rel="preconnect" href="https://image.tmdb.org">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="css/main.css?v=4">
+  <style>
+    /* ── List-page controls ──────────────────────────────────── */
+
+    /* Type badges in card-meta */
+    .lt-badge {
+      font-family: 'DM Mono', monospace;
+      font-size: 8.5px;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 1px 5px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .lt-tv    { background: rgba(91,140,255,0.15); color: var(--accent); }
+    .lt-anime { background: rgba(249,115,22,0.15); color: var(--st-paused); }
+    .lt-movie { background: rgba(245,158,11,0.15); color: var(--st-planning); }
+
+    /* Score in meta bar */
+    .lt-score {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      color: var(--muted);
+      margin-left: auto;
+      white-space: nowrap;
+    }
+
+    /* ── Dropdown selects ────────────────────────────────────── */
+    .list-selects {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .ls-label {
+      font-size: 10.5px;
+      color: var(--faint);
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .list-select {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 11.5px;
+      font-weight: 500;
+      padding: 4px 26px 4px 10px;
+      border-radius: 6px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      /* chevron */
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7494'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      transition: border-color 0.12s, color 0.12s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .list-select:hover  { border-color: var(--faint); color: var(--text); }
+    .list-select:focus  { border-color: var(--accent); }
+    .list-select option { background: #1b2030; color: var(--text); }
+    .list-select option:disabled { color: var(--faint); font-style: italic; }
+
+    /* ── Count label ─────────────────────────────────────────── */
+    .list-count {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    /* ── Card grid ───────────────────────────────────────────── */
+    #list-grid {
+      --card-w: 185px;
+      --art-h:  255px;
+    }
+
+    /* empty / loading state */
+    .list-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 14px;
+      padding: 60px 20px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Top nav ─────────────────────────────────────────── -->
+<nav class="top-nav">
+  <a href="index.html" class="nav-brand">Starfleet</a>
+  <ul class="nav-links">
+    <li><a href="index.html">Calendar</a></li>
+    <li><a href="backlog.html">Backlog</a></li>
+    <li><a href="list.html" class="active">List</a></li>
+    <li><a href="grabs.html">Grabs</a></li>
+    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
+    <li><a href="add.html">Add</a></li>
+  </ul>
+  <div class="nav-spacer"></div>
+  <div class="status-filter" id="status-filter">
+    <span class="status-filter-label">Show:</span>
+    <button class="sf-pill active" data-status="WATCHING" style="--pill-color:var(--st-watching)">
+      <span class="sf-dot" style="background:var(--st-watching)"></span>Watching
+    </button>
+    <button class="sf-pill active" data-status="COMPLETED" style="--pill-color:var(--st-completed)">
+      <span class="sf-dot" style="background:var(--st-completed)"></span>Completed
+    </button>
+    <button class="sf-pill active" data-status="PLANNED" style="--pill-color:var(--st-planning)">
+      <span class="sf-dot" style="background:var(--st-planning)"></span>Planned
+    </button>
+    <button class="sf-pill active" data-status="PAUSED" style="--pill-color:var(--st-paused)">
+      <span class="sf-dot" style="background:var(--st-paused)"></span>Paused
+    </button>
+    <button class="sf-pill active" data-status="DROPPED" style="--pill-color:var(--st-dropped)">
+      <span class="sf-dot" style="background:var(--st-dropped)"></span>Dropped
+    </button>
+  </div>
+  <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
+  <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
+</nav>
+
+<div id="status-banner" class="status-banner hidden"></div>
+
+<!-- ── Controls bar ─────────────────────────────────────── -->
+<div class="view-controls">
+
+  <span class="list-count" id="list-count">—</span>
+
+  <div class="ctrl-sep"></div>
+
+  <!-- Filter dropdowns -->
+  <div class="list-selects">
+    <span class="ls-label">Filter:</span>
+
+    <select class="list-select" id="filter-type" title="Media type">
+      <option value="">All types</option>
+      <option value="tv">TV Series</option>
+      <option value="anime">Anime</option>
+      <option value="movie">Movies</option>
+    </select>
+
+    <select class="list-select" id="filter-tracking" title="Tracking service">
+      <option value="">All services</option>
+      <option value="sonarr">Sonarr</option>
+      <option value="radarr">Radarr</option>
+    </select>
+
+    <select class="list-select" id="filter-year" title="Year (coming soon)" disabled>
+      <option value="">All years</option>
+    </select>
+
+    <select class="list-select" id="filter-studio" title="Studio (coming soon)" disabled>
+      <option value="">All studios</option>
+    </select>
+  </div>
+
+  <div class="ctrl-sep"></div>
+
+  <!-- Sort dropdown -->
+  <div class="list-selects">
+    <span class="ls-label">Sort:</span>
+    <select class="list-select" id="sort-by">
+      <option value="title-asc">Title A → Z</option>
+      <option value="title-desc">Title Z → A</option>
+      <option value="score-desc">Score ↑</option>
+      <option value="score-asc">Score ↓</option>
+      <option value="status">Status</option>
+      <option value="eps-desc">Most episodes</option>
+      <option value="eps-asc">Fewest episodes</option>
+      <option value="type">Type</option>
+      <option value="airdate-desc" disabled>Air date newest ↓</option>
+      <option value="airdate-asc"  disabled>Air date oldest ↑</option>
+      <option value="watched-desc" disabled>Recently watched</option>
+      <option value="completed-desc" disabled>Recently completed</option>
+    </select>
+  </div>
+
+</div>
+
+<!-- ── Show grid ─────────────────────────────────────────── -->
+<div class="calendar" id="list-grid">
+  <div class="list-empty"><span class="spinner" style="width:18px;height:18px;border-width:2.5px;margin-right:10px"></span>Loading…</div>
+</div>
+
+<script type="module">
+  import { requireConfig, getConfig } from './js/config.js?v=2';
+  import { initSearch } from './js/search.js?v=2';
+  import { fetchAllShows } from './js/api.js?v=11';
+  import {
+    buildStatusBtn,
+    buildSvcStrip,
+    fetchTmdbPoster,
+    onStatusChange,
+    showBanner,
+    hideBanner,
+  } from './js/calendar.js?v=17';
+
+  requireConfig();
+  initSearch();
+
+  /* ── Constants ────────────────────────────────────────────── */
+  const STATUSES       = ['WATCHING','COMPLETED','PLANNED','PAUSED','DROPPED'];
+  const STATUS_ORDER   = { WATCHING: 0, PAUSED: 1, PLANNED: 2, COMPLETED: 3, DROPPED: 4 };
+  const STATUS_FILTER_KEY = 'starfleet_status_filter';
+
+  /* ── Status filter ──────────────────────────────────────────── */
+  let activeStatuses = loadStatusFilter();
+
+  function loadStatusFilter() {
+    try {
+      const s = localStorage.getItem(STATUS_FILTER_KEY);
+      if (s) { const p = JSON.parse(s); if (Array.isArray(p)) return new Set(p); }
+    } catch {}
+    return new Set(STATUSES);
+  }
+
+  function saveStatusFilter() {
+    try { localStorage.setItem(STATUS_FILTER_KEY, JSON.stringify([...activeStatuses])); } catch {}
+  }
+
+  let _allShows = [];
+
+  function toggleStatus(status) {
+    activeStatuses.has(status) ? activeStatuses.delete(status) : activeStatuses.add(status);
+    saveStatusFilter();
+    document.querySelectorAll('.sf-pill').forEach(p =>
+      p.classList.toggle('active', activeStatuses.has(p.dataset.status)));
+    renderList(_allShows, getConfig());
+  }
+
+  document.querySelectorAll('.sf-pill').forEach(pill => {
+    pill.classList.toggle('active', activeStatuses.has(pill.dataset.status));
+    pill.addEventListener('click', () => toggleStatus(pill.dataset.status));
+  });
+
+  /* ── Filter + sort state ────────────────────────────────────── */
+  const filterType     = document.getElementById('filter-type');
+  const filterTracking = document.getElementById('filter-tracking');
+  const sortBy         = document.getElementById('sort-by');
+
+  [filterType, filterTracking, sortBy].forEach(el =>
+    el.addEventListener('change', () => renderList(_allShows, getConfig())));
+
+  /* ── Type helpers ────────────────────────────────────────────── */
+  function showType(show) {
+    if (show.mediaShape === 'MOVIE') return 'movie';
+    if (show.trackingSpace === 'ANIME') return 'anime';
+    return 'tv';
+  }
+
+  /* ── Filter + sort pipeline ─────────────────────────────────── */
+  function applyFiltersAndSort(shows) {
+    const typeVal     = filterType.value;
+    const trackingVal = filterTracking.value;
+    const sortVal     = sortBy.value;
+
+    let result = shows.filter(s => {
+      if (!s.tracked) return false;
+      if (!activeStatuses.has(s.status)) return false;
+      if (typeVal) {
+        const t = showType(s);
+        if (t !== typeVal) return false;
+      }
+      if (trackingVal) {
+        const extIds = s.externalIds.edges.map(e => e.node);
+        if (trackingVal === 'sonarr' && !extIds.some(n => n.service === 'sonarr')) return false;
+        if (trackingVal === 'radarr' && !extIds.some(n => n.service === 'radarr')) return false;
+      }
+      return true;
+    });
+
+    result.sort((a, b) => {
+      switch (sortVal) {
+        case 'title-asc':  return a.displayTitle.localeCompare(b.displayTitle);
+        case 'title-desc': return b.displayTitle.localeCompare(a.displayTitle);
+        case 'score-desc': return (b.score ?? -1) - (a.score ?? -1);
+        case 'score-asc':  return (a.score ?? 99) - (b.score ?? 99);
+        case 'status':     return (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9);
+        case 'eps-desc':   return (b.totalEpisodes ?? 0) - (a.totalEpisodes ?? 0);
+        case 'eps-asc':    return (a.totalEpisodes ?? 0) - (b.totalEpisodes ?? 0);
+        case 'type': {
+          const order = { anime: 0, tv: 1, movie: 2 };
+          const ta = order[showType(a)] ?? 9;
+          const tb = order[showType(b)] ?? 9;
+          return ta !== tb ? ta - tb : a.displayTitle.localeCompare(b.displayTitle);
+        }
+        default: return a.displayTitle.localeCompare(b.displayTitle);
+      }
+    });
+
+    return result;
+  }
+
+  /* ── Show card builder ──────────────────────────────────────── */
+  function buildShowCard(show, cfg) {
+    const extIds = show.externalIds.edges.map(e => e.node);
+    const type   = showType(show);
+    const typeLabel = { tv: 'TV', anime: 'Anime', movie: 'Film' }[type];
+    const typeClass = { tv: 'lt-tv', anime: 'lt-anime', movie: 'lt-movie' }[type];
+
+    const card = document.createElement('article');
+    card.className = 'show-card';
+    card.dataset.showId = show.id;
+
+    /* ── Meta bar: type badge + score ── */
+    const meta = document.createElement('div');
+    meta.className = 'card-meta';
+
+    const badge = document.createElement('span');
+    badge.className = `lt-badge ${typeClass}`;
+    badge.textContent = typeLabel;
+    meta.appendChild(badge);
+
+    if (show.score != null) {
+      const score = document.createElement('span');
+      score.className = 'lt-score';
+      score.textContent = `★ ${show.score.toFixed(1)}`;
+      meta.appendChild(score);
+    }
+
+    card.appendChild(meta);
+
+    /* ── Card body: service strip + art ── */
+    const body = document.createElement('div');
+    body.className = 'card-body';
+
+    // Service strip — no file, no season-level malId at show level
+    body.appendChild(buildSvcStrip(extIds, null, null, false, cfg));
+
+    // Cover art — clicking navigates to show page
+    const art = document.createElement('a');
+    art.className = 'card-art';
+    art.dataset.showId = show.id;
+    art.href = `show.html?id=${encodeURIComponent(show.id)}`;
+    art.style.display = 'block';
+
+    const posterUrl = show.posterUrl || null;
+    if (posterUrl) {
+      const img = document.createElement('img');
+      img.src = posterUrl;
+      img.alt = show.displayTitle;
+      // No loading="lazy" — every card on this page is already in a wrapped
+      // flex row, not off-screen below a scroll boundary, so lazy-loading
+      // only delays the browser's own request without saving anything.
+      // If the LCARS-provided URL fails (Sonarr auth, broken path, etc.), fall back to TMDB
+      if (cfg.tmdb_api_key) {
+        img.onerror = () => {
+          img.remove();
+          fetchTmdbPoster(show, cfg.tmdb_api_key);
+        };
+      }
+      art.appendChild(img);
+    } else if (cfg.tmdb_api_key) {
+      // fetchTmdbPoster patches .card-art[data-show-id] when it resolves
+      fetchTmdbPoster(show, cfg.tmdb_api_key);
+    }
+
+    // Score overlay on art
+    if (show.score != null) {
+      const scoreOverlay = document.createElement('span');
+      scoreOverlay.className = 'art-score';
+      scoreOverlay.textContent = `★ ${show.score.toFixed(1)}`;
+      art.appendChild(scoreOverlay);
+    }
+
+    body.appendChild(art);
+    card.appendChild(body);
+
+    /* ── Footer: title + episode count ── */
+    const footer = document.createElement('div');
+    footer.className = 'card-footer';
+
+    const title = document.createElement('a');
+    title.className = 'show-title';
+    title.href = `show.html?id=${encodeURIComponent(show.id)}`;
+    title.textContent = show.displayTitle;
+    title.title = show.displayTitle;
+    footer.appendChild(title);
+
+    if (show.totalEpisodes != null) {
+      const counts = document.createElement('div');
+      counts.className = 'ep-counts';
+      counts.innerHTML = `<span class="c-total">${show.totalEpisodes} ep</span>`;
+      footer.appendChild(counts);
+    }
+
+    card.appendChild(footer);
+
+    /* ── Status radial picker ── */
+    card.appendChild(buildStatusBtn(show.id, show.status || 'WATCHING'));
+
+    return card;
+  }
+
+  /* ── Render ─────────────────────────────────────────────────── */
+  function renderList(shows, cfg) {
+    const grid     = document.getElementById('list-grid');
+    const countEl  = document.getElementById('list-count');
+    grid.innerHTML = '';
+
+    const visible = applyFiltersAndSort(shows);
+    countEl.textContent = `${visible.length} show${visible.length !== 1 ? 's' : ''}`;
+
+    if (visible.length === 0) {
+      grid.innerHTML = `<div class="list-empty">${
+        activeStatuses.size === 0
+          ? 'All statuses hidden — enable some in the Show filter.'
+          : 'No shows match the current filters.'
+      }</div>`;
+      return;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'card-row';
+    for (const show of visible) row.appendChild(buildShowCard(show, cfg));
+    grid.appendChild(row);
+
+    // Kick off TMDB poster fetches for shows without posterUrl
+    if (cfg.tmdb_api_key) {
+      const seen = new Set();
+      for (const show of visible) {
+        if (!show.posterUrl && !seen.has(show.id)) {
+          seen.add(show.id);
+          fetchTmdbPoster(show, cfg.tmdb_api_key);
+        }
+      }
+    }
+  }
+
+  /* ── Load ────────────────────────────────────────────────────── */
+  async function load() {
+    try {
+      showBanner('Loading shows…', 'loading');
+      _allShows = await fetchAllShows();
+      renderList(_allShows, getConfig());
+      hideBanner();
+    } catch (err) {
+      document.getElementById('list-grid').innerHTML =
+        `<div class="list-empty" style="color:var(--st-dropped)">${err.message}</div>`;
+      showBanner(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  load();
+</script>
+
+</body>
+</html>

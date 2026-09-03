@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <!-- Gold gradient: lighter at the tip (right), darker at the trailing edge (left) -->
+    <linearGradient id="gold" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#e8c558"/>
+      <stop offset="40%"  stop-color="#c8892a"/>
+      <stop offset="100%" stop-color="#8a5510"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="100" height="100" rx="16" fill="#0d0f14"/>
+
+  <!--
+    Starfleet delta insignia rotated 90° clockwise → points RIGHT like ▶.
+
+    Original upright shape has:
+      • Sharp top point
+      • Two outer edges angling down to lower corners
+      • A concave V-notch at the bottom (trailing edge)
+
+    Rotated 90° CW:
+      • Right tip  = was the top point
+      • Top edge   = outer right edge of the upright shape (straight-ish)
+      • Bottom edge = outer left edge of the upright shape (straight-ish)
+      • Left side  = the concave V-notch, now curving inward from both
+                     left corners toward a center notch point
+
+    Path (100×100):
+      Start at right tip → straight to top-left corner → cubic curve
+      RIGHT to the notch → cubic curve back LEFT to bottom-left corner
+      → implicit straight line back to right tip (Z).
+  -->
+
+  <!-- Outer dark layer (gives the bold black border seen on the badge) -->
+  <path d="M 91,50
+           L 9,4
+           C 26,22 31,38 29,50
+           C 31,62 26,78 9,96
+           Z"
+        fill="#050608"/>
+
+  <!-- Gold delta shape -->
+  <path d="M 87,50
+           L 13,9
+           C 28,25 33,40 31,50
+           C 33,60 28,75 13,91
+           Z"
+        fill="url(#gold)"/>
+
+  <!--
+    4-pointed star, centred inside the delta (slightly right of canvas centre).
+    Outer radius 8, inner radius 3, centre at (56, 50).
+  -->
+  <polygon
+    points="64,50 59,47 56,42 53,47 48,50 53,53 56,58 59,53"
+    fill="#0d0f14"
+    opacity="0.80"/>
+</svg>

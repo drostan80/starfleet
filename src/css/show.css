@@ -1,0 +1,955 @@
+/* ── Show page styles ──────────────────────────────────────
+ * Loaded ONLY in show.html, after main.css.
+ * All classes prefixed sp- to avoid collisions with card/list
+ * styles in main.css (e.g. .show-title, .watch-btn).
+ * ─────────────────────────────────────────────────────────── */
+
+/* ── Banner + hero ──────────────────────────────────────── */
+.sp-banner {
+  position: relative;
+  height: 320px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.sp-banner img {
+  width: 100%; height: 100%;
+  object-fit: cover; opacity: 0.45;
+}
+.sp-banner::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(to bottom, transparent 30%, var(--bg) 100%);
+}
+
+.sp-hero {
+  max-width: 1200px;
+  margin: -160px auto 0;
+  padding: 0 28px;
+  position: relative; z-index: 2;
+  display: grid;
+  grid-template-columns: 216px 1fr;
+  gap: 28px;
+}
+
+.sp-poster {
+  width: 216px; height: 312px;
+  border-radius: 8px; overflow: hidden;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.sp-poster img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+
+.sp-header {
+  padding-top: 140px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+.sp-title-row {
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+}
+.sp-title {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800; font-size: 28px;
+  letter-spacing: -0.02em; line-height: 1.15;
+}
+.sp-alt-title {
+  font-size: 14px; color: var(--muted); font-style: italic;
+}
+
+.sp-meta-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+
+/* ── Interactive status picker (overrides main.css card positioning) ── */
+.sp-status-wrap {
+  display: flex; align-items: center; gap: 10px;
+  position: relative;
+}
+/* Override the card-absolute positioning from main.css */
+.sp-status-wrap .status-btn-wrap {
+  position: relative;
+  bottom: auto; right: auto;
+  width: 28px; height: 28px;
+}
+.sp-status-wrap .status-icon-btn {
+  width: 28px; height: 28px;
+  font-size: 14px;
+}
+.sp-status-label {
+  font-size: 13px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.sp-status-label[data-status="WATCHING"]  { color: var(--st-watching); }
+.sp-status-label[data-status="COMPLETED"] { color: var(--st-completed); }
+.sp-status-label[data-status="PLANNED"]   { color: var(--st-planning); }
+.sp-status-label[data-status="PAUSED"]    { color: var(--st-paused); }
+.sp-status-label[data-status="DROPPED"]   { color: var(--st-dropped); }
+
+.sp-ts-badge {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px; font-weight: 500;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 4px;
+}
+.sp-ts-anime { background: rgba(249,115,22,0.15); color: var(--st-paused); }
+.sp-ts-tv    { background: rgba(91,140,255,0.15); color: var(--accent); }
+
+.sp-score { display: flex; align-items: center; gap: 6px; }
+.sp-score-editable { cursor: pointer; padding: 4px 8px; border-radius: 6px; transition: background .12s; }
+.sp-score-editable:hover { background: var(--surface-3); }
+.sp-score-input {
+  font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 500;
+  width: 56px; padding: 2px 4px; border-radius: 4px;
+  border: 1px solid var(--accent); background: var(--surface);
+  color: var(--text); outline: none; text-align: center;
+}
+.sp-score-input:disabled { opacity: 0.5; }
+.sp-score-value {
+  font-family: 'DM Mono', monospace; font-size: 20px; font-weight: 500;
+}
+.sp-score-max {
+  font-family: 'DM Mono', monospace; font-size: 12px; color: var(--faint);
+}
+
+.sp-meta-sep { width: 1px; height: 18px; background: var(--border); }
+.sp-meta-label { font-size: 11px; color: var(--muted); }
+.sp-meta-value { font-family: 'DM Mono', monospace; font-size: 12px; }
+
+/* ── Show body (single column below hero) ────────────────── */
+.sp-body {
+  max-width: 1200px;
+  margin: 0 auto; padding: 28px;
+  display: flex; flex-direction: column; gap: 24px;
+}
+
+.sp-section-label {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700; font-size: 13px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); margin-bottom: 10px;
+}
+.sp-synopsis {
+  font-size: 14px; line-height: 1.65;
+  color: var(--text); opacity: 0.88; max-width: 72ch;
+}
+
+/* ── Inline details row (hero) ──────────────────────────── */
+.sp-details-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12px; color: var(--muted); line-height: 1.4;
+}
+.sp-detail-item {
+  font-family: 'DM Sans', sans-serif;
+}
+.sp-detail-sep {
+  color: var(--faint); font-size: 10px;
+}
+
+/* ── Inline ext-ID badges (hero) ──────────────────────── */
+.sp-ext-inline {
+  display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px;
+}
+.sp-ext-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: 'DM Mono', monospace; font-size: 10px;
+  color: var(--muted); text-decoration: none;
+  padding: 2px 8px 2px 3px; border-radius: 4px;
+  background: var(--surface-3); transition: color .12s, background .12s;
+}
+.sp-ext-badge:hover { color: var(--accent); background: rgba(91,140,255,0.12); }
+.sp-ext-editable { cursor: context-menu; }
+.sp-ext-editable::after {
+  content: '✎'; font-size: 7px; opacity: 0; transition: opacity .12s;
+  margin-left: 2px; color: var(--muted);
+}
+.sp-ext-editable:hover::after { opacity: 1; }
+.sp-ext-add {
+  border: 1px dashed var(--muted); background: transparent;
+  color: var(--muted); cursor: pointer; font-size: 12px;
+  padding: 2px 8px; line-height: 16px;
+}
+.sp-ext-add:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Ext-ID inline editor ────────────────────────────── */
+.sp-ext-editor {
+  display: flex; gap: 4px; align-items: center;
+  flex-wrap: wrap; width: 100%;
+  margin-top: 4px; padding: 6px 8px;
+  background: var(--surface-2); border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.sp-ext-input {
+  font-family: 'DM Mono', monospace; font-size: 10px;
+  background: var(--surface-3); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 3px;
+  padding: 3px 6px; outline: none;
+}
+.sp-ext-input:focus { border-color: var(--accent); }
+.sp-ext-svc-select { min-width: 80px; }
+.sp-ext-url { flex: 1; min-width: 140px; }
+.sp-ext-actions { display: flex; gap: 4px; }
+.sp-ext-actions button {
+  border: none; border-radius: 3px; cursor: pointer;
+  font-size: 11px; padding: 2px 8px; line-height: 18px;
+}
+.sp-ext-save { background: var(--accent); color: #fff; }
+.sp-ext-save:hover { filter: brightness(1.15); }
+.sp-ext-save:disabled { opacity: .5; cursor: default; }
+.sp-ext-del { background: var(--status-dropped); color: #fff; }
+.sp-ext-del:hover { filter: brightness(1.15); }
+.sp-ext-del:disabled { opacity: .5; cursor: default; }
+.sp-ext-cancel { background: var(--surface-3); color: var(--muted); }
+.sp-ext-cancel:hover { color: var(--fg); }
+
+/* URL wrapper with verify link */
+.sp-ext-url-wrap {
+  display: flex; align-items: center; gap: 4px;
+  flex: 1; min-width: 140px;
+}
+.sp-ext-url-wrap .sp-ext-url { flex: 1; min-width: 0; }
+
+.sp-ext-verify {
+  font-size: 14px; text-decoration: none;
+  color: var(--accent); cursor: pointer;
+  line-height: 1; flex-shrink: 0;
+}
+.sp-ext-verify:hover { color: var(--fg); }
+
+/* Auto-search status */
+.sp-ext-search-status {
+  font-family: 'DM Sans', sans-serif; font-size: 10px;
+  color: var(--muted); white-space: nowrap;
+}
+.sp-ext-search-ok { color: var(--st-watching); }
+.sp-ext-search-miss { color: var(--st-paused); }
+
+.sp-ext-search-link {
+  font-size: 10px; color: var(--accent);
+  text-decoration: none;
+}
+.sp-ext-search-link:hover { text-decoration: underline; }
+
+/* Wide icons (wordmark logos like TMDB, IMDb) */
+.sp-ext-badge-icon.wide { width: 32px; }
+.sp-ext-badge-icon.extra-wide { width: 48px; }
+
+.sp-ext-badge-icon {
+  width: 16px; height: 16px; border-radius: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 8px; font-weight: 500; color: #fff; flex-shrink: 0;
+  overflow: hidden;
+}
+.sp-ext-badge-icon img, .sp-ext-badge-icon svg {
+  width: 100%; height: 100%; object-fit: contain; display: block;
+}
+/* Season-header service icon (inside AL/MAL links) */
+.sp-season-ext-icon {
+  width: 14px; height: 14px; display: inline-block; vertical-align: -2px;
+  margin-right: 3px; border-radius: 2px; overflow: hidden; flex-shrink: 0;
+}
+.sp-season-ext-icon img, .sp-season-ext-icon svg {
+  width: 100%; height: 100%; object-fit: contain; display: block;
+}
+
+/* ── Seasons ────────────────────────────────────────────── */
+
+.sp-season-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: visible;
+  scroll-margin-top: calc(var(--nav-h) + 12px);
+}
+
+.sp-season-hdr {
+  padding: 14px 18px;
+  display: flex; align-items: center; gap: 14px;
+  cursor: pointer; transition: background .12s;
+  border-radius: 10px 10px 0 0;
+}
+.sp-season-card:not(.open) .sp-season-hdr { border-radius: 10px; }
+.sp-season-hdr:hover { background: var(--surface-2); }
+
+.sp-season-num {
+  font-family: 'Syne', sans-serif; font-weight: 700; font-size: 16px;
+  white-space: nowrap;
+}
+.sp-season-range-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px; color: var(--faint); white-space: nowrap;
+}
+.sp-season-meta {
+  display: flex; align-items: center; gap: 12px; flex: 1; flex-wrap: wrap;
+}
+.sp-season-score {
+  font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted);
+}
+.sp-season-score-editable {
+  cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  transition: background .12s; display: inline-flex; align-items: center;
+}
+.sp-season-score-editable:hover { background: var(--surface-3); }
+.sp-season-score-label { pointer-events: none; }
+.sp-season-score-value { pointer-events: none; }
+.sp-season-score-editable .sp-score-input {
+  font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500;
+  width: 44px; padding: 1px 3px; border-radius: 3px;
+  border: 1px solid var(--accent); background: var(--surface);
+  color: var(--text); outline: none; text-align: center;
+}
+.sp-season-score-editable .sp-score-input:disabled { opacity: 0.5; }
+.sp-season-dates {
+  font-family: 'DM Mono', monospace; font-size: 11px; color: var(--faint);
+}
+.sp-season-abs-range {
+  font-family: 'DM Mono', monospace; font-size: 10px; color: var(--faint);
+  padding: 2px 7px; background: var(--surface-3); border-radius: 4px;
+}
+.sp-season-al-id, .sp-season-mal-id {
+  font-family: 'DM Mono', monospace; font-size: 10px; color: var(--faint);
+}
+.sp-season-ext-link {
+  text-decoration: none; color: var(--faint);
+  padding: 2px 6px; border-radius: 4px;
+  background: var(--surface-3); transition: color .12s, background .12s;
+}
+.sp-season-ext-link:hover {
+  color: var(--accent); background: rgba(91,140,255,0.12);
+}
+.sp-season-edit-btn {
+  font-size: 12px; padding: 2px 6px; border-radius: 4px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--faint); cursor: pointer; opacity: 0.7;
+  font-family: inherit; line-height: 1; transition: opacity .12s, color .12s;
+}
+.sp-season-edit-btn:hover { opacity: 1; color: var(--accent); }
+.sp-season-ep-count {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  color: var(--muted); margin-left: auto;
+}
+.sp-season-toggle {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--faint); transition: transform .2s; font-size: 12px;
+}
+.sp-season-card.open .sp-season-toggle { transform: rotate(180deg); }
+
+/* Per-season status chips */
+.sp-season-status-chips {
+  display: flex; gap: 4px; flex-shrink: 0; margin-left: auto;
+}
+.sp-season-chip {
+  font: 500 11px/1 var(--font-ui);
+  padding: 3px 8px; border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent; color: var(--muted);
+  cursor: pointer; transition: all .15s;
+  white-space: nowrap;
+}
+.sp-season-chip:hover { border-color: var(--accent); color: var(--fg); }
+.sp-season-chip.active[data-status="WATCHING"]   { background: #22c55e22; border-color: #22c55e; color: #22c55e; }
+.sp-season-chip.active[data-status="COMPLETED"]  { background: #3b82f622; border-color: #3b82f6; color: #3b82f6; }
+.sp-season-chip.active[data-status="PLANNED"]    { background: #f59e0b22; border-color: #f59e0b; color: #f59e0b; }
+.sp-season-chip.active[data-status="PAUSED"]     { background: #f9731622; border-color: #f97316; color: #f97316; }
+.sp-season-chip.active[data-status="DROPPED"]    { background: #ef444422; border-color: #ef4444; color: #ef4444; }
+.sp-season-chip:disabled { opacity: .5; cursor: wait; }
+.sp-season-hdr { overflow: visible; }
+
+/* ── Season body: poster + episode list side by side ────── */
+.sp-season-body {
+  display: grid;
+  grid-template-columns: 156px 1fr;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 10px 10px;
+  overflow: hidden;
+}
+.sp-season-body[hidden] { display: none !important; }
+
+.sp-season-poster {
+  width: 156px; min-height: 228px;
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 12px 0;
+}
+.sp-season-poster img {
+  width: 132px; height: 192px;
+  object-fit: cover; border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.sp-season-poster-empty {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px; color: var(--faint);
+  text-align: center; padding: 8px;
+  align-self: center;
+}
+
+.sp-ep-list { min-width: 0; }
+
+.sp-ep-row {
+  display: grid;
+  grid-template-columns: 60px 44px 1fr 90px 34px 34px;
+  align-items: center;
+  padding: 9px 14px; gap: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; transition: background .1s;
+}
+.sp-ep-row:last-child { border-bottom: none; }
+.sp-ep-row:hover { background: var(--surface-2); }
+
+.sp-ep-num {
+  font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500;
+}
+.sp-ep-abs {
+  font-family: 'DM Mono', monospace; font-size: 10px; color: var(--faint);
+}
+.sp-ep-title-cell {
+  display: flex; flex-direction: row; align-items: center; gap: 2px; min-width: 0;
+}
+.sp-ep-title {
+  font-size: 13px; flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sp-ep-airdate {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  color: var(--muted); text-align: right;
+}
+
+.sp-ep-mpv { display: flex; align-items: center; justify-content: center; }
+.sp-mpv-icon {
+  width: 20px; height: 20px; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; transition: opacity .12s; overflow: hidden;
+}
+.sp-mpv-icon img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.sp-mpv-icon.available {
+  background: rgba(34,197,94,0.15); color: var(--svc-player); cursor: pointer;
+}
+.sp-mpv-icon.unavailable {
+  background: var(--surface-3); color: var(--faint); cursor: default;
+}
+
+.sp-ep-watch { display: flex; align-items: center; justify-content: center; }
+
+/* ── Availability state dots (reuse main.css avail-* colors) ── */
+.sp-avail-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block; margin-right: 4px;
+}
+.sp-avail-dot.ready       { background: var(--av-ready); }
+.sp-avail-dot.downloading { background: var(--av-downloading); }
+.sp-avail-dot.missing     { background: var(--av-missing); }
+.sp-avail-dot.future      { background: var(--av-future); }
+
+/* ── Synopsis toggle & row ─────────────────────────────── */
+.sp-syn-toggle {
+  background: none; border: none; cursor: pointer;
+  color: var(--accent); font-size: 12px; padding: 0 4px;
+  opacity: 0.6; transition: opacity .12s;
+  flex-shrink: 0;
+}
+.sp-syn-toggle:hover, .sp-syn-toggle.active { opacity: 1; }
+.sp-ep-synopsis {
+  padding: 6px 14px 10px 128px;
+  font-size: 12px; line-height: 1.6;
+  color: var(--muted); border-bottom: 1px solid var(--border);
+  align-items: flex-start; gap: 8px;
+}
+.sp-ep-synopsis:not([hidden]) { display: flex; }
+
+/* ── Synopsis editor ───────────────────────────────────── */
+.sp-synopsis-section { position: relative; }
+.sp-synopsis-hdr {
+  display: flex; align-items: center; gap: 12px;
+}
+.sp-synopsis-hdr .sp-section-label { margin-bottom: 0; }
+.sp-sources-btn {
+  font-family: 'DM Sans', sans-serif; font-size: 11px;
+  padding: 3px 10px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--muted); transition: color .12s, background .12s;
+}
+.sp-sources-btn:hover { color: var(--accent); background: rgba(91,140,255,0.08); }
+.sp-synopsis-editable { cursor: pointer; border-radius: 6px; padding: 6px 8px; transition: background .12s; }
+.sp-synopsis-editable:hover { background: var(--surface-2); }
+.sp-synopsis-editable.empty { font-style: italic; color: var(--faint); }
+.sp-syn-editor { max-width: 72ch; }
+.sp-syn-textarea {
+  width: 100%; min-height: 80px; padding: 8px 10px;
+  font-family: 'DM Sans', sans-serif; font-size: 13px; line-height: 1.6;
+  border: 1px solid var(--accent); border-radius: 6px;
+  background: var(--surface); color: var(--text);
+  resize: vertical; outline: none;
+}
+.sp-syn-editor-btns { display: flex; gap: 6px; margin-top: 6px; }
+.sp-syn-save, .sp-syn-cancel {
+  font-family: 'DM Sans', sans-serif; font-size: 11px;
+  padding: 4px 12px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--text);
+}
+.sp-syn-save { background: var(--accent); color: #fff; border-color: var(--accent); }
+.sp-syn-save:hover { background: #4a7bef; }
+.sp-syn-save:disabled { opacity: 0.5; cursor: default; }
+.sp-syn-cancel:hover { background: var(--surface-3); }
+
+/* Episode synopsis edit / sources buttons */
+.sp-ep-syn-text { flex: 1; }
+.sp-syn-edit-btn, .sp-syn-src-btn {
+  flex-shrink: 0; background: none; border: none; cursor: pointer;
+  color: var(--faint); font-size: 11px; padding: 0 3px;
+  opacity: 0.5; transition: opacity .12s, color .12s;
+}
+.sp-syn-edit-btn:hover, .sp-syn-src-btn:hover { opacity: 1; color: var(--accent); }
+.sp-ep-syn-edit-area { width: 100%; }
+.sp-ep-syn-textarea {
+  width: 100%; min-height: 50px; padding: 6px 8px;
+  font-family: 'DM Sans', sans-serif; font-size: 12px; line-height: 1.5;
+  border: 1px solid var(--accent); border-radius: 4px;
+  background: var(--surface); color: var(--text);
+  resize: vertical; outline: none;
+}
+.sp-syn-toggle.add-mode { color: var(--faint); font-size: 11px; }
+
+/* Synopsis sources modal */
+.sp-sources-modal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 24px; max-width: 900px; width: 100%;
+  max-height: 80vh; overflow-y: auto; position: relative;
+}
+.sp-sources-loading {
+  font-family: 'DM Mono', monospace; font-size: 12px;
+  color: var(--muted); padding: 20px 0;
+}
+.sp-sources-empty {
+  color: var(--faint); font-size: 13px; font-style: italic; padding: 20px 0;
+}
+.sp-sources-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+.sp-source-card {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.sp-source-label {
+  font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.sp-source-text {
+  font-size: 12px; line-height: 1.6; color: var(--text);
+  max-height: 200px; overflow-y: auto;
+}
+.sp-source-text.empty { color: var(--faint); font-style: italic; }
+.sp-source-use-btn {
+  align-self: flex-start;
+  font-family: 'DM Sans', sans-serif; font-size: 11px;
+  padding: 4px 12px; border-radius: 4px; cursor: pointer;
+  background: var(--accent); color: #fff; border: none;
+  transition: background .12s;
+}
+.sp-source-use-btn:hover { background: #4a7bef; }
+.sp-source-use-btn:disabled { opacity: 0.5; cursor: wait; }
+
+/* ── Future episode dim ─────────────────────────────────── */
+.sp-ep-row.future { opacity: 0.4; }
+
+/* ── Special/film card (inline between seasons) ─────────── */
+.sp-special-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px; margin-bottom: 12px;
+  display: grid; grid-template-columns: 80px 1fr;
+  overflow: hidden;
+  scroll-margin-top: calc(var(--nav-h) + 12px);
+}
+.sp-special-poster {
+  width: 80px; background: var(--surface-2);
+  display: flex; align-items: center; justify-content: center;
+  padding: 8px 0;
+}
+.sp-special-poster img {
+  width: 64px; height: 94px;
+  object-fit: cover; border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.sp-special-info {
+  padding: 14px 18px;
+  display: flex; flex-direction: column; gap: 6px;
+  justify-content: center;
+}
+.sp-special-top-row {
+  display: flex; align-items: center; gap: 10px;
+}
+.sp-special-badge {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 3px 8px; border-radius: 4px; flex-shrink: 0;
+}
+.sp-special-badge.film    { background: rgba(59,130,246,0.15); color: var(--st-completed); }
+.sp-special-badge.special { background: rgba(245,158,11,0.15); color: var(--st-planning); }
+.sp-special-badge.ova     { background: rgba(249,115,22,0.15); color: var(--st-paused); }
+.sp-special-title { font-size: 14px; font-weight: 500; flex: 1; }
+.sp-special-bottom-row {
+  display: flex; align-items: center; gap: 14px;
+}
+.sp-special-bottom-row .sp-ep-abs,
+.sp-special-bottom-row .sp-ep-airdate {
+  font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted);
+}
+
+/* ── Movie page (no seasons) ────────────────────────────── */
+.sp-movie-info {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px; padding: 20px;
+}
+
+/* (Sidebar ext-ID editor removed — IDs now inline badges in hero) */
+
+/* ── Season mapping editor ────────────────────────────────── */
+.sp-mapping-editor {
+  padding: 14px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.sp-mapping-editor-title {
+  font-family: 'Syne', sans-serif; font-weight: 700;
+  font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); margin-bottom: 10px;
+}
+.sp-mapping-editor-fields {
+  display: flex; gap: 14px; flex-wrap: wrap;
+}
+.sp-mapping-field-group {
+  display: flex; flex-direction: column; gap: 4px; min-width: 100px;
+}
+.sp-mapping-label {
+  font-family: 'DM Sans', sans-serif; font-size: 10px;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.sp-mapping-input {
+  font-family: 'DM Mono', monospace; font-size: 12px;
+  padding: 5px 8px; border-radius: 4px; width: 120px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); outline: none;
+}
+.sp-mapping-input:focus { border-color: var(--accent); }
+.sp-mapping-editor-btns {
+  display: flex; gap: 6px; margin-top: 10px;
+}
+.sp-mapping-save, .sp-mapping-cancel {
+  font-family: 'DM Sans', sans-serif; font-size: 11px;
+  padding: 4px 12px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text); transition: background .12s;
+}
+.sp-mapping-save { background: var(--accent); color: #fff; border-color: var(--accent); }
+.sp-mapping-save:hover { background: #4a7bef; }
+.sp-mapping-save:disabled { opacity: 0.5; cursor: default; }
+.sp-mapping-cancel:hover { background: var(--surface-3); }
+
+/* ── Per-episode remap editor (inline) ───────────────────── */
+.sp-ep-num-editable { cursor: pointer; }
+.sp-ep-num-editable:hover {
+  background: var(--accent-d); border-radius: 3px;
+  outline: 1px solid var(--accent);
+}
+.sp-ep-remap-editor {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 12px 6px 0; margin-left: 8px;
+  background: var(--surface-2); border-bottom: 1px solid var(--border);
+}
+.sp-remap-label {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  color: var(--muted); margin-left: 4px;
+}
+.sp-remap-input {
+  font-family: 'DM Mono', monospace; font-size: 12px;
+  padding: 3px 6px; border-radius: 4px; width: 52px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); outline: none;
+}
+.sp-remap-input:focus { border-color: var(--accent); }
+.sp-remap-save, .sp-remap-cancel {
+  font-size: 12px; padding: 2px 6px; border-radius: 4px;
+  cursor: pointer; border: 1px solid var(--border);
+  background: transparent; color: var(--text); transition: background .12s;
+}
+.sp-remap-save { background: var(--accent); color: #fff; border-color: var(--accent); }
+.sp-remap-save:hover { background: #4a7bef; }
+.sp-remap-save:disabled { opacity: 0.5; cursor: default; }
+.sp-remap-cancel:hover { background: var(--surface-3); }
+
+/* ── Bulk remap editor (season-card level) ───────────────── */
+.sp-bulk-remap-editor {
+  padding: 14px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.sp-remap-btn { font-size: 13px; }
+
+/* ── Episode kind badge (inline in title cell) ─────────── */
+.sp-kind-badge {
+  display: inline-block;
+  font-family: 'DM Mono', monospace;
+  font-size: 8px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 2px 6px; border-radius: 3px; margin-right: 6px;
+  vertical-align: middle; flex-shrink: 0;
+}
+.sp-kind-badge.film    { background: rgba(59,130,246,0.15); color: var(--st-completed); }
+.sp-kind-badge.special { background: rgba(245,158,11,0.15); color: var(--st-planning); }
+.sp-kind-badge.ova     { background: rgba(249,115,22,0.15); color: var(--st-paused); }
+.sp-kind-badge.mini    { background: rgba(139,92,246,0.15); color: #a78bfa; }
+
+/* Minisode inline rows — subtle visual differentiation */
+.sp-ep-row.minisode {
+  background: rgba(139,92,246,0.04);
+  border-left: 2px solid rgba(139,92,246,0.3);
+  padding-left: 14px;
+}
+
+/* Minisode toggle button in season header */
+.sp-mini-toggle {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px; color: #a78bfa;
+  background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.25);
+  border-radius: 4px; padding: 2px 8px; cursor: pointer;
+  transition: opacity .12s, background .12s;
+  white-space: nowrap;
+}
+.sp-mini-toggle:hover { background: rgba(139,92,246,0.22); }
+.sp-mini-toggle.hiding { opacity: 0.5; }
+
+/* ── Special / film interleave cards ───────────────────── */
+.sp-special-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  overflow: hidden;
+}
+.sp-special-poster {
+  width: 80px;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+}
+.sp-special-poster img {
+  width: 64px;
+  height: 94px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.sp-special-info {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+}
+.sp-special-top-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sp-special-badge {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 3px 8px; border-radius: 4px;
+  flex-shrink: 0;
+}
+.sp-special-badge.film    { background: rgba(59,130,246,0.15); color: var(--st-completed); }
+.sp-special-badge.special { background: rgba(245,158,11,0.15); color: var(--st-planning); }
+.sp-special-badge.ova     { background: rgba(249,115,22,0.15); color: var(--st-paused); }
+.sp-special-title {
+  font-size: 14px; font-weight: 500; flex: 1;
+  color: var(--text); text-decoration: none;
+}
+a.sp-special-title:hover { color: var(--accent); }
+.sp-special-bottom-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* ── Error state ────────────────────────────────────────── */
+.sp-error {
+  max-width: 600px; margin: 80px auto;
+  text-align: center; color: var(--muted);
+}
+.sp-error h2 {
+  font-family: 'Syne', sans-serif; font-weight: 700;
+  font-size: 20px; color: var(--text); margin-bottom: 8px;
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .sp-banner { height: 220px; }
+  .sp-hero { grid-template-columns: 130px 1fr; gap: 18px; margin-top: -100px; }
+  .sp-poster { width: 130px; height: 190px; }
+  .sp-header { padding-top: 70px; }
+  .sp-title { font-size: 22px; }
+  .sp-season-body { grid-template-columns: 100px 1fr; }
+  .sp-season-poster { width: 100px; }
+  .sp-season-poster img { width: 84px; height: 122px; }
+  .sp-ep-row { grid-template-columns: 60px 40px 1fr 80px 28px 28px; gap: 6px; padding: 8px 10px; }
+  .sp-ep-synopsis { padding-left: 60px; }
+  .sp-ep-syn-textarea { min-width: 0; }
+}
+@media (max-width: 600px) {
+  .sp-season-body { grid-template-columns: 1fr; }
+  .sp-season-poster { width: 100%; min-height: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 12px; flex-direction: row; gap: 12px; }
+  .sp-season-poster img { width: 70px; height: 102px; }
+  .sp-special-card { grid-template-columns: 1fr; }
+  .sp-special-poster { width: 100%; border-bottom: 1px solid var(--border); }
+  .sp-season-hdr { flex-wrap: wrap; }
+  .sp-season-status-chips { width: 100%; order: 10; margin-top: 4px; }
+  .sp-season-chip { font-size: 10px; padding: 2px 6px; }
+}
+
+/* ── Art picker overlay ──────────────────────────────────── */
+.sp-poster-clickable { cursor: pointer; position: relative; }
+.sp-poster-edit-hint {
+  position: absolute; bottom: 6px; right: 6px;
+  font-size: 16px; opacity: 0; transition: opacity 0.2s;
+  background: rgba(0,0,0,0.6); border-radius: 4px; padding: 2px 5px;
+  pointer-events: none;
+}
+.sp-poster-edit-hint-sm { font-size: 12px; bottom: 4px; right: 4px; }
+.sp-poster-clickable:hover .sp-poster-edit-hint { opacity: 1; }
+.sp-banner-clickable { cursor: pointer; }
+
+.sp-art-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.sp-art-modal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 24px; max-width: 820px; width: 100%;
+  max-height: 80vh; overflow-y: auto; position: relative;
+}
+.sp-art-modal-title {
+  font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 700;
+  margin: 0 0 16px 0; color: var(--text);
+}
+.sp-art-fetch-btn {
+  background: var(--accent); color: #fff; border: none;
+  border-radius: 6px; padding: 8px 18px; cursor: pointer;
+  font-family: 'DM Sans', sans-serif; font-size: 13px;
+  margin-bottom: 16px;
+}
+.sp-art-fetch-btn:disabled { opacity: 0.6; cursor: wait; }
+.sp-art-empty {
+  color: var(--text-muted); font-size: 13px; font-style: italic;
+  padding: 20px 0;
+}
+.sp-art-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+.sp-art-card {
+  border: 2px solid var(--border); border-radius: 8px;
+  overflow: hidden; cursor: pointer; transition: border-color 0.2s;
+  background: var(--surface-2);
+}
+.sp-art-card:hover { border-color: var(--accent); }
+.sp-art-card.selected { border-color: var(--st-watching); }
+.sp-art-card img {
+  width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block;
+}
+.sp-art-card-info {
+  padding: 6px 8px; display: flex; flex-wrap: wrap; gap: 4px;
+  align-items: center;
+}
+.sp-art-source {
+  font-family: 'DM Mono', monospace; font-size: 10px;
+  text-transform: uppercase; padding: 2px 6px;
+  border-radius: 3px; background: var(--surface-3); color: var(--text-muted);
+}
+.sp-art-dims {
+  font-family: 'DM Mono', monospace; font-size: 10px;
+  color: var(--text-muted);
+}
+.sp-art-selected-badge {
+  font-size: 10px; font-weight: 600; color: var(--st-watching);
+}
+.sp-art-close-btn {
+  position: absolute; top: 12px; right: 12px;
+  background: none; border: none; color: var(--text-muted);
+  font-size: 20px; cursor: pointer; padding: 4px 8px;
+}
+.sp-art-close-btn:hover { color: var(--text); }
+
+/* ── Section label row + Add Season ───────────────────── */
+.sp-section-label-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.sp-add-season-btn {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--accent);
+  background: var(--accent-d);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.sp-add-season-btn:hover { background: var(--accent); }
+.sp-add-season-form {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+.sp-add-season-result {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  padding: 6px 0;
+  margin-top: 4px;
+}
+.sp-add-season-result.ok { color: var(--st-watching); }
+.sp-add-season-result.warn { color: var(--st-paused); }
+.sp-add-season-result.info { color: var(--muted); }
+
+/* Reconcile result (inline in season card) */
+.sp-reconcile-result {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  padding: 6px 16px;
+  border-top: 1px solid var(--border);
+}
+.sp-reconcile-result.ok { color: var(--st-watching); }
+.sp-reconcile-result.warn { color: var(--st-paused); }
+.sp-reconcile-result.info { color: var(--muted); }
+.sp-reconcile-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+.sp-reconcile-btn {
+  font-size: 13px !important;
+}
