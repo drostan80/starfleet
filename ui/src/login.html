@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starfleet — Login</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="css/main.css?v=5">
+  <style>
+    .login-page {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 400px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 36px 32px 32px;
+    }
+    .login-card h1 {
+      font-family: 'Syne', system-ui, sans-serif;
+      font-weight: 700;
+      font-size: 1.6rem;
+      margin-bottom: 8px;
+      color: var(--accent);
+    }
+    .login-card .subtitle {
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin-bottom: 24px;
+    }
+    .login-card .field-group { margin-bottom: 16px; }
+    .login-error {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #ef4444;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 0.88rem;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .login-error.visible { display: block; }
+    .login-actions { margin-top: 20px; }
+    .login-actions .btn-primary { width: 100%; }
+    .import-check {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 16px;
+    }
+    .import-check input[type="checkbox"] {
+      margin-top: 3px;
+      accent-color: var(--accent);
+    }
+    .import-check label {
+      color: var(--text);
+      font-size: 0.88rem;
+      line-height: 1.4;
+      cursor: pointer;
+    }
+    .import-check .import-detail {
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+
+<main class="login-page">
+  <div class="login-card">
+    <h1 id="page-title">Starfleet</h1>
+    <p class="subtitle" id="page-subtitle">Sign in to continue</p>
+
+    <div class="login-error" id="error-msg"></div>
+
+    <form id="login-form" autocomplete="off">
+      <div class="field-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username"
+               spellcheck="false" autocomplete="username" required>
+      </div>
+
+      <div class="field-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password"
+               autocomplete="current-password" required>
+      </div>
+
+      <!-- Setup mode only: confirm password -->
+      <div class="field-group" id="confirm-group" style="display:none">
+        <label for="confirm-password">Confirm Password</label>
+        <input type="password" id="confirm-password" name="confirm_password"
+               autocomplete="new-password">
+      </div>
+
+      <!-- Setup mode only: import existing settings -->
+      <div id="import-section" style="display:none">
+        <div class="import-check">
+          <input type="checkbox" id="import-settings" checked>
+          <div>
+            <label for="import-settings">Import existing settings from this browser</label>
+            <p class="import-detail" id="import-detail"></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="login-actions">
+        <button type="submit" class="btn-primary" id="submit-btn">Sign in</button>
+      </div>
+    </form>
+  </div>
+</main>
+
+<script type="module">
+  const form     = document.getElementById('login-form');
+  const errorDiv = document.getElementById('error-msg');
+  const title    = document.getElementById('page-title');
+  const subtitle = document.getElementById('page-subtitle');
+  const submitBtn = document.getElementById('submit-btn');
+  const confirmGroup = document.getElementById('confirm-group');
+  const importSection = document.getElementById('import-section');
+  const importDetail  = document.getElementById('import-detail');
+
+  let setupMode = false;
+
+  function showError(msg) {
+    errorDiv.textContent = msg;
+    errorDiv.classList.add('visible');
+  }
+  function clearError() {
+    errorDiv.classList.remove('visible');
+  }
+
+  // Check if this is a first-time setup.
+  async function checkSetup() {
+    try {
+      const res = await fetch('/auth/setup');
+      const data = await res.json();
+      if (data.needs_setup) {
+        setupMode = true;
+        title.textContent = 'Welcome to Starfleet';
+        subtitle.textContent = 'Create your account to get started';
+        submitBtn.textContent = 'Create Account';
+        confirmGroup.style.display = '';
+        document.getElementById('password').autocomplete = 'new-password';
+
+        // Check for existing localStorage settings to import.
+        try {
+          const raw = localStorage.getItem('starfleet_config');
+          if (raw) {
+            const cfg = JSON.parse(raw);
+            const keys = ['lcars_url', 'lcars_token', 'home_server_host', 'tmdb_api_key']
+              .filter(k => cfg[k]);
+            if (keys.length > 0) {
+              importSection.style.display = '';
+              importDetail.textContent = `Found: ${keys.join(', ')}`;
+            }
+          }
+        } catch { /* no localStorage or not parseable — skip */ }
+      }
+    } catch {
+      // /auth/setup not available — possibly old LCARS version, just show login.
+    }
+  }
+
+  checkSetup();
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    clearError();
+
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+
+    if (!username || !password) {
+      showError('Username and password are required.');
+      return;
+    }
+
+    if (setupMode) {
+      // Setup mode: create account.
+      const confirm = document.getElementById('confirm-password').value;
+      if (password !== confirm) {
+        showError('Passwords do not match.');
+        return;
+      }
+      if (password.length < 6) {
+        showError('Password must be at least 6 characters.');
+        return;
+      }
+
+      const body = { username, password };
+
+      // Import settings if checked.
+      const importCheck = document.getElementById('import-settings');
+      if (importCheck.checked) {
+        try {
+          const raw = localStorage.getItem('starfleet_config');
+          if (raw) {
+            const cfg = JSON.parse(raw);
+            body.settings = {};
+            for (const k of ['lcars_url', 'lcars_token', 'home_server_host', 'tmdb_api_key']) {
+              if (cfg[k]) body.settings[k] = cfg[k];
+            }
+          }
+        } catch { /* skip */ }
+      }
+
+      try {
+        const res = await fetch('/auth/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showError(data.error || 'Setup failed.');
+          return;
+        }
+        // Success — redirect to main app.
+        window.location.href = '/ui/';
+      } catch (err) {
+        showError('Connection error — is LCARS running?');
+      }
+    } else {
+      // Normal login.
+      try {
+        const res = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showError(data.error || 'Login failed.');
+          return;
+        }
+        // Success — redirect to main app (or original URL).
+        const params = new URLSearchParams(window.location.search);
+        window.location.href = params.get('next') || '/ui/';
+      } catch (err) {
+        showError('Connection error — is LCARS running?');
+      }
+    }
+  });
+
+  // Focus the username field.
+  document.getElementById('username').focus();
+</script>
+
+</body>
+</html>

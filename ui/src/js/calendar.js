@@ -8,7 +8,7 @@
  * - Week:  prev/next step by 7 days; range is Mon–Sun of anchor week
  */
 
-import { getConfig, requireConfig, rewriteHost } from './config.js?v=2';
+import { getConfig, requireConfig, bootstrapConfig, rewriteHost } from './config.js?v=3';
 import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus } from './api.js?v=11';
 import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, SVC_ICONS } from './icons.js?v=8';
 
@@ -979,8 +979,8 @@ function initKeyboardNav() {
 /* ── Init ────────────────────────────────────────────────── */
 
 /** Wire up controls and kick off first render. */
-export function init() {
-  const cfg = requireConfig();
+export async function init() {
+  const cfg = await bootstrapConfig();
   if (!cfg) return;
 
   // View mode buttons

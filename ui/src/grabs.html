@@ -389,11 +389,11 @@
 <div class="mpv-toast" id="mpv-toast"></div>
 
 <script type="module">
-  import { requireConfig, getConfig } from './js/config.js?v=2';
+  import { bootstrapConfig, getConfig } from './js/config.js?v=3';
   import { initSearch } from './js/search.js?v=2';
   import { fetchRecentGrabs } from './js/api.js?v=11';
 
-  requireConfig();
+  await bootstrapConfig();
   initSearch();
 
   const PAGE_SIZE = 20;

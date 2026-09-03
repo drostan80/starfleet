@@ -660,14 +660,14 @@
 </div>
 
 <script type="module">
-  import { requireConfig } from './js/config.js?v=2';
+  import { bootstrapConfig } from './js/config.js?v=3';
   import { initSearch } from './js/search.js?v=2';
   import {
     gql, fetchPendingReviews, resolvePendingReview, setSeasonScore,
     linkShowExternalId, setSeasonMapping, unlinkShowExternalId,
   } from './js/api.js?v=11';
 
-  requireConfig();
+  await bootstrapConfig();
   initSearch();
 
   /* ── Inline API helpers (avoid cache issues with api.js) ─── */

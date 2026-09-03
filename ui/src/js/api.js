@@ -11,7 +11,7 @@
  * CAN set. Once that lands, implement subscriptions here.
  */
 
-import { getConfig } from './config.js?v=2';
+import { getConfig } from './config.js?v=3';
 
 /**
  * Execute a GraphQL query or mutation against LCARS.
@@ -34,6 +34,12 @@ export async function gql(query, variables = {}) {
     },
     body: JSON.stringify({ query, variables }),
   });
+
+  // Expired session: nginx 302 → login.html, fetch follows → HTML 200.
+  if (res.redirected && res.url.includes('login.html')) {
+    window.location.href = '/ui/login.html';
+    return;
+  }
 
   // Always try to parse JSON — LCARS returns GraphQL errors with 400 status
   const json = await res.json().catch(() => null);

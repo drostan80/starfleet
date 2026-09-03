@@ -30,6 +30,8 @@ dependencies = [
     # promoted here from a dev-only test dependency, 2026-08-08, now that
     # runtime code (not just tests/test_server.py's ASGI transport) needs it.
     "httpx>=0.27",
+    # Web UI login gate — password hashing for the web_user table.
+    "bcrypt>=4.0",
 ]
 
 [project.scripts]

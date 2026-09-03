@@ -620,11 +620,11 @@
 <!-- ── Scripts ─────────────────────────────────────────── -->
 <script type="module">
 import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=11';
-import { requireConfig } from './js/config.js?v=2';
-import { showBanner, hideBanner } from './js/calendar.js?v=8';
+import { bootstrapConfig } from './js/config.js?v=3';
+import { showBanner, hideBanner } from './js/calendar.js?v=19';
 import { initSearch } from './js/search.js?v=4';
 
-requireConfig();
+await bootstrapConfig();
 initSearch();
 
 /* ── State ────────────────────────────────────────────── */

@@ -241,16 +241,16 @@
 <div class="calendar" id="backlog-grid"></div>
 
 <script type="module">
-  import { getConfig, requireConfig } from './js/config.js?v=2';
+  import { getConfig, bootstrapConfig } from './js/config.js?v=3';
   import { initSearch } from './js/search.js?v=2';
   import { fetchBacklog } from './js/api.js?v=11';
   import {
     buildCard,
     showBanner, hideBanner,
     fetchTmdbPoster,
-  } from './js/calendar.js?v=18';
+  } from './js/calendar.js?v=19';
 
-  requireConfig();
+  await bootstrapConfig();
 
   const STATUSES = ['WATCHING','COMPLETED','PLANNED','PAUSED','DROPPED'];
   const STATUS_FILTER_KEY = 'starfleet_status_filter';

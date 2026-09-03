@@ -6,7 +6,62 @@
   <title>Starfleet — Settings</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=4">
+  <link rel="stylesheet" href="css/main.css?v=5">
+  <style>
+    .settings-section {
+      margin-top: 32px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+    }
+    .settings-section h2 {
+      font-family: 'Syne', system-ui, sans-serif;
+      font-weight: 600;
+      font-size: 1.1rem;
+      margin-bottom: 16px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .device-only {
+      font-weight: 400;
+      text-transform: none;
+      color: var(--faint);
+      font-size: 0.78rem;
+      letter-spacing: 0;
+    }
+    .logout-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 32px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+    }
+    .logout-bar .username {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #ef4444;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 0.88rem;
+      font-weight: 500;
+      padding: 8px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn-danger:hover { opacity: 0.85; }
+    .pw-msg {
+      font-size: 0.88rem;
+      margin-top: 8px;
+      display: none;
+    }
+    .pw-msg.ok { display: block; color: var(--st-watching); }
+    .pw-msg.err { display: block; color: #ef4444; }
+  </style>
 </head>
 <body>
 
@@ -72,7 +127,7 @@
     </div>
 
     <div class="field-group">
-      <label for="mpv-helper-url">mpv Helper URL <span style="font-weight:400;text-transform:none;color:var(--faint)">(optional)</span></label>
+      <label for="mpv-helper-url">mpv Helper URL <span class="device-only">(this device only)</span></label>
       <input type="url" id="mpv-helper-url" name="mpv_helper_url"
              placeholder="http://localhost:19450"
              spellcheck="false">
@@ -91,10 +146,40 @@
       <span class="settings-saved" id="settings-saved">✓ Saved</span>
     </div>
   </form>
+
+  <!-- ── Change Password ─────────────────────────────── -->
+  <div class="settings-section">
+    <h2>Change Password</h2>
+    <form class="settings-form" id="pw-form" autocomplete="off">
+      <div class="field-group">
+        <label for="current-pw">Current Password</label>
+        <input type="password" id="current-pw" autocomplete="current-password">
+      </div>
+      <div class="field-group">
+        <label for="new-pw">New Password</label>
+        <input type="password" id="new-pw" autocomplete="new-password">
+      </div>
+      <div class="field-group">
+        <label for="confirm-pw">Confirm New Password</label>
+        <input type="password" id="confirm-pw" autocomplete="new-password">
+      </div>
+      <div class="settings-actions">
+        <button type="submit" class="btn-primary">Change Password</button>
+      </div>
+      <div class="pw-msg" id="pw-msg"></div>
+    </form>
+  </div>
+
+  <!-- ── Logout ──────────────────────────────────────── -->
+  <div class="logout-bar">
+    <span class="username" id="current-user"></span>
+    <div style="flex:1"></div>
+    <button type="button" class="btn-danger" id="logout-btn">Logout</button>
+  </div>
 </main>
 
 <script type="module">
-  import { getConfig, saveConfig } from './js/config.js';
+  import { getConfig, saveConfig, saveConfigWithSync, syncConfig } from './js/config.js?v=3';
   import { initSearch } from './js/search.js?v=2';
   initSearch();
 
@@ -102,15 +187,28 @@
   const savedMsg  = document.getElementById('settings-saved');
   const backBtn   = document.getElementById('back-btn');
 
-  // Pre-populate from stored config
-  const cfg = getConfig() || {};
-  document.getElementById('lcars-url').value         = cfg.lcars_url         || '';
-  document.getElementById('lcars-token').value       = cfg.lcars_token       || '';
-  document.getElementById('home-server-host').value  = cfg.home_server_host  || '';
-  document.getElementById('tmdb-api-key').value      = cfg.tmdb_api_key      || '';
-  document.getElementById('mpv-helper-url').value    = cfg.mpv_helper_url    || '';
+  // Sync config from server on load.
+  async function init() {
+    await syncConfig();
+    const cfg = getConfig() || {};
+    document.getElementById('lcars-url').value         = cfg.lcars_url         || '';
+    document.getElementById('lcars-token').value       = cfg.lcars_token       || '';
+    document.getElementById('home-server-host').value  = cfg.home_server_host  || '';
+    document.getElementById('tmdb-api-key').value      = cfg.tmdb_api_key      || '';
+    document.getElementById('mpv-helper-url').value    = cfg.mpv_helper_url    || '';
 
-  form.addEventListener('submit', e => {
+    // Show current user.
+    try {
+      const res = await fetch('/auth/me');
+      if (res.ok) {
+        const data = await res.json();
+        document.getElementById('current-user').textContent = `Signed in as ${data.username}`;
+      }
+    } catch { /* ignore */ }
+  }
+  init();
+
+  form.addEventListener('submit', async e => {
     e.preventDefault();
 
     const newCfg = {
@@ -121,13 +219,71 @@
       mpv_helper_url:   document.getElementById('mpv-helper-url').value.trim().replace(/\/$/, ''),
     };
 
-    saveConfig(newCfg);
+    await saveConfigWithSync(newCfg);
 
     savedMsg.classList.add('visible');
     setTimeout(() => savedMsg.classList.remove('visible'), 2500);
-
-    // Show Back link in case we arrived from a redirect (no history to go back to)
     backBtn.style.display = '';
+  });
+
+  // ── Change Password ────────────────────────────────────
+  const pwForm = document.getElementById('pw-form');
+  const pwMsg  = document.getElementById('pw-msg');
+
+  pwForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    pwMsg.className = 'pw-msg';
+    pwMsg.textContent = '';
+
+    const currentPw = document.getElementById('current-pw').value;
+    const newPw     = document.getElementById('new-pw').value;
+    const confirmPw = document.getElementById('confirm-pw').value;
+
+    if (!currentPw || !newPw) {
+      pwMsg.textContent = 'Both fields are required.';
+      pwMsg.className = 'pw-msg err';
+      return;
+    }
+    if (newPw !== confirmPw) {
+      pwMsg.textContent = 'New passwords do not match.';
+      pwMsg.className = 'pw-msg err';
+      return;
+    }
+    if (newPw.length < 6) {
+      pwMsg.textContent = 'Password must be at least 6 characters.';
+      pwMsg.className = 'pw-msg err';
+      return;
+    }
+
+    try {
+      const res = await fetch('/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: currentPw, new_password: newPw }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        pwMsg.textContent = data.error || 'Failed to change password.';
+        pwMsg.className = 'pw-msg err';
+        return;
+      }
+      pwMsg.textContent = '✓ Password changed.';
+      pwMsg.className = 'pw-msg ok';
+      document.getElementById('current-pw').value = '';
+      document.getElementById('new-pw').value = '';
+      document.getElementById('confirm-pw').value = '';
+    } catch {
+      pwMsg.textContent = 'Connection error.';
+      pwMsg.className = 'pw-msg err';
+    }
+  });
+
+  // ── Logout ─────────────────────────────────────────────
+  document.getElementById('logout-btn').addEventListener('click', async () => {
+    try {
+      await fetch('/auth/logout', { method: 'POST' });
+    } catch { /* best-effort */ }
+    window.location.href = '/ui/login.html';
   });
 </script>
 

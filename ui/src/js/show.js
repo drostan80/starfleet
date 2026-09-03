@@ -12,7 +12,7 @@
  * ordering TBD (batch 5 — specials placement decision pending).
  */
 
-import { requireConfig, rewriteHost } from './config.js?v=2';
+import { bootstrapConfig, requireConfig, rewriteHost } from './config.js?v=3';
 import {
   fetchShow, addWatchEvent, deleteWatchEvent, setScore, setSeasonScore,
   setSeasonStatus, setSeasonMapping, reconcileSeasonMapping,
@@ -2868,7 +2868,7 @@ async function autoFetchArt(show, root, cfg, targetSeason) {
 /* ── Init ────────────────────────────────────────────────── */
 
 export async function init() {
-  const cfg = requireConfig();
+  const cfg = await bootstrapConfig();
   if (!cfg) return;
 
   const params = new URLSearchParams(window.location.search);

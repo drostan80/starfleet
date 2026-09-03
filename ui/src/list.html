@@ -207,7 +207,7 @@
 </div>
 
 <script type="module">
-  import { requireConfig, getConfig } from './js/config.js?v=2';
+  import { bootstrapConfig, getConfig } from './js/config.js?v=3';
   import { initSearch } from './js/search.js?v=2';
   import { fetchAllShows } from './js/api.js?v=11';
   import {
@@ -217,9 +217,9 @@
     onStatusChange,
     showBanner,
     hideBanner,
-  } from './js/calendar.js?v=17';
+  } from './js/calendar.js?v=19';
 
-  requireConfig();
+  await bootstrapConfig();
   initSearch();
 
   /* ── Constants ────────────────────────────────────────────── */

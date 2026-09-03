@@ -34,7 +34,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocketClose
 
-from lcars import availability, config, db
+from lcars import auth, availability, config, db
 from lcars.resolvers import BINDABLES
 
 logger = logging.getLogger("lcars.server")
@@ -173,6 +173,15 @@ def build_app(
     )
     protected_graphql = BearerTokenMiddleware(graphql_app, bearer_token)
     routes = [
+        # ── Web UI auth (cookie-based, no bearer token) ──────────
+        Route("/auth/login", auth.login, methods=["POST"]),
+        Route("/auth/logout", auth.logout, methods=["POST"]),
+        Route("/auth/check", auth.check, methods=["GET"]),
+        Route("/auth/settings", auth.settings_handler, methods=["GET", "PUT"]),
+        Route("/auth/me", auth.me, methods=["GET"]),
+        Route("/auth/setup", auth.setup, methods=["GET", "POST"]),
+        Route("/auth/change-password", auth.change_password, methods=["POST"]),
+        # ── Webhooks (secret-header auth) ────────────────────────
         Route(
             "/webhooks/sonarr",
             _webhook_view(
