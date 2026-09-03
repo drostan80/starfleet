@@ -251,6 +251,18 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     # Duplicate external id claimed by more than one season — excluded
     # from this whole run and flagged, since its watch state can't be
     # trusted to belong to either show (watch_reconcile.py Fix 1).
+    #
+    # Subdivision suppression (2026-09-03): shows that share the same
+    # TVDB ID are season subdivisions of the same Sonarr series (e.g.
+    # Dr. STONE S3 split into New World Part 1 / Part 2).  An AniList/
+    # MAL ID claimed by both the parent and a subdivision is expected,
+    # not a conflict — suppress the review and keep processing.
+    tvdb_by_show: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT show_id, external_id FROM show_external_id WHERE service = 'tvdb'"
+    ).fetchall():
+        tvdb_by_show[row["show_id"]] = row["external_id"]
+
     seasons_by_ext_id: dict[int, list] = {}
     for season in seasons:
         seasons_by_ext_id.setdefault(season["ext_id"], []).append(season)
@@ -258,7 +270,12 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     for ext_id, dupes in seasons_by_ext_id.items():
         if len(dupes) <= 1:
             continue
-        show_ids = [d["show_id"] for d in dupes]
+        show_ids = {d["show_id"] for d in dupes}
+        # Suppress when every show in the conflict shares a TVDB ID —
+        # they're subdivisions of the same Sonarr series.
+        tvdb_ids = {tvdb_by_show.get(sid) for sid in show_ids} - {None}
+        if len(tvdb_ids) == 1:
+            continue
         for season in dupes:
             conflicted_season_ids.add(season["id"])
             other_shows = [s for s in show_ids if s != season["show_id"]]

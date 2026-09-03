@@ -413,6 +413,44 @@ def test_two_seasons_sharing_one_anilist_id_each_get_their_own_pending_review(co
     assert {r["entity_id"] for r in reviews} == {"z-dup001", "z-dup002"}
 
 
+def test_subdivision_same_tvdb_suppresses_conflict(conn, monkeypatch):
+    """Shows that share a TVDB ID are season subdivisions of the same
+    Sonarr series.  A shared AniList ID between them is expected — the
+    reconciler should NOT flag it as a conflict, and should still apply
+    the remote watch state to both seasons normally."""
+    _show(conn, "s-sub001", status="planned")
+    _show(conn, "s-sub002", status="planned")
+    # Both shows share TVDB 355774 (e.g. Dr. STONE parent + split-out cour).
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES ('s-sub001', 'tvdb', '355774', '', 'x')"
+    )
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES ('s-sub002', 'tvdb', '355774', '', 'x')"
+    )
+    _season(conn, "z-sub001", "s-sub001", 3, anilist_id=162670)
+    _season(conn, "z-sub002", "s-sub002", 1, anilist_id=162670)
+    _episode(conn, "e-sub001", "s-sub001", 3, 1)
+    _episode(conn, "e-sub002", "s-sub002", 1, 1)
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(162670, status="COMPLETED", progress=1)])
+
+    result = watch_reconcile.reconcile_watch_progress(conn)
+
+    # No conflict flagged — subdivision suppression.
+    assert result["ambiguous_anilist_id_conflicts"] == 0
+    # No pending_review created.
+    reviews = conn.execute(
+        "SELECT * FROM pending_review WHERE field = 'anilist_id_conflict'"
+    ).fetchall()
+    assert len(reviews) == 0
+    # Watch state was still applied to both seasons' episodes.
+    for eid in ("e-sub001", "e-sub002"):
+        ep = conn.execute("SELECT state FROM episode WHERE id = ?", (eid,)).fetchone()
+        assert ep["state"] == "watched"
+
+
 def test_a_stale_link_on_the_highest_season_does_not_fall_back_to_a_lower_seasons_status(
     conn, monkeypatch
 ):
