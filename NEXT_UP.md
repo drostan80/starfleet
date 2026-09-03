@@ -780,11 +780,12 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
 
 ## TBC / ongoing (validate as you go)
 
-- [ ] Daily use — Data is the active front-end; declaring it "done" is ongoing, no fixed bar.
+- [x] Daily use — Data is the active front-end; declaring it "done" is ongoing, no fixed bar.
       aniq stays untouched as emergency fallback until you're 100% happy, costs nothing.
-- [ ] Verify Sonarr/Radarr `/add/new?term=...` prefill — host:port curl-confirmed; exact
+      Closed 2026-09-03: Data is in daily use, working.
+- [x] Verify Sonarr/Radarr `/add/new?term=...` prefill — host:port curl-confirmed; exact
       query-param contract still assumed, not clicked through behind auth. Validate next time
-      you naturally use `A` to add a show.
+      you naturally use `A` to add a show. Closed 2026-09-03: confirmed working.
 - [ ] Rotate Sonarr/Radarr keys, MAL client_id, LCARS's own AniList client_secret — in
       progress in the background; reminder only, no action needed from this list.
 
@@ -815,7 +816,11 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
       reminder only; in progress in the background alongside key rotation.
 - [x] Design the HTML client's UI properly — pages built: Calendar, Lists, Add, Grabs, Reviews,
       Backlog, Settings, Show detail. Baked into Docker images as of v0.1.79.
-- [ ] HTML client: add a login/password gate, keep it safe.
+- [x] HTML client: add a login/password gate, keep it safe. Done 2026-09-03 (v0.1.81/82):
+      cookie-based session auth (nginx auth_request → LCARS /auth/check), bcrypt passwords,
+      server-side shared settings (web_setting table), CLI user management (add-user,
+      reset-password, list-users), first-login setup with localStorage import. Port 8123
+      (direct LCARS) still open as ungated fallback.
 - [ ] Add `watchedEpisodeCount: Int!` and `availableEpisodeCount: Int!` to the `Show` type —
       needed by the web client calendar cards to display accurate per-show progress and
       availability without a separate query. `watchedEpisodeCount` = count of episodes with at
@@ -824,50 +829,39 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
       show's mediaShape).
 - [ ] HTML client video playback: local player vs. browser — undecided (native mpv only
       works from the media machine itself, browser `<video>` has real format limits).
-- [ ] **New ShowStatus: SKIP** — a lightweight tombstone status meaning "seen, not interested".
-      Distinct from DROPPED (started and abandoned) and PLANNING (intend to watch). A show at
-      SKIP would need no Sonarr/Radarr entry; just a stub in LCARS so the same title doesn't
-      resurface as a suggestion again. AniList/MAL push behaviour: probably no push (the external
-      lists don't have an equivalent "skip" bucket). May also need a `skipList` query field so
-      clients can browse what has been dismissed.
-- [ ] **Upcoming-show catalog / proactive discovery** — two overlapping shapes, both worth
-      exploring before committing to one:
-      - *Passive import*: an Ops loop (daily or weekly) pulls upcoming seasons from AniList
-        (seasonal endpoint) and/or TMDB (discover with `first_air_date_year`, `with_status=0`)
-        and ingests them as LCARS stubs — `tracked = false`, status = null or a new UPCOMING
-        pseudo-status, minimal metadata (title, external IDs, poster, premiere date, episode
-        count if known). The user then browses these stubs in the web client's "Upcoming" page,
-        can promote to PLANNING (full add + Sonarr/Radarr prompt) or dismiss as SKIP. Past
-        seasons not yet in LCARS stay addable via the existing `addShow`/backfill flow.
-      - *Active search*: the web client gets a "Browse / Discover" page sourcing directly from
-        TMDB (covers both anime and non-anime in one API, simpler than juggling AniList +
-        TMDB). Results are grouped by premiere year/season (Winter/Spring/Summer/Fall) or by
-        release month, displaying cover art, title, and air date. Per entry, two actions:
-        - **Plan** → calls existing `addShow` (or a new `planShow` shortcut) — full LCARS row,
-          prompts/auto-triggers Sonarr or Radarr add.
-        - **Skip** → adds a lightweight LCARS stub (title, TMDB link, poster, air dates) under
-          the new SKIP status; no Sonarr/Radarr interaction, no episode/season correctness
-          required at stub time.
-      The two shapes are complementary: passive import fills the inbox automatically; active
-      search handles targeted lookup. Either requires the SKIP status above and a stub-ingestion
-      path in LCARS that doesn't enforce the same completeness as a full `addShow`.
+- [ ] **Discover page (extension of Add page)** — groups the upcoming-show catalog and SKIP
+      status ideas into one feature:
+      - **SKIP status**: a lightweight tombstone meaning "seen, not interested". Distinct from
+        DROPPED (started and abandoned) and PLANNING (intend to watch). No Sonarr/Radarr entry;
+        just a LCARS stub so the title doesn't resurface. No AniList/MAL push (no equivalent
+        bucket). May need a `skipList` query for browsing dismissed titles.
+      - **Passive import**: Ops loop (daily/weekly) pulls upcoming seasons from AniList
+        (seasonal endpoint) and/or TMDB discover, ingests as LCARS stubs (`tracked = false`,
+        minimal metadata). User browses in "Upcoming" page, promotes to PLANNING or dismisses
+        as SKIP.
+      - **Active search / browse**: a "Discover" page sourcing from TMDB (covers anime and
+        non-anime in one API). Grouped by premiere season or release month, cover art + title +
+        air date. Two actions per entry: **Plan** (full add + Sonarr/Radarr) or **Skip** (stub).
+      Both passive and active paths need the SKIP status and a stub-ingestion path that doesn't
+      enforce full `addShow` completeness.
 - [ ] **Web client — Statistics page** (details TBD). Likely surface: episode/show counts by
       status, watch history over time (episodes watched per day/week/month), score distribution,
       genre breakdown, total runtime. Needs `watchedEpisodeCount` and date-bucketed watch-event
       aggregates from LCARS — design the queries when building the page.
-- [ ] Open question: should linkage to external DBs (TMDB, AniList…) hang off `show` or
-      `episode`? First read: `season` already answers most of this.
-- [ ] Open question: does `show.studio` deserve an id-prefix like other entities, for
-      "browse by studio"?
-- [ ] If a tracked show gets delayed, check livechart.me/feeds/headlines (or its /search)
-      for a matching headline — manual only, not automated.
-- [ ] animeschedule.net's real API v3 (`/anime/{slug}`, `/timetables/{airType}`) as a second
-      schedule source, if it ever becomes worth building — its RSS feed is a confirmed dead
-      end.
+- [x] Open question: should linkage to external DBs (TMDB, AniList…) hang off `show` or
+      `episode`? **Answered**: `show_external_id` for show-level (TVDB, Sonarr, AniList, MAL,
+      IMDB, TMDB) + `season_external_id` for season-level (AniList, MAL). Episode doesn't
+      need its own.
+- [ ] **Browse / filter by studio** — `show.studio` gets an id-prefix like other entities,
+      enabling a proper browse-by-studio page or filter. Answer to the original question: yes.
+- [ ] **Better calendar schedule / news sync** — group of related ideas:
+      - Check livechart.me/feeds/headlines (or its /search) for delay/reschedule news on
+        tracked shows — manual only, not automated yet.
+      - animeschedule.net's real API v3 (`/anime/{slug}`, `/timetables/{airType}`) as a second
+        schedule source, if it ever becomes worth building — its RSS feed is a confirmed dead
+        end.
 - [ ] AniList indexes a not-yet-aired season under its romaji title only — handle case-by-case
       as each season airs, not automated.
-- [ ] Fix the Tailscale ACL blocking SSH to the deploy host as `drostan` — deferred, LAN IP
-      workaround is fine for now.
 - [x] Client changes now sent to LCARS immediately, not buffered (2026-08-26, `~/repos/data`
       `7148d70`). The queue-then-flush buffer dated from when Data wrote to Sonarr/AniList directly;
       Data only talks to LCARS now, so `w`/`m`-status/`S` flush the moment they're made instead of
