@@ -15,7 +15,6 @@ local mount or path mapping.
 """
 import json
 import os
-import signal
 import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
