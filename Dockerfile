@@ -51,6 +51,11 @@ COPY migrations/ ./migrations/
 RUN useradd --create-home --uid 1000 lcars
 USER lcars
 
+# Web client — baked into the app image so LCARS can serve it at /ui/
+# via LCARS_WEB_ROOT=/ui (Starlette StaticFiles, see server.py), without
+# a host bind mount. The lcars user owns it read-only.
+COPY --chown=lcars:lcars ui/src/ /ui/
+
 EXPOSE 8000
 
 # Real serve command, landed in A.3 (was a placeholder through 0.5/0.4).
@@ -69,3 +74,13 @@ CMD ["sh", "-c", "alembic upgrade head && lcars"]
 # `ops` service overrides `command` to `ops run` instead of using this
 # CMD, and gets its own env (OPS_LCARS_URL/OPS_LCARS_BEARER_TOKEN[_FILE]) —
 # see SCOPE.md §11.3's own B.1 addendum for the full compose shape.
+
+# --- Web reverse proxy (nginx) -------------------------------------------
+# Separate stage — built as a second image (starfleet:<version>-web) from
+# the same CI run. Serves static UI files at /ui/, raw media at /files/,
+# and proxies GraphQL to the lcars container. Replaces the bind-mounted
+# nginx:alpine + deploy.sh workflow.
+FROM nginx:alpine AS web
+COPY ui/src/ /ui/
+COPY ui/nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80

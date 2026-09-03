@@ -62,14 +62,25 @@ jobs:
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             version="${GITHUB_REF_NAME#v}"
-            echo "tags=${IMAGE}:${version},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+            echo "app-tags=${IMAGE}:${version},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+            echo "web-tags=${IMAGE}:${version}-web,${IMAGE}:latest-web" >> "$GITHUB_OUTPUT"
           else
-            echo "tags=${IMAGE}:ci-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "app-tags=${IMAGE}:ci-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "web-tags=${IMAGE}:ci-${{ github.sha }}-web" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build (and publish only on a v* tag)
+      - name: Build app image (and publish only on a v* tag)
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: base
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.meta.outputs.app-tags }}
+
+      - name: Build web image (and publish only on a v* tag)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: web
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: ${{ steps.meta.outputs.web-tags }}

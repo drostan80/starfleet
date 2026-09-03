@@ -66,16 +66,17 @@ Settings UI is lowest priority — functional over pretty.
 
 ## Deployment
 
-The web client is **not baked into the LCARS Docker image** — it is served
-by the nginx reverse-proxy container from a host bind mount
-(`/home/tiny/repos/web/src:/ui`). Deploy with `./deploy.sh` from this
-directory, which rsyncs `src/` to the remote host over SSH. No container
-restart needed.
+The web client is baked into both Docker images at build time:
 
-```
-cd ui && ./deploy.sh
-# → deployed → http://192.168.0.152:8888/ui/index.html
-```
+- **`starfleet:<ver>`** (app image) — LCARS serves `ui/src/` at `/ui/`
+  via Starlette StaticFiles (`LCARS_WEB_ROOT=/ui`).
+- **`starfleet:<ver>-web`** (nginx image) — serves `/ui/` static files,
+  `/files/` for media playback, and proxies `/` to LCARS.
 
-The nginx config (`nginx.conf`) serves static files at `/ui/` and proxies
-everything else to LCARS at `http://lcars:8000`.
+Deploy with the normal starfleet release process (tag → CI → SSH →
+bump image pins in `starfleet.yml` → pull → up). UI changes require a
+new release — there is no separate rsync/deploy.sh step.
+
+The nginx config (`nginx.conf`) is baked into the `-web` image and serves
+static files at `/ui/`, raw media at `/files/`, and proxies everything
+else to LCARS at `http://lcars:8000`.
