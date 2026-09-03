@@ -860,6 +860,10 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
       - animeschedule.net's real API v3 (`/anime/{slug}`, `/timetables/{airType}`) as a second
         schedule source, if it ever becomes worth building — its RSS feed is a confirmed dead
         end.
+- [ ] **Download episode locally** — trigger a download of a specific episode from the web
+      client (pull from Sonarr/Radarr to a local path, or stream-save via the `/files/` media
+      endpoint). Details TBD: interaction with Sonarr's manual search/grab vs. already-available
+      files, destination path, progress feedback.
 - [ ] AniList indexes a not-yet-aired season under its romaji title only — handle case-by-case
       as each season airs, not automated.
 - [x] Client changes now sent to LCARS immediately, not buffered (2026-08-26, `~/repos/data`
