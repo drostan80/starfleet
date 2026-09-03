@@ -1,0 +1,2201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starfleet — Reviews</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="css/main.css?v=4">
+  <style>
+    /* ── Reviews page ────────────────────────────────────────── */
+    .reviews-controls {
+      height: var(--ctrl-h);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 14px;
+      flex-shrink: 0;
+      position: sticky;
+      top: var(--nav-h);
+      z-index: 95;
+    }
+
+    .reviews-count {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+    }
+    .reviews-count .cnt-open { color: var(--st-planning); font-weight: 500; }
+
+    .filter-pills {
+      display: flex;
+      gap: 4px;
+      margin-left: 8px;
+    }
+    .filter-pill {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.12s;
+      user-select: none;
+    }
+    .filter-pill:hover { color: var(--text); background: var(--surface-3); }
+    .filter-pill.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+    .toggle-resolved {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--muted);
+      user-select: none;
+    }
+    .toggle-resolved input[type=checkbox] {
+      accent-color: var(--accent);
+      width: 14px; height: 14px;
+      cursor: pointer;
+    }
+    .toggle-resolved:hover { color: var(--text); }
+
+    .refresh-btn {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 12px;
+      border-radius: 6px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .refresh-btn:hover { color: var(--text); background: var(--surface-3); }
+
+    /* ── Review list + detail ────────────────────────────────── */
+    .reviews-body {
+      flex: 1;
+      display: flex;
+      gap: 0;
+      min-height: 0;
+    }
+
+    .review-list {
+      width: 360px;
+      flex-shrink: 0;
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+    }
+
+    .review-item {
+      display: flex;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.1s;
+      align-items: flex-start;
+    }
+    .review-item:hover { background: var(--surface-2); }
+    .review-item.selected {
+      background: var(--surface-2);
+      border-left: 2px solid var(--accent);
+      padding-left: 12px;
+    }
+    .review-item.resolved { opacity: 0.45; }
+    .review-item.resolved.selected { opacity: 0.8; }
+
+    .ri-poster {
+      width: 32px;
+      height: 48px;
+      border-radius: 3px;
+      object-fit: cover;
+      flex-shrink: 0;
+      background: var(--surface-3);
+    }
+
+    .ri-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+
+    .ri-title {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .ri-field-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .ri-entity-type {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--surface-3);
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    .ri-field {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--accent);
+    }
+    .ri-resolved-badge {
+      font-size: 9px;
+      color: var(--st-watching);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      margin-left: auto;
+    }
+
+    .ri-meta {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .ri-source {
+      font-size: 10px;
+      color: var(--faint);
+    }
+    .ri-date {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      color: var(--faint);
+      margin-left: auto;
+    }
+
+    /* ── Detail pane ─────────────────────────────────────────── */
+    .review-detail {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .detail-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .detail-header {
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    .detail-poster {
+      width: 60px;
+      height: 90px;
+      border-radius: 4px;
+      object-fit: cover;
+      background: var(--surface-3);
+      flex-shrink: 0;
+    }
+    .detail-header-info { flex: 1; min-width: 0; }
+    .detail-show-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      margin: 0 0 4px;
+    }
+    .detail-episode-ctx {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--accent);
+      margin-bottom: 2px;
+    }
+    .detail-episode-title {
+      font-size: 12px;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .detail-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .detail-section-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 6px 12px;
+    }
+    .dg-key {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .dg-val {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--text);
+      word-break: break-all;
+    }
+    .dg-val.resolved { color: var(--st-watching); }
+
+    /* ── Before/after diff ───────────────────────────────────── */
+    .diff-container {
+      display: flex;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .diff-box {
+      flex: 1;
+      border-radius: 6px;
+      padding: 10px 14px;
+      min-height: 48px;
+    }
+    .diff-box.before {
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+    }
+    .diff-box.after {
+      background: rgba(34, 197, 94, 0.08);
+      border: 1px solid rgba(34, 197, 94, 0.25);
+    }
+    .diff-label {
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
+    }
+    .diff-box.before .diff-label { color: var(--st-dropped); }
+    .diff-box.after .diff-label { color: var(--st-watching); }
+    .diff-value {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--text);
+      word-break: break-all;
+    }
+    .diff-arrow {
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    /* chain (collapsed by default if long) */
+    .chain-toggle {
+      font-size: 10px;
+      color: var(--accent);
+      cursor: pointer;
+      user-select: none;
+      margin-top: 4px;
+    }
+    .chain-toggle:hover { text-decoration: underline; }
+    .chain-items {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-top: 6px;
+    }
+    .chain-item {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+      padding: 3px 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+    }
+    .chain-item:last-child {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* ── Proposed message (for non-value chains) ─────────────── */
+    .proposed-message {
+      font-size: 12px;
+      color: var(--text);
+      padding: 10px 14px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      line-height: 1.5;
+    }
+
+    /* ── Actions ─────────────────────────────────────────────── */
+    .review-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .review-actions .btn-primary {
+      font-size: 12px;
+      padding: 6px 14px;
+    }
+    .btn-approve {
+      background: var(--st-watching) !important;
+      border-color: var(--st-watching) !important;
+    }
+    .btn-approve:hover { filter: brightness(1.15); }
+    .btn-revert {
+      background: var(--st-planning) !important;
+      border-color: var(--st-planning) !important;
+    }
+    .btn-revert:hover { filter: brightness(1.15); }
+    .btn-retry {
+      background: var(--accent) !important;
+      border-color: var(--accent) !important;
+    }
+    .btn-dismiss {
+      background: var(--surface-2) !important;
+      border: 1px solid var(--border) !important;
+      color: var(--muted) !important;
+    }
+    .btn-dismiss:hover { color: var(--text) !important; background: var(--surface-3) !important; }
+
+    /* Inline edit row */
+    .inline-edit {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 4px;
+    }
+    .inline-edit input {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      padding: 5px 10px;
+      border-radius: 5px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      outline: none;
+      flex: 1;
+      min-width: 0;
+    }
+    .inline-edit input:focus { border-color: var(--accent); }
+    .inline-edit .btn-primary { flex-shrink: 0; }
+
+    .action-note {
+      font-size: 10px;
+      color: var(--faint);
+      font-style: italic;
+      margin-top: 2px;
+    }
+    .action-status {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .action-status.ok { color: var(--st-watching); }
+    .action-status.err { color: var(--st-dropped); }
+
+    /* ── Resolve form ────────────────────────────────────────── */
+    .resolve-form textarea {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      resize: vertical;
+      min-height: 40px;
+      outline: none;
+      transition: border-color 0.12s;
+      width: 100%;
+    }
+    .resolve-form textarea:focus { border-color: var(--accent); }
+    .resolve-form textarea::placeholder { color: var(--faint); }
+
+    /* Resolution display */
+    .resolution-box {
+      background: rgba(34, 197, 94, 0.06);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+      border-radius: 6px;
+      padding: 10px 14px;
+    }
+    .resolution-box .detail-grid { gap: 4px 12px; }
+
+    .reviews-loading {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    /* ── Bulk bar ────────────────────────────────────────────── */
+    .bulk-bar {
+      padding: 6px 20px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .bulk-bar:empty { display: none; }
+
+    /* ── Conflict comparison ─────────────────────────────────── */
+    .conflict-compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .conflict-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      background: var(--surface-2);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .conflict-card.this-side { border-color: var(--accent); }
+    .conflict-card-header {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .conflict-card-poster {
+      width: 44px; height: 66px;
+      border-radius: 3px;
+      object-fit: cover;
+      background: var(--surface-3);
+      flex-shrink: 0;
+    }
+    .conflict-card-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .conflict-card-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .conflict-tag {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: var(--surface-3);
+      color: var(--muted);
+    }
+    .conflict-tag.watching { background: rgba(34,197,94,0.15); color: var(--st-watching); }
+    .conflict-tag.planned { background: rgba(245,158,11,0.15); color: var(--st-planning); }
+    .conflict-tag.tracked { background: rgba(91,140,255,0.15); color: var(--accent); }
+    .conflict-tag.untracked { background: rgba(239,68,68,0.1); color: var(--st-dropped); }
+    .conflict-ids {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .conflict-ids a { color: var(--accent); text-decoration: none; }
+    .conflict-ids a:hover { text-decoration: underline; }
+    .conflict-ids .contested { color: var(--st-planning); font-weight: 600; }
+    .conflict-label {
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--faint);
+      margin-bottom: 2px;
+    }
+    .conflict-actions-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 4px;
+    }
+    .conflict-loading {
+      grid-column: 1 / -1;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 20px;
+    }
+
+    /* ── External IDs section ────────────────────────────────── */
+    .ext-ids-grid {
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      gap: 6px 10px;
+      align-items: center;
+    }
+    .ext-id-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    .ext-id-value {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--text);
+    }
+    .ext-id-value a { color: var(--accent); text-decoration: none; }
+    .ext-id-value a:hover { text-decoration: underline; }
+    .ext-id-value.missing { color: var(--st-dropped); font-style: italic; }
+
+    .id-form-grid {
+      display: grid;
+      grid-template-columns: 80px 1fr auto;
+      gap: 8px 10px;
+      align-items: center;
+    }
+    .id-form-grid label {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted);
+    }
+    .id-form-grid input {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      padding: 5px 10px;
+      border-radius: 5px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      outline: none;
+      min-width: 0;
+    }
+    .id-form-grid input:focus { border-color: var(--accent); }
+    .id-form-grid input::placeholder { color: var(--faint); }
+    .id-form-grid .hint {
+      font-size: 10px;
+      color: var(--faint);
+    }
+    .season-rows {
+      margin-top: 6px;
+    }
+    .season-row-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--faint);
+      grid-column: 1 / -1;
+      margin-top: 4px;
+      border-top: 1px solid var(--border);
+      padding-top: 6px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Top nav ─────────────────────────────────────────── -->
+<nav class="top-nav">
+  <a href="index.html" class="nav-brand">Starfleet</a>
+  <ul class="nav-links">
+    <li><a href="index.html">Calendar</a></li>
+    <li><a href="backlog.html">Backlog</a></li>
+    <li><a href="list.html">List</a></li>
+    <li><a href="grabs.html">Grabs</a></li>
+    <li><a href="reviews.html" class="active" data-nav="reviews">Reviews</a></li>
+    <li><a href="add.html">Add</a></li>
+  </ul>
+  <div class="nav-spacer"></div>
+  <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
+  <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
+</nav>
+
+<div id="status-banner" class="status-banner hidden"></div>
+
+<!-- ── Controls bar ─────────────────────────────────────── -->
+<div class="reviews-controls">
+  <span class="reviews-count" id="reviews-count">—</span>
+  <div class="filter-pills" id="filter-pills"></div>
+  <label class="toggle-resolved">
+    <input type="checkbox" id="include-resolved">
+    Show resolved
+  </label>
+  <button class="refresh-btn" id="refresh-btn">↺ Refresh</button>
+</div>
+
+<div class="bulk-bar" id="bulk-bar"></div>
+
+<!-- ── Reviews body: list + detail ──────────────────────── -->
+<div class="reviews-body">
+  <div class="review-list" id="review-list">
+    <div class="reviews-loading"><span class="spinner"></span>Loading…</div>
+  </div>
+  <div class="review-detail" id="review-detail">
+    <div class="detail-empty">Select a review to inspect</div>
+  </div>
+</div>
+
+<script type="module">
+  import { requireConfig } from './js/config.js?v=2';
+  import { initSearch } from './js/search.js?v=2';
+  import {
+    gql, fetchPendingReviews, resolvePendingReview, setSeasonScore,
+    linkShowExternalId, setSeasonMapping, unlinkShowExternalId,
+  } from './js/api.js?v=11';
+
+  requireConfig();
+  initSearch();
+
+  /* ── Inline API helpers (avoid cache issues with api.js) ─── */
+  async function resolveReviewLabels(reviews) {
+    if (!reviews.length) return new Map();
+    const byType = { show: new Set(), episode: new Set(), season: new Set() };
+    for (const r of reviews) {
+      if (byType[r.entityType]) byType[r.entityType].add(r.entityId);
+    }
+    const parts = [];
+    const showIds = [...byType.show];
+    const episodeIds = [...byType.episode];
+    const seasonIds = [...byType.season];
+    showIds.forEach((id, i) => {
+      parts.push(`s${i}: show(id: "${id}") { id displayTitle posterUrl externalIds(first:20) { edges { node { service externalId url } } } seasons(first:20) { edges { node { id seasonNumber anilistId malId } } } }`);
+    });
+    episodeIds.forEach((id, i) => {
+      parts.push(`e${i}: episode(id: "${id}") { id season episode title airDateUtc show { id displayTitle posterUrl } }`);
+    });
+    seasonIds.forEach((id, i) => {
+      parts.push(`z${i}: season(id: "${id}") { id seasonNumber anilistId malId show { id displayTitle posterUrl status tracked totalEpisodes mediaShape externalIds(first:20) { edges { node { service externalId url } } } seasons(first:20) { edges { node { id seasonNumber anilistId malId } } } } }`);
+    });
+    if (!parts.length) return new Map();
+    const data = await gql(`query ResolveLabels { ${parts.join('\n')} }`);
+    const result = new Map();
+    showIds.forEach((id, i) => {
+      const s = data[`s${i}`];
+      if (s) {
+        const extIds = {};
+        for (const e of (s.externalIds?.edges || [])) {
+          extIds[e.node.service] = { id: e.node.externalId, url: e.node.url };
+        }
+        const seasons = (s.seasons?.edges || []).map(e => e.node);
+        result.set(id, { label: s.displayTitle, posterUrl: s.posterUrl, showId: s.id, externalIds: extIds, seasons });
+      }
+    });
+    episodeIds.forEach((id, i) => {
+      const e = data[`e${i}`];
+      if (e) {
+        const ctx = `S${String(e.season).padStart(2, '0')}E${String(e.episode).padStart(2, '0')}`;
+        result.set(id, {
+          label: `${e.show.displayTitle} — ${ctx}`,
+          showTitle: e.show.displayTitle, episodeCtx: ctx,
+          episodeTitle: e.title, airDateUtc: e.airDateUtc,
+          posterUrl: e.show.posterUrl, showId: e.show.id,
+          season: e.season, episode: e.episode,
+        });
+      }
+    });
+    seasonIds.forEach((id, i) => {
+      const z = data[`z${i}`];
+      if (z) {
+        const showExtIds = {};
+        for (const e of (z.show.externalIds?.edges || [])) {
+          showExtIds[e.node.service] = { id: e.node.externalId, url: e.node.url };
+        }
+        const showSeasons = (z.show.seasons?.edges || []).map(e => e.node);
+        result.set(id, {
+          label: `${z.show.displayTitle} — Season ${z.seasonNumber}`,
+          showTitle: z.show.displayTitle, seasonNumber: z.seasonNumber,
+          anilistId: z.anilistId, malId: z.malId,
+          posterUrl: z.show.posterUrl, showId: z.show.id,
+          showStatus: z.show.status, showTracked: z.show.tracked,
+          showTotalEpisodes: z.show.totalEpisodes, showMediaShape: z.show.mediaShape,
+          externalIds: showExtIds, seasons: showSeasons,
+        });
+      }
+    });
+    return result;
+  }
+
+  async function setEpisodeAirDate(episodeId, airDateUtc) {
+    const data = await gql(`
+      mutation SetAirDate($episodeId: ID!, $airDateUtc: DateTime!) {
+        setEpisodeAirDate(episodeId: $episodeId, airDateUtc: $airDateUtc) {
+          id airDateUtc airDateSource
+        }
+      }
+    `, { episodeId, airDateUtc });
+    return data.setEpisodeAirDate;
+  }
+
+  async function refreshShowMetadata(showId) {
+    const data = await gql(`
+      mutation RefreshMeta($showId: ID!) {
+        refreshShowMetadata(showId: $showId) {
+          id displayTitle metadataLastRefreshedAt
+        }
+      }
+    `, { showId });
+    return data.refreshShowMetadata;
+  }
+
+  /** Fetch a show's full card for conflict comparison */
+  async function fetchShowCard(showId) {
+    const data = await gql(`
+      query ShowCard($id: ID!) {
+        show(id: $id) {
+          id displayTitle posterUrl status tracked totalEpisodes mediaShape
+          externalIds(first:20) { edges { node { service externalId url } } }
+          seasons(first:20) { edges { node { id seasonNumber anilistId malId } } }
+          episodes(first:1) { edges { node { id } } pageInfo { hasNextPage } }
+          watchEvents(first:1) { edges { node { id watchedAt } } }
+        }
+      }
+    `, { id: showId });
+    const s = data.show;
+    if (!s) return null;
+    const extIds = {};
+    for (const e of (s.externalIds?.edges || [])) {
+      extIds[e.node.service] = { id: e.node.externalId, url: e.node.url };
+    }
+    return {
+      id: s.id, displayTitle: s.displayTitle, posterUrl: s.posterUrl,
+      status: s.status, tracked: s.tracked, totalEpisodes: s.totalEpisodes,
+      mediaShape: s.mediaShape, externalIds: extIds,
+      seasons: (s.seasons?.edges || []).map(e => e.node),
+      hasEpisodes: (s.episodes?.edges?.length || 0) > 0 || s.episodes?.pageInfo?.hasNextPage,
+      lastWatched: s.watchEvents?.edges?.[0]?.node?.watchedAt || null,
+    };
+  }
+
+  /** Parse conflict message: "mal_id 63150 also claimed by show(s): ['s-vdphq9']" */
+  function parseConflict(chain) {
+    if (!chain || !chain.length) return null;
+    const msg = chain[0];
+    const idMatch = msg.match(/(?:mal_id|anilist_id)\s+(\d+)/);
+    const showsMatch = msg.match(/\['([^']+(?:',\s*'[^']+)*)'\]/);
+    if (!idMatch) return null;
+    const contestedId = idMatch[1];
+    const claimantShowIds = showsMatch
+      ? showsMatch[1].split("', '").map(s => s.trim().replace(/'/g, ''))
+      : [];
+    return { contestedId, claimantShowIds };
+  }
+
+  /* ── Helpers ────────────────────────────────────────────── */
+  function esc(s) {
+    if (s == null) return '';
+    const d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+
+  function fmtDate(dateStr) {
+    if (!dateStr) return '—';
+    try {
+      return new Date(dateStr).toLocaleDateString('en-GB', {
+        day: '2-digit', month: 'short', year: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+      });
+    } catch { return dateStr; }
+  }
+
+  function fmtDatetime(dateStr) {
+    if (!dateStr) return '—';
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleDateString('en-GB', {
+        weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        timeZoneName: 'short',
+      });
+    } catch { return dateStr; }
+  }
+
+  /** Convert ISO UTC string to local datetime-local input value */
+  function isoToLocal(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  /** Convert local datetime-local value to ISO UTC string */
+  function localToIso(localStr) {
+    if (!localStr) return null;
+    return new Date(localStr).toISOString();
+  }
+
+  /** Fields where proposedValueChain[-1] is a real typed value, not a message. */
+  const VALUE_FIELDS = new Set(['air_date_utc', 'score']);
+
+  /** Does the chain hold a real parseable value for this field? */
+  function chainHasValue(field, chain) {
+    if (!VALUE_FIELDS.has(field)) return false;
+    if (!chain || !chain.length) return false;
+    const last = chain[chain.length - 1];
+    if (field === 'air_date_utc') return !isNaN(Date.parse(last));
+    if (field === 'score') return !isNaN(Number(last));
+    return false;
+  }
+
+  /** Parse an ID from raw input — accepts a bare number or a URL containing a number */
+  function parseIdInput(raw, urlPattern) {
+    if (!raw) return null;
+    raw = raw.trim();
+    if (!raw) return null;
+    // Try to extract numeric ID from a URL
+    if (urlPattern && raw.includes(urlPattern)) {
+      const match = raw.match(/(\d+)/g);
+      if (match) return match[match.length - 1]; // last number in URL
+    }
+    // If it looks like a URL but we didn't match, try extracting trailing number
+    if (raw.startsWith('http')) {
+      const match = raw.match(/\/(\d+)/);
+      if (match) return match[1];
+    }
+    // Bare number
+    if (/^\d+$/.test(raw)) return raw;
+    return null;
+  }
+
+  function latestValue(chain) {
+    return chain && chain.length ? chain[chain.length - 1] : null;
+  }
+
+  /** Human-friendly field label for the review list. */
+  function friendlyField(r) {
+    if (r.field.startsWith('sequel_season:')) return 'sequel season';
+    if (r.field === 'anilist_push') return 'AniList push';
+    if (r.field === 'mal_push') return 'MAL push';
+    if (r.field === 'anilist_id') return r.entityType === 'season' ? 'season AniList ID' : 'AniList ID';
+    if (r.field === 'metadata_fetch') return 'metadata fetch';
+    if (r.field === 'air_date_utc') return 'air date';
+    if (r.field.includes('_conflict')) {
+      const idType = r.field.startsWith('mal') ? 'MAL' : 'AniList';
+      return `${idType} ID conflict`;
+    }
+    return r.field;
+  }
+
+  /* ── State ──────────────────────────────────────────────── */
+  let _reviews = [];
+  let _labels = new Map();  // entityId → {label, posterUrl, ...}
+  let _selected = null;
+  let _includeResolved = false;
+  let _activeFilter = null;  // null = all, or a field name
+
+  const listEl    = document.getElementById('review-list');
+  const detailEl  = document.getElementById('review-detail');
+  const countEl   = document.getElementById('reviews-count');
+  const pillsEl   = document.getElementById('filter-pills');
+  const bulkBar   = document.getElementById('bulk-bar');
+  const banner    = document.getElementById('status-banner');
+
+  /* ── Banner ─────────────────────────────────────────────── */
+  function showBanner(msg, type = 'error') {
+    banner.className = `status-banner ${type}`;
+    banner.textContent = msg;
+  }
+  function hideBanner() { banner.className = 'status-banner hidden'; }
+
+  /* ── Filtering ─────────────────────────────────────────── */
+  // Group sequel_season:* into one pill key
+  function fieldGroup(field) {
+    return field.startsWith('sequel_season:') ? 'sequel_season' : field;
+  }
+
+  function filteredReviews() {
+    let list = _activeFilter
+      ? _reviews.filter(r => fieldGroup(r.field) === _activeFilter)
+      : _reviews;
+    // Open items first, resolved sink to bottom
+    return list.slice().sort((a, b) => {
+      const aRes = a.resolvedAt ? 1 : 0;
+      const bRes = b.resolvedAt ? 1 : 0;
+      return aRes - bRes;
+    });
+  }
+
+  function renderPills() {
+    const fieldCounts = {};
+    for (const r of _reviews) {
+      if (!r.resolvedAt) {
+        const g = fieldGroup(r.field);
+        fieldCounts[g] = (fieldCounts[g] || 0) + 1;
+      }
+    }
+    const fields = Object.entries(fieldCounts).sort((a, b) => b[1] - a[1]);
+    if (fields.length <= 1) { pillsEl.innerHTML = ''; return; }
+
+    const pillLabel = f => {
+      const labels = {
+        sequel_season: 'sequel season', anilist_push: 'AniList push', mal_push: 'MAL push',
+        anilist_id: 'AniList ID', metadata_fetch: 'metadata fetch', air_date_utc: 'air date',
+        score: 'score', sonarr_unmonitor: 'sonarr unmonitor', radarr_unmonitor: 'radarr unmonitor',
+      };
+      if (f.includes('_conflict')) return (f.startsWith('mal') ? 'MAL' : 'AniList') + ' conflict';
+      return labels[f] || f;
+    };
+    pillsEl.innerHTML = `<span class="filter-pill${!_activeFilter ? ' active' : ''}" data-field="">All</span>` +
+      fields.map(([f, c]) =>
+        `<span class="filter-pill${_activeFilter === f ? ' active' : ''}" data-field="${esc(f)}">${esc(pillLabel(f))} (${c})</span>`
+      ).join('');
+
+    pillsEl.querySelectorAll('.filter-pill').forEach(pill => {
+      pill.addEventListener('click', () => {
+        _activeFilter = pill.dataset.field || null;
+        renderPills();
+        renderList();
+        renderBulkBar();
+      });
+    });
+  }
+
+  /* ── Bulk bar ──────────────────────────────────────────── */
+  function renderBulkBar() {
+    let sections = '';
+
+    // ── Failed metadata fetches ──
+    const timedOut = _reviews.filter(r =>
+      !r.resolvedAt && r.field === 'metadata_fetch'
+    );
+    if (timedOut.length > 0) {
+      sections += `
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span>${timedOut.length} failed metadata fetches</span>
+          <button class="btn-primary btn-retry" id="bulk-dismiss-meta" style="font-size:11px;padding:4px 10px">✕ Dismiss all</button>
+          <button class="btn-primary btn-retry" id="bulk-retry-meta" style="font-size:11px;padding:4px 10px">↺ Retry all</button>
+          <span class="action-status" id="bulk-status-meta"></span>
+          <span class="action-note">Dismiss resolves all; retry re-fetches metadata from AniList.</span>
+        </div>
+      `;
+    }
+
+    // ── Failed AniList pushes ──
+    const anilistOutage = _reviews.filter(r =>
+      !r.resolvedAt && r.field === 'anilist_push'
+    );
+    if (anilistOutage.length > 0) {
+      sections += `
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap${sections ? ';margin-top:6px' : ''}">
+          <span>${anilistOutage.length} failed AniList pushes</span>
+          <button class="btn-primary btn-retry" id="bulk-dismiss-al" style="font-size:11px;padding:4px 10px">✕ Dismiss all</button>
+          <button class="btn-primary btn-retry" id="bulk-retry-al" style="font-size:11px;padding:4px 10px">↺ Retry all</button>
+          <span class="action-status" id="bulk-status-al"></span>
+          <span class="action-note">Dismiss resolves all; retry re-pushes status to AniList (deduped by show).</span>
+        </div>
+      `;
+    }
+
+    bulkBar.innerHTML = sections;
+
+    // ── Wire metadata dismiss ──
+    const metaDismissBtn = document.getElementById('bulk-dismiss-meta');
+    if (metaDismissBtn) {
+      metaDismissBtn.addEventListener('click', async () => {
+        metaDismissBtn.disabled = true;
+        const retryBtn = document.getElementById('bulk-retry-meta');
+        if (retryBtn) retryBtn.disabled = true;
+        const status = document.getElementById('bulk-status-meta');
+        status.textContent = 'Dismissing…';
+        status.className = 'action-status';
+        let ok = 0, fail = 0;
+        for (const r of timedOut) {
+          try {
+            await resolvePendingReview(r.id, 'dismissed — metadata fetch failure');
+            r.resolvedAt = new Date().toISOString();
+            ok++;
+          } catch { fail++; }
+        }
+        status.textContent = `✓ ${ok} dismissed${fail ? `, ${fail} failed` : ''}`;
+        status.className = `action-status ${fail ? 'err' : 'ok'}`;
+        renderList();
+        renderPills();
+        renderBulkBar();
+      });
+    }
+
+    // ── Wire metadata retry ──
+    const metaRetryBtn = document.getElementById('bulk-retry-meta');
+    if (metaRetryBtn) {
+      metaRetryBtn.addEventListener('click', async () => {
+        const btn = metaRetryBtn;
+        const dismissBtn = document.getElementById('bulk-dismiss-meta');
+        if (dismissBtn) dismissBtn.disabled = true;
+        const status = document.getElementById('bulk-status-meta');
+        btn.disabled = true;
+        status.textContent = 'Retrying…';
+        status.className = 'action-status';
+        let ok = 0, fail = 0;
+        let aborted = false;
+        for (const r of timedOut) {
+          const info = _labels.get(r.entityId);
+          const showId = info?.showId || r.entityId;
+          try {
+            await refreshShowMetadata(showId);
+            await resolvePendingReview(r.id, 'bulk retry via web review screen');
+            r.resolvedAt = new Date().toISOString();
+            ok++;
+          } catch (err) {
+            if (/disabled|stability|unavailable|connect|timed out/i.test(err.message)) {
+              const remaining = timedOut.filter(r => !r.resolvedAt).length;
+              status.textContent = `AniList still unavailable — ${ok} retried, ${remaining} skipped`;
+              status.className = 'action-status err';
+              aborted = true;
+              break;
+            }
+            fail++;
+          }
+        }
+        if (!aborted) {
+          status.textContent = `✓ ${ok} retried${fail ? `, ${fail} failed` : ''}`;
+          status.className = `action-status ${fail ? 'err' : 'ok'}`;
+        }
+        renderList();
+        renderPills();
+        renderBulkBar();
+      });
+    }
+
+    // ── Wire AniList dismiss ──
+    const alDismissBtn = document.getElementById('bulk-dismiss-al');
+    if (alDismissBtn) {
+      alDismissBtn.addEventListener('click', async () => {
+        alDismissBtn.disabled = true;
+        const retryBtn = document.getElementById('bulk-retry-al');
+        if (retryBtn) retryBtn.disabled = true;
+        const status = document.getElementById('bulk-status-al');
+        status.textContent = 'Dismissing…';
+        status.className = 'action-status';
+        let ok = 0, fail = 0;
+        for (const r of anilistOutage) {
+          try {
+            await resolvePendingReview(r.id, 'dismissed — AniList API outage');
+            r.resolvedAt = new Date().toISOString();
+            ok++;
+          } catch { fail++; }
+        }
+        status.textContent = `✓ ${ok} dismissed${fail ? `, ${fail} failed` : ''}`;
+        status.className = `action-status ${fail ? 'err' : 'ok'}`;
+        renderList();
+        renderPills();
+        renderBulkBar();
+      });
+    }
+
+    // ── Wire AniList retry (deduped by show) ──
+    const alRetryBtn = document.getElementById('bulk-retry-al');
+    if (alRetryBtn) {
+      alRetryBtn.addEventListener('click', async () => {
+        alRetryBtn.disabled = true;
+        const dismissBtn = document.getElementById('bulk-dismiss-al');
+        if (dismissBtn) dismissBtn.disabled = true;
+        const status = document.getElementById('bulk-status-al');
+        status.textContent = 'Re-pushing…';
+        status.className = 'action-status';
+
+        // Deduplicate by showId — setStatus pushes all linked seasons at once
+        const byShow = new Map(); // showId → [reviews]
+        for (const r of anilistOutage) {
+          const info = _labels.get(r.entityId);
+          const showId = info?.showId;
+          if (!showId) continue;
+          if (!byShow.has(showId)) byShow.set(showId, []);
+          byShow.get(showId).push(r);
+        }
+
+        let ok = 0, fail = 0;
+        let aborted = false;
+        for (const [showId, reviews] of byShow) {
+          try {
+            // Re-trigger push by re-setting the show's current status
+            const showData = await gql(`query($id:ID!){show(id:$id){status}}`, { id: showId });
+            if (showData.show) {
+              await gql(`mutation($id:ID!,$s:ShowStatus!){setStatus(showId:$id,status:$s){id}}`,
+                { id: showId, s: showData.show.status });
+            }
+            // Resolve all reviews for this show
+            for (const r of reviews) {
+              await resolvePendingReview(r.id, 're-pushed to AniList via bulk retry');
+              r.resolvedAt = new Date().toISOString();
+            }
+            ok += reviews.length;
+          } catch (err) {
+            // If AniList is still down, abort early instead of grinding through 30 failures
+            if (/disabled|stability|unavailable|connect|timed out/i.test(err.message)) {
+              const remaining = anilistOutage.filter(r => !r.resolvedAt).length;
+              status.textContent = `AniList still unavailable — ${ok} pushed, ${remaining} skipped`;
+              status.className = 'action-status err';
+              aborted = true;
+              break;
+            }
+            fail += reviews.length;
+          }
+        }
+        if (!aborted) {
+          status.textContent = `✓ ${ok} re-pushed${fail ? `, ${fail} failed` : ''}`;
+          status.className = `action-status ${fail ? 'err' : 'ok'}`;
+        }
+        renderList();
+        renderPills();
+        renderBulkBar();
+      });
+    }
+  }
+
+  /* ── Render list ────────────────────────────────────────── */
+  function renderList() {
+    const visible = filteredReviews();
+    const open = visible.filter(r => !r.resolvedAt).length;
+    const totalOpen = _reviews.filter(r => !r.resolvedAt).length;
+    countEl.innerHTML = `<span class="cnt-open">${totalOpen}</span> open · ${_reviews.length} total`;
+
+    if (!visible.length) {
+      listEl.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px">No pending reviews</div>';
+      return;
+    }
+
+    listEl.innerHTML = visible.map(r => {
+      const resolved = !!r.resolvedAt;
+      const isSelected = _selected === r.id;
+      const info = _labels.get(r.entityId);
+      const title = info?.label || `${r.entityType}:${r.entityId}`;
+      const posterUrl = info?.posterUrl;
+
+      return `
+        <div class="review-item${resolved ? ' resolved' : ''}${isSelected ? ' selected' : ''}" data-id="${esc(r.id)}">
+          ${posterUrl
+            ? `<img class="ri-poster" src="${esc(posterUrl)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+            : '<div class="ri-poster"></div>'}
+          <div class="ri-info">
+            <div class="ri-title" title="${esc(title)}">${esc(title)}</div>
+            <div class="ri-field-row">
+              <span class="ri-entity-type">${esc(r.entityType)}</span>
+              <span class="ri-field">${esc(friendlyField(r))}</span>
+              ${resolved ? '<span class="ri-resolved-badge">✓ resolved</span>' : ''}
+            </div>
+            <div class="ri-meta">
+              <span class="ri-source">${esc(r.source)}</span>
+              <span class="ri-date">${fmtDate(r.createdAt)}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    listEl.querySelectorAll('.review-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const r = _reviews.find(x => x.id === item.dataset.id);
+        if (r) selectReview(r);
+      });
+    });
+  }
+
+  /* ── Select / detail pane ───────────────────────────────── */
+  function selectReview(r) {
+    _selected = r.id;
+    renderList();
+    renderDetail(r);
+  }
+
+  function renderDetail(r) {
+    const resolved = !!r.resolvedAt;
+    const info = _labels.get(r.entityId) || {};
+    const latest = latestValue(r.proposedValueChain);
+    const hasVal = chainHasValue(r.field, r.proposedValueChain);
+    const isAirDate = r.field === 'air_date_utc';
+    const isMetadataFetch = r.field === 'metadata_fetch';
+    const isAnilistPush = r.field === 'anilist_push';
+    const isRetryable = isMetadataFetch;
+    const isAnilistId = r.field === 'anilist_id' && (r.entityType === 'show' || r.entityType === 'season');
+    const isConflict = r.field.includes('_conflict');
+    const isScore = r.field === 'score' && r.entityType === 'season';
+    const isSequel = r.field.startsWith('sequel_season:') && r.entityType === 'show';
+
+    // Header with poster + title
+    let headerHtml = '';
+    if (info.label) {
+      const showTitle = info.showTitle || info.label;
+      headerHtml = `
+        <div class="detail-header">
+          ${info.posterUrl
+            ? `<img class="detail-poster" src="${esc(info.posterUrl)}" alt="" onerror="this.style.display='none'">`
+            : ''}
+          <div class="detail-header-info">
+            <h2 class="detail-show-title">${esc(showTitle)}</h2>
+            ${info.episodeCtx ? `<div class="detail-episode-ctx">${esc(info.episodeCtx)}</div>` : ''}
+            ${info.episodeTitle ? `<div class="detail-episode-title">${esc(info.episodeTitle)}</div>` : ''}
+            ${info.seasonNumber != null && !info.episodeCtx ? `<div class="detail-episode-ctx">Season ${info.seasonNumber}</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // Metadata grid
+    const metaHtml = `
+      <div class="detail-section">
+        <div class="detail-section-label">Details</div>
+        <div class="detail-grid">
+          <span class="dg-key">Field</span>
+          <span class="dg-val">${esc(friendlyField(r))}${r.field !== friendlyField(r) ? ` <span style="color:var(--faint);font-size:10px">(${esc(r.field)})</span>` : ''}</span>
+          <span class="dg-key">Source</span>
+          <span class="dg-val">${esc(r.source)}</span>
+          <span class="dg-key">Entity</span>
+          <span class="dg-val">${esc(r.entityType)} · ${esc(r.entityId)}</span>
+          <span class="dg-key">Created</span>
+          <span class="dg-val">${fmtDate(r.createdAt)}</span>
+        </div>
+      </div>
+    `;
+
+    // Before/after diff or message display
+    let diffHtml = '';
+    if (isAirDate && hasVal) {
+      // Air date: show formatted dates side by side
+      diffHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">Change</div>
+          <div class="diff-container">
+            <div class="diff-box before">
+              <div class="diff-label">Before</div>
+              <div class="diff-value">${r.previousValue ? fmtDatetime(r.previousValue) : '(none)'}</div>
+              ${r.previousValue ? `<div style="font-size:10px;color:var(--faint);margin-top:4px">${esc(r.previousValue)}</div>` : ''}
+            </div>
+            <div class="diff-arrow">→</div>
+            <div class="diff-box after">
+              <div class="diff-label">Proposed</div>
+              <div class="diff-value">${fmtDatetime(latest)}</div>
+              <div style="font-size:10px;color:var(--faint);margin-top:4px">${esc(latest)}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (isScore && hasVal) {
+      diffHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">Score Change</div>
+          <div class="diff-container">
+            <div class="diff-box before">
+              <div class="diff-label">Before</div>
+              <div class="diff-value" style="font-size:20px;font-weight:600">${r.previousValue ?? '(none)'}</div>
+            </div>
+            <div class="diff-arrow">→</div>
+            <div class="diff-box after">
+              <div class="diff-label">Proposed</div>
+              <div class="diff-value" style="font-size:20px;font-weight:600">${esc(latest)}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (isSequel) {
+      // Parse the JSON previousValue: {"title": "...", "mal": 877|null}
+      let sequelTitle = latest || '';
+      let sequelMal = null;
+      try {
+        const prev = JSON.parse(r.previousValue || '{}');
+        sequelTitle = prev.title || latest || '';
+        sequelMal = prev.mal ?? null;
+      } catch (_) {
+        // Older reviews stored just the title string
+        sequelTitle = r.previousValue || latest || '';
+      }
+      const sequelAlId = r.field.split(':')[1];
+      const seasons = info.seasons || [];
+      const maxSeason = seasons.reduce((m, s) => Math.max(m, s.seasonNumber || 0), 0);
+      const nextSeason = maxSeason + 1;
+
+      let seasonListHtml = '';
+      if (seasons.length) {
+        seasonListHtml = '<div style="margin-top:8px"><div style="font-size:10px;color:var(--muted);font-weight:600;margin-bottom:4px">EXISTING SEASONS</div>';
+        seasonListHtml += '<div class="ext-ids-grid">';
+        for (const s of seasons) {
+          seasonListHtml += `<span class="ext-id-label">S${s.seasonNumber}</span>
+            <span class="ext-id-value">AniList: ${s.anilistId ?? '<span class="missing">—</span>'} · MAL: ${s.malId ?? '<span class="missing">—</span>'}</span>`;
+        }
+        seasonListHtml += '</div></div>';
+      }
+
+      diffHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">Sequel Season Proposal</div>
+          <div style="font-size:13px;color:var(--text);margin-bottom:8px">
+            <strong>${esc(sequelTitle)}</strong>
+          </div>
+          <div class="ext-ids-grid">
+            <span class="ext-id-label">AniList</span>
+            <span class="ext-id-value"><a href="https://anilist.co/anime/${esc(sequelAlId)}" target="_blank">${esc(sequelAlId)} ↗</a></span>
+            ${sequelMal != null ? `
+              <span class="ext-id-label">MAL</span>
+              <span class="ext-id-value"><a href="https://myanimelist.net/anime/${esc(String(sequelMal))}" target="_blank">${esc(String(sequelMal))} ↗</a></span>
+            ` : ''}
+          </div>
+          ${seasonListHtml}
+        </div>
+      `;
+    } else if (hasVal) {
+      diffHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">Change</div>
+          <div class="diff-container">
+            <div class="diff-box before">
+              <div class="diff-label">Before</div>
+              <div class="diff-value">${r.previousValue != null ? esc(r.previousValue) : '(none)'}</div>
+            </div>
+            <div class="diff-arrow">→</div>
+            <div class="diff-box after">
+              <div class="diff-label">Proposed</div>
+              <div class="diff-value">${esc(latest)}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (isConflict) {
+      // Show a loading placeholder — we'll fill it async
+      const conflict = parseConflict(r.proposedValueChain);
+      const idType = r.field.startsWith('mal') ? 'MAL' : 'AniList';
+      diffHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">ID conflict — ${esc(idType)} ${esc(conflict?.contestedId || '?')}</div>
+          <div class="proposed-message">${esc(latest)}</div>
+          <div class="conflict-compare" id="conflict-compare">
+            <div class="conflict-loading"><span class="spinner"></span> Loading both sides…</div>
+          </div>
+        </div>
+      `;
+    } else {
+      // The chain holds a message, not a parseable value
+      diffHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">Information</div>
+          ${r.previousValue != null ? `
+            <div class="detail-grid">
+              <span class="dg-key">Previous value</span>
+              <span class="dg-val">${esc(r.previousValue)}</span>
+            </div>
+          ` : ''}
+          <div class="proposed-message">${esc(latest)}</div>
+        </div>
+      `;
+    }
+
+    // Chain (if > 1 entry, show collapsible history)
+    let chainHtml = '';
+    if (r.proposedValueChain && r.proposedValueChain.length > 1) {
+      const uniqueEntries = [...new Set(r.proposedValueChain)];
+      if (uniqueEntries.length > 1) {
+        chainHtml = `
+          <div class="detail-section">
+            <div class="chain-toggle" id="chain-toggle">▸ Value history (${r.proposedValueChain.length} entries)</div>
+            <div class="chain-items" id="chain-items" style="display:none">
+              ${r.proposedValueChain.map((v, i) =>
+                `<div class="chain-item">${i + 1}. ${esc(v)}</div>`
+              ).join('')}
+            </div>
+          </div>
+        `;
+      } else {
+        // All identical — just note the count
+        chainHtml = `
+          <div style="font-size:10px;color:var(--faint);font-style:italic">
+            Same value reported ${r.proposedValueChain.length}× by ${esc(r.source)}
+          </div>
+        `;
+      }
+    }
+
+    // Actions
+    let actionsHtml = '';
+    if (!resolved) {
+      const uid = r.id.replace(/[^a-z0-9]/gi, '');
+      let buttons = '';
+      let editRow = '';
+      let note = '';
+
+      if (isAirDate && hasVal) {
+        buttons += `<button class="btn-primary btn-approve" data-action="approve" id="btn-approve-${uid}">✓ Accept proposed date</button>`;
+        if (r.previousValue) {
+          buttons += `<button class="btn-primary btn-revert" data-action="revert" id="btn-revert-${uid}">↩ Keep current date</button>`;
+        }
+        editRow = `
+          <div class="inline-edit" id="edit-row-${uid}">
+            <input type="datetime-local" id="edit-input-${uid}" value="${isoToLocal(latest)}">
+            <button class="btn-primary" id="btn-correct-${uid}" style="font-size:11px;padding:5px 10px">Set &amp; resolve</button>
+          </div>
+        `;
+        note = `<div class="action-note">⚠ Setting a date pins air_date_source to MANUAL — it won't be overwritten by future syncs (except animeschedule).</div>`;
+      } else if (isScore && hasVal) {
+        buttons += `<button class="btn-primary btn-approve" data-action="approve" id="btn-approve-${uid}">✓ Apply score ${esc(latest)}</button>`;
+        editRow = `
+          <div class="inline-edit" id="edit-row-${uid}">
+            <input type="number" step="0.25" min="0" max="20" id="edit-input-${uid}" value="${esc(latest)}" placeholder="0–20 quarter-point">
+            <button class="btn-primary" id="btn-correct-${uid}" style="font-size:11px;padding:5px 10px">Set &amp; resolve</button>
+          </div>
+        `;
+      } else if (isRetryable) {
+        buttons += `<button class="btn-primary btn-retry" data-action="retry" id="btn-retry-${uid}">↺ Retry metadata fetch</button>`;
+      } else if (isAnilistPush) {
+        buttons += `<button class="btn-primary btn-retry" id="btn-repush-${uid}">↺ Re-push to AniList</button>`;
+        note = `<div class="action-note">Re-sends the current score/status to AniList for this season.</div>`;
+      } else if (isSequel) {
+        // Parse sequel info from the diff section's locals
+        const sequelAlId = r.field.split(':')[1];
+        let sequelMalId = null;
+        try {
+          const prev = JSON.parse(r.previousValue || '{}');
+          sequelMalId = prev.mal ?? null;
+        } catch (_) {}
+        const seasons = info.seasons || [];
+        const maxSeason = seasons.reduce((m, s) => Math.max(m, s.seasonNumber || 0), 0);
+        const nextSeason = maxSeason + 1;
+        buttons += `<button class="btn-primary btn-approve" id="btn-sequel-${uid}">✓ Add as Season ${nextSeason}</button>`;
+        editRow = `
+          <div class="inline-edit" id="edit-row-${uid}">
+            <label style="font-size:11px;color:var(--muted);margin-right:6px">Season #</label>
+            <input type="number" min="1" id="sequel-snum-${uid}" value="${nextSeason}" style="width:60px">
+          </div>
+        `;
+        note = `<div class="action-note">Creates the season mapping with AniList ${esc(sequelAlId)}${sequelMalId != null ? ' / MAL ' + esc(String(sequelMalId)) : ''}. If the show was completed, it will reopen as watching.</div>`;
+      } else if (isAnilistId) {
+        const extIds = info.externalIds || {};
+        const seasons = info.seasons || [];
+        const isSeasonLevel = r.entityType === 'season';
+        const reviewedSeason = isSeasonLevel ? info.seasonNumber : null;
+
+        // Context note
+        let contextNote = '';
+        if (isSeasonLevel) {
+          contextNote = `<div class="action-note" style="margin-bottom:8px">This review is about <strong>Season ${reviewedSeason}'s</strong> AniList/MAL mapping — the per-season IDs used for score/status sync. Fribb auto-derived this; verify or correct below.</div>`;
+        } else {
+          contextNote = `<div class="action-note" style="margin-bottom:8px">This is a <strong>show-level</strong> AniList ID — a legacy link. Per-season AniList/MAL IDs (below) are what's used for sync.</div>`;
+        }
+
+        // Build current IDs display
+        let currentIdsHtml = `
+          <div class="detail-section">
+            <div class="detail-section-label">Show-level external IDs</div>
+            <div class="ext-ids-grid">
+        `;
+        for (const svc of ['anilist', 'tvdb', 'mal', 'imdb']) {
+          const entry = extIds[svc];
+          if (entry) {
+            currentIdsHtml += `<span class="ext-id-label">${esc(svc)}</span>
+              <span class="ext-id-value"><a href="${esc(entry.url)}" target="_blank">${esc(entry.id)}</a></span>`;
+          } else {
+            currentIdsHtml += `<span class="ext-id-label">${esc(svc)}</span>
+              <span class="ext-id-value missing">not set</span>`;
+          }
+        }
+        currentIdsHtml += '</div>';
+        // Season mappings (these are what actually matter for sync)
+        if (seasons.length) {
+          currentIdsHtml += '<div style="margin-top:8px"><div style="font-size:10px;color:var(--muted);font-weight:600;margin-bottom:4px">SEASON MAPPINGS <span style="font-weight:400;font-style:italic">(used for AniList/MAL sync)</span></div>';
+          currentIdsHtml += '<div class="ext-ids-grid">';
+          for (const s of seasons) {
+            const highlight = reviewedSeason === s.seasonNumber ? 'color:var(--accent);font-weight:600' : '';
+            currentIdsHtml += `<span class="ext-id-label" style="${highlight}">S${s.seasonNumber}${reviewedSeason === s.seasonNumber ? ' ◀' : ''}</span>
+              <span class="ext-id-value" style="${highlight}">AniList: ${s.anilistId ?? '<span class="missing">—</span>'} · MAL: ${s.malId ?? '<span class="missing">—</span>'}</span>`;
+          }
+          currentIdsHtml += '</div></div>';
+        }
+        currentIdsHtml += '</div>';
+
+        // Build input form
+        editRow = `
+          ${contextNote}
+          ${currentIdsHtml}
+          <div class="detail-section">
+            <div class="detail-section-label">Link external IDs</div>
+            <div class="id-form-grid">
+              <label>TVDB</label>
+              <input type="text" id="id-tvdb-${uid}" placeholder="e.g. 471878 or thetvdb.com URL" value="${extIds.tvdb?.id || ''}">
+              <span class="hint">show-level</span>
+
+              <label>AniList</label>
+              <input type="text" id="id-anilist-${uid}" placeholder="e.g. 204466 or anilist.co URL" value="${extIds.anilist?.id || ''}">
+              <span class="hint">show-level</span>
+            </div>
+            ${seasons.length ? `
+              <div class="id-form-grid season-rows">
+                <div class="season-row-label">Season-level AniList / MAL IDs <span style="font-weight:400;font-style:italic">(these drive sync)</span></div>
+                ${seasons.map(s => `
+                  <label style="${reviewedSeason === s.seasonNumber ? 'color:var(--accent)' : ''}">S${s.seasonNumber} AL</label>
+                  <input type="text" id="id-sal-${uid}-${s.seasonNumber}" placeholder="AniList ID" value="${s.anilistId ?? ''}">
+                  <span class="hint">${reviewedSeason === s.seasonNumber ? '← this review' : ''}</span>
+                  <label style="${reviewedSeason === s.seasonNumber ? 'color:var(--accent)' : ''}">S${s.seasonNumber} MAL</label>
+                  <input type="text" id="id-smal-${uid}-${s.seasonNumber}" placeholder="MAL ID" value="${s.malId ?? ''}">
+                  <span class="hint"></span>
+                `).join('')}
+              </div>
+            ` : ''}
+            <div style="margin-top:8px">
+              <button class="btn-primary btn-approve" id="btn-linkids-${uid}" style="font-size:12px;padding:6px 14px">Save IDs &amp; resolve</button>
+              <a href="https://anilist.co/search/anime" target="_blank" style="color:var(--accent);font-size:11px;margin-left:12px">Search AniList →</a>
+              <a href="https://thetvdb.com/search?query=" target="_blank" style="color:var(--accent);font-size:11px;margin-left:8px">Search TVDB →</a>
+            </div>
+          </div>
+        `;
+      }
+
+      buttons += `<button class="btn-primary btn-dismiss" data-action="dismiss" id="btn-dismiss-${uid}">Dismiss</button>`;
+
+      actionsHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">Actions</div>
+          <div class="resolve-form">
+            <textarea placeholder="Resolution note (optional)" id="resolve-note-${uid}"></textarea>
+          </div>
+          <div class="review-actions">${buttons}</div>
+          ${editRow}
+          ${note}
+          <span class="action-status" id="action-status-${uid}"></span>
+        </div>
+      `;
+    } else {
+      // Resolved — show resolution info
+      actionsHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">Resolution</div>
+          <div class="resolution-box">
+            <div class="detail-grid">
+              <span class="dg-key">Resolved at</span>
+              <span class="dg-val resolved">${fmtDate(r.resolvedAt)}</span>
+              <span class="dg-key">Resolved by</span>
+              <span class="dg-val">${esc(r.resolvedByClient) || '—'}</span>
+              <span class="dg-key">Note</span>
+              <span class="dg-val">${esc(r.resolutionNote) || '—'}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    detailEl.innerHTML = headerHtml + metaHtml + diffHtml + chainHtml + actionsHtml;
+
+    // Wire up chain toggle
+    const chainToggle = document.getElementById('chain-toggle');
+    if (chainToggle) {
+      chainToggle.addEventListener('click', () => {
+        const items = document.getElementById('chain-items');
+        const open = items.style.display !== 'none';
+        items.style.display = open ? 'none' : 'flex';
+        chainToggle.textContent = (open ? '▸' : '▾') + chainToggle.textContent.slice(1);
+      });
+    }
+
+    // Async-load conflict comparison
+    if (isConflict && !resolved) {
+      const conflict = parseConflict(r.proposedValueChain);
+      const compareEl = document.getElementById('conflict-compare');
+      if (conflict && compareEl) {
+        (async () => {
+          try {
+            // Fetch this review's show (from the season's show)
+            const thisShow = await fetchShowCard(info.showId);
+            // Fetch claimant show(s)
+            const otherShows = await Promise.all(
+              conflict.claimantShowIds.map(id => fetchShowCard(id))
+            );
+            if (_selected !== r.id) return; // user navigated away
+            const idType = r.field.startsWith('mal') ? 'MAL' : 'AniList';
+            const idField = r.field.startsWith('mal') ? 'malId' : 'anilistId';
+
+            function renderCard(show, label, isThis) {
+              if (!show) return `<div class="conflict-card"><em>Show not found</em></div>`;
+              const statusClass = show.status === 'WATCHING' ? 'watching' : show.status === 'PLANNED' ? 'planned' : '';
+              const trackedClass = show.tracked ? 'tracked' : 'untracked';
+              const extIdLines = [];
+              for (const svc of ['anilist', 'tvdb', 'mal']) {
+                const e = show.externalIds[svc];
+                if (e) extIdLines.push(`${svc}: <a href="${esc(e.url)}" target="_blank">${esc(e.id)}</a>`);
+              }
+              const seasonLines = show.seasons.map(s => {
+                const alClass = s[idField] == conflict.contestedId ? 'contested' : '';
+                return `S${s.seasonNumber}: AL=${s.anilistId ?? '—'} MAL=<span class="${alClass}">${s.malId ?? '—'}</span>`;
+              }).join('<br>');
+              return `
+                <div class="conflict-card${isThis ? ' this-side' : ''}">
+                  <div class="conflict-label">${esc(label)}</div>
+                  <div class="conflict-card-header">
+                    ${show.posterUrl ? `<img class="conflict-card-poster" src="${esc(show.posterUrl)}" alt="" onerror="this.style.display='none'">` : ''}
+                    <div>
+                      <div class="conflict-card-title">${esc(show.displayTitle)}</div>
+                      <div class="conflict-card-meta">
+                        <span class="conflict-tag ${statusClass}">${show.status}</span>
+                        <span class="conflict-tag ${trackedClass}">${show.tracked ? 'tracked' : 'untracked'}</span>
+                        ${show.totalEpisodes ? `<span class="conflict-tag">${show.totalEpisodes} eps</span>` : ''}
+                        ${show.lastWatched ? `<span class="conflict-tag">watched ${fmtDate(show.lastWatched)}</span>` : ''}
+                        ${show.hasEpisodes ? '' : '<span class="conflict-tag untracked">no episodes</span>'}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="conflict-ids">${extIdLines.join('<br>') || '<em>no external IDs</em>'}</div>
+                  <div class="conflict-ids">${seasonLines || '<em>no seasons</em>'}</div>
+                  <div class="conflict-actions-row">
+                    <button class="btn-primary btn-dismiss" data-clear-from="${esc(show.id)}" style="font-size:10px;padding:4px 8px">
+                      Remove ${esc(idType)} ID from this show
+                    </button>
+                  </div>
+                </div>
+              `;
+            }
+
+            let html = renderCard(thisShow, 'This review\'s show', true);
+            for (const other of otherShows) {
+              html += renderCard(other, 'Also claims this ID', false);
+            }
+
+            // Merge button if both are the same show (duplicate entries)
+            if (thisShow && otherShows.length === 1 && otherShows[0]) {
+              const other = otherShows[0];
+              // Check for overlapping external services
+              const thisExt = thisShow.externalIds || {};
+              const otherExt = other.externalIds || {};
+              const overlap = Object.keys(thisExt).filter(svc => svc in otherExt);
+              const sameIdOverlap = overlap.filter(svc => thisExt[svc].id === otherExt[svc].id);
+              const diffIdOverlap = overlap.filter(svc => thisExt[svc].id !== otherExt[svc].id);
+
+              if (diffIdOverlap.length > 0) {
+                // Different IDs for same service — user must pick which to keep
+                html += `<div style="grid-column:1/-1;margin-top:6px;padding:8px 10px;background:rgba(249,115,22,.12);border-radius:6px;font-size:12px">
+                  <strong style="color:var(--st-paused)">⚠ External ID conflict — manual resolution needed</strong><br>
+                  Both shows have different IDs for the same service. Remove one before merging:<br>`;
+                for (const svc of diffIdOverlap) {
+                  html += `<div style="margin:6px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <span style="font-family:var(--font-mono);min-width:60px"><strong>${esc(svc)}</strong></span>
+                    <span>${esc(thisShow.displayTitle)}: <code>${esc(thisExt[svc].id)}</code></span>
+                    <button class="btn-sm btn-deny" data-unlink-show="${esc(thisShow.id)}" data-unlink-svc="${esc(svc)}" style="font-size:10px;padding:2px 8px">Remove</button>
+                    <span style="opacity:.5">│</span>
+                    <span>${esc(other.displayTitle)}: <code>${esc(otherExt[svc].id)}</code></span>
+                    <button class="btn-sm btn-deny" data-unlink-show="${esc(other.id)}" data-unlink-svc="${esc(svc)}" style="font-size:10px;padding:2px 8px">Remove</button>
+                  </div>`;
+                }
+                html += `</div>`;
+              }
+
+              html += `
+                <div style="grid-column:1/-1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px">
+                  <button class="btn-primary btn-approve" id="btn-merge-this-wins" style="font-size:11px;padding:5px 12px">
+                    Merge — keep "${esc(thisShow.displayTitle)}" (${thisShow.status})
+                  </button>
+                  <button class="btn-primary btn-approve" id="btn-merge-other-wins" style="font-size:11px;padding:5px 12px">
+                    Merge — keep "${esc(other.displayTitle)}" (${other.status})
+                  </button>
+                  ${sameIdOverlap.length > 0 ? `<span style="font-size:11px;color:var(--st-watching);opacity:.8">
+                    Will auto-unlink duplicate ${sameIdOverlap.join(', ')} ID${sameIdOverlap.length>1?'s':''} from loser before merge
+                  </span>` : ''}
+                </div>
+              `;
+            }
+            compareEl.innerHTML = html;
+
+            // Wire clear-ID buttons
+            compareEl.querySelectorAll('[data-clear-from]').forEach(btn => {
+              btn.addEventListener('click', async () => {
+                const clearShowId = btn.dataset.clearFrom;
+                btn.disabled = true;
+                const uid = r.id.replace(/[^a-z0-9]/gi, '');
+                const statusEl = document.getElementById(`action-status-${uid}`);
+                if (statusEl) { statusEl.textContent = 'Clearing ID…'; statusEl.className = 'action-status'; }
+                try {
+                  // Find which season on that show holds the contested ID
+                  const card = (clearShowId === thisShow?.id) ? thisShow : otherShows.find(o => o?.id === clearShowId);
+                  if (card) {
+                    for (const s of card.seasons) {
+                      if (String(s[idField]) === conflict.contestedId) {
+                        const newAl = idField === 'anilistId' ? null : (s.anilistId ?? null);
+                        const newMal = idField === 'malId' ? null : (s.malId ?? null);
+                        await setSeasonMapping(clearShowId, s.seasonNumber, newAl, newMal);
+                      }
+                    }
+                  }
+                  const noteVal = (document.getElementById(`resolve-note-${uid}`)?.value || '').trim();
+                  await resolvePendingReview(r.id, noteVal || `cleared ${idField} ${conflict.contestedId} from ${clearShowId} via web review`);
+                  r.resolvedAt = new Date().toISOString();
+                  renderList(); renderPills(); renderBulkBar();
+                  const visible = filteredReviews();
+                  const nextOpen = visible.find(x => !x.resolvedAt && x.id !== r.id);
+                  if (nextOpen) selectReview(nextOpen); else renderDetail(r);
+                } catch (err) {
+                  if (statusEl) { statusEl.textContent = `Error: ${err.message}`; statusEl.className = 'action-status err'; }
+                  btn.disabled = false;
+                }
+              });
+            });
+
+            // Wire unlink buttons for diff-ID overlaps
+            compareEl.querySelectorAll('[data-unlink-show]').forEach(btn => {
+              btn.addEventListener('click', async () => {
+                const showId = btn.dataset.unlinkShow;
+                const svc = btn.dataset.unlinkSvc;
+                btn.disabled = true;
+                const uid = r.id.replace(/[^a-z0-9]/gi, '');
+                const statusEl = document.getElementById(`action-status-${uid}`);
+                if (statusEl) { statusEl.textContent = `Unlinking ${svc}…`; statusEl.className = 'action-status'; }
+                try {
+                  await unlinkShowExternalId(showId, svc);
+                  // Remove from local card data and re-render
+                  const card = (showId === thisShow?.id) ? thisShow : otherShows.find(o => o?.id === showId);
+                  if (card) delete card.externalIds[svc];
+                  if (statusEl) { statusEl.textContent = `Unlinked ${svc} — you can now merge`; statusEl.className = 'action-status ok'; }
+                  // Re-render the conflict comparison to update buttons
+                  renderDetail(r);
+                } catch (err) {
+                  if (statusEl) { statusEl.textContent = `Error: ${err.message}`; statusEl.className = 'action-status err'; }
+                  btn.disabled = false;
+                }
+              });
+            });
+
+            // Wire merge buttons
+            const mergeThisBtn = document.getElementById('btn-merge-this-wins');
+            const mergeOtherBtn = document.getElementById('btn-merge-other-wins');
+            async function doMerge(winnerId, loserId) {
+              const uid = r.id.replace(/[^a-z0-9]/gi, '');
+              const statusEl = document.getElementById(`action-status-${uid}`);
+              if (statusEl) { statusEl.textContent = 'Merging…'; statusEl.className = 'action-status'; }
+              try {
+                // Pre-clear overlapping external IDs from the loser where both have the same ID
+                const winCard = (winnerId === thisShow?.id) ? thisShow : otherShows.find(o => o?.id === winnerId);
+                const loseCard = (loserId === thisShow?.id) ? thisShow : otherShows.find(o => o?.id === loserId);
+                if (winCard && loseCard) {
+                  const winExt = winCard.externalIds || {};
+                  const loseExt = loseCard.externalIds || {};
+                  for (const svc of Object.keys(loseExt)) {
+                    if (svc in winExt) {
+                      if (loseExt[svc].id === winExt[svc].id) {
+                        // Same ID on both — safe to unlink from loser
+                        if (statusEl) statusEl.textContent = `Unlinking duplicate ${svc} from loser…`;
+                        await unlinkShowExternalId(loserId, svc);
+                      } else {
+                        // Different IDs — refuse (user should use the unlink buttons first)
+                        throw new Error(`Both shows have different ${svc} IDs (${winExt[svc].id} vs ${loseExt[svc].id}). Remove one manually first.`);
+                      }
+                    }
+                  }
+                }
+
+                if (statusEl) statusEl.textContent = 'Merging…';
+                await gql(`mutation Merge($w: ID!, $l: ID!, $m: String!) {
+                  applyShowMerge(winnerId: $w, loserId: $l, matchedOn: $m) { id }
+                }`, { w: winnerId, l: loserId, m: `${r.field}:${conflict.contestedId}` });
+
+                // Resolve this review and any sibling reviews for the same show pair
+                // Check for both show IDs since sibling reviews may reference either
+                const relatedReviews = _reviews.filter(rv =>
+                  !rv.resolvedAt && rv.id !== r.id &&
+                  rv.proposedValueChain?.length > 0 &&
+                  (rv.proposedValueChain[0].includes(winnerId) || rv.proposedValueChain[0].includes(loserId))
+                );
+                r.resolvedAt = new Date().toISOString();
+                for (const sib of relatedReviews) {
+                  try {
+                    await resolvePendingReview(sib.id, `auto-resolved: merged into ${winnerId}`);
+                    sib.resolvedAt = new Date().toISOString();
+                  } catch (_) { /* server may have already resolved it */ }
+                }
+                // Also try to explicitly resolve this one in case server didn't
+                try { await resolvePendingReview(r.id, `merged ${loserId} into ${winnerId}`); } catch (_) {}
+
+                renderList(); renderPills(); renderBulkBar();
+                const visible = filteredReviews();
+                const nextOpen = visible.find(x => !x.resolvedAt && x.id !== r.id);
+                if (nextOpen) selectReview(nextOpen); else renderDetail(r);
+              } catch (err) {
+                // If the merge fails because the loser is already untracked
+                // (absorbed by a prior merge), just resolve this review
+                if (err.message?.includes('tracked')) {
+                  if (statusEl) { statusEl.textContent = 'Already merged — resolving…'; statusEl.className = 'action-status'; }
+                  try {
+                    await resolvePendingReview(r.id, `auto-resolved: show already merged`);
+                    r.resolvedAt = new Date().toISOString();
+                    // Also resolve siblings
+                    const siblings = _reviews.filter(rv =>
+                      !rv.resolvedAt && rv.id !== r.id &&
+                      rv.proposedValueChain?.length > 0 &&
+                      (rv.proposedValueChain[0].includes(winnerId) || rv.proposedValueChain[0].includes(loserId))
+                    );
+                    for (const sib of siblings) {
+                      try {
+                        await resolvePendingReview(sib.id, `auto-resolved: show already merged`);
+                        sib.resolvedAt = new Date().toISOString();
+                      } catch (_) {}
+                    }
+                    renderList(); renderPills(); renderBulkBar();
+                    const visible = filteredReviews();
+                    const nextOpen = visible.find(x => !x.resolvedAt && x.id !== r.id);
+                    if (nextOpen) selectReview(nextOpen); else renderDetail(r);
+                    return;
+                  } catch (_) {}
+                }
+                if (statusEl) { statusEl.textContent = `Error: ${err.message}`; statusEl.className = 'action-status err'; }
+              }
+            }
+            if (mergeThisBtn && thisShow) {
+              mergeThisBtn.addEventListener('click', () => {
+                mergeThisBtn.disabled = true;
+                if (mergeOtherBtn) mergeOtherBtn.disabled = true;
+                doMerge(thisShow.id, otherShows[0].id);
+              });
+            }
+            if (mergeOtherBtn && otherShows[0]) {
+              mergeOtherBtn.addEventListener('click', () => {
+                mergeOtherBtn.disabled = true;
+                if (mergeThisBtn) mergeThisBtn.disabled = true;
+                doMerge(otherShows[0].id, thisShow.id);
+              });
+            }
+          } catch (err) {
+            if (_selected === r.id && compareEl) {
+              compareEl.innerHTML = `<div class="conflict-loading" style="color:var(--st-dropped)">Failed to load: ${esc(err.message)}</div>`;
+            }
+          }
+        })();
+      }
+    }
+
+    // Wire up action buttons
+    if (!resolved) {
+      const uid = r.id.replace(/[^a-z0-9]/gi, '');
+      const statusEl = () => document.getElementById(`action-status-${uid}`);
+      const noteVal = () => (document.getElementById(`resolve-note-${uid}`)?.value || '').trim();
+
+      async function doResolve(note) {
+        await resolvePendingReview(r.id, note || null);
+        r.resolvedAt = new Date().toISOString();
+        r.resolutionNote = note || '';
+        renderList();
+        renderPills();
+        renderBulkBar();
+        // Auto-advance to next open review
+        const visible = filteredReviews();
+        const nextOpen = visible.find(x => !x.resolvedAt && x.id !== r.id);
+        if (nextOpen) {
+          selectReview(nextOpen);
+        } else {
+          renderDetail(r); // no more open — show the just-resolved one
+        }
+      }
+
+      function setStatus(msg, type = '') {
+        const el = statusEl();
+        if (el) { el.textContent = msg; el.className = `action-status ${type}`; }
+      }
+
+      // Approve (apply proposed value)
+      const approveBtn = document.getElementById(`btn-approve-${uid}`);
+      if (approveBtn) {
+        approveBtn.addEventListener('click', async () => {
+          approveBtn.disabled = true;
+          setStatus('Applying…');
+          try {
+            if (isAirDate) {
+              await setEpisodeAirDate(r.entityId, latest);
+              await doResolve(noteVal() || `accepted ${latest} via web review`);
+            } else if (isScore) {
+              await setSeasonScore(r.entityId, parseFloat(latest));
+              await doResolve(noteVal() || `applied score ${latest} via web review`);
+            }
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            approveBtn.disabled = false;
+          }
+        });
+      }
+
+      // Revert (keep previous value)
+      const revertBtn = document.getElementById(`btn-revert-${uid}`);
+      if (revertBtn) {
+        revertBtn.addEventListener('click', async () => {
+          revertBtn.disabled = true;
+          setStatus('Reverting…');
+          try {
+            if (isAirDate && r.previousValue) {
+              // Set back to previous, which pins it as MANUAL
+              await setEpisodeAirDate(r.entityId, r.previousValue);
+              await doResolve(noteVal() || `kept previous date ${r.previousValue}, pinned as MANUAL via web review`);
+            }
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            revertBtn.disabled = false;
+          }
+        });
+      }
+
+      // Correct (inline edit → set custom value)
+      const correctBtn = document.getElementById(`btn-correct-${uid}`);
+      if (correctBtn) {
+        correctBtn.addEventListener('click', async () => {
+          const input = document.getElementById(`edit-input-${uid}`);
+          if (!input || !input.value) { setStatus('Enter a value first', 'err'); return; }
+          correctBtn.disabled = true;
+          setStatus('Setting…');
+          try {
+            if (isAirDate) {
+              const iso = localToIso(input.value);
+              if (!iso) { setStatus('Invalid date', 'err'); correctBtn.disabled = false; return; }
+              await setEpisodeAirDate(r.entityId, iso);
+              await doResolve(noteVal() || `corrected to ${iso} via web review`);
+            } else if (isScore) {
+              const score = parseFloat(input.value);
+              if (isNaN(score) || score < 0 || score > 20) { setStatus('Score must be 0–20', 'err'); correctBtn.disabled = false; return; }
+              await setSeasonScore(r.entityId, score);
+              await doResolve(noteVal() || `corrected score to ${score} via web review`);
+            }
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            correctBtn.disabled = false;
+          }
+        });
+      }
+
+      // Retry (metadata_fetch only)
+      const retryBtn = document.getElementById(`btn-retry-${uid}`);
+      if (retryBtn) {
+        retryBtn.addEventListener('click', async () => {
+          retryBtn.disabled = true;
+          setStatus('Retrying metadata fetch…');
+          try {
+            const showId = info.showId || r.entityId;
+            const result = await refreshShowMetadata(showId);
+            // Only resolve if the fetch actually ran (metadataLastRefreshedAt advanced)
+            if (result.metadataLastRefreshedAt) {
+              await doResolve(noteVal() || `retried metadata fetch successfully via web review`);
+            } else {
+              setStatus('Fetch ran but metadata still not populated — AniList may still be unreachable', 'err');
+              retryBtn.disabled = false;
+            }
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            retryBtn.disabled = false;
+          }
+        });
+      }
+
+      // Re-push to AniList (anilist_push reviews)
+      const repushBtn = document.getElementById(`btn-repush-${uid}`);
+      if (repushBtn) {
+        repushBtn.addEventListener('click', async () => {
+          repushBtn.disabled = true;
+          setStatus('Re-pushing to AniList…');
+          try {
+            // Re-trigger the push by re-setting the show's current status
+            // (setStatus pushes to AniList as a side effect)
+            const showId = info.showId || r.entityId;
+            const showData = await gql(`query($id:ID!){show(id:$id){status}}`, { id: showId });
+            if (showData.show) {
+              await gql(`mutation($id:ID!,$s:ShowStatus!){setStatus(showId:$id,status:$s){id}}`,
+                { id: showId, s: showData.show.status });
+            }
+            await doResolve(noteVal() || `re-pushed to AniList via web review`);
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            repushBtn.disabled = false;
+          }
+        });
+      }
+
+      // Link external IDs (anilist_id reviews)
+      const linkIdsBtn = document.getElementById(`btn-linkids-${uid}`);
+      if (linkIdsBtn) {
+        linkIdsBtn.addEventListener('click', async () => {
+          linkIdsBtn.disabled = true;
+          setStatus('Saving IDs…');
+          try {
+            const notes = [];
+            const showId = info.showId || r.entityId;
+
+            // Show-level external IDs
+            const tvdbInput = document.getElementById(`id-tvdb-${uid}`);
+            const anilistInput = document.getElementById(`id-anilist-${uid}`);
+
+            const tvdbVal = parseIdInput(tvdbInput?.value, 'thetvdb.com');
+            const anilistVal = parseIdInput(anilistInput?.value, 'anilist.co/anime');
+
+            if (tvdbVal && tvdbVal !== (info.externalIds?.tvdb?.id || '')) {
+              await linkShowExternalId(showId, 'tvdb', tvdbVal, `https://thetvdb.com/series/${tvdbVal}`);
+              notes.push(`tvdb=${tvdbVal}`);
+            }
+            if (anilistVal && anilistVal !== (info.externalIds?.anilist?.id || '')) {
+              await linkShowExternalId(showId, 'anilist', anilistVal, `https://anilist.co/anime/${anilistVal}`);
+              notes.push(`anilist=${anilistVal}`);
+            }
+
+            // Season-level AniList/MAL IDs
+            const seasons = info.seasons || [];
+            for (const s of seasons) {
+              const alInput = document.getElementById(`id-sal-${uid}-${s.seasonNumber}`);
+              const malInput = document.getElementById(`id-smal-${uid}-${s.seasonNumber}`);
+              const alVal = alInput?.value?.trim() ? parseInt(alInput.value.trim(), 10) : null;
+              const malVal = malInput?.value?.trim() ? parseInt(malInput.value.trim(), 10) : null;
+              const alChanged = alVal != null && alVal !== s.anilistId;
+              const malChanged = malVal != null && malVal !== s.malId;
+              if (alChanged || malChanged) {
+                await setSeasonMapping(showId, s.seasonNumber,
+                  alVal ?? s.anilistId ?? null,
+                  malVal ?? s.malId ?? null);
+                if (alChanged) notes.push(`S${s.seasonNumber} anilist=${alVal}`);
+                if (malChanged) notes.push(`S${s.seasonNumber} mal=${malVal}`);
+              }
+            }
+
+            if (notes.length === 0) {
+              setStatus('Nothing changed — fill in at least one ID', 'err');
+              linkIdsBtn.disabled = false;
+              return;
+            }
+            await doResolve(noteVal() || `linked ${notes.join(', ')} via web review`);
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            linkIdsBtn.disabled = false;
+          }
+        });
+      }
+
+      // Sequel approve (create season mapping + resolve)
+      const sequelBtn = document.getElementById(`btn-sequel-${uid}`);
+      if (sequelBtn) {
+        sequelBtn.addEventListener('click', async () => {
+          sequelBtn.disabled = true;
+          setStatus('Creating season mapping…');
+          try {
+            const sequelAlId = r.field.split(':')[1];
+            let sequelMalId = null;
+            try {
+              const prev = JSON.parse(r.previousValue || '{}');
+              sequelMalId = prev.mal ?? null;
+            } catch (_) {}
+            const snumInput = document.getElementById(`sequel-snum-${uid}`);
+            const seasonNum = snumInput ? parseInt(snumInput.value, 10) : null;
+            if (!seasonNum || seasonNum < 1) {
+              setStatus('Enter a valid season number', 'err');
+              sequelBtn.disabled = false;
+              return;
+            }
+            const showId = info.showId || r.entityId;
+            // Safety: refuse to overwrite a different season mapping
+            const existingSeason = (info.seasons || []).find(s => s.seasonNumber === seasonNum);
+            if (existingSeason && existingSeason.anilistId != null && existingSeason.anilistId !== parseInt(sequelAlId, 10)) {
+              setStatus(`S${seasonNum} already mapped to AniList ${existingSeason.anilistId} — pick a different number or dismiss`, 'err');
+              sequelBtn.disabled = false;
+              return;
+            }
+            await setSeasonMapping(showId, seasonNum, parseInt(sequelAlId, 10), sequelMalId);
+            // Update cached labels so the next sequel review sees the new season
+            const lbl = _labels.get(r.entityId);
+            if (lbl) {
+              lbl.seasons = (lbl.seasons || [])
+                .filter(s => s.seasonNumber !== seasonNum)
+                .concat([{ seasonNumber: seasonNum, anilistId: parseInt(sequelAlId, 10), malId: sequelMalId }]);
+            }
+            await doResolve(noteVal() || `added as S${seasonNum} (AL ${sequelAlId}${sequelMalId != null ? ', MAL ' + sequelMalId : ''}) via web review`);
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            sequelBtn.disabled = false;
+          }
+        });
+      }
+
+      // Dismiss (resolve without any change)
+      const dismissBtn = document.getElementById(`btn-dismiss-${uid}`);
+      if (dismissBtn) {
+        dismissBtn.addEventListener('click', async () => {
+          dismissBtn.disabled = true;
+          setStatus('Dismissing…');
+          try {
+            await doResolve(noteVal() || 'dismissed via web review');
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            dismissBtn.disabled = false;
+          }
+        });
+      }
+    }
+  }
+
+  /* ── Load ────────────────────────────────────────────────── */
+  async function loadReviews() {
+    listEl.innerHTML = '<div class="reviews-loading"><span class="spinner"></span>Loading…</div>';
+    detailEl.innerHTML = '<div class="detail-empty">Select a review to inspect</div>';
+    _selected = null;
+    _reviews = [];
+    _labels = new Map();
+
+    try {
+      // Load all pages
+      const allNodes = [];
+      let after = null;
+      while (true) {
+        const { nodes, pageInfo } = await fetchPendingReviews(_includeResolved, 100, after);
+        allNodes.push(...nodes);
+        if (!pageInfo.hasNextPage) break;
+        after = pageInfo.endCursor;
+      }
+      _reviews = allNodes;
+
+      // Resolve labels in one batched query
+      _labels = await resolveReviewLabels(_reviews);
+
+      renderPills();
+      renderList();
+      renderBulkBar();
+      hideBanner();
+    } catch (err) {
+      listEl.innerHTML = `<div style="padding:20px;color:var(--st-dropped);font-size:12px">${esc(err.message)}</div>`;
+      showBanner(err.message);
+    }
+  }
+
+  /* ── Controls ───────────────────────────────────────────── */
+  document.getElementById('include-resolved').addEventListener('change', e => {
+    _includeResolved = e.target.checked;
+    loadReviews();
+  });
+  document.getElementById('refresh-btn').addEventListener('click', loadReviews);
+
+  /* ── Keyboard: j/k to navigate list ────────────────────── */
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    const visible = filteredReviews();
+    if (!visible.length) return;
+
+    const currentIdx = _selected ? visible.findIndex(r => r.id === _selected) : -1;
+    if (e.key === 'j' || e.key === 'ArrowDown') {
+      const next = Math.min(currentIdx + 1, visible.length - 1);
+      selectReview(visible[next]);
+      e.preventDefault();
+    } else if (e.key === 'k' || e.key === 'ArrowUp') {
+      const prev = Math.max(currentIdx - 1, 0);
+      selectReview(visible[prev]);
+      e.preventDefault();
+    }
+  });
+
+  /* ── Init ────────────────────────────────────────────────── */
+  loadReviews();
+</script>
+
+</body>
+</html>
