@@ -1127,7 +1127,7 @@ input AddShowInput {
   malId: Int
 }
 
-"B.21 — addShowWithArr's own input, mirrors AddShowInput exactly."
+"B.21 — addShowWithArr's own input, mirrors AddShowInput plus the unmonitored flag for PAUSED adds."
 input AddShowWithArrInput {
   mediaShape: MediaShape!
   trackingSpace: TrackingSpace!
@@ -1140,6 +1140,8 @@ input AddShowWithArrInput {
   tmdbId: Int
   imdbId: String
   malId: Int
+  "When true, add to Sonarr/Radarr as unmonitored (no automatic search/download). Defaults to false (monitored)."
+  unmonitored: Boolean
 }
 
 """

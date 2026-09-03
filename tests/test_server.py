@@ -1686,6 +1686,110 @@ async def test_add_show_with_arr_new_radarr_movie_writes_a_real_radarr_deep_link
     assert url == "http://radarr.public.test/movie/inception"
 
 
+# --- addShowWithArr unmonitored flag (PAUSED status) -----------------------
+
+
+async def test_add_show_with_arr_unmonitored_sonarr_adds_as_unmonitored(client, monkeypatch):
+    """unmonitored: true → Sonarr payload has monitored=false and no initial search."""
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(
+        series=None,
+        lookup_results=[{"tvdbId": 421855, "title": "Shangri-La Frontier", "titleSlug": "x"}],
+        add_series_result={"id": 4, "tvdbId": 421855, "title": "Shangri-La Frontier"},
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "EPISODIC",
+                "trackingSpace": "ANIME",
+                "titleRomaji": "Shangri-La Frontier",
+                "primaryTitle": "ROMAJI",
+                "unmonitored": True,
+            }
+        },
+        headers=auth_headers(),
+    )
+    result = data["addShowWithArr"]
+    assert result["sonarrSeriesCreated"] is True
+
+    add_calls = [c for c in fake.calls if c[0] == "add_series"]
+    assert len(add_calls) == 1
+    payload = add_calls[0][1]
+    assert payload["monitored"] is False
+    assert payload["addOptions"]["searchForMissingEpisodes"] is False
+
+
+async def test_add_show_with_arr_unmonitored_radarr_adds_as_unmonitored(client, monkeypatch):
+    """unmonitored: true → Radarr payload has monitored=false and no initial search."""
+    config.set_current(_radarr_configured_config())
+    fake = _FakeRadarrClient(
+        movie=None,
+        lookup_results=[{"tmdbId": 27205, "title": "Inception", "titleSlug": "x"}],
+        add_movie_result={"id": 4, "tmdbId": 27205, "title": "Inception"},
+    )
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "MOVIE",
+                "trackingSpace": "TV",
+                "titleRomaji": "Inception",
+                "primaryTitle": "ROMAJI",
+                "unmonitored": True,
+            }
+        },
+        headers=auth_headers(),
+    )
+    result = data["addShowWithArr"]
+    assert result["radarrMovieCreated"] is True
+
+    add_calls = [c for c in fake.calls if c[0] == "add_movie"]
+    assert len(add_calls) == 1
+    payload = add_calls[0][1]
+    assert payload["monitored"] is False
+    assert payload["addOptions"]["searchForMovie"] is False
+
+
+async def test_add_show_with_arr_unmonitored_existing_sonarr_series_is_moot(
+    client, monkeypatch
+):
+    """When the series already exists in Sonarr, unmonitored is ignored — we just
+    link, not create. The existing series's monitored state is untouched."""
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(
+        series={"id": 4, "tvdbId": 421855, "title": "Shangri-La Frontier"},
+        lookup_results=[{"tvdbId": 421855, "title": "Shangri-La Frontier", "titleSlug": "x"}],
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {
+            "input": {
+                "mediaShape": "EPISODIC",
+                "trackingSpace": "ANIME",
+                "titleRomaji": "Shangri-La Frontier",
+                "primaryTitle": "ROMAJI",
+                "tvdbId": 421855,
+                "unmonitored": True,
+            }
+        },
+        headers=auth_headers(),
+    )
+    result = data["addShowWithArr"]
+    assert result["sonarrSeriesCreated"] is False
+    # No add_series call — we linked to the existing one, didn't create
+    assert [c for c in fake.calls if c[0] == "add_series"] == []
+
+
 async def test_add_show_with_arr_zero_lookup_results_rejects_nothing_created(client, monkeypatch):
     config.set_current(_sonarr_configured_config())
     fake = _FakeSonarrClient(lookup_results=[])

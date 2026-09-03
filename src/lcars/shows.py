@@ -416,9 +416,13 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
                     "images": candidate.get("images", []),
                     "seasons": candidate.get("seasons", []),
                     "rootFolderPath": root_folder,
-                    "monitored": True,
+                    # unmonitored=true (PAUSED status) → don't monitor or auto-search;
+                    # the arr instance stays hands-off until the user resumes.
+                    "monitored": not input.get("unmonitored", False),
                     "seasonFolder": True,
-                    "addOptions": {"searchForMissingEpisodes": True},
+                    "addOptions": {
+                        "searchForMissingEpisodes": not input.get("unmonitored", False),
+                    },
                 }
                 created = client.add_series(payload)
             service_health.record_success(conn, "sonarr")
@@ -456,9 +460,11 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
                 "titleSlug": candidate.get("titleSlug"),
                 "images": candidate.get("images", []),
                 "rootFolderPath": cfg.radarr_root_folder,
-                "monitored": True,
+                "monitored": not input.get("unmonitored", False),
                 "minimumAvailability": candidate.get("minimumAvailability") or "released",
-                "addOptions": {"searchForMovie": True},
+                "addOptions": {
+                    "searchForMovie": not input.get("unmonitored", False),
+                },
             }
             created = client.add_movie(payload)
         service_health.record_success(conn, "radarr")
