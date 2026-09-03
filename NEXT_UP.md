@@ -772,15 +772,11 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
 ## Web client (`ui/`)
 
 The HTML/CSS/JS web client (formerly `~/repos/web`) now lives in `ui/` in
-this repo. It is a vanilla static site — **not** part of the Python package
-or Docker image. nginx serves it from a host bind mount at `:8888/ui/`.
-Deploy with `cd ui && ./deploy.sh`.
+this repo. Baked into both Docker images at build time (v0.1.79):
+`starfleet:<ver>` serves it via LCARS at `/ui/`, `starfleet:<ver>-web`
+serves it via nginx. Deploy with the normal tag-and-deploy process.
 
 See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
-
-**Note:** the remote deploy target (`/home/tiny/repos/web/src`) is still
-named `web` on the server. Renaming it would require editing the
-docker-compose bind mount and restarting nginx — left as-is for now.
 
 ## TBC / ongoing (validate as you go)
 
@@ -817,7 +813,8 @@ docker-compose bind mount and restarting nginx — left as-is for now.
       corrected-precedence logic as the catalog backfill script.
 - [ ] Move all secrets/passwords to a safer place (plaintext `config.ini` today) — deferred,
       reminder only; in progress in the background alongside key rotation.
-- [ ] Design the HTML client's UI properly.
+- [x] Design the HTML client's UI properly — pages built: Calendar, Lists, Add, Grabs, Reviews,
+      Backlog, Settings, Show detail. Baked into Docker images as of v0.1.79.
 - [ ] HTML client: add a login/password gate, keep it safe.
 - [ ] Add `watchedEpisodeCount: Int!` and `availableEpisodeCount: Int!` to the `Show` type —
       needed by the web client calendar cards to display accurate per-show progress and
