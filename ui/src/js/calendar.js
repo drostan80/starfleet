@@ -331,43 +331,17 @@ const SVC_DEFS = [
  * filePath: server-side path (/data/media/…)
  * cfg: config object
  */
-export async function launchMpv(filePath, cfg) {
-  if (!filePath) {
-    showBanner('No file available for this episode', 'error');
-    return;
-  }
-
-  const helperUrl = (cfg.mpv_helper_url || 'http://localhost:19450').replace(/\/$/, '');
-
-  // filePathSonarr/Radarr is the path inside the server container (/data/…).
-  // nginx serves /data/ at /files/, so strip the /data prefix to form the URL.
-  const mediaPath = filePath.startsWith('/data') ? filePath.slice('/data'.length) : filePath;
-  const mediaUrl  = `${cfg.lcars_url}/files${mediaPath}`;
-
-  try {
-    // Timeout: browsers on non-secure contexts may silently block
-    // Private Network Access requests (LAN page → localhost) without
-    // ever resolving or rejecting the fetch promise.
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
-    const res = await fetch(`${helperUrl}/play`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ url: mediaUrl }),
-      signal:  controller.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) throw new Error(`helper returned ${res.status}`);
-    const body = await res.text();
-    if (body === 'FAILED') {
-      showBanner('No mpv output — try Jellyfin', 'error');
-      return;
-    }
-    showBanner('▶ Launching mpv…', 'info');
-    setTimeout(hideBanner, 2500);
-  } catch (err) {
-    showBanner('No mpv output — try Jellyfin', 'error');
-  }
+export async function launchMpv(filePath, _cfg) {
+  // mpv helper requires fetch from a LAN page to localhost, which
+  // browsers block on non-secure (HTTP) contexts (Private Network
+  // Access).  Until the web client is served over HTTPS, mpv
+  // playback is not possible — show a Jellyfin fallback instead.
+  showBanner(
+    filePath
+      ? 'No mpv output — try Jellyfin'
+      : 'No file available for this episode',
+    'error',
+  );
 }
 
 /**
