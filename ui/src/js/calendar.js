@@ -327,16 +327,41 @@ const SVC_DEFS = [
 /* ── mpv launcher ────────────────────────────────────────── */
 
 /**
- * Play an episode — mpv playback is not yet supported behind the login
- * gate (nginx /files/ requires cookie auth that external players can't
- * carry).  Show a Jellyfin fallback message instead.
+ * Launch a file in mpv via the local helper daemon.
+ * filePath: server-side path (/data/media/…)
+ * cfg: config object
  */
 export async function launchMpv(filePath, cfg) {
   if (!filePath) {
     showBanner('No file available for this episode', 'error');
     return;
   }
-  showBanner('No mpv output — try Jellyfin', 'error');
+
+  const helperUrl = (cfg.mpv_helper_url || 'http://localhost:19450').replace(/\/$/, '');
+
+  // filePathSonarr/Radarr is the path inside the server container (/data/…).
+  // nginx serves /data/ at /files/, so strip the /data prefix to form the URL.
+  const mediaPath = filePath.startsWith('/data') ? filePath.slice('/data'.length) : filePath;
+  const mediaUrl  = `${cfg.lcars_url}/files${mediaPath}`;
+
+  try {
+    const res = await fetch(`${helperUrl}/play`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ url: mediaUrl }),
+    });
+    if (!res.ok) throw new Error(`helper returned ${res.status}`);
+    showBanner('▶ Launching mpv…', 'info');
+    setTimeout(hideBanner, 2500);
+  } catch (err) {
+    const isNetErr = err instanceof TypeError;
+    showBanner(
+      isNetErr
+        ? 'mpv helper not running — start mpv-helper.py on this machine'
+        : `mpv error: ${err.message}`,
+      'error',
+    );
+  }
 }
 
 /**
