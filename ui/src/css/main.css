@@ -566,6 +566,26 @@ body {
   min-height: 18px;
 }
 
+/* Download button — pinned to the bottom-left corner of .show-card */
+.card-dl-btn {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  width: 22px;
+  height: 22px;
+  z-index: 5;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  padding: 4px;
+  background: rgba(0,0,0,0.55);
+  color: var(--muted);
+  transition: transform 0.12s, color 0.15s, background 0.15s;
+}
+.card-dl-btn:hover { transform: scale(1.15); color: var(--accent); background: rgba(0,0,0,0.75); }
+.card-dl-btn.triggered { color: var(--st-watching); }
+
 /* Wrapper is pinned to the bottom-right corner of .show-card */
 .status-btn-wrap {
   position: absolute;

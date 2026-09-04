@@ -10,7 +10,8 @@
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost } from './config.js?v=3';
 import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus } from './api.js?v=11';
-import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, SVC_ICONS } from './icons.js?v=8';
+import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, SVC_ICONS } from './icons.js?v=8';
+import { startDownload } from './downloads.js?v=2';
 
 /* ── Constants ────────────────────────────────────────────── */
 
@@ -581,6 +582,25 @@ export function buildCard(ep, cfg) {
   }
 
   card.appendChild(footer);
+
+  // Download button — absolutely pinned to bottom-left of the card
+  if (ep.availableLocally && filePath) {
+    const dlBtn = document.createElement('button');
+    dlBtn.className = 'card-dl-btn';
+    dlBtn.title = 'Download';
+    dlBtn.innerHTML = _downloadSvg;
+    dlBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      startDownload({
+        showTitle: ep.show.displayTitle,
+        label: fmtEpBadge(ep) + (ep.title ? ` — ${ep.title}` : ''),
+        filePath,
+      });
+      dlBtn.classList.add('triggered');
+      setTimeout(() => dlBtn.classList.remove('triggered'), 1200);
+    });
+    card.appendChild(dlBtn);
+  }
 
   // Status button — absolutely pinned to bottom-right of the card itself
   card.appendChild(buildStatusBtn(ep.show.id, status));
