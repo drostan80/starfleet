@@ -843,6 +843,24 @@ export async function batchCheckTracked(candidates) {
  * @param {number} [page=1]
  * @returns {Promise<object>} SeasonalBrowseResult
  */
+export async function browseTmdb(year, month, mediaType = 'ALL', page = 1) {
+  const data = await gql(`
+    query BrowseTmdb($year: Int!, $month: Int!, $mediaType: String, $page: Int) {
+      browseTmdb(year: $year, month: $month, mediaType: $mediaType, page: $page) {
+        items {
+          tmdbId mediaType title originalTitle
+          overview posterUrl backdropUrl
+          firstAirDate releaseDate
+          popularity voteAverage genreIds
+          lcarsShowId lcarsStatus
+        }
+        currentPage totalPages totalResults hasNextPage
+      }
+    }
+  `, { year, month, mediaType, page });
+  return data.browseTmdb;
+}
+
 export async function browseSeasonalAnime(season, year, page = 1) {
   const data = await gql(`
     query BrowseSeasonal($season: AnimeSeason!, $year: Int!, $page: Int) {

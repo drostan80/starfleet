@@ -1,17 +1,34 @@
 /**
- * browse.js — Seasonal anime browse module for the Add page.
+ * browse.js — Seasonal anime + TV/Movies browse module for the Add page.
  *
- * Manages season selection, status filtering, card rendering, pagination,
+ * Two browse modes:
+ *   - Anime: seasonal (AniList) — season+year picker
+ *   - TV/Movies: monthly (TMDB) — month+year picker
+ *
+ * Manages navigation, status filtering, card rendering, pagination,
  * and add-to-LCARS flows. Wired from add.html's mode toggle.
  */
 
-import { browseSeasonalAnime, searchArrCandidates, addShowWithArr, addShow, setStatus, setSeasonStatus } from './api.js?v=12';
+import {
+  browseSeasonalAnime, browseTmdb,
+  searchArrCandidates, addShowWithArr, addShow,
+  setStatus, setSeasonStatus,
+} from './api.js?v=13';
 import { showBanner } from './calendar.js?v=20';
 
 // ── Constants ────────────────────────────────────────────
 
 const SEASONS = ['WINTER', 'SPRING', 'SUMMER', 'FALL'];
 const SEASON_LABELS = { WINTER: 'Winter', SPRING: 'Spring', SUMMER: 'Summer', FALL: 'Fall' };
+
+const MONTH_LABELS = [
+  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+const MONTH_FULL = [
+  '', 'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
 
 const STATUSES = ['PLANNED', 'WATCHING', 'PAUSED', 'COMPLETED', 'DROPPED'];
 const STATUS_LABELS = { PLANNED: 'Plan', WATCHING: 'Watch', PAUSED: 'Pause', COMPLETED: 'Done', DROPPED: 'Drop' };
@@ -20,15 +37,24 @@ const STATUS_LABELS = { PLANNED: 'Plan', WATCHING: 'Watch', PAUSED: 'Pause', COM
 
 let resultsEl = null;
 let controlsEl = null;
+// Browse type: 'anime' | 'all' | 'tv' | 'movie'
+let browseType = 'anime';
+
+// Anime state (season-based)
 let currentSeason = '';
 let currentYear = 0;
+
+// TMDB state (month-based)
+let currentMonth = 0;
+let tmdbYear = 0;
+
 let currentPage = 1;
 let items = [];          // all loaded items (accumulates across pages)
 let hasNextPage = false;
 let activeFilters = new Set();  // active status filters (empty = show all)
 let loading = false;
 
-// ── Season math ──────────────────────────────────────────
+// ── Season math (anime) ─────────────────────────────────
 
 function currentSeasonYear() {
   const now = new Date();
@@ -69,11 +95,42 @@ function nextSeason() {
   }
 }
 
-function canGoNext() {
-  // Cap at current year + 2
+function canGoNextSeason() {
   const maxYear = new Date().getFullYear() + 2;
   if (currentYear > maxYear) return false;
   if (currentYear === maxYear && currentSeason === 'FALL') return false;
+  return true;
+}
+
+// ── Month math (TMDB) ───────────────────────────────────
+
+function currentMonthYear() {
+  const now = new Date();
+  return { month: now.getMonth() + 1, year: now.getFullYear() };
+}
+
+function prevMonth() {
+  if (currentMonth === 1) {
+    currentMonth = 12;
+    tmdbYear -= 1;
+  } else {
+    currentMonth -= 1;
+  }
+}
+
+function nextMonth() {
+  if (currentMonth === 12) {
+    currentMonth = 1;
+    tmdbYear += 1;
+  } else {
+    currentMonth += 1;
+  }
+}
+
+function canGoNextMonth() {
+  const maxYear = new Date().getFullYear() + 2;
+  if (tmdbYear > maxYear) return false;
+  if (tmdbYear === maxYear && currentMonth === 12) return false;
   return true;
 }
 
@@ -81,6 +138,7 @@ function canGoNext() {
 
 /** Compute the single display status for filtering/highlighting. */
 function effectiveStatus(item) {
+  // Anime items have season-level match; TMDB items are show-level only
   return item.lcarsSeasonStatus ?? item.lcarsStatus ?? 'NOT_IN_LCARS';
 }
 
@@ -90,7 +148,13 @@ async function fetchPage(page) {
   loading = true;
   updateLoadingState();
   try {
-    const result = await browseSeasonalAnime(currentSeason, currentYear, page);
+    let result;
+    if (browseType === 'anime') {
+      result = await browseSeasonalAnime(currentSeason, currentYear, page);
+    } else {
+      const mediaType = browseType === 'tv' ? 'TV' : browseType === 'movie' ? 'MOVIE' : 'ALL';
+      result = await browseTmdb(tmdbYear, currentMonth, mediaType, page);
+    }
     if (page === 1) {
       items = result.items;
     } else {
@@ -112,12 +176,21 @@ function updateLoadingState() {
   if (bar) bar.classList.toggle('active', loading);
 }
 
-// ── Season selector UI ───────────────────────────────────
+// ── Controls UI ─────────────────────────────────────────
 
 function renderControls() {
   controlsEl.innerHTML = '';
 
-  // Season nav: ◀ [select] ▶
+  if (browseType === 'anime') {
+    renderSeasonNav();
+  } else {  // 'all', 'tv', 'movie'
+    renderMonthNav();
+  }
+
+  renderFilterBar();
+}
+
+function renderSeasonNav() {
   const nav = document.createElement('div');
   nav.className = 'browse-season-nav';
 
@@ -127,7 +200,7 @@ function renderControls() {
   prevBtn.addEventListener('click', () => {
     prevSeason();
     updateSeasonSelect();
-    loadSeason();
+    loadFresh();
   });
 
   const select = document.createElement('select');
@@ -138,24 +211,66 @@ function renderControls() {
     const [s, y] = select.value.split(':');
     currentSeason = s;
     currentYear = parseInt(y);
-    loadSeason();
+    loadFresh();
   });
 
   const nextBtn = document.createElement('button');
   nextBtn.className = 'browse-nav-btn';
-  nextBtn.disabled = !canGoNext();
+  nextBtn.id = 'browse-next-btn';
+  nextBtn.disabled = !canGoNextSeason();
   nextBtn.textContent = '▶';
   nextBtn.addEventListener('click', () => {
-    if (!canGoNext()) return;
+    if (!canGoNextSeason()) return;
     nextSeason();
     updateSeasonSelect();
-    loadSeason();
+    loadFresh();
   });
 
   nav.append(prevBtn, select, nextBtn);
   controlsEl.appendChild(nav);
+}
 
-  // Status filter pills (using .bf-pill to avoid calendar.js collision)
+function renderMonthNav() {
+  const nav = document.createElement('div');
+  nav.className = 'browse-season-nav';
+
+  const prevBtn = document.createElement('button');
+  prevBtn.className = 'browse-nav-btn';
+  prevBtn.textContent = '◀';
+  prevBtn.addEventListener('click', () => {
+    prevMonth();
+    updateMonthSelect();
+    loadFresh();
+  });
+
+  const select = document.createElement('select');
+  select.className = 'browse-season-select';
+  select.id = 'browse-month-select';
+  populateMonthOptions(select);
+  select.addEventListener('change', () => {
+    const [m, y] = select.value.split(':');
+    currentMonth = parseInt(m);
+    tmdbYear = parseInt(y);
+    loadFresh();
+  });
+
+  const nextBtn = document.createElement('button');
+  nextBtn.className = 'browse-nav-btn';
+  nextBtn.id = 'browse-next-btn';
+  nextBtn.disabled = !canGoNextMonth();
+  nextBtn.textContent = '▶';
+  nextBtn.addEventListener('click', () => {
+    if (!canGoNextMonth()) return;
+    nextMonth();
+    updateMonthSelect();
+    loadFresh();
+  });
+
+  nav.append(prevBtn, select, nextBtn);
+  controlsEl.appendChild(nav);
+}
+
+function renderFilterBar() {
   const filterBar = document.createElement('div');
   filterBar.className = 'browse-filter-bar';
 
@@ -207,7 +322,6 @@ function createFilterPill(value, label, color) {
 function populateSeasonOptions(select) {
   const maxYear = new Date().getFullYear() + 2;
   const minYear = 2020;
-  // Build options newest-first
   const opts = [];
   for (let y = maxYear; y >= minYear; y--) {
     for (let s = SEASONS.length - 1; s >= 0; s--) {
@@ -226,15 +340,41 @@ function populateSeasonOptions(select) {
   select.value = `${currentSeason}:${currentYear}`;
 }
 
+function populateMonthOptions(select) {
+  const maxYear = new Date().getFullYear() + 2;
+  const minYear = 2020;
+  const opts = [];
+  for (let y = maxYear; y >= minYear; y--) {
+    for (let m = 12; m >= 1; m--) {
+      const val = `${m}:${y}`;
+      const label = `${MONTH_FULL[m]} ${y}`;
+      opts.push({ val, label });
+    }
+  }
+  for (const o of opts) {
+    const opt = document.createElement('option');
+    opt.value = o.val;
+    opt.textContent = o.label;
+    select.appendChild(opt);
+  }
+  select.value = `${currentMonth}:${tmdbYear}`;
+}
+
 function updateSeasonSelect() {
   const select = document.getElementById('browse-season-select');
   if (select) select.value = `${currentSeason}:${currentYear}`;
-  // Update next button disabled state
-  const nextBtn = controlsEl.querySelector('.browse-nav-btn:last-child');
-  if (nextBtn) nextBtn.disabled = !canGoNext();
+  const nextBtn = document.getElementById('browse-next-btn');
+  if (nextBtn) nextBtn.disabled = !canGoNextSeason();
 }
 
-function loadSeason() {
+function updateMonthSelect() {
+  const select = document.getElementById('browse-month-select');
+  if (select) select.value = `${currentMonth}:${tmdbYear}`;
+  const nextBtn = document.getElementById('browse-next-btn');
+  if (nextBtn) nextBtn.disabled = !canGoNextMonth();
+}
+
+function loadFresh() {
   currentPage = 1;
   items = [];
   hasNextPage = false;
@@ -248,12 +388,17 @@ function renderCards() {
   resultsEl.innerHTML = '';
 
   if (!items.length) {
-    resultsEl.innerHTML = '<div class="add-empty">No anime found for this season</div>';
+    const emptyLabel = browseType === 'anime'
+      ? 'No anime found for this season'
+      : `No ${browseType === 'tv' ? 'TV shows' : browseType === 'movie' ? 'movies' : 'TV shows or movies'} found for this month`;
+    resultsEl.innerHTML = `<div class="add-empty">${emptyLabel}</div>`;
     return;
   }
 
   for (const item of items) {
-    const card = createBrowseCard(item);
+    const card = browseType === 'anime'
+      ? createAnimeCard(item)
+      : createTmdbCard(item);  // 'all', 'tv', 'movie' all use TMDB cards
     resultsEl.appendChild(card);
   }
 
@@ -271,7 +416,9 @@ function renderCards() {
   applyFilters();
 }
 
-function createBrowseCard(item) {
+// ── Anime card (AniList data) ────────────────────────────
+
+function createAnimeCard(item) {
   const card = document.createElement('div');
   card.className = 'browse-card';
   card.dataset.anilistId = item.anilistId;
@@ -341,7 +488,84 @@ function createBrowseCard(item) {
     chip.dataset.status = st;
     chip.textContent = STATUS_LABELS[st];
     if (eff === st) chip.classList.add('active');
-    chip.addEventListener('click', () => onBrowseChipClick(card, item, st));
+    chip.addEventListener('click', () => onAnimeChipClick(card, item, st));
+    chipsRow.appendChild(chip);
+  }
+  body.appendChild(chipsRow);
+
+  // Spinner
+  const spinner = document.createElement('div');
+  spinner.className = 'cand-spinner';
+  card.appendChild(spinner);
+
+  card.appendChild(body);
+  return card;
+}
+
+// ── TMDB card (TV/Movie data) ────────────────────────────
+
+function createTmdbCard(item) {
+  const card = document.createElement('div');
+  card.className = 'browse-card';
+  card.dataset.tmdbId = item.tmdbId;
+
+  const eff = effectiveStatus(item);
+  card.dataset.effectiveStatus = eff;
+  if (eff !== 'NOT_IN_LCARS') {
+    card.classList.add('tracked');
+    card.style.setProperty('--tracked-color', statusColor(eff));
+  }
+
+  // Poster
+  const cover = document.createElement('div');
+  cover.className = 'browse-cover';
+  if (item.posterUrl) {
+    cover.style.backgroundImage = `url(${item.posterUrl})`;
+  }
+  card.appendChild(cover);
+
+  // Body
+  const body = document.createElement('div');
+  body.className = 'browse-body';
+
+  // Title
+  const title = document.createElement('div');
+  title.className = 'browse-title';
+  title.textContent = item.title;
+  if (item.originalTitle && item.originalTitle !== item.title) {
+    title.title = item.originalTitle;
+  }
+  body.appendChild(title);
+
+  // Meta line
+  const meta = document.createElement('div');
+  meta.className = 'browse-meta';
+  const metaParts = [];
+  metaParts.push(item.mediaType === 'MOVIE' ? 'Movie' : 'TV');
+  if (item.releaseDate) metaParts.push(item.releaseDate);
+  if (item.firstAirDate) metaParts.push(`Since ${item.firstAirDate}`);
+  if (item.voteAverage) metaParts.push(`★ ${item.voteAverage.toFixed(1)}`);
+  meta.textContent = metaParts.join(' · ');
+  body.appendChild(meta);
+
+  // Overview
+  if (item.overview) {
+    const synopsis = document.createElement('div');
+    synopsis.className = 'browse-synopsis';
+    synopsis.textContent = item.overview;
+    body.appendChild(synopsis);
+  }
+
+  // Status chips
+  const chipsRow = document.createElement('div');
+  chipsRow.className = 'cand-chips';
+  for (const st of STATUSES) {
+    const chip = document.createElement('button');
+    chip.className = 'cand-chip';
+    chip.dataset.status = st;
+    chip.textContent = STATUS_LABELS[st];
+    if (eff === st) chip.classList.add('active');
+    chip.addEventListener('click', () => onTmdbChipClick(card, item, st));
     chipsRow.appendChild(chip);
   }
   body.appendChild(chipsRow);
@@ -388,14 +612,12 @@ function applyFilters() {
   }
 }
 
-// ── Chip click (add / status change) ─────────────────────
+// ── Anime chip click (add / status change) ───────────────
 
-async function onBrowseChipClick(card, item, status) {
+async function onAnimeChipClick(card, item, status) {
   if (loading) return;
 
   const eff = effectiveStatus(item);
-
-  // Already at this status — no-op (no soft-delete from browse)
   if (eff === status) return;
 
   // Season-level match: change season status
@@ -448,14 +670,12 @@ async function onBrowseChipClick(card, item, status) {
     let show;
 
     if (status === 'COMPLETED' || status === 'DROPPED') {
-      // LCARS-only — no arr interaction
       show = await addShow(input);
       if (show.status !== status) {
         await setStatus(show.id, status);
         show.status = status;
       }
     } else {
-      // Try arr-backed add: first search for tvdbId/tmdbId
       const title = item.titleEnglish || item.titleRomaji;
       let arrInput = { ...input };
       if (status === 'PAUSED') arrInput.unmonitored = true;
@@ -463,7 +683,6 @@ async function onBrowseChipClick(card, item, status) {
       try {
         const candidates = await searchArrCandidates(mediaShape, title);
         if (candidates.length) {
-          // Use the top Sonarr/Radarr hit's IDs
           if (candidates[0].tvdbId) arrInput.tvdbId = candidates[0].tvdbId;
           if (candidates[0].tmdbId) arrInput.tmdbId = candidates[0].tmdbId;
         }
@@ -475,13 +694,107 @@ async function onBrowseChipClick(card, item, status) {
         const result = await addShowWithArr(arrInput);
         show = result.show;
       } catch (err) {
-        // "already tracked" → mark card as tracked, don't mutate the existing show
         const match = err.message.match(/already tracked \(show ([^)]+)\)/);
         if (match) {
           item.lcarsShowId = match[1];
-          item.lcarsStatus = 'PLANNED'; // show exists, but we don't know its exact status
+          item.lcarsStatus = 'PLANNED';
           refreshCard(card, item);
           showBanner('Already tracked — use Add mode to manage seasons', 'info');
+          card.classList.remove('loading');
+          return;
+        }
+        show = await addShow(input);
+      }
+
+      if (show.status !== status && status !== 'PLANNED') {
+        await setStatus(show.id, status);
+        show.status = status;
+      }
+    }
+
+    item.lcarsShowId = show.id;
+    item.lcarsStatus = show.status || status;
+    refreshCard(card, item);
+    showBanner(`Added: ${show.displayTitle} [${STATUS_LABELS[status]}]`, 'ok');
+
+  } catch (err) {
+    showBanner(`Add failed: ${err.message}`, 'error');
+  } finally {
+    card.classList.remove('loading');
+  }
+}
+
+// ── TMDB chip click (add / status change) ────────────────
+
+async function onTmdbChipClick(card, item, status) {
+  if (loading) return;
+
+  const eff = effectiveStatus(item);
+  if (eff === status) return;
+
+  // Already tracked: change show status
+  if (item.lcarsShowId) {
+    card.classList.add('loading');
+    try {
+      await setStatus(item.lcarsShowId, status);
+      item.lcarsStatus = status;
+      refreshCard(card, item);
+      showBanner(`Status → ${STATUS_LABELS[status]}`, 'ok');
+    } catch (err) {
+      showBanner(`Status change failed: ${err.message}`, 'error');
+    } finally {
+      card.classList.remove('loading');
+    }
+    return;
+  }
+
+  // Not in LCARS — add it
+  card.classList.add('loading');
+  try {
+    const mediaShape = item.mediaType === 'MOVIE' ? 'MOVIE' : 'EPISODIC';
+    const input = {
+      mediaShape,
+      trackingSpace: 'TV',
+      primaryTitle: 'ENGLISH',
+      titleEnglish: item.title,
+      tmdbId: item.tmdbId,
+    };
+
+    let show;
+
+    if (status === 'COMPLETED' || status === 'DROPPED') {
+      show = await addShow(input);
+      if (show.status !== status) {
+        await setStatus(show.id, status);
+        show.status = status;
+      }
+    } else {
+      let arrInput = { ...input };
+      if (status === 'PAUSED') arrInput.unmonitored = true;
+
+      // For TV shows, search arr for tvdbId since Sonarr needs it
+      if (mediaShape === 'EPISODIC') {
+        try {
+          const candidates = await searchArrCandidates(mediaShape, item.title);
+          if (candidates.length) {
+            if (candidates[0].tvdbId) arrInput.tvdbId = candidates[0].tvdbId;
+            if (candidates[0].tmdbId) arrInput.tmdbId = candidates[0].tmdbId;
+          }
+        } catch {
+          // Sonarr search failed
+        }
+      }
+
+      try {
+        const result = await addShowWithArr(arrInput);
+        show = result.show;
+      } catch (err) {
+        const match = err.message.match(/already tracked \(show ([^)]+)\)/);
+        if (match) {
+          item.lcarsShowId = match[1];
+          item.lcarsStatus = 'PLANNED';
+          refreshCard(card, item);
+          showBanner('Already tracked', 'info');
           card.classList.remove('loading');
           return;
         }
@@ -495,7 +808,6 @@ async function onBrowseChipClick(card, item, status) {
       }
     }
 
-    // Update item state so card reflects it
     item.lcarsShowId = show.id;
     item.lcarsStatus = show.status || status;
     refreshCard(card, item);
@@ -526,18 +838,56 @@ function refreshCard(card, item) {
 // ── Public API ───────────────────────────────────────────
 
 /**
+ * Set the browse type and refresh. Called when type buttons
+ * are clicked in browse mode.
+ * @param {'anime'|'tv'|'movie'} type
+ */
+export function setBrowseType(type) {
+  if (type === browseType) return;
+  browseType = type;
+
+  // Reset navigation state
+  if (type === 'anime') {
+    const def = defaultSeasonYear();
+    currentSeason = def.season;
+    currentYear = def.year;
+  } else {  // 'all', 'tv', 'movie'
+    const def = currentMonthYear();
+    currentMonth = def.month;
+    tmdbYear = def.year;
+  }
+
+  currentPage = 1;
+  items = [];
+  hasNextPage = false;
+  activeFilters.clear();
+
+  renderControls();
+  fetchPage(1);
+}
+
+/**
  * Initialize browse mode. Called when user switches to Browse tab.
  * @param {HTMLElement} results - the #browse-results container
  * @param {HTMLElement} controls - the .browse-controls container
+ * @param {'anime'|'all'|'tv'|'movie'} [type] - initial browse type
  */
-export function initBrowse(results, controls) {
+export function initBrowse(results, controls, type) {
   resultsEl = results;
   controlsEl = controls;
 
-  // Default to upcoming season
-  const def = defaultSeasonYear();
-  currentSeason = def.season;
-  currentYear = def.year;
+  browseType = type || 'anime';
+
+  if (browseType === 'anime') {
+    const def = defaultSeasonYear();
+    currentSeason = def.season;
+    currentYear = def.year;
+  } else {  // 'all', 'tv', 'movie'
+    const def = currentMonthYear();
+    currentMonth = def.month;
+    tmdbYear = def.year;
+  }
+
   currentPage = 1;
   items = [];
   hasNextPage = false;

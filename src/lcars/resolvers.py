@@ -30,6 +30,7 @@ from lcars import (
     art,
     availability,
     browse,
+    browse_tmdb,
     config,
     db,
     episode_movie_link,
@@ -2676,6 +2677,12 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
 def resolve_browse_seasonal_anime(_, info, season, year, page=1):
     conn = db.get_connection()
     return browse.fetch_seasonal_browse(conn, season, year, page)
+
+
+@query.field("browseTmdb")
+def resolve_browse_tmdb(_, info, year, month, media_type="ALL", page=1):
+    conn = db.get_connection()
+    return browse_tmdb.fetch_tmdb_browse(conn, year, month, media_type, page)
 
 
 @mutation.field("setStatus")

@@ -123,3 +123,40 @@ class TmdbClient:
         data = self._get(f"tv/{tmdb_id}")
         run_times = (data or {}).get("episode_run_time") or []
         return run_times[-1] if run_times else None
+
+    # ── Discover (browse) ───────────────────────────────────
+
+    def discover_tv(self, air_date_gte: str, air_date_lte: str,
+                    page: int = 1) -> dict:
+        """Discover TV shows with episodes airing in the given date range.
+
+        ``air_date_gte``/``air_date_lte`` are ISO dates (YYYY-MM-DD).
+        TMDB's ``air_date`` filter is episode-level: a show appears only
+        if it has at least one episode dated within the range.
+
+        Returns the raw TMDB Discover response (``page``, ``results``,
+        ``total_pages``, ``total_results``).
+        """
+        data = self._get("discover/tv", params={
+            "air_date.gte": air_date_gte,
+            "air_date.lte": air_date_lte,
+            "sort_by": "popularity.desc",
+            "page": page,
+        })
+        return data or {"page": page, "results": [], "total_pages": 0,
+                        "total_results": 0}
+
+    def discover_movies(self, release_gte: str, release_lte: str,
+                        page: int = 1) -> dict:
+        """Discover movies with a primary release date in the given range.
+
+        Returns the raw TMDB Discover response.
+        """
+        data = self._get("discover/movie", params={
+            "primary_release_date.gte": release_gte,
+            "primary_release_date.lte": release_lte,
+            "sort_by": "popularity.desc",
+            "page": page,
+        })
+        return data or {"page": page, "results": [], "total_pages": 0,
+                        "total_results": 0}

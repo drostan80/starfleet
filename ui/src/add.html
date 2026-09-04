@@ -604,6 +604,13 @@
       flex-wrap: wrap;
     }
 
+    /* ── Browse type buttons ────────────────────────────────── */
+    .browse-type-btns {
+      display: flex;
+      gap: 6px;
+      padding: 0 16px 4px;
+    }
+
     /* ── Browse controls ────────────────────────────────────── */
     .browse-controls {
       display: flex;
@@ -830,6 +837,14 @@
   </div>
 </div>
 
+<!-- ── Browse type buttons (hidden in add mode) ───────── -->
+<div class="browse-type-btns" id="browse-type-btns" hidden>
+  <button class="type-btn browse-type-btn active" data-browse-type="anime">Anime</button>
+  <button class="type-btn browse-type-btn" data-browse-type="all">TV & Movies</button>
+  <button class="type-btn browse-type-btn" data-browse-type="tv">TV</button>
+  <button class="type-btn browse-type-btn" data-browse-type="movie">Movies</button>
+</div>
+
 <!-- ── Browse controls (hidden in add mode) ──────────── -->
 <div class="browse-controls" id="browse-controls" hidden></div>
 
@@ -842,11 +857,11 @@
 
 <!-- ── Scripts ─────────────────────────────────────────── -->
 <script type="module">
-import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=12';
+import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=13';
 import { bootstrapConfig } from './js/config.js?v=3';
 import { showBanner, hideBanner } from './js/calendar.js?v=20';
 import { initSearch } from './js/search.js?v=4';
-import { initBrowse, teardownBrowse } from './js/browse.js?v=1';
+import { initBrowse, teardownBrowse, setBrowseType } from './js/browse.js?v=2';
 
 await bootstrapConfig();
 initSearch();
@@ -1765,6 +1780,9 @@ const browseControlsEl = document.getElementById('browse-controls');
 const browseResultsEl = document.getElementById('browse-results');
 let currentMode = 'add';
 
+const browseTypeBtnsEl = document.getElementById('browse-type-btns');
+let currentBrowseType = 'anime';
+
 document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const mode = btn.dataset.mode;
@@ -1776,17 +1794,31 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
     if (mode === 'browse') {
       addModeControls.hidden = true;
       resultsEl.hidden = true;
+      browseTypeBtnsEl.hidden = false;
       browseControlsEl.hidden = false;
       browseResultsEl.hidden = false;
-      initBrowse(browseResultsEl, browseControlsEl);
+      initBrowse(browseResultsEl, browseControlsEl, currentBrowseType);
     } else {
       addModeControls.hidden = false;
       resultsEl.hidden = false;
+      browseTypeBtnsEl.hidden = true;
       browseControlsEl.hidden = true;
       browseResultsEl.hidden = true;
       teardownBrowse();
       requestAnimationFrame(() => searchInput.focus());
     }
+  });
+});
+
+// Browse type buttons (Anime / TV / Movies)
+document.querySelectorAll('.browse-type-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const type = btn.dataset.browseType;
+    if (type === currentBrowseType) return;
+    currentBrowseType = type;
+    document.querySelectorAll('.browse-type-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.browseType === type));
+    setBrowseType(type);
   });
 });
 
