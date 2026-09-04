@@ -674,9 +674,9 @@ async function onAnimeChipClick(card, item, status) {
     if (status === 'SKIPPED') {
       show = await skipShow(input);
       item.lcarsShowId = show.id;
-      item.lcarsStatus = 'SKIPPED';
+      item.lcarsStatus = (show.status || 'SKIPPED').toUpperCase();
       refreshCard(card, item);
-      showBanner('Skipped', 'ok');
+      showBanner(show.status === 'skipped' ? 'Skipped' : `Already ${STATUS_LABELS[item.lcarsStatus] || show.status}`, 'ok');
       card.classList.remove('loading');
       return;
     }
@@ -777,9 +777,9 @@ async function onTmdbChipClick(card, item, status) {
     if (status === 'SKIPPED') {
       show = await skipShow(input);
       item.lcarsShowId = show.id;
-      item.lcarsStatus = 'SKIPPED';
+      item.lcarsStatus = (show.status || 'SKIPPED').toUpperCase();
       refreshCard(card, item);
-      showBanner('Skipped', 'ok');
+      showBanner(show.status === 'skipped' ? 'Skipped' : `Already ${STATUS_LABELS[item.lcarsStatus] || show.status}`, 'ok');
       card.classList.remove('loading');
       return;
     }

@@ -91,6 +91,10 @@ def upgrade() -> None:
     op.execute("DROP TABLE show")
     op.execute("ALTER TABLE show_new RENAME TO show")
 
+    # Re-create indexes that DROP TABLE destroyed
+    op.execute("CREATE INDEX ix_show_status ON show (status)")
+    op.execute("CREATE INDEX ix_show_tracking_space ON show (tracking_space)")
+
     # ── season table ───────────────────────────────────────
     op.execute(
         """
@@ -209,6 +213,9 @@ def downgrade() -> None:
     )
     op.execute("DROP TABLE show")
     op.execute("ALTER TABLE show_old RENAME TO show")
+
+    op.execute("CREATE INDEX ix_show_status ON show (status)")
+    op.execute("CREATE INDEX ix_show_tracking_space ON show (tracking_space)")
 
     op.execute(
         """

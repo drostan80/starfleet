@@ -654,6 +654,8 @@ def _recompute_show_status(
     if show is None:
         return
     old_status = show["status"]
+    if old_status == "skipped":
+        return  # tombstone — never overwrite via derivation
     new_status = _compute_show_status(conn, show_id)
     if new_status is None or new_status == old_status:
         return
