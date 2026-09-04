@@ -181,7 +181,6 @@ def build_app(
         Route("/auth/me", auth.me, methods=["GET"]),
         Route("/auth/setup", auth.setup, methods=["GET", "POST"]),
         Route("/auth/change-password", auth.change_password, methods=["POST"]),
-        Route("/auth/media-token", auth.media_token, methods=["POST"]),
         # ── Webhooks (secret-header auth) ────────────────────────
         Route(
             "/webhooks/sonarr",

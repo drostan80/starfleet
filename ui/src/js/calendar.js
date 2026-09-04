@@ -327,74 +327,16 @@ const SVC_DEFS = [
 /* ── mpv launcher ────────────────────────────────────────── */
 
 /**
- * Launch a file in mpv via the local helper daemon.
- * filePath: server-side path (/data/media/…)
- * cfg: config object
+ * Play an episode — mpv playback is not yet supported behind the login
+ * gate (nginx /files/ requires cookie auth that external players can't
+ * carry).  Show a Jellyfin fallback message instead.
  */
 export async function launchMpv(filePath, cfg) {
   if (!filePath) {
     showBanner('No file available for this episode', 'error');
     return;
   }
-
-  const helperUrl = (cfg.mpv_helper_url || 'http://localhost:19450').replace(/\/$/, '');
-
-  // filePathSonarr/Radarr is the path inside the server container (/data/…).
-  // nginx serves /data/ at /files/, so strip the /data prefix to form the URL.
-  const mediaPath = filePath.startsWith('/data') ? filePath.slice('/data'.length) : filePath;
-
-  // Get a short-lived media token so mpv can authenticate without cookies.
-  let mediaToken;
-  try {
-    const tokenRes = await fetch('/auth/media-token', { method: 'POST' });
-    if (!tokenRes.ok) throw new Error('session expired');
-    const tokenBody = await tokenRes.json();
-    mediaToken = tokenBody.token;
-  } catch {
-    showBanner('Session expired — reload the page', 'error');
-    return;
-  }
-
-  // Use the browser's own origin (nginx) for the media URL, not cfg.lcars_url
-  // — /files/ is an nginx route, not served by LCARS directly.
-  // Encode each path segment individually so spaces and special chars
-  // (brackets, braces, parens) don't break the HTTP request.
-  const origin = window.location.origin;
-  const encodedPath = mediaPath.split('/').map(s => encodeURIComponent(s)).join('/');
-  const mediaUrl = `${origin}/files${encodedPath}?t=${mediaToken}`;
-
-  try {
-    const res = await fetch(`${helperUrl}/play`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ url: mediaUrl }),
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      if (res.status === 502) {
-        // Helper reported mpv failed to start.
-        showBanner('No mpv output — try Jellyfin', 'error');
-      } else {
-        throw new Error(`helper returned ${res.status}: ${body}`);
-      }
-      return;
-    }
-    const body = await res.text();
-    if (body === 'OK (mpv exited)') {
-      showBanner('No mpv output — try Jellyfin', 'error');
-    } else {
-      showBanner('▶ Launching mpv…', 'info');
-      setTimeout(hideBanner, 2500);
-    }
-  } catch (err) {
-    const isNetErr = err instanceof TypeError;
-    showBanner(
-      isNetErr
-        ? 'mpv helper not running — start mpv-helper.py on this machine'
-        : `mpv error: ${err.message}`,
-      'error',
-    );
-  }
+  showBanner('No mpv output — try Jellyfin', 'error');
 }
 
 /**
