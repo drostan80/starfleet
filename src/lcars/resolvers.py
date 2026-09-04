@@ -29,6 +29,7 @@ from lcars import (
     animeschedule,
     art,
     availability,
+    browse,
     config,
     db,
     episode_movie_link,
@@ -2669,6 +2670,12 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
     except (sonarr_client.SonarrError, radarr_client.RadarrError):
         pass
     return []
+
+
+@query.field("browseSeasonalAnime")
+def resolve_browse_seasonal_anime(_, info, season, year, page=1):
+    conn = db.get_connection()
+    return browse.fetch_seasonal_browse(conn, season, year, page)
 
 
 @mutation.field("setStatus")

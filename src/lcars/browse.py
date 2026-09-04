@@ -1,0 +1,218 @@
+"""Anime seasonal browse — ``browseSeasonalAnime`` query implementation.
+
+Fetches AniList's public seasonal catalog, cross-references against LCARS's
+own tracked shows (by ``anilist_id`` on both ``show_external_id`` and
+``season`` tables), and returns combined metadata + LCARS status.
+
+Module-level cache avoids re-fetching unchanged seasonal catalogs from
+AniList on every request. Same justification as ``_last_anilist_call_at``
+in anilist_client.py: one shared connection, sync execution model.
+"""
+
+import logging
+import sqlite3
+import time
+
+from lcars import anilist_client
+
+log = logging.getLogger(__name__)
+
+# ── Cache ────────────────────────────────────────────────────────────
+
+_cache: dict[tuple[str, int, int], tuple[float, dict]] = {}
+_CACHE_TTL_PAST = 86400  # 24 hours for past seasons
+_CACHE_TTL_CURRENT = 1800  # 30 min for current season
+_CACHE_TTL_UPCOMING = 900  # 15 min for upcoming/future
+
+_SEASONS_ORDER = ["WINTER", "SPRING", "SUMMER", "FALL"]
+
+
+def _current_season_year() -> tuple[str, int]:
+    """Return (season, year) for today."""
+    import datetime
+
+    now = datetime.date.today()
+    month = now.month
+    if month <= 3:
+        return "WINTER", now.year
+    if month <= 6:
+        return "SPRING", now.year
+    if month <= 9:
+        return "SUMMER", now.year
+    return "FALL", now.year
+
+
+def _cache_ttl(season: str, year: int) -> int:
+    cur_season, cur_year = _current_season_year()
+    cur_idx = _SEASONS_ORDER.index(cur_season) + cur_year * 4
+    req_idx = _SEASONS_ORDER.index(season) + year * 4
+    if req_idx < cur_idx:
+        return _CACHE_TTL_PAST
+    if req_idx == cur_idx:
+        return _CACHE_TTL_CURRENT
+    return _CACHE_TTL_UPCOMING
+
+
+def _get_cached(season: str, year: int, page: int) -> dict | None:
+    key = (season, year, page)
+    entry = _cache.get(key)
+    if entry is None:
+        return None
+    cached_at, data = entry
+    if time.monotonic() - cached_at > _cache_ttl(season, year):
+        del _cache[key]
+        return None
+    return data
+
+
+def _set_cached(season: str, year: int, page: int, data: dict) -> None:
+    _cache[(season, year, page)] = (time.monotonic(), data)
+
+
+# ── Cross-reference ──────────────────────────────────────────────────
+
+
+def _cross_reference(
+    conn: sqlite3.Connection, anilist_ids: list[int]
+) -> dict[int, dict]:
+    """Return {anilist_id -> {show_id, status, season_id, season_status}}
+    for tracked shows matching the given AniList IDs."""
+    if not anilist_ids:
+        return {}
+
+    result: dict[int, dict] = {}
+
+    # 1. show_external_id (external_id is TEXT)
+    placeholders = ",".join("?" for _ in anilist_ids)
+    str_ids = [str(aid) for aid in anilist_ids]
+    show_rows = conn.execute(
+        f"SELECT sei.external_id, sei.show_id, sh.status, sh.tracked"
+        f" FROM show_external_id sei"
+        f" JOIN show sh ON sh.id = sei.show_id"
+        f" WHERE sei.service = 'anilist' AND sei.external_id IN ({placeholders})",
+        str_ids,
+    ).fetchall()
+    for row in show_rows:
+        if not row["tracked"]:
+            continue  # ignore untracked stubs
+        aid = int(row["external_id"])
+        result[aid] = {
+            "show_id": row["show_id"],
+            "status": row["status"],
+            "season_id": None,
+            "season_status": None,
+        }
+
+    # 2. season.anilist_id (INTEGER) — may find season-level matches
+    season_rows = conn.execute(
+        f"SELECT s.id AS season_id, s.anilist_id, s.show_id, s.status AS season_status,"
+        f" sh.status AS show_status, sh.tracked"
+        f" FROM season s"
+        f" JOIN show sh ON sh.id = s.show_id"
+        f" WHERE s.anilist_id IN ({placeholders})",
+        anilist_ids,
+    ).fetchall()
+    for row in season_rows:
+        if not row["tracked"]:
+            continue
+        aid = row["anilist_id"]
+        # Prefer season-level match over show-level when available
+        if aid not in result or result[aid]["season_id"] is None:
+            result[aid] = {
+                "show_id": row["show_id"],
+                "status": row["show_status"],
+                "season_id": row["season_id"],
+                "season_status": row["season_status"],
+            }
+
+    return result
+
+
+# ── Flattening ───────────────────────────────────────────────────────
+
+
+def _format_fuzzy_date(d: dict | None) -> str | None:
+    """Convert AniList's ``{year, month, day}`` (any can be null) to
+    an ISO-like string or None."""
+    if not d or not d.get("year"):
+        return None
+    parts = [str(d["year"])]
+    if d.get("month"):
+        parts.append(str(d["month"]).zfill(2))
+        if d.get("day"):
+            parts.append(str(d["day"]).zfill(2))
+    return "-".join(parts)
+
+
+def _flatten_media(media: dict, lcars_match: dict | None) -> dict:
+    """Flatten one AniList media item + optional LCARS match into a
+    snake_case dict for ``SeasonalBrowseItem``."""
+    return {
+        "anilist_id": media["id"],
+        "mal_id": media.get("idMal"),
+        "title_romaji": (media.get("title") or {}).get("romaji"),
+        "title_english": (media.get("title") or {}).get("english"),
+        "title_native": (media.get("title") or {}).get("native"),
+        "cover_image_url": (media.get("coverImage") or {}).get("large"),
+        "description": media.get("description"),
+        "genres": media.get("genres") or [],
+        "format": media.get("format"),
+        "episodes": media.get("episodes"),
+        "duration": media.get("duration"),
+        "status": media.get("status"),
+        "studio_names": [
+            n["name"] for n in (media.get("studios") or {}).get("nodes", [])
+        ],
+        "start_date": _format_fuzzy_date(media.get("startDate")),
+        "lcars_show_id": lcars_match["show_id"] if lcars_match else None,
+        "lcars_status": lcars_match["status"] if lcars_match else None,
+        "lcars_season_id": lcars_match["season_id"] if lcars_match else None,
+        "lcars_season_status": (
+            lcars_match["season_status"] if lcars_match else None
+        ),
+    }
+
+
+# ── Main entry point ─────────────────────────────────────────────────
+
+
+def fetch_seasonal_browse(
+    conn: sqlite3.Connection, season: str, year: int, page: int = 1
+) -> dict:
+    """Fetch AniList seasonal page + cross-reference against LCARS.
+
+    Returns a dict matching ``SeasonalBrowseResult`` (snake_case keys
+    for Ariadne's ``convert_names_case=True``).
+    """
+    # Validate season
+    if season not in _SEASONS_ORDER:
+        raise ValueError(f"Invalid season: {season}")
+
+    # Check cache
+    cached = _get_cached(season, year, page)
+    if cached is not None:
+        anilist_page = cached
+    else:
+        anilist_page = anilist_client.fetch_seasonal_page(season, year, page)
+        _set_cached(season, year, page, anilist_page)
+
+    media_list = anilist_page.get("media") or []
+    page_info = anilist_page.get("pageInfo") or {}
+
+    # Cross-reference
+    anilist_ids = [m["id"] for m in media_list]
+    lcars_matches = _cross_reference(conn, anilist_ids)
+
+    # Flatten
+    items = [
+        _flatten_media(m, lcars_matches.get(m["id"]))
+        for m in media_list
+    ]
+
+    return {
+        "items": items,
+        "current_page": page_info.get("currentPage", page),
+        "last_page": page_info.get("lastPage", 1),
+        "total": page_info.get("total", len(items)),
+        "has_next_page": page_info.get("hasNextPage", False),
+    }

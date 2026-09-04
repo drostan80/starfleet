@@ -833,3 +833,32 @@ export async function batchCheckTracked(candidates) {
 
   return result;
 }
+
+/* ── Seasonal browse ───────────────────────────────────── */
+
+/**
+ * Browse AniList's seasonal anime catalog, cross-referenced against LCARS.
+ * @param {string} season - AnimeSeason enum: WINTER, SPRING, SUMMER, FALL
+ * @param {number} year
+ * @param {number} [page=1]
+ * @returns {Promise<object>} SeasonalBrowseResult
+ */
+export async function browseSeasonalAnime(season, year, page = 1) {
+  const data = await gql(`
+    query BrowseSeasonal($season: AnimeSeason!, $year: Int!, $page: Int) {
+      browseSeasonalAnime(season: $season, year: $year, page: $page) {
+        items {
+          anilistId malId
+          titleRomaji titleEnglish titleNative
+          coverImageUrl description
+          genres format episodes duration status
+          studioNames startDate
+          lcarsShowId lcarsStatus
+          lcarsSeasonId lcarsSeasonStatus
+        }
+        currentPage lastPage total hasNextPage
+      }
+    }
+  `, { season, year, page });
+  return data.browseSeasonalAnime;
+}

@@ -126,6 +126,26 @@ query ($mediaId: Int) {
 # show model has no place for (LCARS only tracks anime/TV/movies).
 ANIME_RELATION_FORMATS = frozenset({"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA"})
 
+_SEASONAL_QUERY = """
+query ($season: MediaSeason, $seasonYear: Int, $page: Int) {
+  Page(page: $page, perPage: 50) {
+    pageInfo { total currentPage lastPage hasNextPage }
+    media(season: $season, seasonYear: $seasonYear, type: ANIME,
+          format_in: [TV, TV_SHORT, MOVIE, SPECIAL, OVA, ONA],
+          sort: POPULARITY_DESC) {
+      id idMal
+      title { romaji english native }
+      coverImage { large }
+      description(asHtml: false)
+      genres
+      format episodes duration status
+      startDate { year month day }
+      studios(isMain: true) { nodes { name } }
+    }
+  }
+}
+"""
+
 
 class AniListError(Exception):
     pass
@@ -211,6 +231,25 @@ def fetch_media(anilist_id: int, client: httpx.Client | None = None) -> dict | N
     former isn't)."""
     data = _graphql_request(_MEDIA_QUERY, {"mediaId": anilist_id}, token=None, client=client)
     return data["Media"]
+
+
+def fetch_seasonal_page(
+    season: str, year: int, page: int = 1, client: httpx.Client | None = None
+) -> dict:
+    """Browse AniList's seasonal anime catalog — public, no auth needed.
+
+    ``season`` is one of ``WINTER``/``SPRING``/``SUMMER``/``FALL``
+    (matches AniList's ``MediaSeason`` enum).  Returns the raw ``Page``
+    dict: ``{"pageInfo": {...}, "media": [...]}``.  Single page per call;
+    the caller handles pagination.
+    """
+    data = _graphql_request(
+        _SEASONAL_QUERY,
+        {"season": season, "seasonYear": year, "page": page},
+        token=None,
+        client=client,
+    )
+    return data["Page"]
 
 
 def fetch_airing_schedule(anilist_id: int, client: httpx.Client | None = None) -> dict | None:

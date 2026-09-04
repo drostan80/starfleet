@@ -75,6 +75,13 @@ enum ShowStatus {
   DROPPED
 }
 
+enum AnimeSeason {
+  WINTER
+  SPRING
+  SUMMER
+  FALL
+}
+
 "§5.2 — specials/OVAs/bonus-movie episodes all keep season = 0, distinguished by kind."
 enum EpisodeKind {
   REGULAR
@@ -1180,6 +1187,43 @@ type ArrCandidate {
 }
 
 # ---------------------------------------------------------------------------
+# Browse
+# ---------------------------------------------------------------------------
+
+type SeasonalBrowseItem {
+  anilistId: Int!
+  malId: Int
+  titleRomaji: String
+  titleEnglish: String
+  titleNative: String
+  coverImageUrl: String
+  description: String
+  genres: [String!]!
+  format: String
+  episodes: Int
+  duration: Int
+  status: String
+  studioNames: [String!]!
+  startDate: String
+  "If this AniList entry matches a tracked LCARS show, its id."
+  lcarsShowId: ID
+  "If matched, the LCARS show's current status."
+  lcarsStatus: ShowStatus
+  "If matched via a season row, the season id (for setSeasonStatus)."
+  lcarsSeasonId: ID
+  "If matched via a season row, the season's own status override (null = inherits show status)."
+  lcarsSeasonStatus: ShowStatus
+}
+
+type SeasonalBrowseResult {
+  items: [SeasonalBrowseItem!]!
+  currentPage: Int!
+  lastPage: Int!
+  total: Int!
+  hasNextPage: Boolean!
+}
+
+# ---------------------------------------------------------------------------
 # Query
 # ---------------------------------------------------------------------------
 
@@ -1246,6 +1290,9 @@ type Query {
 
   "Recent grab events from Sonarr or Radarr (2026-08-27). service: 'sonarr' or 'radarr'. page: 1-indexed page number (Sonarr/Radarr native), default 1. pageSize: events per page, default 20. Only 'grabbed' event types are returned — imports, deletes, and rejected grabs are excluded. Returns an empty list (no error) when the requested service is not configured."
   recentGrabs(service: String!, page: Int, pageSize: Int): [GrabEvent!]!
+
+  "Browse anime airing in a specific AniList season. Returns AniList metadata cross-referenced against LCARS's own tracked shows. Anime only; TV/film browse is a future slice."
+  browseSeasonalAnime(season: AnimeSeason!, year: Int!, page: Int): SeasonalBrowseResult!
 
   franchise(id: ID!): Franchise
   franchises(first: Int, after: String, last: Int, before: String): FranchiseConnection!

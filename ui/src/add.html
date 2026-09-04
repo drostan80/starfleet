@@ -11,6 +11,9 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="css/main.css?v=5">
   <style>
+    /* Force hidden attribute to work even on elements with explicit display */
+    [hidden] { display: none !important; }
+
     /* ── Add page controls ───────────────────────────────────── */
 
     .add-controls {
@@ -564,16 +567,224 @@
     }
     .gap-resolve button:hover { background: var(--surface-3); }
 
+    /* ── Mode toggle ─────────────────────────────────────────── */
+    .mode-toggle {
+      display: flex;
+      gap: 0;
+      margin-right: 8px;
+    }
+    .mode-btn {
+      font-family: 'DM Mono', monospace;
+      font-size: 10.5px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .mode-btn:first-child { border-radius: 5px 0 0 5px; }
+    .mode-btn:last-child  { border-radius: 0 5px 5px 0; border-left: none; }
+    .mode-btn.active {
+      background: var(--accent-d);
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    /* Add-mode controls wrapper — maintains flex layout of type btns + search */
+    .add-mode-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      min-width: 240px;
+      flex-wrap: wrap;
+    }
+
+    /* ── Browse controls ────────────────────────────────────── */
+    .browse-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 16px 12px;
+      flex-wrap: wrap;
+    }
+    .browse-season-nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .browse-nav-btn {
+      font-size: 13px;
+      padding: 5px 10px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .browse-nav-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+    .browse-nav-btn:disabled { opacity: 0.3; cursor: default; }
+    .browse-season-select {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 13px;
+      padding: 5px 8px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    /* Browse filter pills — same look as .sf-pill but distinct class */
+    .browse-filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .bf-pill {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 20px;
+      border: 1.5px solid var(--border);
+      cursor: pointer;
+      font-size: 10.5px;
+      font-weight: 500;
+      color: var(--faint);
+      background: var(--surface);
+      transition: all 0.12s;
+      white-space: nowrap;
+      user-select: none;
+      opacity: 0.5;
+    }
+    .bf-pill:hover { opacity: 0.8; }
+    .bf-pill.active {
+      color: var(--text);
+      background: var(--surface-2);
+      border-color: var(--pill-color, var(--border));
+      opacity: 1;
+    }
+    .bf-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: opacity 0.12s;
+    }
+    .bf-pill:not(.active) .bf-dot { opacity: 0.3; }
+
+    /* ── Browse cards ───────────────────────────────────────── */
+    .browse-results {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 12px;
+      padding: 16px;
+    }
+    .browse-card {
+      background: var(--surface);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      display: flex;
+      flex-direction: row;
+      transition: border-color 0.15s;
+      position: relative;
+      overflow: hidden;
+    }
+    .browse-card:hover { border-color: var(--accent); }
+    .browse-card.tracked {
+      border-color: color-mix(in srgb, var(--tracked-color, var(--accent)) 50%, transparent);
+    }
+    .browse-card.loading { opacity: 0.6; pointer-events: none; }
+    .browse-card.loading .cand-spinner { display: block; }
+
+    .browse-cover {
+      width: 120px;
+      min-height: 170px;
+      flex-shrink: 0;
+      background-size: cover;
+      background-position: center;
+      background-color: var(--surface-2);
+    }
+    .browse-body {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 10px 12px 8px;
+      gap: 4px;
+    }
+    .browse-title {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.3;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .browse-meta {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+    }
+    .browse-genres {
+      font-size: 11px;
+      color: var(--faint);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .browse-synopsis {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 11.5px;
+      color: var(--muted);
+      line-height: 1.4;
+      max-height: 60px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .browse-load-more {
+      grid-column: 1 / -1;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 13px;
+      padding: 10px 24px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s;
+      justify-self: center;
+    }
+    .browse-load-more:hover { background: var(--surface-2); }
+
+    @media (max-width: 600px) {
+      .browse-results { grid-template-columns: 1fr; }
+      .browse-cover { width: 90px; min-height: 130px; }
+    }
+
     /* ── Light theme ─────────────────────────────────────────── */
     @media (prefers-color-scheme: light) {
       :root:not([data-theme="dark"]) {
         .cand-card { box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
         .cand-match-banner { background: rgba(91,140,255,0.06); }
+        .browse-card { box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
       }
     }
     :root[data-theme="light"] {
       .cand-card { box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
       .cand-match-banner { background: rgba(91,140,255,0.06); }
+      .browse-card { box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
     }
   </style>
 </head>
@@ -601,29 +812,41 @@
 
 <!-- ── Controls ────────────────────────────────────────── -->
 <div class="add-controls">
-  <button class="type-btn active" data-shape="EPISODIC" data-space="ANIME">Anime</button>
-  <button class="type-btn" data-shape="EPISODIC" data-space="TV">TV</button>
-  <button class="type-btn" data-shape="MOVIE" data-space="ANIME">Anime Movie</button>
-  <button class="type-btn" data-shape="MOVIE" data-space="TV">Movie</button>
+  <div class="mode-toggle">
+    <button class="mode-btn active" data-mode="add">Add</button>
+    <button class="mode-btn" data-mode="browse">Browse</button>
+  </div>
 
-  <div class="add-search-row">
-    <input type="text" class="add-search-input" id="add-search" placeholder="Search Sonarr / Radarr…" autocomplete="off" spellcheck="false">
-    <button class="add-search-btn" id="add-search-btn">Search</button>
+  <div class="add-mode-controls" id="add-mode-controls">
+    <button class="type-btn active" data-shape="EPISODIC" data-space="ANIME">Anime</button>
+    <button class="type-btn" data-shape="EPISODIC" data-space="TV">TV</button>
+    <button class="type-btn" data-shape="MOVIE" data-space="ANIME">Anime Movie</button>
+    <button class="type-btn" data-shape="MOVIE" data-space="TV">Movie</button>
+
+    <div class="add-search-row">
+      <input type="text" class="add-search-input" id="add-search" placeholder="Search Sonarr / Radarr…" autocomplete="off" spellcheck="false">
+      <button class="add-search-btn" id="add-search-btn">Search</button>
+    </div>
   </div>
 </div>
 
+<!-- ── Browse controls (hidden in add mode) ──────────── -->
+<div class="browse-controls" id="browse-controls" hidden></div>
+
 <!-- ── Results ─────────────────────────────────────────── -->
 <div class="add-results" id="results"></div>
+<div class="browse-results" id="browse-results" hidden></div>
 
 <!-- ── Banner ──────────────────────────────────────────── -->
 <div id="status-banner" class="status-banner hidden"></div>
 
 <!-- ── Scripts ─────────────────────────────────────────── -->
 <script type="module">
-import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=11';
+import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=12';
 import { bootstrapConfig } from './js/config.js?v=3';
 import { showBanner, hideBanner } from './js/calendar.js?v=20';
 import { initSearch } from './js/search.js?v=4';
+import { initBrowse, teardownBrowse } from './js/browse.js?v=1';
 
 await bootstrapConfig();
 initSearch();
@@ -1534,6 +1757,38 @@ function showGapResolution(resultArea, errorMsg, showId, missingStr, card, onRes
 
   resultArea.appendChild(bulkBtn);
 }
+
+/* ── Mode toggle (Add / Browse) ──────────────────────── */
+
+const addModeControls = document.getElementById('add-mode-controls');
+const browseControlsEl = document.getElementById('browse-controls');
+const browseResultsEl = document.getElementById('browse-results');
+let currentMode = 'add';
+
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.mode;
+    if (mode === currentMode) return;
+    currentMode = mode;
+
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+
+    if (mode === 'browse') {
+      addModeControls.hidden = true;
+      resultsEl.hidden = true;
+      browseControlsEl.hidden = false;
+      browseResultsEl.hidden = false;
+      initBrowse(browseResultsEl, browseControlsEl);
+    } else {
+      addModeControls.hidden = false;
+      resultsEl.hidden = false;
+      browseControlsEl.hidden = true;
+      browseResultsEl.hidden = true;
+      teardownBrowse();
+      requestAnimationFrame(() => searchInput.focus());
+    }
+  });
+});
 
 /* ── Focus search on load ─────────────────────────────── */
 requestAnimationFrame(() => searchInput.focus());
