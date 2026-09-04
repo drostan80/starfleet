@@ -114,14 +114,11 @@ export function getDownloadCount() {
 /* ── Internal ────────────────────────────────────────────── */
 
 function triggerDownload(url) {
-  // Use a hidden link click to trigger the browser download manager.
+  // Use window.open to trigger the browser download manager.
   // The /download/ location sends Content-Disposition: attachment so the
   // browser saves instead of navigating.
-  const a = document.createElement('a');
-  a.href = url;
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  // Remove after a tick to avoid DOM clutter
-  setTimeout(() => a.remove(), 100);
+  // Note: a hidden <a>.click() is suppressed on Android Firefox as a
+  // non-user-initiated navigation; window.open works because the call
+  // chain originates from a real click event handler.
+  window.open(url, '_blank');
 }
