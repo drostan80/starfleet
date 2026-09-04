@@ -42,7 +42,9 @@ export function downloadUrl(filePath) {
 export function startDownload({ showTitle, label, filePath }) {
   const url = downloadUrl(filePath);
   const entry = {
-    id: crypto.randomUUID(),
+    id: self.crypto?.randomUUID?.()
+        ?? Array.from(crypto.getRandomValues(new Uint8Array(16)),
+             b => b.toString(16).padStart(2, '0')).join(''),
     showTitle,
     label,          // e.g. "S2 E5 — Episode Title"
     filePath,
