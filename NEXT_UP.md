@@ -883,8 +883,9 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
       (`air_date.gte/lte` for TV episodes airing this month, `primary_release_date.gte/lte` for
       movies in cinemas). Month navigation + prev/next, status filters, "Load more" pagination.
       Each card shows LCARS tracking status via `show_external_id WHERE service='tmdb'`
-      cross-reference (577 TMDB IDs in DB; shows with only TVDB IDs won't match — known
-      limitation, not blocking). Status chips: click to add (full `addShowWithArr` + Sonarr/
+      cross-reference. TMDB ID backfill applied 2026-09-04: 1207 shows resolved via
+      TVDB→TMDB `/find` endpoint (577 → 1784 tmdb rows; 199 tracked shows remain without
+      TMDB IDs — anime-only, no TVDB/IMDB bridge). Status chips: click to add (full `addShowWithArr` + Sonarr/
       Radarr search fallback) or change status. Server: `browse_tmdb.py`, `tmdb_client.py`
       discover methods, `browseTmdb` GraphQL query. Client: `browse.js` rewritten for dual
       mode, `api.js` browseTmdb query. 18 new tests. SKIP status and passive import remain
