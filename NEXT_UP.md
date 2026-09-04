@@ -386,7 +386,7 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       dozen shows, all mirrored onward to AniList), second run 0 changes (converged, no
       oscillation); then ops brought to 0.1.37, loops running clean. Snapshot
       `lcars.db.bak-20260826-pre-v0.1.37-mal`. `~/repos/starfleet` `9efa01e`.
-- [~] Hierarchical season subdivision for legitimate cross-source granularity mismatches
+- [x] Hierarchical season subdivision for legitimate cross-source granularity mismatches
       (Bookworm/Mushoku Tensei-style cases). (archive/todo.md:1175) **Model chosen + design note
       written, 2026-08-26 — awaiting decisions before build.** User's chosen model: LCARS is source
       of truth and subdivides its seasons to the *finest* linked source (so seasons are followable
@@ -537,6 +537,39 @@ old `todo.md`, plus the two `~/.claude/plans/` files they reference) —
       `show_seasons_and_episodes` fetches `seasonNumber` (not `absStart`/`absEnd`); the 4 seasons
       display as distinct numbered seasons in the show-detail screen, which is correct and fully
       navigable. No client work needed — sub-season display is not required for usability.
+      **S6 `splitSeason` mutation + web UI (`4d732d7`, 2026-09-03)**: generic "subdivide this
+      season" tool — `splitSeason(showId, seasonNumber, afterEpisode, newAnilistId, newMalId)`
+      splits at an episode boundary: lower half keeps original IDs, upper half becomes a new season
+      (renumbered from E1) with supplied external IDs, subsequent seasons cascade-shifted,
+      abs_start/abs_end recomputed, season_external_id dual-written, watch_events follow their
+      episodes, open season_subdivision pending_reviews auto-resolved. Web UI: ✂ button on season
+      headers, split editor with preview showing both halves + cascade plan. 6 tests.
+      **Subdivision conflict suppression (`dd8bda8`, 2026-09-03)**: shows sharing a TVDB ID are
+      subdivisions of the same Sonarr series — when both claim the same AniList/MAL ID, the
+      reconciler now recognises this as expected (shared-TVDB check) instead of opening false-
+      positive conflict reviews. Without this, every reconcile cycle re-created reviews for all
+      split shows.
+      **Sequel-season review queue (`177762a`, 2026-09-02)**: auto-detects new AniList seasons
+      via SEQUEL relation edges — when a sequel's AniList ID isn't mapped to any LCARS season,
+      opens a `pending_review` (field `sequel_season:<anilist_id>`) suggesting the user add it.
+      Global season lookup suppresses same-show and cross-show (DIFF) cases; existing unresolved
+      review check prevents chain duplication; `already_resolved_with` prevents re-opening after
+      resolution. This closes the "handle future shows" item — flag-for-confirmation per D7,
+      never auto-split.
+      **Backfill gap found and fixed, 2026-09-04**: 5 anilist + 1 mal `season_external_id` rows
+      missing — seasons whose IDs were set before the S2 dual-write hooks deployed (v0.1.40).
+      These seasons were invisible to `_apply_remote_list` (S3's read switch to
+      `season_external_id`), a functional reconcile gap, not just a parity nit.
+      `scripts/backfill_season_external_id_gaps.py` (`--dry-run`/`--apply`), same
+      stop→apply→restart pattern as other direct-DB fixes.
+      **Column retirement (`season.anilist_id`/`season.mal_id`) — deliberately deferred**: ~15
+      live SQL reads across `resolvers.py` (AniList/MAL push for status, score, progress,
+      started_at, completed_at), `metadata.py` (sequel detection, season mapping), and
+      `score_sync.py` (MAL score drift). Dual-write from S2 keeps them in exact sync with
+      `season_external_id`; the columns serve as fast direct lookups (no JOIN), are simpler to
+      read, and migrating all ~15 sites would be a pure-refactor with no functional benefit and
+      real regression risk. Kept as a convenience, not a debt — the mapping table is the
+      authoritative source for reconcile (S3), and new read sites should prefer it.
 - [x] Recent grabs screen (`G` key, v0.1.47 / `~/repos/data`, 2026-08-27): two-column modal
       (Sonarr left, Radarr right), 20 events per page, `[` goes back (older), `]` goes forward
       (only active when page > 1), `r` resets to page 1 + reloads, `q`/Esc closes. Both columns
@@ -827,8 +860,9 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
       least one WatchEvent; `availableEpisodeCount` = count of episodes whose
       `availableViaSonarr`/`availableViaRadarr` is AVAILABLE (whichever applies to the
       show's mediaShape).
-- [ ] HTML client video playback: local player vs. browser — undecided (native mpv only
-      works from the media machine itself, browser `<video>` has real format limits).
+- [x] HTML client video playback: local player vs. browser — **closed 2026-09-04**: mpv
+      helper for local playback (already built); remote/tablet playback handled by the
+      existing Jellyfin server, no browser `<video>` fallback needed.
 - [ ] **Discover page (extension of Add page)** — groups the upcoming-show catalog and SKIP
       status ideas into one feature:
       - **SKIP status**: a lightweight tombstone meaning "seen, not interested". Distinct from
