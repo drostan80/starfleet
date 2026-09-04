@@ -357,8 +357,11 @@ export async function launchMpv(filePath, cfg) {
 
   // Use the browser's own origin (nginx) for the media URL, not cfg.lcars_url
   // — /files/ is an nginx route, not served by LCARS directly.
+  // Encode each path segment individually so spaces and special chars
+  // (brackets, braces, parens) don't break the HTTP request.
   const origin = window.location.origin;
-  const mediaUrl = `${origin}/files${mediaPath}?t=${mediaToken}`;
+  const encodedPath = mediaPath.split('/').map(s => encodeURIComponent(s)).join('/');
+  const mediaUrl = `${origin}/files${encodedPath}?t=${mediaToken}`;
 
   try {
     const res = await fetch(`${helperUrl}/play`, {
