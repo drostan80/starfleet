@@ -125,8 +125,7 @@ def main():
         conn.close()
         return
 
-    for show_id, imdb_id, media_shape in matched:
-        media_type = "movie" if media_shape == "movie" else "tv"
+    for show_id, imdb_id, _media_shape in matched:
         url = f"https://www.imdb.com/title/{imdb_id}/"
         conn.execute(
             "INSERT OR IGNORE INTO show_external_id"
@@ -149,7 +148,10 @@ def main():
         "     WHERE t.show_id = sh.id AND t.service = 'imdb'"
         "   )"
     ).fetchone()[0]
-    print(f"\nPost-backfill: {total_imdb} total imdb rows, {tracked_no_imdb} tracked shows still without imdb ID")
+    print(
+        f"\nPost-backfill: {total_imdb} total imdb rows,"
+        f" {tracked_no_imdb} tracked shows still without imdb ID"
+    )
 
     conn.close()
 

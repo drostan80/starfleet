@@ -123,7 +123,7 @@ def main():
         conn.close()
         return
 
-    for show_id, tmdb_id, tvdb_id in matched:
+    for show_id, tmdb_id, _tvdb_id in matched:
         url = f"https://www.themoviedb.org/tv/{tmdb_id}"
         conn.execute(
             "INSERT OR IGNORE INTO show_external_id"
@@ -146,7 +146,10 @@ def main():
         "     WHERE t.show_id = sh.id AND t.service = 'tmdb'"
         "   )"
     ).fetchone()[0]
-    print(f"\nPost-backfill: {total_tmdb} total tmdb rows, {tracked_no_tmdb} tracked shows still without tmdb ID")
+    print(
+        f"\nPost-backfill: {total_tmdb} total tmdb rows,"
+        f" {tracked_no_tmdb} tracked shows still without tmdb ID"
+    )
 
     conn.close()
 
