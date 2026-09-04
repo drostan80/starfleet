@@ -114,11 +114,9 @@ export function getDownloadCount() {
 /* ── Internal ────────────────────────────────────────────── */
 
 function triggerDownload(url) {
-  // Use window.open to trigger the browser download manager.
-  // The /download/ location sends Content-Disposition: attachment so the
-  // browser saves instead of navigating.
-  // Note: a hidden <a>.click() is suppressed on Android Firefox as a
-  // non-user-initiated navigation; window.open works because the call
-  // chain originates from a real click event handler.
-  window.open(url, '_blank');
+  // Content-Disposition: attachment means the browser saves instead of
+  // navigating, so assigning location is safe — the page stays put.
+  // This avoids both the hidden-<a>.click() suppression on Android
+  // Firefox and the popup-blocker that kills window.open().
+  window.location.assign(url);
 }

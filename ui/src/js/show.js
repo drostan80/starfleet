@@ -26,7 +26,7 @@ import {
   buildStatusBtn,
 } from './calendar.js?v=17';
 import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=9';
-import { startDownload } from './downloads.js?v=1';
+import { startDownload } from './downloads.js?v=2';
 
 /* ── Constants ───────────────────────────────────────────── */
 
