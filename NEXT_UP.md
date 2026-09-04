@@ -878,6 +878,17 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
         air date. Two actions per entry: **Plan** (full add + Sonarr/Radarr) or **Skip** (stub).
       Both passive and active paths need the SKIP status and a stub-ingestion path that doesn't
       enforce full `addShow` completeness.
+      **TV & Movies browse shipped 2026-09-04 (v0.1.99)**: Add page → Browse → Anime / TV &
+      Movies / TV / Movies tabs. Anime uses AniList seasonal; TV/Movies use TMDB Discover
+      (`air_date.gte/lte` for TV episodes airing this month, `primary_release_date.gte/lte` for
+      movies in cinemas). Month navigation + prev/next, status filters, "Load more" pagination.
+      Each card shows LCARS tracking status via `show_external_id WHERE service='tmdb'`
+      cross-reference (577 TMDB IDs in DB; shows with only TVDB IDs won't match — known
+      limitation, not blocking). Status chips: click to add (full `addShowWithArr` + Sonarr/
+      Radarr search fallback) or change status. Server: `browse_tmdb.py`, `tmdb_client.py`
+      discover methods, `browseTmdb` GraphQL query. Client: `browse.js` rewritten for dual
+      mode, `api.js` browseTmdb query. 18 new tests. SKIP status and passive import remain
+      unbuilt.
 - [ ] **Web client — Statistics page** (details TBD). Likely surface: episode/show counts by
       status, watch history over time (episodes watched per day/week/month), score distribution,
       genre breakdown, total runtime. Needs `watchedEpisodeCount` and date-bucketed watch-event
