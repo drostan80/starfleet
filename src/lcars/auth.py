@@ -18,6 +18,7 @@ localStorage on the client.
 from __future__ import annotations
 
 import secrets
+import threading
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -29,6 +30,10 @@ from lcars import db, ids
 # Session cookie config.
 COOKIE_NAME = "sf_session"
 SESSION_TTL_DAYS = 30
+# Short-lived media tokens — in-memory, for mpv playback auth.
+MEDIA_TOKEN_TTL_SECONDS = 300  # 5 minutes
+_media_tokens: dict[str, datetime] = {}  # token → expires_at (UTC)
+_media_tokens_lock = threading.Lock()
 # Allowed shared-setting keys — everything else stays in localStorage.
 SHARED_SETTING_KEYS = frozenset({
     "lcars_url",
@@ -95,6 +100,26 @@ def _purge_expired_sessions(conn) -> None:
     conn.execute("DELETE FROM web_session WHERE expires_at < ?", (_now_iso(),))
 
 
+def _purge_media_tokens() -> None:
+    """Remove expired media tokens — called under _media_tokens_lock."""
+    now = datetime.now(UTC)
+    expired = [t for t, exp in _media_tokens.items() if exp <= now]
+    for t in expired:
+        del _media_tokens[t]
+
+
+def _validate_media_token(token: str) -> bool:
+    """Return True if the token is valid and not expired."""
+    with _media_tokens_lock:
+        exp = _media_tokens.get(token)
+        if exp is None:
+            return False
+        if datetime.now(UTC) >= exp:
+            del _media_tokens[token]
+            return False
+        return True
+
+
 # ── Route handlers ───────────────────────────────────────────────
 
 
@@ -149,11 +174,20 @@ async def logout(request: Request) -> Response:
 
 
 async def check(request: Request) -> Response:
-    """GET /auth/check — nginx auth_request target."""
+    """GET /auth/check — nginx auth_request target.
+
+    Accepts either the session cookie (normal browser requests) or an
+    X-Media-Token header (short-lived token for mpv / external players
+    that can't carry cookies).
+    """
     user = _get_session_user(request)
-    if user is None:
-        return Response(status_code=401)
-    return Response(status_code=200)
+    if user is not None:
+        return Response(status_code=200)
+    # Fall back to media token (forwarded by nginx from ?t= query param).
+    media_token = request.headers.get("x-media-token", "")
+    if media_token and _validate_media_token(media_token):
+        return Response(status_code=200)
+    return Response(status_code=401)
 
 
 async def settings_handler(request: Request) -> Response:
@@ -305,3 +339,26 @@ async def change_password(request: Request) -> Response:
     )
     conn.commit()
     return JSONResponse({"ok": True})
+
+
+async def media_token(request: Request) -> Response:
+    """POST /auth/media-token — issue a short-lived token for media access.
+
+    Used by the web client's mpv integration: the browser calls this
+    (cookie sent automatically), receives a 5-minute token, and appends
+    it as ``?t=<token>`` to the ``/files/`` URL passed to the local mpv
+    helper.  mpv fetches the URL without cookies, and nginx forwards
+    the query-param value as an ``X-Media-Token`` header to
+    ``/auth/check``, which validates it.
+    """
+    user = _get_session_user(request)
+    if user is None:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+
+    token = secrets.token_urlsafe(32)
+    expires = datetime.now(UTC) + timedelta(seconds=MEDIA_TOKEN_TTL_SECONDS)
+    with _media_tokens_lock:
+        _purge_media_tokens()
+        _media_tokens[token] = expires
+
+    return JSONResponse({"token": token, "expires_in": MEDIA_TOKEN_TTL_SECONDS})

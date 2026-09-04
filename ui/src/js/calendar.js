@@ -342,7 +342,23 @@ export async function launchMpv(filePath, cfg) {
   // filePathSonarr/Radarr is the path inside the server container (/data/…).
   // nginx serves /data/ at /files/, so strip the /data prefix to form the URL.
   const mediaPath = filePath.startsWith('/data') ? filePath.slice('/data'.length) : filePath;
-  const mediaUrl  = `${cfg.lcars_url}/files${mediaPath}`;
+
+  // Get a short-lived media token so mpv can authenticate without cookies.
+  let mediaToken;
+  try {
+    const tokenRes = await fetch('/auth/media-token', { method: 'POST' });
+    if (!tokenRes.ok) throw new Error('session expired');
+    const tokenBody = await tokenRes.json();
+    mediaToken = tokenBody.token;
+  } catch {
+    showBanner('Session expired — reload the page', 'error');
+    return;
+  }
+
+  // Use the browser's own origin (nginx) for the media URL, not cfg.lcars_url
+  // — /files/ is an nginx route, not served by LCARS directly.
+  const origin = window.location.origin;
+  const mediaUrl = `${origin}/files${mediaPath}?t=${mediaToken}`;
 
   try {
     const res = await fetch(`${helperUrl}/play`, {
@@ -350,9 +366,23 @@ export async function launchMpv(filePath, cfg) {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ url: mediaUrl }),
     });
-    if (!res.ok) throw new Error(`helper returned ${res.status}`);
-    showBanner('▶ Launching mpv…', 'info');
-    setTimeout(hideBanner, 2500);
+    if (!res.ok) {
+      const body = await res.text();
+      if (res.status === 502) {
+        // Helper reported mpv failed to start.
+        showBanner('No mpv output — try Jellyfin', 'error');
+      } else {
+        throw new Error(`helper returned ${res.status}: ${body}`);
+      }
+      return;
+    }
+    const body = await res.text();
+    if (body === 'OK (mpv exited)') {
+      showBanner('No mpv output — try Jellyfin', 'error');
+    } else {
+      showBanner('▶ Launching mpv…', 'info');
+      setTimeout(hideBanner, 2500);
+    }
   } catch (err) {
     const isNetErr = err instanceof TypeError;
     showBanner(

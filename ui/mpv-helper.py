@@ -92,6 +92,20 @@ class Handler(BaseHTTPRequestHandler):
             env=env,
         )
 
+        # Wait briefly to catch immediate failures (bad URL, no display,
+        # missing codecs).  If mpv dies within ~1s the response tells the
+        # client so it can show a fallback message.
+        time.sleep(1.0)
+        exit_code = _current_proc.poll()
+        if exit_code is not None:
+            print(f'[mpv] exited immediately with code {exit_code}')
+            _current_proc = None
+            self._cors(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'OK (mpv exited)')
+            return
+
         self._cors(200)
         self.send_header('Content-Type', 'text/plain')
         self.end_headers()
