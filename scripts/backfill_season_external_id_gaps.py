@@ -13,7 +13,6 @@ Usage:
 
 import argparse
 import sqlite3
-import sys
 
 DB_PATH = "/db/lcars.db"
 
