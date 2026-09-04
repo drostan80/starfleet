@@ -25,7 +25,8 @@ import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv,
   buildStatusBtn,
 } from './calendar.js?v=17';
-import { SVC_ICONS, _mpvSvg } from './icons.js?v=8';
+import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=9';
+import { startDownload } from './downloads.js?v=1';
 
 /* ── Constants ───────────────────────────────────────────── */
 
@@ -1443,6 +1444,25 @@ function renderSpecialCard(ep, show, container, cfg) {
   mpvCell.appendChild(mpvIcon);
   bottomRow.appendChild(mpvCell);
 
+  // Download button
+  const dlCell = el('div', 'sp-ep-dl');
+  if (canPlay) {
+    const dlIcon = el('span', 'sp-dl-icon available');
+    dlIcon.innerHTML = _downloadSvg;
+    dlIcon.title = 'Download';
+    dlIcon.addEventListener('click', () => {
+      startDownload({
+        showTitle: show.displayTitle,
+        label: ep.title || `Special #${ep.absoluteNumber}`,
+        filePath,
+      });
+      dlIcon.classList.add('triggered');
+      setTimeout(() => dlIcon.classList.remove('triggered'), 1200);
+    });
+    dlCell.appendChild(dlIcon);
+  }
+  bottomRow.appendChild(dlCell);
+
   // Watch button
   const watchCell = el('div', 'sp-ep-watch');
   const isWatched = (ep.watchEvents?.edges?.length > 0) ||
@@ -2371,6 +2391,31 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     }
     mpvCell.appendChild(mpvIcon);
     row.appendChild(mpvCell);
+
+    // Download button — triggers browser-native download
+    const dlCell = el('div', 'sp-ep-dl');
+    if (canPlay) {
+      const dlIcon = el('span', 'sp-dl-icon available');
+      dlIcon.innerHTML = _downloadSvg;
+      dlIcon.title = 'Download episode';
+      dlIcon.addEventListener('click', () => {
+        const epLabel = show.mediaShape === 'MOVIE'
+          ? show.displayTitle
+          : `S${ep.season} E${ep.episode}${ep.title ? ' — ' + ep.title : ''}`;
+        startDownload({
+          showTitle: show.displayTitle,
+          label: epLabel,
+          filePath: epFilePath,
+        });
+        // Brief visual feedback
+        dlIcon.classList.add('triggered');
+        setTimeout(() => dlIcon.classList.remove('triggered'), 1200);
+      });
+      dlCell.appendChild(dlIcon);
+    } else {
+      dlCell.appendChild(el('span', 'sp-dl-icon unavailable'));
+    }
+    row.appendChild(dlCell);
 
     // Watch / unwatch button
     const watchCell = el('div', 'sp-ep-watch');

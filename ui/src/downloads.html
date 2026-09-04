@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starfleet — Downloads</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="css/main.css?v=4">
+  <style>
+    /* ── Downloads page ─────────────────────────────────────── */
+    .dl-page {
+      flex: 1;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 24px 20px;
+      width: 100%;
+    }
+
+    .dl-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .dl-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 22px;
+      font-weight: 700;
+    }
+    .dl-clear-btn {
+      background: none; border: 1px solid var(--border);
+      color: var(--muted); font-size: 12px; padding: 5px 12px;
+      border-radius: 6px; cursor: pointer; transition: all .15s;
+    }
+    .dl-clear-btn:hover { border-color: var(--accent); color: var(--text); }
+
+    .dl-empty {
+      text-align: center; color: var(--muted); padding: 60px 0;
+      font-size: 14px;
+    }
+    .dl-empty-icon { font-size: 40px; margin-bottom: 12px; display: block; }
+
+    .dl-list {
+      display: flex; flex-direction: column; gap: 1px;
+    }
+
+    .dl-entry {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 6px;
+      transition: background .1s;
+    }
+    .dl-entry:hover { background: var(--surface-2); }
+
+    .dl-info {
+      min-width: 0;
+    }
+    .dl-show-title {
+      font-size: 13px; font-weight: 500;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .dl-ep-label {
+      font-size: 12px; color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .dl-timestamp {
+      font-size: 10px; color: var(--faint);
+      font-family: 'DM Mono', monospace;
+      margin-top: 2px;
+    }
+
+    .dl-actions {
+      display: flex; gap: 8px; align-items: center;
+    }
+    .dl-action-btn {
+      background: none; border: 1px solid var(--border);
+      color: var(--muted); font-size: 11px; padding: 4px 10px;
+      border-radius: 5px; cursor: pointer; transition: all .15s;
+      white-space: nowrap;
+    }
+    .dl-action-btn:hover { border-color: var(--accent); color: var(--text); }
+    .dl-action-btn.retry { color: var(--accent); border-color: var(--accent-d); }
+    .dl-action-btn.retry:hover { background: rgba(91,140,255,0.1); }
+    .dl-action-btn.remove { color: var(--st-dropped); border-color: rgba(239,68,68,0.3); }
+    .dl-action-btn.remove:hover { background: rgba(239,68,68,0.1); }
+
+    @media (max-width: 600px) {
+      .dl-page { padding: 16px 12px; }
+      .dl-entry { grid-template-columns: 1fr; gap: 8px; }
+      .dl-actions { justify-content: flex-end; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Top nav ─────────────────────────────────────────── -->
+<nav class="top-nav">
+  <a href="index.html" class="nav-brand">Starfleet</a>
+  <ul class="nav-links">
+    <li><a href="index.html">Calendar</a></li>
+    <li><a href="backlog.html">Backlog</a></li>
+    <li><a href="list.html">List</a></li>
+    <li><a href="grabs.html">Grabs</a></li>
+    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
+    <li><a href="downloads.html" class="active">Downloads</a></li>
+    <li><a href="add.html">Add</a></li>
+  </ul>
+  <div class="nav-spacer"></div>
+  <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
+  <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
+</nav>
+
+<div id="status-banner" class="status-banner hidden"></div>
+
+<div class="dl-page">
+  <div class="dl-header">
+    <span class="dl-title">Downloads</span>
+    <button class="dl-clear-btn" id="dl-clear-all" hidden>Clear all</button>
+  </div>
+  <div id="dl-content"></div>
+</div>
+
+<script type="module">
+  import { getDownloads, retriggerDownload, purgeDownload, purgeAll } from './js/downloads.js?v=1';
+
+  function relativeTime(iso) {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  }
+
+  function render() {
+    const entries = getDownloads();
+    const content = document.getElementById('dl-content');
+    const clearBtn = document.getElementById('dl-clear-all');
+
+    if (!entries.length) {
+      clearBtn.hidden = true;
+      content.innerHTML = `
+        <div class="dl-empty">
+          <span class="dl-empty-icon">⬇</span>
+          No downloads yet.<br>
+          Use the download button on episode rows to start one.
+        </div>`;
+      return;
+    }
+
+    clearBtn.hidden = false;
+    const list = document.createElement('div');
+    list.className = 'dl-list';
+
+    for (const e of entries) {
+      const entry = document.createElement('div');
+      entry.className = 'dl-entry';
+
+      const info = document.createElement('div');
+      info.className = 'dl-info';
+      info.innerHTML = `
+        <div class="dl-show-title">${esc(e.showTitle)}</div>
+        <div class="dl-ep-label">${esc(e.label)}</div>
+        <div class="dl-timestamp">${relativeTime(e.startedAt)}</div>`;
+
+      const actions = document.createElement('div');
+      actions.className = 'dl-actions';
+
+      const retryBtn = document.createElement('button');
+      retryBtn.className = 'dl-action-btn retry';
+      retryBtn.textContent = '↻ Retry';
+      retryBtn.addEventListener('click', () => {
+        retriggerDownload(e.id);
+        render();
+      });
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'dl-action-btn remove';
+      removeBtn.textContent = '✕';
+      removeBtn.title = 'Remove from list';
+      removeBtn.addEventListener('click', () => {
+        purgeDownload(e.id);
+        render();
+      });
+
+      actions.appendChild(retryBtn);
+      actions.appendChild(removeBtn);
+
+      entry.appendChild(info);
+      entry.appendChild(actions);
+      list.appendChild(entry);
+    }
+
+    content.innerHTML = '';
+    content.appendChild(list);
+  }
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  document.getElementById('dl-clear-all').addEventListener('click', () => {
+    if (confirm('Clear all download history?')) {
+      purgeAll();
+      render();
+    }
+  });
+
+  render();
+</script>
+
+</body>
+</html>

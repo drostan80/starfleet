@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="css/main.css?v=4">
-  <link rel="stylesheet" href="css/show.css?v=13">
+  <link rel="stylesheet" href="css/show.css?v=14">
 </head>
 <body>
 
@@ -23,6 +23,7 @@
     <li><a href="list.html">List</a></li>
     <li><a href="grabs.html">Grabs</a></li>
     <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
+    <li><a href="downloads.html">Downloads</a></li>
     <li><a href="add.html">Add</a></li>
   </ul>
   <div class="nav-spacer"></div>
@@ -37,7 +38,7 @@
 <div id="show-root"></div>
 
 <script type="module">
-  import { init } from './js/show.js?v=27';
+  import { init } from './js/show.js?v=28';
   import { initSearch } from './js/search.js?v=2';
   await init();
   initSearch();

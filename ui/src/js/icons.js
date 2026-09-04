@@ -74,6 +74,9 @@ export const _tmdbMarkSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 
   <rect x="12" y="24" rx="3" width="16" height="6" fill="#fff" opacity=".7"/>
 </svg>`;
 
+/** Download arrow icon — inline SVG, inherits color from parent. */
+export const _downloadSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="100%" height="100%" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/></svg>`;
+
 /* Pre-built icon map keyed by service name */
 export const SVC_ICONS = {
   anilist: _anilistSvg,
