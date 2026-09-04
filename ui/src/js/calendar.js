@@ -351,6 +351,11 @@ export async function launchMpv(filePath, cfg) {
       body:    JSON.stringify({ url: mediaUrl }),
     });
     if (!res.ok) throw new Error(`helper returned ${res.status}`);
+    const body = await res.text();
+    if (body === 'FAILED') {
+      showBanner('No mpv output — try Jellyfin', 'error');
+      return;
+    }
     showBanner('▶ Launching mpv…', 'info');
     setTimeout(hideBanner, 2500);
   } catch (err) {
