@@ -76,8 +76,8 @@ def _cross_reference(
         str_ids,
     ).fetchall()
     for row in rows:
-        if not row["tracked"]:
-            continue
+        if not row["tracked"] and row["status"] != "skipped":
+            continue  # ignore untracked stubs (but keep skipped tombstones)
         tid = int(row["external_id"])
         result[tid] = {
             "show_id": row["show_id"],

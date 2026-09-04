@@ -249,6 +249,94 @@ def create_show(conn, input: dict) -> str:
     return show_id
 
 
+def skip_show(conn, input: dict) -> str:
+    """Create a minimal stub with status='skipped', tracked=0 — the browse
+    "skip" flow's write path.  No metadata fetch, no Sonarr/Radarr add,
+    no AniList/MAL push.
+
+    If an existing show row already matches one of the input's external ids:
+    - tracked=1 → no-op, return the existing show_id (use setStatus instead)
+    - tracked=0, status!='skipped' → flip status to 'skipped', return id
+    - tracked=0, status='skipped' → already skipped, return id
+
+    Otherwise creates a new row with status='skipped', tracked=0, and
+    inserts external-id links (same shape as create_show, minus the
+    metadata fetch)."""
+    primary = input["primary_title"]
+    title_field = f"title_{primary}"
+    if not input.get(title_field):
+        raise ShowInputError(
+            f"primaryTitle is {primary.upper()} but {title_field.replace('_', ' ', 1)}"
+            " (as camelCase) was not provided"
+        )
+
+    existing_show_id = find_existing_show(conn, input)
+    if existing_show_id is not None:
+        existing = conn.execute(
+            "SELECT tracked, status FROM show WHERE id = ?", (existing_show_id,)
+        ).fetchone()
+        if existing["tracked"]:
+            return existing_show_id  # already tracked — no-op
+        if existing["status"] != "skipped":
+            now = util.now_utc_iso()
+            conn.execute(
+                "UPDATE show SET status = 'skipped', updated_at = ? WHERE id = ?",
+                (now, existing_show_id),
+            )
+            conn.commit()
+        return existing_show_id
+
+    show_id = ids.generate_id(conn, "s")
+    now = util.now_utc_iso()
+    conn.execute(
+        """
+        INSERT INTO show (
+            id, media_shape, tracking_space,
+            title_romaji, title_english, title_native, primary_title,
+            status, tracked, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'skipped', 0, ?, ?)
+        """,
+        (
+            show_id,
+            input["media_shape"],
+            input["tracking_space"],
+            input.get("title_romaji"),
+            input.get("title_english"),
+            input.get("title_native"),
+            primary,
+            now,
+            now,
+        ),
+    )
+
+    for service, key in (
+        ("anilist", "anilist_id"),
+        ("tvdb", "tvdb_id"),
+        ("imdb", "imdb_id"),
+        ("mal", "mal_id"),
+    ):
+        value = input.get(key)
+        if value is not None:
+            url = _EXTERNAL_ID_URL_TEMPLATES[service].format(id=value)
+            conn.execute(
+                "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (show_id, service, str(value), url, now),
+            )
+
+    tmdb_id = input.get("tmdb_id")
+    if tmdb_id is not None:
+        url = _TMDB_URL_TEMPLATES[input["media_shape"]].format(id=tmdb_id)
+        conn.execute(
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES (?, 'tmdb', ?, ?, ?)",
+            (show_id, str(tmdb_id), url, now),
+        )
+
+    conn.commit()
+    return show_id
+
+
 # --- B.21 — addShowWithArr: search-Sonarr/Radarr-then-track-in-LCARS -------
 #
 # One combined mutation (user's own explicit call), not separate composable

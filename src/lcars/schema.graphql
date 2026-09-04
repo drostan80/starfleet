@@ -73,6 +73,8 @@ enum ShowStatus {
   PAUSED
   COMPLETED
   DROPPED
+  "Lightweight tombstone — seen, not interested. No AniList/MAL equivalent; never pushed to external services."
+  SKIPPED
 }
 
 enum AnimeSeason {
@@ -1399,6 +1401,15 @@ type Mutation {
   in Sonarr/Radarr with no matching LCARS show.
   """
   addShowWithArr(input: AddShowWithArrInput!): AddShowResult!
+  """
+  Skip a show from browse — lightweight tombstone meaning "seen, not interested."
+  Creates a minimal stub (tracked = false, status = SKIPPED) or marks an existing
+  untracked stub as skipped. No metadata fetch, no Sonarr/Radarr add, no AniList/MAL
+  push. The show still appears in browse cross-reference so the user doesn't see it
+  as "Not in LCARS" again. If the show is already tracked (tracked = true), this is
+  a no-op that returns the existing show unchanged — use setStatus instead.
+  """
+  skipShow(input: AddShowInput!): Show!
   "A.8 — re-runs the same on-demand metadata fetch addShow triggers at creation; the manual-retry half of its best-effort policy."
   refreshShowMetadata(showId: ID!): Show!
   """

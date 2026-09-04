@@ -11,9 +11,9 @@
 
 import {
   browseSeasonalAnime, browseTmdb,
-  searchArrCandidates, addShowWithArr, addShow,
+  searchArrCandidates, addShowWithArr, addShow, skipShow,
   setStatus, setSeasonStatus,
-} from './api.js?v=13';
+} from './api.js?v=14';
 import { showBanner } from './calendar.js?v=20';
 
 // ── Constants ────────────────────────────────────────────
@@ -30,8 +30,8 @@ const MONTH_FULL = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-const STATUSES = ['PLANNED', 'WATCHING', 'PAUSED', 'COMPLETED', 'DROPPED'];
-const STATUS_LABELS = { PLANNED: 'Plan', WATCHING: 'Watch', PAUSED: 'Pause', COMPLETED: 'Done', DROPPED: 'Drop' };
+const STATUSES = ['PLANNED', 'WATCHING', 'PAUSED', 'COMPLETED', 'DROPPED', 'SKIPPED'];
+const STATUS_LABELS = { PLANNED: 'Plan', WATCHING: 'Watch', PAUSED: 'Pause', COMPLETED: 'Done', DROPPED: 'Drop', SKIPPED: 'Skip' };
 
 // ── State ────────────────────────────────────────────────
 
@@ -285,6 +285,7 @@ function renderFilterBar() {
     PAUSED: 'var(--st-paused)',
     COMPLETED: 'var(--st-completed)',
     DROPPED: 'var(--st-dropped)',
+    SKIPPED: 'var(--faint)',
   };
   for (const st of STATUSES) {
     const pill = createFilterPill(st, STATUS_LABELS[st] || st, statusColors[st]);
@@ -594,6 +595,7 @@ function statusColor(status) {
     PAUSED: 'var(--st-paused)',
     COMPLETED: 'var(--st-completed)',
     DROPPED: 'var(--st-dropped)',
+    SKIPPED: 'var(--faint)',
   };
   return colors[status] || 'var(--accent)';
 }
@@ -652,7 +654,7 @@ async function onAnimeChipClick(card, item, status) {
     return;
   }
 
-  // Not in LCARS — add it
+  // Not in LCARS — add it (or skip it)
   card.classList.add('loading');
   try {
     const mediaShape = item.format === 'MOVIE' ? 'MOVIE' : 'EPISODIC';
@@ -668,6 +670,16 @@ async function onAnimeChipClick(card, item, status) {
     };
 
     let show;
+
+    if (status === 'SKIPPED') {
+      show = await skipShow(input);
+      item.lcarsShowId = show.id;
+      item.lcarsStatus = 'SKIPPED';
+      refreshCard(card, item);
+      showBanner('Skipped', 'ok');
+      card.classList.remove('loading');
+      return;
+    }
 
     if (status === 'COMPLETED' || status === 'DROPPED') {
       show = await addShow(input);
@@ -748,7 +760,7 @@ async function onTmdbChipClick(card, item, status) {
     return;
   }
 
-  // Not in LCARS — add it
+  // Not in LCARS — add it (or skip it)
   card.classList.add('loading');
   try {
     const mediaShape = item.mediaType === 'MOVIE' ? 'MOVIE' : 'EPISODIC';
@@ -761,6 +773,16 @@ async function onTmdbChipClick(card, item, status) {
     };
 
     let show;
+
+    if (status === 'SKIPPED') {
+      show = await skipShow(input);
+      item.lcarsShowId = show.id;
+      item.lcarsStatus = 'SKIPPED';
+      refreshCard(card, item);
+      showBanner('Skipped', 'ok');
+      card.classList.remove('loading');
+      return;
+    }
 
     if (status === 'COMPLETED' || status === 'DROPPED') {
       show = await addShow(input);

@@ -100,7 +100,7 @@ def _enum(name: str, *values: str) -> EnumType:
 ENUMS = [
     _enum("MediaShape", "episodic", "movie"),
     _enum("TrackingSpace", "tv", "anime"),
-    _enum("ShowStatus", "watching", "planned", "paused", "completed", "dropped"),
+    _enum("ShowStatus", "watching", "planned", "paused", "completed", "dropped", "skipped"),
     _enum("EpisodeKind", "regular", "special", "ova", "bonus_movie"),
     _enum("AirDateSource", "sonarr", "anilist", "animeschedule", "manual"),
     _enum("EpisodeState", "unwatched", "watched", "skipped"),
@@ -217,8 +217,11 @@ _STATUS_TO_ANILIST = {
     "paused": "PAUSED",
     "completed": "COMPLETED",
     "dropped": "DROPPED",
+    # "skipped" deliberately absent — no AniList equivalent; push functions
+    # use .get() and early-return on None so a skipped status is silently
+    # a no-op, matching the "no external push" design for SKIP.
     # deliberately no REPEATING mapping — §6.8/§6.9: setStatus/_push_show_status
-    # still never auto-pushes AniList's REPEATING status (LCARS's own 5-value
+    # still never auto-pushes AniList's REPEATING status (LCARS's own
     # status enum has no rewatch-specific value to map from anyway), and that
     # stays true even after markSeasonRewatch (2026-08-16, todo.md) — that's
     # a separate, explicit, caller-supplied-count mutation, not something
@@ -275,7 +278,9 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
     ).fetchall()
     for season in seasons:
         effective = season["season_status"] or status
-        anilist_status = _STATUS_TO_ANILIST[effective]
+        anilist_status = _STATUS_TO_ANILIST.get(effective)
+        if anilist_status is None:
+            continue  # 'skipped' — no AniList equivalent
         try:
             anilist_client.save_media_list_entry(
                 cfg.anilist_access_token, season["anilist_id"], status=anilist_status
@@ -295,7 +300,9 @@ def _push_season_status(conn, season: dict, status: str) -> None:
     cfg = config.get_current()
     if not cfg.anilist_access_token:
         return
-    anilist_status = _STATUS_TO_ANILIST[status]
+    anilist_status = _STATUS_TO_ANILIST.get(status)
+    if anilist_status is None:
+        return  # 'skipped' — no AniList equivalent
     try:
         anilist_client.save_media_list_entry(
             cfg.anilist_access_token, season["anilist_id"], status=anilist_status
@@ -314,7 +321,9 @@ def _push_mal_season_status(conn, season: dict, status: str) -> None:
     cfg = config.get_current()
     if not cfg.mal_access_token:
         return
-    mal_status = _STATUS_TO_MAL[status]
+    mal_status = _STATUS_TO_MAL.get(status)
+    if mal_status is None:
+        return  # 'skipped' — no MAL equivalent
     try:
         mal_client.update_my_list_status(
             cfg.mal_access_token, season["mal_id"], status=mal_status
@@ -879,12 +888,9 @@ def _push_show_episode_progress(conn, show_id: str, season_number: int) -> None:
 # asymmetry reads as a scope decision, not an oversight.
 
 _STATUS_TO_MAL = {
-    # Exhaustive against show.status's own CHECK constraint (checked directly,
-    # not assumed) — all 5 values map, so this plain dict lookup can never
-    # KeyError and break the "push never fails the local write" invariant
-    # every push path in this file honors (same shape _STATUS_TO_ANILIST
-    # already relies on, unchanged here — just confirmed explicitly since
-    # this is the second dict leaning on that same assumption).
+    # Maps the five pushable statuses; 'skipped' is deliberately absent
+    # (no MAL equivalent) — push functions use .get() and early-return on
+    # None, same pattern as _STATUS_TO_ANILIST.
     "watching": "watching",
     "planned": "plan_to_watch",
     "paused": "on_hold",
@@ -943,7 +949,9 @@ def _push_mal_show_status(conn, show_id: str, status: str) -> None:
     ).fetchall()
     for season in seasons:
         effective = season["season_status"] or status
-        mal_status = _STATUS_TO_MAL[effective]
+        mal_status = _STATUS_TO_MAL.get(effective)
+        if mal_status is None:
+            continue  # 'skipped' — no MAL equivalent
         try:
             mal_client.update_my_list_status(
                 cfg.mal_access_token, season["mal_id"], status=mal_status
@@ -2109,6 +2117,20 @@ def resolve_add_show_with_arr(_, info, input):
         "matched_tvdb_id": arr_result["matched_tvdb_id"],
         "matched_tmdb_id": arr_result["matched_tmdb_id"],
     }
+
+
+@mutation.field("skipShow")
+def resolve_skip_show(_, info, input):
+    """Browse "skip" — creates a minimal stub (status='skipped', tracked=0)
+    or marks an existing untracked stub as skipped.  No metadata fetch,
+    no Sonarr/Radarr, no AniList/MAL push.  If the show is already tracked,
+    returns it unchanged (use setStatus instead)."""
+    conn = db.get_connection()
+    try:
+        show_id = shows.skip_show(conn, input)
+    except shows.ShowInputError as e:
+        raise GraphQLError(str(e)) from e
+    return _get_show(conn, show_id)
 
 
 @mutation.field("refreshShowMetadata")

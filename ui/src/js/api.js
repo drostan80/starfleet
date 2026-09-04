@@ -762,6 +762,23 @@ export async function addShow(input) {
 }
 
 /**
+ * Skip a show from browse — lightweight tombstone (tracked=0, status=SKIPPED).
+ * @param {object} input - AddShowInput
+ * @returns {Promise<object>} the skipped Show
+ */
+export async function skipShow(input) {
+  const data = await gql(`
+    mutation SkipShow($input: AddShowInput!) {
+      skipShow(input: $input) {
+        id displayTitle status score mediaShape trackingSpace tracked
+        posterUrl
+      }
+    }
+  `, { input });
+  return data.skipShow;
+}
+
+/**
  * Soft-delete a show (sets tracked=0, unmonitors in arr).
  * @param {string} showId
  * @returns {Promise<object>} the soft-deleted Show

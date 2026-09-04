@@ -93,8 +93,8 @@ def _cross_reference(
         str_ids,
     ).fetchall()
     for row in show_rows:
-        if not row["tracked"]:
-            continue  # ignore untracked stubs
+        if not row["tracked"] and row["status"] != "skipped":
+            continue  # ignore untracked stubs (but keep skipped tombstones)
         aid = int(row["external_id"])
         result[aid] = {
             "show_id": row["show_id"],
@@ -113,8 +113,8 @@ def _cross_reference(
         anilist_ids,
     ).fetchall()
     for row in season_rows:
-        if not row["tracked"]:
-            continue
+        if not row["tracked"] and row["show_status"] != "skipped":
+            continue  # ignore untracked stubs (but keep skipped tombstones)
         aid = row["anilist_id"]
         # Prefer season-level match over show-level when available
         if aid not in result or result[aid]["season_id"] is None:
