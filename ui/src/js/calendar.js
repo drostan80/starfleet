@@ -350,7 +350,15 @@ export async function launchMpv(filePath, cfg) {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ url: mediaUrl }),
     });
-    if (!res.ok) throw new Error(`helper returned ${res.status}`);
+    if (!res.ok) {
+      // Helper returns 502 + JSON when mpv exits immediately (bad URL, auth, …)
+      const body = await res.json().catch(() => ({}));
+      if (body.error === 'mpv_failed') {
+        showBanner('No mpv output — try Jellyfin', 'error');
+        return;
+      }
+      throw new Error(`helper returned ${res.status}`);
+    }
     showBanner('▶ Launching mpv…', 'info');
     setTimeout(hideBanner, 2500);
   } catch (err) {
@@ -430,9 +438,9 @@ export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cf
   playerA.addEventListener('click', async e => {
     e.preventDefault();
     if (!availableLocally) return;
-    playerA.textContent = '…';
+    playerA.style.opacity = '0.5';
     await launchMpv(filePath, cfg);
-    playerA.textContent = '▶';
+    playerA.style.opacity = '';
   });
   strip.appendChild(playerA);
 
