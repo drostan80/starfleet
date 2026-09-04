@@ -116,6 +116,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        # Private Network Access — browsers block requests from a LAN
+        # page (192.168.x) to localhost unless this header is present.
+        self.send_header('Access-Control-Allow-Private-Network', 'true')
 
     def log_message(self, *_):
         pass  # silence default Apache-style log; we print our own above

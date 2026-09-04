@@ -345,11 +345,18 @@ export async function launchMpv(filePath, cfg) {
   const mediaUrl  = `${cfg.lcars_url}/files${mediaPath}`;
 
   try {
+    // Timeout: browsers on non-secure contexts may silently block
+    // Private Network Access requests (LAN page → localhost) without
+    // ever resolving or rejecting the fetch promise.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
     const res = await fetch(`${helperUrl}/play`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ url: mediaUrl }),
+      signal:  controller.signal,
     });
+    clearTimeout(timer);
     if (!res.ok) throw new Error(`helper returned ${res.status}`);
     const body = await res.text();
     if (body === 'FAILED') {
@@ -359,13 +366,7 @@ export async function launchMpv(filePath, cfg) {
     showBanner('▶ Launching mpv…', 'info');
     setTimeout(hideBanner, 2500);
   } catch (err) {
-    const isNetErr = err instanceof TypeError;
-    showBanner(
-      isNetErr
-        ? 'mpv helper not running — start mpv-helper.py on this machine'
-        : `mpv error: ${err.message}`,
-      'error',
-    );
+    showBanner('No mpv output — try Jellyfin', 'error');
   }
 }
 
