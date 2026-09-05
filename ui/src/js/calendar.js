@@ -999,6 +999,16 @@ function buildPlannerCard(ep, cfg) {
     fetchTmdbBackdrop(ep.show, cfg.tmdb_api_key);
   }
 
+  // Play triangle overlay on banner when episode is available
+  if (ep.availableLocally) {
+    body.classList.add('body-playable');
+    const playOverlay = document.createElement('div');
+    playOverlay.className = 'planner-play-overlay';
+    playOverlay.textContent = '▶';
+    playOverlay.addEventListener('click', () => launchMpv(filePath, cfg));
+    body.appendChild(playOverlay);
+  }
+
   // Title — larger in planner
   const title = document.createElement('a');
   title.className = 'planner-title';
@@ -1063,6 +1073,11 @@ function buildPlannerCard(ep, cfg) {
     epTitle.textContent = ep.title;
     body.appendChild(epTitle);
   }
+
+  // Service links strip — at the bottom of the detail pane over banner art
+  const externalIds = ep.show.externalIds?.edges?.map(e => e.node) || [];
+  const malId = ep.seasonEntity?.malId ?? null;
+  body.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg));
 
   card.appendChild(body);
 
