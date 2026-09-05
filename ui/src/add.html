@@ -109,6 +109,17 @@
       width: 100%;
     }
 
+    .source-fallback-banner {
+      background: var(--warning-bg, #f59e0b22);
+      border: 1px solid var(--warning-border, #f59e0b55);
+      color: var(--warning-text, #f59e0b);
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 13px;
+      text-align: center;
+      margin: 0 16px 8px;
+    }
+
     /* ── Candidate card ──────────────────────────────────────── */
 
     .cand-card {
@@ -831,7 +842,7 @@ import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDelet
 import { bootstrapConfig, applyAppName } from './js/config.js?v=4';
 import { showBanner, hideBanner } from './js/calendar.js?v=29';
 import { initSearch } from './js/search.js?v=4';
-import { initBrowse, teardownBrowse, setBrowseType } from './js/browse.js?v=3';
+import { initBrowse, teardownBrowse, setBrowseType } from './js/browse.js?v=4';
 
 applyAppName();
 await bootstrapConfig();

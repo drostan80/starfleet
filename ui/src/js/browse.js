@@ -13,7 +13,7 @@ import {
   browseSeasonalAnime, browseTmdb,
   searchArrCandidates, addShowWithArr, addShow, skipShow,
   setStatus, setSeasonStatus,
-} from './api.js?v=18';
+} from './api.js?v=19';
 import { showBanner } from './calendar.js?v=23';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -166,12 +166,30 @@ async function fetchPage(page) {
     }
     currentPage = result.currentPage;
     hasNextPage = result.hasNextPage;
+    // Show/hide degraded-service banner for MAL fallback
+    _showSourceBanner(result.source);
     renderCards();
   } catch (err) {
     resultsEl.innerHTML = `<div class="add-empty">Browse failed: ${err.message}</div>`;
   } finally {
     loading = false;
     updateLoadingState();
+  }
+}
+
+function _showSourceBanner(source) {
+  let banner = document.getElementById('source-fallback-banner');
+  if (source === 'MAL') {
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'source-fallback-banner';
+      banner.className = 'source-fallback-banner';
+      banner.textContent = 'AniList is unavailable — showing MyAnimeList data (some fields may differ)';
+      resultsEl.parentElement.insertBefore(banner, resultsEl);
+    }
+    banner.hidden = false;
+  } else if (banner) {
+    banner.hidden = true;
   }
 }
 
@@ -426,7 +444,8 @@ function renderCards() {
 function createAnimeCard(item) {
   const card = document.createElement('div');
   card.className = 'browse-card';
-  card.dataset.anilistId = item.anilistId;
+  card.dataset.anilistId = item.anilistId || '';
+  card.dataset.malId = item.malId || '';
 
   const eff = effectiveStatus(item);
   card.dataset.effectiveStatus = eff;
@@ -486,7 +505,7 @@ function createAnimeCard(item) {
 
   // Radial status picker on cover
   const picker = buildStatusBtn({
-    id: item.anilistId,
+    id: item.anilistId || `mal-${item.malId}`,
     currentStatus: eff === 'NOT_IN_LCARS' ? 'UNTRACKED' : eff,
     statuses: STATUSES_6,
     onPick: (_wrap, _id, st) => onAnimeChipClick(card, item, st),
@@ -661,7 +680,7 @@ async function onAnimeChipClick(card, item, status) {
       titleEnglish: item.titleEnglish || undefined,
       titleRomaji: item.titleRomaji || undefined,
       titleNative: item.titleNative || undefined,
-      anilistId: item.anilistId,
+      anilistId: item.anilistId || undefined,
       malId: item.malId || undefined,
     };
 

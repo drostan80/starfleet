@@ -3050,6 +3050,220 @@ async def test_mal_fallback_double_outage_still_opens_pending_review(client, mon
     assert reviews[0]["source"] == "anilist"
 
 
+# --- MAL browse fallback (2026-09-05 — AniList→MAL seasonal + search) -------
+#
+# When AniList's seasonal or search API is unreachable, LCARS falls back to
+# MAL's public API. These tests verify the fallback path, field mapping,
+# cross-reference by MAL ID, and the search fallback.
+
+BROWSE_SEASONAL_QUERY = """
+  query($season: AnimeSeason!, $year: Int!, $page: Int) {
+    browseSeasonalAnime(season: $season, year: $year, page: $page) {
+      items {
+        anilistId malId
+        titleRomaji titleEnglish titleNative
+        coverImageUrl description
+        genres format episodes duration status
+        studioNames startDate
+        lcarsShowId lcarsStatus
+      }
+      currentPage lastPage total hasNextPage source
+    }
+  }
+"""
+
+FAKE_MAL_SEASONAL_RESPONSE = {
+    "data": [
+        {
+            "node": {
+                "id": 55555,
+                "title": "Konosuba S3",
+                "main_picture": {"large": "https://cdn.myanimelist.net/seasonal.jpg"},
+                "synopsis": "Another season of adventures.",
+                "num_episodes": 12,
+                "average_episode_duration": 1440,
+                "genres": [{"id": 1, "name": "Comedy"}, {"id": 2, "name": "Fantasy"}],
+                "media_type": "tv",
+                "status": "currently_airing",
+                "start_date": "2026-07-01",
+                "studios": [{"id": 1, "name": "Drive"}],
+                "alternative_titles": {"en": "Konosuba S3 English", "ja": "このすば3"},
+            }
+        }
+    ],
+    "paging": {"next": "https://api.myanimelist.net/v2/anime/season/2026/summer?offset=50"},
+}
+
+
+async def test_browse_mal_fallback_returns_items(client, monkeypatch):
+    """When AniList is down, MAL seasonal fetch returns items with
+    source='MAL' and null anilistId."""
+    from lcars import browse
+
+    config.set_current(config.Config(mal_client_id="cid"))
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_seasonal_page",
+        lambda *a, **kw: (_ for _ in ()).throw(anilist_client.AniListError("503")),
+    )
+    monkeypatch.setattr(
+        "lcars.mal_client.fetch_seasonal_anime",
+        lambda *a, **kw: FAKE_MAL_SEASONAL_RESPONSE,
+    )
+    # Clear browse cache
+    browse._cache.clear()
+
+    data = await gql(
+        client, BROWSE_SEASONAL_QUERY,
+        {"season": "SUMMER", "year": 2026},
+        headers=auth_headers(),
+    )
+    result = data["browseSeasonalAnime"]
+    assert result["source"] == "MAL"
+    assert result["hasNextPage"] is True
+    assert len(result["items"]) == 1
+
+    item = result["items"][0]
+    assert item["anilistId"] is None
+    assert item["malId"] == 55555
+    assert item["titleEnglish"] == "Konosuba S3 English"
+    assert item["titleRomaji"] == "Konosuba S3"  # MAL's title field is the romaji
+    assert item["coverImageUrl"] == "https://cdn.myanimelist.net/seasonal.jpg"
+    assert item["description"] == "Another season of adventures."
+    assert item["genres"] == ["Comedy", "Fantasy"]
+    assert item["format"] == "TV"
+    assert item["episodes"] == 12
+    assert item["duration"] == 24  # 1440s / 60
+    assert item["status"] == "RELEASING"
+    assert item["studioNames"] == ["Drive"]
+    assert item["startDate"] == "2026-07-01"
+
+
+async def test_browse_mal_fallback_cross_references_by_mal_id(client, monkeypatch):
+    """MAL browse results are cross-referenced against LCARS shows by
+    MAL ID, so tracked shows show their LCARS status."""
+    from lcars import browse
+
+    config.set_current(config.Config(mal_client_id="cid"))
+    # Stub AniList fetch_media (called by addShow's metadata fetch)
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_media",
+        lambda *a, **kw: None,
+    )
+    # Add a show with mal_id=55555
+    show = await add_show(client, malId=55555, titleRomaji="Konosuba S3")
+
+    # Now stub browse to fail AniList, succeed MAL
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_seasonal_page",
+        lambda *a, **kw: (_ for _ in ()).throw(anilist_client.AniListError("503")),
+    )
+    monkeypatch.setattr(
+        "lcars.mal_client.fetch_seasonal_anime",
+        lambda *a, **kw: FAKE_MAL_SEASONAL_RESPONSE,
+    )
+    browse._cache.clear()
+
+    data = await gql(
+        client, BROWSE_SEASONAL_QUERY,
+        {"season": "SUMMER", "year": 2026},
+        headers=auth_headers(),
+    )
+    item = data["browseSeasonalAnime"]["items"][0]
+    assert item["lcarsShowId"] == show["id"]
+    assert item["lcarsStatus"].lower() == "planned"
+
+
+async def test_browse_anilist_normal_has_source_anilist(client, monkeypatch):
+    """When AniList is working, source='ANILIST' is returned."""
+    from lcars import browse
+
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_seasonal_page",
+        lambda *a, **kw: {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "total": 1, "hasNextPage": False},
+            "media": [{
+                "id": 111,
+                "idMal": 222,
+                "title": {"romaji": "Test", "english": "Test En", "native": "テスト"},
+                "coverImage": {"large": "https://img.test/cover.jpg"},
+                "description": "A test show.",
+                "genres": ["Action"],
+                "format": "TV",
+                "episodes": 12,
+                "duration": 24,
+                "status": "RELEASING",
+                "studios": {"nodes": [{"name": "Studio A"}]},
+                "startDate": {"year": 2026, "month": 7, "day": 1},
+            }],
+        },
+    )
+    browse._cache.clear()
+
+    data = await gql(
+        client, BROWSE_SEASONAL_QUERY,
+        {"season": "SUMMER", "year": 2026},
+        headers=auth_headers(),
+    )
+    result = data["browseSeasonalAnime"]
+    assert result["source"] == "ANILIST"
+    assert result["items"][0]["anilistId"] == 111
+
+
+SEARCH_ANILIST_QUERY = """
+  query($title: String!) {
+    searchAniList(title: $title) {
+      anilistId malId titleRomaji titleEnglish format episodes coverImageUrl year
+    }
+  }
+"""
+
+
+async def test_search_anilist_mal_fallback(client, monkeypatch):
+    """When AniList search is unreachable, MAL search results are returned
+    with anilistId=null."""
+    config.set_current(config.Config(mal_client_id="cid"))
+    monkeypatch.setattr(
+        anilist_client,
+        "search_media",
+        lambda *a, **kw: (_ for _ in ()).throw(anilist_client.AniListError("503")),
+    )
+    monkeypatch.setattr(
+        "lcars.mal_client.search_anime",
+        lambda *a, **kw: [
+            {
+                "id": 77777,
+                "title": "Some Anime",
+                "main_picture": {"large": "https://cdn.myanimelist.net/search.jpg"},
+                "synopsis": "Some synopsis.",
+                "num_episodes": 24,
+                "average_episode_duration": 1440,
+                "genres": [{"id": 1, "name": "Action"}],
+                "media_type": "tv",
+                "status": "finished_airing",
+                "start_date": "2025-01-15",
+                "studios": [{"id": 1, "name": "Bones"}],
+                "alternative_titles": {"en": "Some Anime EN", "ja": "あるアニメ"},
+            }
+        ],
+    )
+
+    data = await gql(
+        client, SEARCH_ANILIST_QUERY,
+        {"title": "some anime"},
+        headers=auth_headers(),
+    )
+    results = data["searchAniList"]
+    assert len(results) == 1
+    assert results[0]["anilistId"] is None
+    assert results[0]["malId"] == 77777
+    assert results[0]["titleEnglish"] == "Some Anime EN"
+    assert results[0]["year"] == 2025
+
+
 # --- TMDB duration fetch (A.19, §5.1 duration_minutes gap) -------------------
 #
 # Default fixture config has no tmdb_api_key, so every test above this

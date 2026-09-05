@@ -240,6 +240,114 @@ def fetch_anime_details(
             client.close()
 
 
+_SEASONAL_FIELDS = (
+    "id,title,main_picture,synopsis,num_episodes,average_episode_duration,"
+    "genres,alternative_titles,start_date,status,media_type,studios"
+)
+
+
+def fetch_seasonal_anime(
+    year: int,
+    season: str,
+    client_id: str,
+    page: int = 1,
+    per_page: int = 50,
+    client: httpx.Client | None = None,
+) -> dict:
+    """Public seasonal anime listing — ``GET /v2/anime/season/{year}/{season}``,
+    authenticated by ``X-MAL-CLIENT-ID`` header only (no user OAuth token).
+
+    MAL's seasonal endpoint uses cursor-based pagination via ``offset`` +
+    ``limit`` (not AniList's ``page`` numbers), so ``page`` is translated
+    here: page 1 → offset 0, page 2 → offset ``per_page``, etc.
+
+    Returns ``{"data": [...], "paging": {...}}`` — caller maps the MAL
+    shapes. ``nsfw=true`` mirrors AniList's unfiltered seasonal query and
+    ``fetch_my_list``'s own convention.
+
+    Built for AniList→MAL browse fallback (2026-09-05): when AniList's
+    seasonal fetch is unreachable, ``browse.py`` calls this instead.
+    """
+    offset = (page - 1) * per_page
+    url = (
+        f"{API_BASE_URL}/anime/season/{year}/{season.lower()}"
+        f"?fields={_SEASONAL_FIELDS}"
+        f"&sort=anime_num_list_users&limit={per_page}&offset={offset}"
+        f"&nsfw=true"
+    )
+    owns_client = client is None
+    client = client or httpx.Client(timeout=15.0)
+    try:
+        try:
+            response = client.get(url, headers={"X-MAL-CLIENT-ID": client_id})
+        except httpx.ConnectError as e:
+            raise MALError("Could not connect to MyAnimeList") from e
+        except httpx.TimeoutException as e:
+            raise MALError("Timed out talking to MyAnimeList") from e
+
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("message")
+            except (ValueError, AttributeError):
+                detail = None
+            raise MALError(
+                f"MyAnimeList returned an error: HTTP {response.status_code}"
+                + (f" ({detail})" if detail else "")
+            )
+        return response.json()
+    finally:
+        if owns_client:
+            client.close()
+
+
+def search_anime(
+    query: str,
+    client_id: str,
+    limit: int = 10,
+    client: httpx.Client | None = None,
+) -> list[dict]:
+    """Public anime search — ``GET /v2/anime?q=...``, authenticated by
+    ``X-MAL-CLIENT-ID`` header only. Returns up to ``limit`` results.
+
+    MAL requires ``q`` to be at least 3 characters. Raises ``MALError``
+    if the query is too short or on network/HTTP errors.
+
+    Built for AniList→MAL search fallback (2026-09-05): when AniList's
+    ``searchMedia`` is unreachable, ``resolvers.py`` calls this instead.
+    """
+    if len(query) < 3:
+        raise MALError("MAL search requires at least 3 characters")
+    url = (
+        f"{API_BASE_URL}/anime?q={query}"
+        f"&fields={_SEASONAL_FIELDS}"
+        f"&limit={limit}&nsfw=true"
+    )
+    owns_client = client is None
+    client = client or httpx.Client(timeout=10.0)
+    try:
+        try:
+            response = client.get(url, headers={"X-MAL-CLIENT-ID": client_id})
+        except httpx.ConnectError as e:
+            raise MALError("Could not connect to MyAnimeList") from e
+        except httpx.TimeoutException as e:
+            raise MALError("Timed out talking to MyAnimeList") from e
+
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("message")
+            except (ValueError, AttributeError):
+                detail = None
+            raise MALError(
+                f"MyAnimeList returned an error: HTTP {response.status_code}"
+                + (f" ({detail})" if detail else "")
+            )
+        payload = response.json()
+        return [row["node"] for row in payload.get("data", []) if row.get("node")]
+    finally:
+        if owns_client:
+            client.close()
+
+
 def update_my_list_status(
     token: str,
     mal_id: int,

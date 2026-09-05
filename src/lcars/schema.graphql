@@ -1214,9 +1214,9 @@ type ArrCandidate {
   overview: String
 }
 
-"searchAniList result — one AniList media entry matching the search query. idMal piggybacks on AniList's own data so the picker can fill both AniList and MAL IDs at once."
+"searchAniList result — one AniList media entry matching the search query. idMal piggybacks on AniList's own data so the picker can fill both AniList and MAL IDs at once. When AniList is down, results come from MAL (anilistId will be null)."
 type AniListCandidate {
-  anilistId: Int!
+  anilistId: Int
   malId: Int
   titleRomaji: String
   titleEnglish: String
@@ -1232,7 +1232,8 @@ type AniListCandidate {
 # ---------------------------------------------------------------------------
 
 type SeasonalBrowseItem {
-  anilistId: Int!
+  "Null when data comes from MAL fallback (MAL doesn't carry AniList IDs)."
+  anilistId: Int
   malId: Int
   titleRomaji: String
   titleEnglish: String
@@ -1262,6 +1263,8 @@ type SeasonalBrowseResult {
   lastPage: Int!
   total: Int!
   hasNextPage: Boolean!
+  "Which API served this data — ANILIST (normal) or MAL (fallback). Clients should show a degraded-service banner when MAL."
+  source: String!
 }
 
 # ---------------------------------------------------------------------------

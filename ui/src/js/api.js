@@ -953,7 +953,7 @@ export async function browseSeasonalAnime(season, year, page = 1) {
           lcarsShowId lcarsStatus
           lcarsSeasonId lcarsSeasonStatus
         }
-        currentPage lastPage total hasNextPage
+        currentPage lastPage total hasNextPage source
       }
     }
   `, { season, year, page });

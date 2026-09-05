@@ -973,12 +973,28 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
         watched episodes (off / after 1 day / 3 days / 7 days). Download page also has a
         per-episode delete button for manual cleanup regardless of settings.
 - [ ] check if list page could grab faster from tmdb or tvdb (which ever it isn't using, or divide and conquer (divide the work between both DB.
-- [ ] **Source failover — AniList↔MAL backup** — when AniList GraphQL is down (transient outages
-      confirmed 2026-08-23), fall back to MAL for metadata fetch, schedule lookup, and reconcile
-      instead of failing open. Same idea for TVDB↔TMDB: if one is unreachable, pivot to the other
-      for episode data, art, and external ID resolution. Needs: shared interface or adapter per
-      source pair, health-check/circuit-breaker logic, and mapping between each pair's ID spaces
-      (AniList↔MAL via `idMal`; TVDB↔TMDB via `/find` endpoint already used in backfills).
+- [x] **Source failover — AniList→MAL metadata fallback** — when AniList GraphQL is unreachable,
+      `_fetch_mal_fallback` fills scalar show columns (poster, synopsis, duration_minutes) from
+      MAL's public API via `mal_client.fetch_anime_details` (client_id only, no OAuth token).
+      NULL-only writes (never overwrites existing AniList data); re-raises the AniListError so
+      `_guarded` still opens a pending_review for full-metadata retry later. Skips
+      total_episodes (MAL's merged-parent count would be a wrong progress denominator for
+      AniList split entries, and `dueForMetadataRefresh` only revisits watching+airing shows so
+      the wrong value would be permanent). Collision guard: skips when >1 LCARS show shares the
+      same MAL ID. No `service_health` recording (public API and OAuth are independent failure
+      domains). Five tests. Built and verified live during a real AniList 403 outage, 2026-09-05.
+      **Browse + search fallback (2026-09-05)**: when AniList's seasonal API is unreachable,
+      `browse.py` falls back to MAL's public `GET /v2/anime/season/{year}/{season}` endpoint
+      (`mal_client.fetch_seasonal_anime`, client_id only); results cross-referenced by MAL ID
+      instead of AniList ID. `SeasonalBrowseResult.source` field (`"ANILIST"` / `"MAL"`) lets
+      the web client show a degraded-service banner. `AniListCandidate.anilistId` and
+      `SeasonalBrowseItem.anilistId` made nullable (MAL results carry no AniList IDs). Add flow
+      works with `malId` only — `AddShowInput.anilistId` was already nullable. Search fallback:
+      `searchAniList` resolver falls back to `mal_client.search_anime` on `AniListError`. MAL
+      results not cached (fallback window should be short). 4 new tests. Full suite 366 passed.
+      **Descoped**: TVDB↔TMDB failover — no TVDB client exists in LCARS; TVDB IDs are just keys;
+      the genuine pair would be Sonarr↔TMDB for episode data (much bigger project). Schedule
+      lookup and reconcile failover also descoped — separate slices.
 - [ ] **Investigate AniDB + IMDB as additional sources** — AniDB: the most granular anime DB
       (per-episode staff/cast, sub-episode parts, absolute numbering authority); has a UDP API
       (rate-limited, needs a persistent local client) and a daily XML dump; no official REST API.

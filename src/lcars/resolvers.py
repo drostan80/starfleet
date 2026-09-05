@@ -19,6 +19,7 @@ logic (relationships, computed values, paginated connections).
 """
 
 import json
+import logging
 import urllib.parse
 
 from ariadne import EnumType, MutationType, ObjectType, QueryType, SubscriptionType
@@ -59,6 +60,8 @@ from lcars import (
     util,
     watch_reconcile,
 )
+
+log = logging.getLogger(__name__)
 
 query = QueryType()
 mutation = MutationType()
@@ -1383,11 +1386,16 @@ def resolve_search_anilist(_, info, title):
     """Search AniList's anime catalog by title — up to 10 results sorted
     by relevance.  Returns AniListCandidate dicts with explicit key
     shaping (same reasoning as searchArrCandidates above — server.py's
-    convert_names_case expects snake_case keys)."""
+    convert_names_case expects snake_case keys).
+
+    Falls back to MAL search when AniList is unreachable (2026-09-05).
+    MAL results won't have ``anilist_id`` (null) — the client sends
+    ``malId`` only to ``addShow``, which accepts it."""
     try:
         results = anilist_client.search_media(title)
-    except anilist_client.AniListError as e:
-        raise GraphQLError(str(e)) from e
+    except anilist_client.AniListError:
+        log.warning("AniList search failed for %r, trying MAL", title)
+        return _search_mal_fallback(title)
     return [
         {
             "anilist_id": r["id"],
@@ -1402,6 +1410,41 @@ def resolve_search_anilist(_, info, title):
         }
         for r in results
     ]
+
+
+def _search_mal_fallback(title: str) -> list[dict]:
+    """MAL fallback for ``resolve_search_anilist`` — called when AniList
+    is unreachable. Maps MAL search results to ``AniListCandidate`` shape.
+    Raises ``GraphQLError`` if MAL is also down."""
+    conf = config.get_current()
+    if not conf.mal_client_id:
+        raise GraphQLError("AniList is down and MAL client_id is not configured")
+    try:
+        results = mal_client.search_anime(title, conf.mal_client_id)
+    except mal_client.MALError as e:
+        raise GraphQLError(f"Both AniList and MAL are unavailable: {e}") from e
+    items = []
+    for r in results:
+        alt = r.get("alternative_titles") or {}
+        start = r.get("start_date") or ""
+        year = int(start[:4]) if len(start) >= 4 else None
+        main_pic = r.get("main_picture") or {}
+        items.append(
+            {
+                "anilist_id": None,
+                "mal_id": r.get("id"),
+                "title_romaji": r.get("title"),  # MAL's title IS the romaji
+                "title_english": alt.get("en") or None,
+                "title_native": alt.get("ja"),
+                "format": browse._MAL_FORMAT_MAP.get(
+                    (r.get("media_type") or "").lower()
+                ),
+                "episodes": r.get("num_episodes") or None,
+                "cover_image_url": main_pic.get("large") or main_pic.get("medium"),
+                "year": year,
+            }
+        )
+    return items
 
 
 @query.field("showByExternalId")
