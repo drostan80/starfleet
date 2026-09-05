@@ -951,6 +951,21 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
       browse page all use it; browse gets 6 petals (SKIP), others get 5.
 - [ ] make the web client the basis for an android app, player is VLC app, vlc can have remote share access...
 - [ ] check if list page could grab faster from tmdb or tvdb (which ever it isn't using, or divide and conquer (divide the work between both DB.
+- [ ] **Source failover — AniList↔MAL backup** — when AniList GraphQL is down (transient outages
+      confirmed 2026-08-23), fall back to MAL for metadata fetch, schedule lookup, and reconcile
+      instead of failing open. Same idea for TVDB↔TMDB: if one is unreachable, pivot to the other
+      for episode data, art, and external ID resolution. Needs: shared interface or adapter per
+      source pair, health-check/circuit-breaker logic, and mapping between each pair's ID spaces
+      (AniList↔MAL via `idMal`; TVDB↔TMDB via `/find` endpoint already used in backfills).
+- [ ] **Investigate AniDB + IMDB as additional sources** — AniDB: the most granular anime DB
+      (per-episode staff/cast, sub-episode parts, absolute numbering authority); has a UDP API
+      (rate-limited, needs a persistent local client) and a daily XML dump; no official REST API.
+      Could improve absolute-number accuracy and fill gaps AniList doesn't cover (OVAs, specials).
+      IMDB: already partially present (IMDB IDs stored via `show_external_id`, links shown in
+      web client); investigate using IMDB datasets (title.basics.tsv.gz, title.episode.tsv.gz —
+      free, daily, no API key) for episode-level cross-referencing, runtime data, and as a
+      fallback ID bridge (IMDB↔TVDB↔TMDB). Neither is urgent — research scope first, then decide
+      what's worth building.
 - [x] calendar page #UI day in a small column on the left (more vertical space on page) — done 2026-09-05
 - [x] calendar page #UI option to toggle between current view and planner view where each day is a column — done 2026-09-05
 - [x] calendar page #UI add a move by one day back/forward to teh 3 day and week view — done 2026-09-05
