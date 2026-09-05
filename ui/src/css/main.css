@@ -639,7 +639,8 @@ body {
 .planner-fetch-art:hover { background: var(--accent); border-color: var(--accent); }
 .planner-fetch-art:disabled { cursor: default; opacity: 0.4; }
 
-/* Play overlay on banner art */
+/* Play overlay on banner art — z-index 1 so interactive children (watch btn)
+   at z-index 3+ stay clickable above it */
 .planner-play-overlay {
   position: absolute;
   inset: 0;
@@ -651,10 +652,19 @@ body {
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s ease;
-  z-index: 2;
+  z-index: 1;
 }
 .planner-card:hover .planner-play-overlay { opacity: 1; }
 .planner-play-overlay:hover { color: #fff; }
+
+/* Watch button inside planner cards — bigger tap target, above play overlay */
+.planner-card .watch-btn {
+  width: 28px; height: 28px;
+  font-size: 14px;
+  border-width: 2px;
+  z-index: 3;
+  position: relative;
+}
 
 /* Service strip inside planner detail pane */
 .planner-body .svc-strip {

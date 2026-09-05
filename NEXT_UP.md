@@ -949,7 +949,29 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
 - [x] all instance of choose status (exept filters for lists) to be made with the flower picker #UI
       — 2026-09-05: extracted `status-picker.js` module from calendar.js; calendar, show page, and
       browse page all use it; browse gets 6 petals (SKIP), others get 5.
-- [ ] make the web client the basis for an android app, player is VLC app, vlc can have remote share access...
+- [ ] **Android app (Capacitor wrapper)** — wrap the existing web client with Capacitor; native
+      Kotlin plugins only for what the web can't do. Approach chosen over full-native rebuild
+      (one codebase, web UI already feature-complete) or plain TWA (no native bridge). Scope:
+      - **VLC intent plugin** (~30 lines Kotlin): `ACTION_VIEW` with local file path first,
+        HTTP streaming URL second. VLC handles both natively.
+      - **Local download**: Capacitor Filesystem saves episodes from nginx `/download/` endpoint
+        (supports `Accept-Ranges` resume). Download ledger maps `episodeId → localPath`. Play
+        button logic: local copy → launch VLC local; no local copy → start background download +
+        launch VLC via HTTP stream simultaneously. Download page shows per-episode delete button
+        for manual cleanup.
+      - **Auto-download new episodes** (Sonarr/episodic only, not Radarr/movies): WorkManager
+        background job, periodic check against LCARS for newly-available episodes. Network
+        constraint: Wi-Fi only or Wi-Fi + cellular (Android `NetworkType.UNMETERED` vs
+        `CONNECTED` — WorkManager holds the job until the constraint is met, zero battery drain
+        while waiting). Fires local notification on completion. Holiday use case: connect to
+        hotel wifi → episodes download automatically.
+      - **Settings**: auto-download on/off, network mode (Wi-Fi only / Wi-Fi + cellular),
+        auto-download-since timestamp (set when toggled on). No max-storage limit (tablet has
+        storage). No auto-delete (manual delete from download page only).
+      - **Storage management settings** (all opt-in, all off by default): max local storage
+        limit (e.g. 10/20/50 GB — oldest downloads purged first when exceeded), auto-delete
+        watched episodes (off / after 1 day / 3 days / 7 days). Download page also has a
+        per-episode delete button for manual cleanup regardless of settings.
 - [ ] check if list page could grab faster from tmdb or tvdb (which ever it isn't using, or divide and conquer (divide the work between both DB.
 - [ ] **Source failover — AniList↔MAL backup** — when AniList GraphQL is down (transient outages
       confirmed 2026-08-23), fall back to MAL for metadata fetch, schedule lookup, and reconcile
