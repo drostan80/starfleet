@@ -8,8 +8,9 @@
  * - Week:  prev/next step by 7 days; range is Mon–Sun of anchor week
  */
 
-import { getConfig, requireConfig, bootstrapConfig, rewriteHost } from './config.js?v=3';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, refreshShowMetadata } from './api.js?v=17';
+import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=4';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=18';
+import { openArtPicker } from './art-picker.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,
@@ -328,11 +329,10 @@ function computeRange() {
       startLocal = anchor;
       endLocal   = addDays(anchor, 3);
       break;
-    case 'week': {
-      startLocal = isoWeekMon(anchor);
-      endLocal   = addDays(startLocal, 7);
+    case 'week':
+      startLocal = anchor;
+      endLocal   = addDays(anchor, 7);
       break;
-    }
   }
 
   return {
@@ -1066,52 +1066,41 @@ function buildPlannerCard(ep, cfg) {
 
   card.appendChild(body);
 
-  // Fetch art button — always visible on planner cards
+  // Art picker button — opens full art picker modal
   const fetchBtn = document.createElement('button');
   fetchBtn.className = 'planner-fetch-art';
-  fetchBtn.title = 'Refresh art from all sources';
+  fetchBtn.title = 'Choose banner art';
   fetchBtn.textContent = '🖼';
   fetchBtn.addEventListener('click', async () => {
     fetchBtn.textContent = '⏳';
     fetchBtn.disabled = true;
     try {
-      // Refresh metadata from all sources (AniList, TVDB, TMDB)
-      const updated = await refreshShowMetadata(ep.show.id);
-      const newBanner = updated?.bannerUrl || null;
-      if (newBanner) {
+      // Read existing art assets (episodes query doesn't include them)
+      const result = await getShowArtAssets(ep.show.id);
+      // Build a mutable show-like object the picker can update
+      const showObj = { id: ep.show.id, artAssets: result.artAssets || [] };
+      openArtPicker(showObj, null, 'banner', null, (url) => {
+        // Persist so re-renders (poll) keep the chosen banner
+        ep.show.bannerUrl = url;
+        backdropCache.set(ep.show.id, url);
+        // Update this card's banner
         body.classList.add('has-banner');
-        body.style.setProperty('--banner-url', `url(${newBanner})`);
-        fetchBtn.textContent = '✓';
-      } else {
-        // LCARS has no banner — try TMDB backdrop as fallback
-        const apiKey = cfg.tmdb_api_key || getConfig()?.tmdb_api_key;
-        if (apiKey) {
-          backdropCache.delete(ep.show.id);
-          fetchTmdbBackdrop(ep.show, apiKey);
-          // Wait for the queued TMDB fetch
-          await new Promise(r => setTimeout(r, 1500));
-          const bdUrl = backdropCache.get(ep.show.id);
-          if (bdUrl) {
-            body.classList.add('has-banner');
-            body.style.setProperty('--banner-url', `url(${bdUrl})`);
-            fetchBtn.textContent = '✓';
-          } else {
-            fetchBtn.textContent = '✗';
+        body.style.setProperty('--banner-url', `url(${url})`);
+        // Patch sibling cards for the same show
+        document.querySelectorAll(`.planner-card .planner-body[data-show-id="${ep.show.id}"]`).forEach(b => {
+          if (b !== body) {
+            b.classList.add('has-banner');
+            b.style.setProperty('--banner-url', `url(${url})`);
           }
-        } else {
-          fetchBtn.textContent = '✗';
-        }
-      }
-      // Also update poster if returned
-      if (updated?.posterUrl) {
-        document.querySelectorAll(`.planner-cover[data-show-id="${ep.show.id}"]`).forEach(c => {
-          c.style.backgroundImage = `url(${updated.posterUrl})`;
         });
-      }
+      }, (msg) => showBanner(msg, 'error'));
     } catch {
       fetchBtn.textContent = '✗';
+      setTimeout(() => { fetchBtn.textContent = '🖼'; fetchBtn.disabled = false; }, 2000);
+      return;
     }
-    setTimeout(() => { fetchBtn.textContent = '🖼'; fetchBtn.disabled = false; }, 2000);
+    fetchBtn.textContent = '🖼';
+    fetchBtn.disabled = false;
   });
   card.appendChild(fetchBtn);
 
@@ -1174,6 +1163,7 @@ function navigatePeriod(delta) {
 function setMode(mode) {
   state.mode = mode;
   if (mode === 'today') state.anchor = new Date();
+  if (mode === 'week') state.anchor = isoWeekMon(new Date());
 
   document.querySelectorAll('.view-mode[data-mode]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === mode);
@@ -1303,6 +1293,7 @@ function syncLayoutBtn() {
 
 /** Wire up controls and kick off first render. */
 export async function init() {
+  applyAppName();
   const cfg = await bootstrapConfig();
   if (!cfg) return;
 

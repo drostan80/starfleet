@@ -97,6 +97,22 @@ export async function bootstrapConfig() {
   return requireConfig();
 }
 
+/** App name — 'TEST SHUTTLE' on localhost, 'STARFLEET' in production. */
+export const APP_NAME = location.hostname === 'localhost' ? 'TEST SHUTTLE' : 'STARFLEET';
+
+/**
+ * Apply app name to the page title and nav brand element.
+ * Call once at page load from each page's init.
+ */
+export function applyAppName() {
+  const suffix = document.title.includes('—')
+    ? document.title.split('—').slice(1).join('—').trim()
+    : '';
+  document.title = suffix ? `${APP_NAME} — ${suffix}` : APP_NAME;
+  const brand = document.querySelector('.nav-brand');
+  if (brand) brand.textContent = APP_NAME;
+}
+
 /**
  * Rewrite the host in a Sonarr/Radarr URL to the configured
  * home_server_host. Mirrors data's links.py:rewrite_host.

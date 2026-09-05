@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TEST SHUTTLE — Login</title>
+  <title>STARFLEET — Login</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=15">
+  <link rel="stylesheet" href="css/main.css?v=16">
   <style>
     .login-page {
       display: flex;
@@ -124,6 +124,8 @@
 </main>
 
 <script type="module">
+  import { applyAppName } from './js/config.js?v=4';
+  applyAppName();
   const form     = document.getElementById('login-form');
   const errorDiv = document.getElementById('error-msg');
   const title    = document.getElementById('page-title');

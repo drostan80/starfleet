@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TEST SHUTTLE — Grabs</title>
+  <title>STARFLEET — Grabs</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=15">
+  <link rel="stylesheet" href="css/main.css?v=16">
   <style>
     /* ── Grabs page ──────────────────────────────────────────── */
     .grabs-layout {
@@ -329,7 +329,7 @@
 
 <!-- ── Top nav ─────────────────────────────────────────── -->
 <nav class="top-nav">
-  <a href="index.html" class="nav-brand">TEST SHUTTLE</a>
+  <a href="index.html" class="nav-brand">STARFLEET</a>
   <ul class="nav-links">
     <li><a href="index.html">Calendar</a></li>
     <li><a href="backlog.html">Backlog</a></li>
@@ -390,10 +390,11 @@
 <div class="mpv-toast" id="mpv-toast"></div>
 
 <script type="module">
-  import { bootstrapConfig, getConfig } from './js/config.js?v=3';
+  import { bootstrapConfig, getConfig, applyAppName } from './js/config.js?v=4';
   import { initSearch } from './js/search.js?v=2';
-  import { fetchRecentGrabs } from './js/api.js?v=17';
+  import { fetchRecentGrabs } from './js/api.js?v=18';
 
+  applyAppName();
   await bootstrapConfig();
   initSearch();
 
@@ -535,7 +536,7 @@
 
       // ── Step 1: look up show in LCARS to get its TMDB ID ──
       try {
-        const { gql } = await import('./js/api.js?v=17');
+        const { gql } = await import('./js/api.js?v=18');
         const data = await gql(`
           query GrabPoster($q: String!) {
             search(query: $q, first: 3) {

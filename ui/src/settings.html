@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TEST SHUTTLE — Settings</title>
+  <title>STARFLEET — Settings</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=15">
+  <link rel="stylesheet" href="css/main.css?v=16">
   <style>
     .settings-section {
       margin-top: 32px;
@@ -67,7 +67,7 @@
 
 <!-- ── Top nav ─────────────────────────────────────────── -->
 <nav class="top-nav">
-  <a href="index.html" class="nav-brand">TEST SHUTTLE</a>
+  <a href="index.html" class="nav-brand">STARFLEET</a>
   <ul class="nav-links">
     <li><a href="index.html">Calendar</a></li>
     <li><a href="backlog.html">Backlog</a></li>
@@ -180,8 +180,9 @@
 </main>
 
 <script type="module">
-  import { getConfig, saveConfig, saveConfigWithSync, syncConfig } from './js/config.js?v=3';
+  import { getConfig, saveConfig, saveConfigWithSync, syncConfig, applyAppName } from './js/config.js?v=4';
   import { initSearch } from './js/search.js?v=2';
+  applyAppName();
   initSearch();
 
   const form      = document.getElementById('settings-form');

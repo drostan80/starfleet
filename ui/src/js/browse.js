@@ -13,7 +13,7 @@ import {
   browseSeasonalAnime, browseTmdb,
   searchArrCandidates, addShowWithArr, addShow, skipShow,
   setStatus, setSeasonStatus,
-} from './api.js?v=17';
+} from './api.js?v=18';
 import { showBanner } from './calendar.js?v=23';
 import {
   buildStatusBtn, refreshStatusBtn,

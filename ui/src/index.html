@@ -3,20 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TEST SHUTTLE — Calendar</title>
+  <title>STARFLEET — Calendar</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <!-- Poster art hosts — opens the connection before the first <img> is parsed -->
   <link rel="preconnect" href="https://artworks.thetvdb.com">
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=15">
+  <link rel="stylesheet" href="css/main.css?v=16">
 </head>
 <body>
 
 <!-- ── Top nav ─────────────────────────────────────────── -->
 <nav class="top-nav">
-  <a href="index.html" class="nav-brand">TEST SHUTTLE</a>
+  <a href="index.html" class="nav-brand">STARFLEET</a>
   <ul class="nav-links">
     <li><a href="index.html" class="active">Calendar</a></li>
     <li><a href="backlog.html">Backlog</a></li>
@@ -76,7 +76,7 @@
 <div class="calendar" id="calendar"></div>
 
 <script type="module">
-  import { init } from './js/calendar.js?v=28';
+  import { init } from './js/calendar.js?v=29';
   import { initSearch } from './js/search.js?v=2';
   await init();
   initSearch();

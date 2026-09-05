@@ -12,7 +12,7 @@
  * ordering TBD (batch 5 — specials placement decision pending).
  */
 
-import { bootstrapConfig, requireConfig, rewriteHost } from './config.js?v=3';
+import { bootstrapConfig, requireConfig, rewriteHost, applyAppName } from './config.js?v=4';
 import {
   fetchShow, addWatchEvent, deleteWatchEvent, setScore, setSeasonScore,
   setSeasonStatus, setSeasonMapping, reconcileSeasonMapping,
@@ -21,17 +21,18 @@ import {
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink,
-} from './api.js?v=17';
+} from './api.js?v=18';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv,
   onStatusChange,
-} from './calendar.js?v=23';
+} from './calendar.js?v=29';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5, STATUS_LABELS, STATUS_ICON_CLASS,
 } from './status-picker.js?v=1';
 import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=9';
 import { startDownload } from './downloads.js?v=2';
+import { openArtPicker } from './art-picker.js?v=1';
 
 /* ── Constants ───────────────────────────────────────────── */
 
@@ -188,117 +189,7 @@ function attachScoreEditor(container, valSpan, getCurrentVal, commitFn, opts = {
   });
 }
 
-/* ── Art Picker ─────────────────────────────────────────── */
-
-/**
- * Open an art picker overlay for a given slot (show poster, show banner,
- * season poster, etc.).
- *
- * @param {object} show - The show object (with artAssets array)
- * @param {string|null} seasonId - Season id (null = show-level)
- * @param {string} kind - 'poster' | 'banner' | 'background'
- * @param {HTMLImageElement|null} targetImg - The image element to update on selection
- * @param {function} onSelect - Callback(assetUrl) after selection
- */
-function openArtPicker(show, seasonId, kind, targetImg, onSelect) {
-  // Filter assets for this slot; banner slot also shows backgrounds
-  const kindSet = kind === 'banner' ? new Set(['banner', 'background']) : new Set([kind]);
-  const assets = (show.artAssets || []).filter(a => {
-    const kindMatch = kindSet.has(a.kind.toLowerCase());
-    if (seasonId) return kindMatch && a.seasonId === seasonId;
-    return kindMatch && !a.seasonId;
-  });
-
-  // Build overlay
-  const overlay = el('div', 'sp-art-overlay');
-  overlay.addEventListener('click', e => {
-    if (e.target === overlay) overlay.remove();
-  });
-
-  const modal = el('div', 'sp-art-modal');
-  const title = el('h3', 'sp-art-modal-title',
-    `Choose ${kind} art${seasonId ? '' : ' (show-level)'}`);
-  modal.appendChild(title);
-
-  // Fetch Art button
-  const fetchBtn = el('button', 'sp-art-fetch-btn', '⟳ Fetch Art from Sources');
-  fetchBtn.addEventListener('click', async () => {
-    fetchBtn.disabled = true;
-    fetchBtn.textContent = 'Fetching…';
-    try {
-      const result = await fetchShowArt(show.id);
-      show.artAssets = result.artAssets;
-      overlay.remove();
-      openArtPicker(show, seasonId, kind, targetImg, onSelect);
-    } catch (err) {
-      fetchBtn.textContent = '✗ ' + err.message;
-      setTimeout(() => {
-        fetchBtn.disabled = false;
-        fetchBtn.textContent = '⟳ Fetch Art from Sources';
-      }, 3000);
-    }
-  });
-  modal.appendChild(fetchBtn);
-
-  if (!assets.length) {
-    modal.appendChild(el('p', 'sp-art-empty',
-      'No art assets yet. Click "Fetch Art" to retrieve from AniList & TVDB.'));
-  }
-
-  // Art grid
-  const grid = el('div', 'sp-art-grid');
-  for (const asset of assets) {
-    const card = el('div', `sp-art-card${asset.selected ? ' selected' : ''}`);
-
-    const img = el('img');
-    img.src = asset.url;
-    img.alt = `${asset.source} ${kind}`;
-    img.loading = 'lazy';
-    img.onerror = () => { img.style.opacity = '0.3'; };
-    card.appendChild(img);
-
-    const info = el('div', 'sp-art-card-info');
-    const srcBadge = el('span', 'sp-art-source', asset.source);
-    info.appendChild(srcBadge);
-    if (asset.width && asset.height) {
-      info.appendChild(el('span', 'sp-art-dims', `${asset.width}×${asset.height}`));
-    }
-    if (asset.selected) {
-      info.appendChild(el('span', 'sp-art-selected-badge', '✓ Active'));
-    }
-    card.appendChild(info);
-
-    card.addEventListener('click', async () => {
-      // Deselect currently selected, select this one
-      const prevSelected = assets.find(a => a.selected);
-      try {
-        if (prevSelected && prevSelected.id !== asset.id) {
-          await deselectArtAsset(prevSelected.id);
-          prevSelected.selected = false;
-        }
-        if (!asset.selected) {
-          await selectArtAsset(asset.id);
-          asset.selected = true;
-        }
-        if (targetImg) targetImg.src = asset.url;
-        if (onSelect) onSelect(asset.url);
-        overlay.remove();
-      } catch (err) {
-        showBanner(`Art selection failed: ${err.message}`, 'error');
-      }
-    });
-    grid.appendChild(card);
-  }
-  modal.appendChild(grid);
-
-  // Close button
-  const closeBtn = el('button', 'sp-art-close-btn', '✕');
-  closeBtn.addEventListener('click', () => overlay.remove());
-  modal.appendChild(closeBtn);
-
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
-}
+/* openArtPicker imported from art-picker.js */
 
 
 /* ── Rendering ───────────────────────────────────────────── */
@@ -336,7 +227,7 @@ function renderBanner(show, root) {
   banner.addEventListener('click', () => {
     openArtPicker(show, null, 'banner', bannerImg, (url) => {
       show.bannerUrl = url;
-    });
+    }, (msg) => showBanner(msg, 'error'));
   });
   root.appendChild(banner);
 }
@@ -961,7 +852,7 @@ function renderHero(show, root, cfg) {
   posterWrap.addEventListener('click', () => {
     openArtPicker(show, null, 'poster', heroImg, (url) => {
       show.posterUrl = url;
-    });
+    }, (msg) => showBanner(msg, 'error'));
   });
   hero.appendChild(posterWrap);
 
@@ -2545,7 +2436,8 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     posterCol.appendChild(snEditHint);
     posterCol.addEventListener('click', (e) => {
       e.stopPropagation();
-      openArtPicker(show, seasonData.id, 'poster', snImg, () => {});
+      openArtPicker(show, seasonData.id, 'poster', snImg, () => {},
+        (msg) => showBanner(msg, 'error'));
     });
   }
   bodyEl.appendChild(posterCol);
@@ -3204,6 +3096,7 @@ async function autoFetchArt(show, root, cfg, targetSeason) {
 /* ── Init ────────────────────────────────────────────────── */
 
 export async function init() {
+  applyAppName();
   const cfg = await bootstrapConfig();
   if (!cfg) return;
 

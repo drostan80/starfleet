@@ -11,7 +11,7 @@
  * CAN set. Once that lands, implement subscriptions here.
  */
 
-import { getConfig } from './config.js?v=3';
+import { getConfig } from './config.js?v=4';
 
 /**
  * Execute a GraphQL query or mutation against LCARS.
@@ -522,6 +522,20 @@ export async function resolvePendingReview(id, resolutionNote = '') {
     }
   `, { id, resolutionNote: resolutionNote || null });
   return data.resolvePendingReview;
+}
+
+/**
+ * Read-only query for a show's existing art assets (no external fetch).
+ */
+export async function getShowArtAssets(showId) {
+  const data = await gql(`
+    query ShowArt($id: ID!) {
+      show(id: $id) {
+        id artAssets { id seasonId kind source url width height selected }
+      }
+    }
+  `, { id: showId });
+  return data.show;
 }
 
 /**
