@@ -170,6 +170,40 @@ class SonarrClient:
         addShowWithArr for the real shape."""
         return self._post("series", json=payload)
 
+    def _delete(self, path: str, params: dict | None = None) -> None:
+        """DELETE request — Sonarr's delete endpoints return 200 with no
+        body on success. Same error shape as `_get`."""
+        try:
+            response = self._client.delete(path, params=params)
+            response.raise_for_status()
+        except httpx.ConnectError as e:
+            raise SonarrError(f"Could not connect to Sonarr at {self.base_url}") from e
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status == 401:
+                raise SonarrError("Sonarr rejected the API key (401 Unauthorized)") from e
+            raise SonarrError(f"Sonarr returned an error: HTTP {status}") from e
+        except httpx.TimeoutException as e:
+            raise SonarrError(f"Timed out talking to Sonarr at {self.base_url}") from e
+
+    def delete_series(
+        self, series_id: int, *, delete_files: bool = False
+    ) -> None:
+        """Delete a series from Sonarr's library.
+
+        `delete_files` — if True, also deletes the media files on disk.
+        Defaults False because a wrong-ID correction still has
+        potentially-wanted files; the user opts in explicitly.
+        `addImportListExclusion` is always False — we never want to block
+        the correct series from being re-added."""
+        self._delete(
+            f"series/{series_id}",
+            params={
+                "deleteFiles": str(delete_files).lower(),
+                "addImportListExclusion": "false",
+            },
+        )
+
     def update_series(self, series: dict) -> dict:
         """B.21 — PUT the full series object back; Sonarr's update
         endpoint wants the whole thing, not a partial patch. Caller

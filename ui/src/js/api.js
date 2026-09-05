@@ -69,7 +69,7 @@ const EPISODES_IN_RANGE_QUERY = `
         watchEvents(first: 1) { edges { node { id } } }
         show {
           id displayTitle status score mediaShape trackingSpace tracked
-          totalEpisodes posterUrl
+          totalEpisodes posterUrl bannerUrl watchedEpisodeCount availableEpisodeCount
           externalIds(first: 20) {
             edges { node { service externalId url } }
           }
@@ -241,6 +241,7 @@ const SHOW_DETAIL_QUERY = `
       id displayTitle displayTitleOverride
       titleRomaji titleEnglish titleNative synonyms
       status score totalEpisodes mediaShape trackingSpace tracked
+      watchedEpisodeCount availableEpisodeCount
       posterUrl bannerUrl synopsis genresRaw durationMinutes
       availableViaRadarr filePathRadarr
       studioCredits(first: 5) {
@@ -719,6 +720,22 @@ export async function searchArrCandidates(mediaShape, title) {
 }
 
 /**
+ * Search AniList by title — returns up to 10 AniListCandidate results.
+ * Each carries anilistId + malId so the season mapping editor can fill both.
+ */
+export async function searchAniList(title) {
+  const data = await gql(`
+    query SearchAL($title: String!) {
+      searchAniList(title: $title) {
+        anilistId malId titleRomaji titleEnglish titleNative
+        format episodes coverImageUrl year
+      }
+    }
+  `, { title });
+  return data.searchAniList;
+}
+
+/**
  * Add a show via arr (Sonarr/Radarr) — creates in LCARS and adds to arr.
  * Pass tvdbId/tmdbId from the chosen ArrCandidate to bypass arr's own
  * auto-pick-first-result behavior.
@@ -803,12 +820,43 @@ export async function refreshShowMetadata(showId) {
   const data = await gql(`
     mutation RefreshMeta($showId: ID!) {
       refreshShowMetadata(showId: $showId) {
-        id displayTitle metadataLastRefreshedAt
+        id displayTitle posterUrl bannerUrl metadataLastRefreshedAt
         externalIds { edges { node { service externalId url } } }
       }
     }
   `, { showId });
   return data.refreshShowMetadata;
+}
+
+/**
+ * Correct a wrong TVDB/TMDB external ID: validates, deletes old arr entry,
+ * adds correct one, updates LCARS link.
+ */
+export async function amendShowArrLink(showId, service, newExternalId, deleteFiles = false) {
+  const data = await gql(`
+    mutation AmendArr($showId: ID!, $service: String!, $newExternalId: String!, $deleteFiles: Boolean) {
+      amendShowArrLink(showId: $showId, service: $service, newExternalId: $newExternalId, deleteFiles: $deleteFiles) {
+        success oldExternalId newExternalId resolvedTitle arrDeleted arrAdded message
+      }
+    }
+  `, { showId, service, newExternalId, deleteFiles });
+  return data.amendShowArrLink;
+}
+
+/**
+ * Set or clear the display title override.
+ * @param {string} showId
+ * @param {string|null} title - null clears the override
+ */
+export async function setDisplayTitle(showId, title) {
+  const data = await gql(`
+    mutation SetDisplayTitle($showId: ID!, $title: String) {
+      setDisplayTitle(showId: $showId, title: $title) {
+        id displayTitle displayTitleOverride
+      }
+    }
+  `, { showId, title });
+  return data.setDisplayTitle;
 }
 
 /**

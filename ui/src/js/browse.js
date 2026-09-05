@@ -13,8 +13,12 @@ import {
   browseSeasonalAnime, browseTmdb,
   searchArrCandidates, addShowWithArr, addShow, skipShow,
   setStatus, setSeasonStatus,
-} from './api.js?v=14';
-import { showBanner } from './calendar.js?v=20';
+} from './api.js?v=17';
+import { showBanner } from './calendar.js?v=23';
+import {
+  buildStatusBtn, refreshStatusBtn,
+  STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS,
+} from './status-picker.js?v=1';
 
 // ── Constants ────────────────────────────────────────────
 
@@ -480,19 +484,15 @@ function createAnimeCard(item) {
     body.appendChild(synopsis);
   }
 
-  // Status chips
-  const chipsRow = document.createElement('div');
-  chipsRow.className = 'cand-chips';
-  for (const st of STATUSES) {
-    const chip = document.createElement('button');
-    chip.className = 'cand-chip';
-    chip.dataset.status = st;
-    chip.textContent = STATUS_LABELS[st];
-    if (eff === st) chip.classList.add('active');
-    chip.addEventListener('click', () => onAnimeChipClick(card, item, st));
-    chipsRow.appendChild(chip);
-  }
-  body.appendChild(chipsRow);
+  // Radial status picker on cover
+  const picker = buildStatusBtn({
+    id: item.anilistId,
+    currentStatus: eff === 'NOT_IN_LCARS' ? 'UNTRACKED' : eff,
+    statuses: STATUSES_6,
+    onPick: (_wrap, _id, st) => onAnimeChipClick(card, item, st),
+  });
+  card.style.position = 'relative';
+  card.appendChild(picker);
 
   // Spinner
   const spinner = document.createElement('div');
@@ -557,19 +557,15 @@ function createTmdbCard(item) {
     body.appendChild(synopsis);
   }
 
-  // Status chips
-  const chipsRow = document.createElement('div');
-  chipsRow.className = 'cand-chips';
-  for (const st of STATUSES) {
-    const chip = document.createElement('button');
-    chip.className = 'cand-chip';
-    chip.dataset.status = st;
-    chip.textContent = STATUS_LABELS[st];
-    if (eff === st) chip.classList.add('active');
-    chip.addEventListener('click', () => onTmdbChipClick(card, item, st));
-    chipsRow.appendChild(chip);
-  }
-  body.appendChild(chipsRow);
+  // Radial status picker on cover
+  const picker = buildStatusBtn({
+    id: String(item.tmdbId),
+    currentStatus: eff === 'NOT_IN_LCARS' ? 'UNTRACKED' : eff,
+    statuses: STATUSES_6,
+    onPick: (_wrap, _id, st) => onTmdbChipClick(card, item, st),
+  });
+  card.style.position = 'relative';
+  card.appendChild(picker);
 
   // Spinner
   const spinner = document.createElement('div');
@@ -849,10 +845,12 @@ function refreshCard(card, item) {
   if (eff !== 'NOT_IN_LCARS') {
     card.style.setProperty('--tracked-color', statusColor(eff));
   }
-  // Update chip highlights
-  card.querySelectorAll('.cand-chip').forEach(chip => {
-    chip.classList.toggle('active', chip.dataset.status === eff);
-  });
+  // Update radial picker
+  const wrap = card.querySelector('.status-btn-wrap');
+  if (wrap) {
+    refreshStatusBtn(wrap, eff === 'NOT_IN_LCARS' ? 'PLANNED' : eff, STATUSES_6);
+    wrap.style.opacity = eff === 'NOT_IN_LCARS' ? '0.5' : '';
+  }
   // Re-apply filters in case status changed visibility
   applyFilters();
 }

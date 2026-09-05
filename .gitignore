@@ -12,6 +12,7 @@ build/
 # lcars.ini holds the bearer token + Sonarr/Radarr/AniList/MAL
 # credentials (SCOPE.md §11.2/§8), same config.ini + keyring pattern
 # aniq already uses.
-lcars.db
+*.db
 lcars.ini
 gdpr_data.json
+config/

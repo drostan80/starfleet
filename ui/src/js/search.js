@@ -6,7 +6,7 @@
  * Usage: import { initSearch } from './search.js'; initSearch();
  */
 
-import { gql } from './api.js?v=11';
+import { gql } from './api.js?v=17';
 
 /* ── State ────────────────────────────────────────────────── */
 

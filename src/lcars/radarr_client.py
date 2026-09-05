@@ -148,6 +148,38 @@ class RadarrClient:
         addShowWithArr for the real shape."""
         return self._post("movie", json=payload)
 
+    def _delete(self, path: str, params: dict | None = None) -> None:
+        """DELETE request — Radarr's delete endpoints return 200 with no
+        body on success. Same error shape as `_get`."""
+        try:
+            response = self._client.delete(path, params=params)
+            response.raise_for_status()
+        except httpx.ConnectError as e:
+            raise RadarrError(f"Could not connect to Radarr at {self.base_url}") from e
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status == 401:
+                raise RadarrError("Radarr rejected the API key (401 Unauthorized)") from e
+            raise RadarrError(f"Radarr returned an error: HTTP {status}") from e
+        except httpx.TimeoutException as e:
+            raise RadarrError(f"Timed out talking to Radarr at {self.base_url}") from e
+
+    def delete_movie(
+        self, movie_id: int, *, delete_files: bool = False
+    ) -> None:
+        """Delete a movie from Radarr's library.
+
+        `delete_files` — if True, also deletes the media files on disk.
+        Defaults False. `addImportExclusion` is always False — we never
+        want to block the correct movie from being re-added."""
+        self._delete(
+            f"movie/{movie_id}",
+            params={
+                "deleteFiles": str(delete_files).lower(),
+                "addImportExclusion": "false",
+            },
+        )
+
     def update_movie(self, movie: dict) -> dict:
         """B.21 — PUT the full movie object back, same "whole object,
         not a partial patch" shape as sonarr_client.py's own

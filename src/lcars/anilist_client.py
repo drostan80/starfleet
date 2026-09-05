@@ -147,6 +147,23 @@ query ($season: MediaSeason, $seasonYear: Int, $page: Int) {
 """
 
 
+_SEARCH_QUERY = """
+query ($q: String) {
+  Page(page: 1, perPage: 10) {
+    media(search: $q, type: ANIME,
+          format_in: [TV, TV_SHORT, MOVIE, SPECIAL, OVA, ONA],
+          sort: SEARCH_MATCH) {
+      id idMal
+      title { romaji english native }
+      format episodes
+      coverImage { large }
+      startDate { year }
+    }
+  }
+}
+"""
+
+
 class AniListError(Exception):
     pass
 
@@ -250,6 +267,22 @@ def fetch_seasonal_page(
         client=client,
     )
     return data["Page"]
+
+
+def search_media(query: str, client: httpx.Client | None = None) -> list[dict]:
+    """Search AniList's anime catalog by title — public, no auth needed.
+
+    Returns up to 10 results sorted by relevance (``SEARCH_MATCH``),
+    filtered to anime formats only (TV/TV_SHORT/MOVIE/SPECIAL/OVA/ONA).
+    Each result carries ``id``, ``idMal``, ``title``, ``format``,
+    ``episodes``, ``coverImage``, ``startDate``.  Used by the season
+    mapping editor's auto-search (show page) to find an AniList ID for a
+    season that doesn't have one yet.
+    """
+    data = _graphql_request(
+        _SEARCH_QUERY, {"q": query}, token=None, client=client
+    )
+    return data["Page"]["media"]
 
 
 def fetch_airing_schedule(anilist_id: int, client: httpx.Client | None = None) -> dict | None:

@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Starfleet — Add Show</title>
+  <title>TEST SHUTTLE — Add Show</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="preconnect" href="https://artworks.thetvdb.com">
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=5">
+  <link rel="stylesheet" href="css/main.css?v=15">
   <style>
     /* Force hidden attribute to work even on elements with explicit display */
     [hidden] { display: none !important; }
@@ -567,33 +567,6 @@
     }
     .gap-resolve button:hover { background: var(--surface-3); }
 
-    /* ── Mode toggle ─────────────────────────────────────────── */
-    .mode-toggle {
-      display: flex;
-      gap: 0;
-      margin-right: 8px;
-    }
-    .mode-btn {
-      font-family: 'DM Mono', monospace;
-      font-size: 10.5px;
-      font-weight: 500;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      padding: 6px 14px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--muted);
-      cursor: pointer;
-      transition: background 0.15s, color 0.15s, border-color 0.15s;
-    }
-    .mode-btn:first-child { border-radius: 5px 0 0 5px; }
-    .mode-btn:last-child  { border-radius: 0 5px 5px 0; border-left: none; }
-    .mode-btn.active {
-      background: var(--accent-d);
-      border-color: var(--accent);
-      color: var(--text);
-    }
-
     /* Add-mode controls wrapper — maintains flex layout of type btns + search */
     .add-mode-controls {
       display: flex;
@@ -701,7 +674,7 @@
       flex-direction: row;
       transition: border-color 0.15s;
       position: relative;
-      overflow: hidden;
+      overflow: visible;
     }
     .browse-card:hover { border-color: var(--accent); }
     .browse-card.tracked {
@@ -717,6 +690,8 @@
       background-size: cover;
       background-position: center;
       background-color: var(--surface-2);
+      border-radius: 8px 0 0 8px;
+      overflow: hidden;
     }
     .browse-body {
       flex: 1;
@@ -799,17 +774,17 @@
 
 <!-- ── Top nav ─────────────────────────────────────────── -->
 <nav class="top-nav">
-  <a href="index.html" class="nav-brand">Starfleet</a>
+  <a href="index.html" class="nav-brand">TEST SHUTTLE</a>
   <ul class="nav-links">
     <li><a href="index.html">Calendar</a></li>
     <li><a href="backlog.html">Backlog</a></li>
     <li><a href="list.html">List</a></li>
     <li><a href="grabs.html">Grabs</a></li>
-    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
-    <li><a href="downloads.html">Downloads</a></li>
     <li><a href="add.html" class="active">Add</a></li>
+    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
   </ul>
   <div class="nav-spacer"></div>
+    <a href="downloads.html" class="nav-icon-btn" title="Downloads">DL</a>
   <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
   <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
 </nav>
@@ -819,11 +794,6 @@
 
 <!-- ── Controls ────────────────────────────────────────── -->
 <div class="add-controls">
-  <div class="mode-toggle">
-    <button class="mode-btn active" data-mode="add">Add</button>
-    <button class="mode-btn" data-mode="browse">Browse</button>
-  </div>
-
   <div class="add-mode-controls" id="add-mode-controls">
     <button class="type-btn active" data-shape="EPISODIC" data-space="ANIME">Anime</button>
     <button class="type-btn" data-shape="EPISODIC" data-space="TV">TV</button>
@@ -837,31 +807,31 @@
   </div>
 </div>
 
-<!-- ── Browse type buttons (hidden in add mode) ───────── -->
-<div class="browse-type-btns" id="browse-type-btns" hidden>
+<!-- ── Browse type buttons ────────────────────────────── -->
+<div class="browse-type-btns" id="browse-type-btns">
   <button class="type-btn browse-type-btn active" data-browse-type="anime">Anime</button>
   <button class="type-btn browse-type-btn" data-browse-type="all">TV & Movies</button>
   <button class="type-btn browse-type-btn" data-browse-type="tv">TV</button>
   <button class="type-btn browse-type-btn" data-browse-type="movie">Movies</button>
 </div>
 
-<!-- ── Browse controls (hidden in add mode) ──────────── -->
-<div class="browse-controls" id="browse-controls" hidden></div>
+<!-- ── Browse controls ────────────────────────────────── -->
+<div class="browse-controls" id="browse-controls"></div>
 
 <!-- ── Results ─────────────────────────────────────────── -->
-<div class="add-results" id="results"></div>
-<div class="browse-results" id="browse-results" hidden></div>
+<div class="add-results" id="results" hidden></div>
+<div class="browse-results" id="browse-results"></div>
 
 <!-- ── Banner ──────────────────────────────────────────── -->
 <div id="status-banner" class="status-banner hidden"></div>
 
 <!-- ── Scripts ─────────────────────────────────────────── -->
 <script type="module">
-import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=13';
+import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=17';
 import { bootstrapConfig } from './js/config.js?v=3';
-import { showBanner, hideBanner } from './js/calendar.js?v=20';
+import { showBanner, hideBanner } from './js/calendar.js?v=28';
 import { initSearch } from './js/search.js?v=4';
-import { initBrowse, teardownBrowse, setBrowseType } from './js/browse.js?v=2';
+import { initBrowse, teardownBrowse, setBrowseType } from './js/browse.js?v=3';
 
 await bootstrapConfig();
 initSearch();
@@ -917,6 +887,7 @@ async function doSearch() {
   const title = searchInput.value.trim();
   if (!title) return;
 
+  showAddResults();
   loadingBar.classList.add('active');
   resultsEl.innerHTML = '';
 
@@ -1773,41 +1744,42 @@ function showGapResolution(resultArea, errorMsg, showId, missingStr, card, onRes
   resultArea.appendChild(bulkBtn);
 }
 
-/* ── Mode toggle (Add / Browse) ──────────────────────── */
+/* ── Unified mode: browse by default, add when searching ── */
 
 const addModeControls = document.getElementById('add-mode-controls');
 const browseControlsEl = document.getElementById('browse-controls');
 const browseResultsEl = document.getElementById('browse-results');
-let currentMode = 'add';
+let currentMode = 'browse';
 
 const browseTypeBtnsEl = document.getElementById('browse-type-btns');
 let currentBrowseType = 'anime';
 
-document.querySelectorAll('.mode-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const mode = btn.dataset.mode;
-    if (mode === currentMode) return;
-    currentMode = mode;
+/** Switch to add-results view (after a search) */
+function showAddResults() {
+  if (currentMode === 'add') return;
+  currentMode = 'add';
+  resultsEl.hidden = false;
+  browseResultsEl.hidden = true;
+  browseControlsEl.hidden = true;
+  browseTypeBtnsEl.hidden = true;
+}
 
-    document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+/** Switch back to browse view (when search cleared) */
+function showBrowseResults() {
+  if (currentMode === 'browse') return;
+  currentMode = 'browse';
+  resultsEl.hidden = true;
+  resultsEl.innerHTML = '';
+  browseResultsEl.hidden = false;
+  browseControlsEl.hidden = false;
+  browseTypeBtnsEl.hidden = false;
+}
 
-    if (mode === 'browse') {
-      addModeControls.hidden = true;
-      resultsEl.hidden = true;
-      browseTypeBtnsEl.hidden = false;
-      browseControlsEl.hidden = false;
-      browseResultsEl.hidden = false;
-      initBrowse(browseResultsEl, browseControlsEl, currentBrowseType);
-    } else {
-      addModeControls.hidden = false;
-      resultsEl.hidden = false;
-      browseTypeBtnsEl.hidden = true;
-      browseControlsEl.hidden = true;
-      browseResultsEl.hidden = true;
-      teardownBrowse();
-      requestAnimationFrame(() => searchInput.focus());
-    }
-  });
+// Clear search → revert to browse
+searchInput.addEventListener('input', () => {
+  if (!searchInput.value.trim() && currentMode === 'add') {
+    showBrowseResults();
+  }
 });
 
 // Browse type buttons (Anime / TV / Movies)
@@ -1822,7 +1794,8 @@ document.querySelectorAll('.browse-type-btn').forEach(btn => {
   });
 });
 
-/* ── Focus search on load ─────────────────────────────── */
+/* ── Init: start in browse mode, focus search ─────────── */
+initBrowse(browseResultsEl, browseControlsEl, currentBrowseType);
 requestAnimationFrame(() => searchInput.focus());
 
 </script>

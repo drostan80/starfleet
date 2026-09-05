@@ -29,6 +29,7 @@
   --svc-tmdb:   #01b4e4;
   --svc-imdb:   #f6c700;
   --svc-player: #22c55e;
+  --danger:      #ef4444;
 
   --av-ready:       #22c55e;
   --av-downloading: #f59e0b;  /* amber — actively queued/downloading */
@@ -327,7 +328,7 @@ body {
   padding: 8px 20px 40px;
   display: flex;
   flex-direction: column;
-  gap: 30px;
+  gap: 14px;
   overflow-x: hidden;
 }
 
@@ -341,8 +342,53 @@ body {
   padding: 60px 20px;
 }
 
-.day-group { display: flex; flex-direction: column; gap: 14px; }
+/* Row layout: day label as left column, cards as right area */
+.day-group {
+  display: flex;
+  flex-direction: row;
+  gap: 16px;
+  align-items: flex-start;
+}
 
+.day-label {
+  width: 72px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding-top: 4px;
+  border-right: 1px solid var(--border);
+  padding-right: 10px;
+}
+
+.day-label .day-date {
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.day-label .day-month {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
+.day-label .day-name {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-orientation: mixed;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  align-self: center;
+}
+
+/* Legacy day-header (kept for planner column headers) */
 .day-header {
   display: flex;
   align-items: baseline;
@@ -354,14 +400,15 @@ body {
 .day-name {
   font-family: 'Syne', sans-serif;
   font-weight: 800;
-  font-size: 26px;
+  font-size: 18px;
   color: var(--text);
   line-height: 1;
   white-space: nowrap;
 }
 
 .day-date {
-  font-family: 'DM Mono', monospace;
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
   font-size: 12px;
   color: var(--muted);
   letter-spacing: 0.04em;
@@ -370,11 +417,236 @@ body {
 .day-today .day-name { color: var(--accent); }
 .day-today .day-date { color: var(--accent); opacity: 0.65; }
 .day-today .day-header { border-bottom-color: var(--accent-d); }
+.day-today .day-label { border-right-color: var(--accent-d); }
 
 .card-row {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+/* ── Planner layout ─────────────────────────────────────── */
+.calendar.planner {
+  flex-direction: row;
+  gap: 0;
+  overflow-x: auto;
+}
+
+.planner-grid {
+  display: flex;
+  gap: 0;
+  min-width: 100%;
+}
+
+.day-col {
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 6px;
+  border-right: 1px solid var(--border);
+}
+.day-col:last-child { border-right: none; }
+
+.day-col.day-today {
+  flex: 1.3;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.day-col-header {
+  font-family: 'Syne', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  text-align: center;
+  padding: 8px 0 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+
+/* Planner header is now plain text: "SATURDAY 5 Sep" */
+
+.day-col.day-today .day-col-header { border-bottom-color: var(--accent-d); }
+
+/* Cards in planner columns: full width */
+.day-col .show-card {
+  width: 100%;
+}
+
+/* Wide planner modes need room for horizontal cards */
+.planner-grid[data-mode="1d"] .day-col,
+.planner-grid[data-mode="today"] .day-col { min-width: 400px; }
+.planner-grid[data-mode="3d"] .day-col { min-width: 340px; }
+
+/* 1d: banner fills full width — no max-width cap */
+
+/* ── Planner browse-style cards (1–3 columns) ─────────── */
+.planner-card {
+  display: flex;
+  flex-direction: row;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: visible;
+  position: relative;
+  z-index: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.planner-card:has(.status-btn-wrap.radial-open) { z-index: 100; }
+.planner-card:hover {
+  border-color: var(--faint);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+}
+
+.planner-cover {
+  width: var(--card-w);
+  min-height: var(--art-h);
+  flex-shrink: 0;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--surface-2);
+  border-radius: 7px 0 0 7px;
+  position: relative;
+  overflow: hidden;
+}
+.planner-cover.art-playable { cursor: pointer; }
+.planner-cover.art-playable::after {
+  content: '▶';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  color: #fff;
+  background: rgba(0,0,0,0.45);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+.planner-cover.art-playable:hover::after { opacity: 1; }
+
+.planner-body {
+  flex: 1;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+  border-radius: 0 7px 7px 0;
+}
+
+/* Banner art background on detail pane */
+.planner-body.has-banner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--banner-url) center / cover no-repeat;
+  opacity: 0.80;
+  border-radius: inherit;
+  pointer-events: none;
+}
+/* Darken overlay for text legibility on banner */
+.planner-body.has-banner::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(13,15,20,0.55) 0%, rgba(13,15,20,0.25) 100%);
+  border-radius: inherit;
+  pointer-events: none;
+}
+.planner-body > * {
+  position: relative;
+  z-index: 1;
+}
+
+.planner-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  text-decoration: none;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding-right: 24px;
+}
+.planner-title:hover { color: var(--accent); }
+
+.planner-badge {
+  font-family: 'DM Mono', monospace;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
+.planner-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.planner-counts {
+  justify-content: flex-start;
+  padding: 0;
+  font-size: 12px;
+}
+
+.planner-ep-title {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: auto;
+}
+
+/* Fetch art button — on the card, top-right of the detail pane */
+.planner-fetch-art {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 16px;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.planner-fetch-art:hover { background: var(--accent); border-color: var(--accent); }
+.planner-fetch-art:disabled { cursor: default; opacity: 0.4; }
+
+/* Status button inside planner cards */
+.planner-card .status-btn-wrap {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+}
+
+/* Layout toggle button */
+.layout-toggle {
+  margin-left: 2px;
 }
 
 /* ── Show card ───────────────────────────────────────────── */
@@ -619,6 +891,8 @@ body {
 .si-planning  { background: var(--st-planning); }
 .si-paused    { background: var(--st-paused); }
 .si-dropped   { background: var(--st-dropped); }
+.si-skipped   { background: var(--faint); }
+.si-untracked { background: var(--muted); }
 
 /* Radial picker: items absolutely placed relative to .status-btn-wrap */
 .sr-opt {
@@ -657,6 +931,7 @@ body {
 .status-btn-wrap.radial-open .sr-opt:nth-child(4) { transition-delay: 50ms; }
 .status-btn-wrap.radial-open .sr-opt:nth-child(5) { transition-delay: 75ms; }
 .status-btn-wrap.radial-open .sr-opt:nth-child(6) { transition-delay:100ms; }
+.status-btn-wrap.radial-open .sr-opt:nth-child(7) { transition-delay:125ms; }
 
 /* Non-current petals: washed out but still legible */
 .sr-opt:not(.cur) {
@@ -682,9 +957,9 @@ body {
   opacity: 1 !important;
 }
 
-/* card footer — extra right padding so text can't run under the pinned status button */
+/* card footer — show-title keeps right padding for status button; ep-counts centre themselves */
 .card-footer {
-  padding: 7px 32px 8px 8px;
+  padding: 7px 8px 8px 8px;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -707,6 +982,7 @@ body {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  padding-right: 24px;
 }
 .show-title:hover { color: var(--accent); }
 
@@ -716,12 +992,15 @@ body {
   color: var(--muted);
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0;
   letter-spacing: 0.01em;
+  padding: 0 26px;
 }
-.ep-counts .c-avail { color: var(--av-ready); font-weight: 500; }
-.ep-counts .c-sep   { color: var(--faint); margin: 0 1px; }
-.ep-counts .c-total { color: var(--faint); }
+.ep-counts .c-watched { color: var(--st-completed); font-weight: 500; }
+.ep-counts .c-avail   { color: var(--av-ready); font-weight: 500; }
+.ep-counts .c-sep     { color: var(--faint); margin: 0 1px; }
+.ep-counts .c-total   { color: var(--muted); }
 
 /* mark-as-watched button */
 .watch-btn {

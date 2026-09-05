@@ -3,30 +3,30 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Starfleet — Show</title>
+  <title>TEST SHUTTLE — Show</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="preconnect" href="https://artworks.thetvdb.com">
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=5">
-  <link rel="stylesheet" href="css/show.css?v=14">
+  <link rel="stylesheet" href="css/main.css?v=15">
+  <link rel="stylesheet" href="css/show.css?v=19">
 </head>
 <body>
 
 <!-- ── Top nav ─────────────────────────────────────────── -->
 <nav class="top-nav">
-  <a href="index.html" class="nav-brand">Starfleet</a>
+  <a href="index.html" class="nav-brand">TEST SHUTTLE</a>
   <ul class="nav-links">
     <li><a href="index.html">Calendar</a></li>
     <li><a href="backlog.html">Backlog</a></li>
     <li><a href="list.html">List</a></li>
     <li><a href="grabs.html">Grabs</a></li>
-    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
-    <li><a href="downloads.html">Downloads</a></li>
     <li><a href="add.html">Add</a></li>
+    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
   </ul>
   <div class="nav-spacer"></div>
+    <a href="downloads.html" class="nav-icon-btn" title="Downloads">DL</a>
   <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
   <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
 </nav>
@@ -38,7 +38,7 @@
 <div id="show-root"></div>
 
 <script type="module">
-  import { init } from './js/show.js?v=30';
+  import { init } from './js/show.js?v=35';
   import { initSearch } from './js/search.js?v=2';
   await init();
   initSearch();

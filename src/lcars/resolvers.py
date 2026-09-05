@@ -1378,6 +1378,32 @@ def resolve_search_arr_candidates(_, info, media_shape, title):
     ]
 
 
+@query.field("searchAniList")
+def resolve_search_anilist(_, info, title):
+    """Search AniList's anime catalog by title — up to 10 results sorted
+    by relevance.  Returns AniListCandidate dicts with explicit key
+    shaping (same reasoning as searchArrCandidates above — server.py's
+    convert_names_case expects snake_case keys)."""
+    try:
+        results = anilist_client.search_media(title)
+    except anilist_client.AniListError as e:
+        raise GraphQLError(str(e)) from e
+    return [
+        {
+            "anilist_id": r["id"],
+            "mal_id": r.get("idMal"),
+            "title_romaji": (r.get("title") or {}).get("romaji"),
+            "title_english": (r.get("title") or {}).get("english"),
+            "title_native": (r.get("title") or {}).get("native"),
+            "format": r.get("format"),
+            "episodes": r.get("episodes"),
+            "cover_image_url": (r.get("coverImage") or {}).get("large"),
+            "year": (r.get("startDate") or {}).get("year"),
+        }
+        for r in results
+    ]
+
+
 @query.field("showByExternalId")
 def resolve_show_by_external_id(_, info, service, external_id):
     """2026-09-02 — look up a tracked show by external-service identity.
@@ -1538,6 +1564,36 @@ def resolve_synonyms(obj, info):
         "SELECT synonym FROM show_synonym WHERE show_id = ? ORDER BY rowid", (obj["id"],)
     ).fetchall()
     return [r["synonym"] for r in rows]
+
+
+@show_type.field("watchedEpisodeCount")
+def resolve_watched_episode_count(obj, info):
+    """Count of episodes with at least one watch event."""
+    conn = db.get_connection()
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT e.id) AS c FROM episode e"
+        " JOIN watch_event w ON w.show_id = e.show_id"
+        " AND w.season = e.season AND w.episode = e.episode"
+        " WHERE e.show_id = ?",
+        (obj["id"],),
+    ).fetchone()
+    return row["c"] if row else 0
+
+
+@show_type.field("availableEpisodeCount")
+def resolve_available_episode_count(obj, info):
+    """Count of episodes available locally or via Sonarr/Radarr."""
+    conn = db.get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM episode"
+        " WHERE show_id = ? AND ("
+        "   available_via_sonarr = 'available'"
+        "   OR available_via_radarr = 'available'"
+        "   OR available_locally = 1"
+        " )",
+        (obj["id"],),
+    ).fetchone()
+    return row["c"] if row else 0
 
 
 @show_type.field("genresRaw")
@@ -3665,6 +3721,38 @@ def resolve_unlink_show_external_id(_, info, show_id, service):
     )
     conn.commit()
     return cur.rowcount > 0
+
+
+@mutation.field("amendShowArrLink")
+def resolve_amend_show_arr_link(
+    _, info, showId, service, newExternalId, deleteFiles=None
+):
+    """Correct a wrong TVDB/TMDB external ID — delegates to
+    shows.amend_show_arr_link() which validates, deletes old arr entry,
+    adds correct one, and updates LCARS link.
+
+    Returns the snake_case dict directly — Ariadne's snake_case fallback
+    resolvers handle the camelCase mapping (same pattern as
+    resolve_link_show_external_id returning dict(row))."""
+    conn = db.get_connection()
+    try:
+        return shows.amend_show_arr_link(
+            conn,
+            showId,
+            service,
+            newExternalId,
+            delete_files=bool(deleteFiles),
+        )
+    except shows.ShowInputError as e:
+        return {
+            "success": False,
+            "old_external_id": None,
+            "new_external_id": newExternalId,
+            "resolved_title": None,
+            "arr_deleted": False,
+            "arr_added": False,
+            "message": str(e),
+        }
 
 
 @mutation.field("refreshShowServicePresence")

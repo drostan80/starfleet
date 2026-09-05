@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Starfleet — Grabs</title>
+  <title>TEST SHUTTLE — Grabs</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=5">
+  <link rel="stylesheet" href="css/main.css?v=15">
   <style>
     /* ── Grabs page ──────────────────────────────────────────── */
     .grabs-layout {
@@ -329,17 +329,17 @@
 
 <!-- ── Top nav ─────────────────────────────────────────── -->
 <nav class="top-nav">
-  <a href="index.html" class="nav-brand">Starfleet</a>
+  <a href="index.html" class="nav-brand">TEST SHUTTLE</a>
   <ul class="nav-links">
     <li><a href="index.html">Calendar</a></li>
     <li><a href="backlog.html">Backlog</a></li>
     <li><a href="list.html">List</a></li>
     <li><a href="grabs.html" class="active">Grabs</a></li>
-    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
-    <li><a href="downloads.html">Downloads</a></li>
     <li><a href="add.html">Add</a></li>
+    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
   </ul>
   <div class="nav-spacer"></div>
+    <a href="downloads.html" class="nav-icon-btn" title="Downloads">DL</a>
   <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
   <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
 </nav>
@@ -392,7 +392,7 @@
 <script type="module">
   import { bootstrapConfig, getConfig } from './js/config.js?v=3';
   import { initSearch } from './js/search.js?v=2';
-  import { fetchRecentGrabs } from './js/api.js?v=11';
+  import { fetchRecentGrabs } from './js/api.js?v=17';
 
   await bootstrapConfig();
   initSearch();
@@ -535,7 +535,7 @@
 
       // ── Step 1: look up show in LCARS to get its TMDB ID ──
       try {
-        const { gql } = await import('./js/api.js?v=11');
+        const { gql } = await import('./js/api.js?v=17');
         const data = await gql(`
           query GrabPoster($q: String!) {
             search(query: $q, first: 3) {

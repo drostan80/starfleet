@@ -509,6 +509,7 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
                     "monitored": not input.get("unmonitored", False),
                     "seasonFolder": True,
                     "addOptions": {
+                        "monitor": "future",
                         "searchForMissingEpisodes": not input.get("unmonitored", False),
                     },
                 }
@@ -642,6 +643,223 @@ def write_tvdb_id(conn, show_id: str, tvdb_id: int) -> bool:
         (show_id, str(tvdb_id), url, util.now_utc_iso()),
     )
     return cur.rowcount > 0
+
+
+def amend_show_arr_link(
+    conn,
+    show_id: str,
+    service: str,
+    new_external_id: str,
+    *,
+    delete_files: bool = False,
+) -> dict:
+    """Correct a wrong TVDB/TMDB external ID on a show: validate the new
+    ID against Sonarr/Radarr's lookup, delete the old series/movie from
+    the arr, add the correct one, and update the LCARS external-ID link.
+
+    Ordering is deliberate (advisor-reviewed):
+      1. Validate new ID (read-only lookup — catches typos before anything
+         is destroyed).
+      2. Delete old arr entry (if one exists for the old ID).
+      3. Add correct arr entry (reuses _ensure_in_arr's quality-profile /
+         root-folder logic).
+      4. Update LCARS show_external_id + write arr deep link.
+
+    Each step's error reports what state things are in — "deleted from
+    Sonarr but re-add failed" is a very different mess than "nothing
+    happened".
+
+    Known limitation: existing episode rows still carry
+    sonarr_season/sonarr_episode captured from the *wrong* series.
+    The next metadata refresh (refreshShowMetadata) will re-match
+    against the new Sonarr series. A manual refresh after amend is
+    recommended."""
+    cfg = config.get_current()
+
+    if service not in ("tvdb", "tmdb"):
+        raise ShowInputError(
+            f"amendShowArrLink only supports 'tvdb' (Sonarr) and 'tmdb' (Radarr), got '{service}'"
+        )
+
+    show = conn.execute(
+        "SELECT id, media_shape, tracking_space FROM show WHERE id = ?",
+        (show_id,),
+    ).fetchone()
+    if show is None:
+        raise ShowInputError(f"show {show_id} not found")
+
+    # The arr is a function of media_shape, not of the service badge:
+    # episodic → Sonarr (keyed by tvdb); movie → Radarr (keyed by tmdb).
+    if show["media_shape"] == "episodic" and service != "tvdb":
+        raise ShowInputError(
+            "episodic shows use Sonarr (tvdb) — amend the tvdb badge, not tmdb"
+        )
+    if show["media_shape"] == "movie" and service != "tmdb":
+        raise ShowInputError(
+            "movies use Radarr (tmdb) — amend the tmdb badge, not tvdb"
+        )
+
+    # Read old external ID (may be None if not yet linked)
+    old_row = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = ?",
+        (show_id, service),
+    ).fetchone()
+    old_external_id = old_row["external_id"] if old_row else None
+
+    result = {
+        "success": False,
+        "old_external_id": old_external_id,
+        "new_external_id": new_external_id,
+        "resolved_title": None,
+        "arr_deleted": False,
+        "arr_added": False,
+        "message": "",
+    }
+
+    # ── Step 1: Validate new ID via lookup (read-only) ──────────────
+    if service == "tvdb":
+        try:
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                candidates = client.lookup_series(f"tvdb:{new_external_id}")
+            service_health.record_success(conn, "sonarr")
+        except sonarr_client.SonarrError as e:
+            service_health.record_failure(conn, "sonarr", str(e))
+            result["message"] = f"Sonarr lookup failed: {e}"
+            return result
+        if not candidates:
+            result["message"] = (
+                f"TVDB ID {new_external_id} resolved to nothing in Sonarr — "
+                "check the ID is correct"
+            )
+            return result
+        candidate = candidates[0]
+        result["resolved_title"] = candidate.get("title")
+    else:  # tmdb
+        try:
+            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                candidates = client.lookup_movie(f"tmdb:{new_external_id}")
+            service_health.record_success(conn, "radarr")
+        except radarr_client.RadarrError as e:
+            service_health.record_failure(conn, "radarr", str(e))
+            result["message"] = f"Radarr lookup failed: {e}"
+            return result
+        if not candidates:
+            result["message"] = (
+                f"TMDB ID {new_external_id} resolved to nothing in Radarr — "
+                "check the ID is correct"
+            )
+            return result
+        candidate = candidates[0]
+        result["resolved_title"] = candidate.get("title")
+
+    # ── Step 2: Delete old arr entry (if present) ───────────────────
+    if service == "tvdb" and old_external_id:
+        try:
+            old_id_int = int(old_external_id)
+        except (ValueError, TypeError):
+            old_id_int = None
+        if old_id_int is not None:
+            try:
+                with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                    existing = client.series_by_tvdb_id(old_id_int)
+                    if existing is not None:
+                        client.delete_series(existing["id"], delete_files=delete_files)
+                        result["arr_deleted"] = True
+                service_health.record_success(conn, "sonarr")
+            except sonarr_client.SonarrError as e:
+                service_health.record_failure(conn, "sonarr", str(e))
+                result["message"] = (
+                    f"Validated new ID (resolves to '{result['resolved_title']}') "
+                    f"but failed to delete old Sonarr entry: {e}"
+                )
+                return result
+    elif service == "tmdb" and old_external_id:
+        try:
+            old_id_int = int(old_external_id)
+        except (ValueError, TypeError):
+            old_id_int = None
+        if old_id_int is not None:
+            try:
+                with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                    existing = client.movie_by_tmdb_id(old_id_int)
+                    if existing is not None:
+                        client.delete_movie(existing["id"], delete_files=delete_files)
+                        result["arr_deleted"] = True
+                service_health.record_success(conn, "radarr")
+            except radarr_client.RadarrError as e:
+                service_health.record_failure(conn, "radarr", str(e))
+                result["message"] = (
+                    f"Validated new ID (resolves to '{result['resolved_title']}') "
+                    f"but failed to delete old Radarr entry: {e}"
+                )
+                return result
+
+    # ── Step 3: Add correct arr entry ───────────────────────────────
+    # Build the same input shape _ensure_in_arr expects
+    ensure_input = {
+        "media_shape": show["media_shape"],
+        "tracking_space": show["tracking_space"],
+    }
+    try:
+        ensure_result = _ensure_in_arr(conn, ensure_input, candidate)
+        result["arr_added"] = True
+    except ShowInputError as e:
+        if result["arr_deleted"]:
+            result["message"] = (
+                f"Old arr entry was deleted, but failed to add the correct one: {e}."
+                " The LCARS external ID has NOT been updated yet."
+            )
+        else:
+            result["message"] = (
+                f"Failed to add the correct arr entry: {e}."
+                " Nothing was changed."
+            )
+        return result
+
+    # ── Step 4: Update LCARS external ID ────────────────────────────
+    now = util.now_utc_iso()
+    if service == "tvdb":
+        url = _EXTERNAL_ID_URL_TEMPLATES["tvdb"].format(id=new_external_id)
+    else:
+        url = _TMDB_URL_TEMPLATES[show["media_shape"]].format(id=new_external_id)
+
+    if old_row:
+        conn.execute(
+            "UPDATE show_external_id SET external_id = ?, url = ?"
+            " WHERE show_id = ? AND service = ?",
+            (str(new_external_id), url, show_id, service),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (show_id, service, str(new_external_id), url, now),
+        )
+
+    # Write arr deep link (sonarr/radarr service presence)
+    title_slug = ensure_result.get("title_slug")
+    if title_slug:
+        # Remove old sonarr/radarr link if it existed
+        arr_service = "sonarr" if service == "tvdb" else "radarr"
+        conn.execute(
+            "DELETE FROM show_external_id WHERE show_id = ? AND service = ?",
+            (show_id, arr_service),
+        )
+        write_arr_external_id(conn, show_id, show["media_shape"], title_slug)
+
+    conn.commit()
+
+    result["success"] = True
+    parts = []
+    if result["resolved_title"]:
+        parts.append(f"Resolved to '{result['resolved_title']}'")
+    if result["arr_deleted"]:
+        parts.append("deleted old arr entry")
+    if result["arr_added"]:
+        parts.append("added correct one")
+    parts.append(f"{service} ID updated to {new_external_id}")
+    result["message"] = "; ".join(parts) + "."
+    return result
 
 
 def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:

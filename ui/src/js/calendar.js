@@ -9,35 +9,35 @@
  */
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost } from './config.js?v=3';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus } from './api.js?v=11';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, refreshShowMetadata } from './api.js?v=17';
+import {
+  buildStatusBtn, refreshStatusBtn,
+  STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,
+  STATUS_ICONS, STATUS_ICON_CLASS,
+} from './status-picker.js?v=1';
 import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, SVC_ICONS } from './icons.js?v=8';
 import { startDownload } from './downloads.js?v=2';
 
 /* ── Constants ────────────────────────────────────────────── */
 
 const DAY_NAMES  = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const DAY_NAMES_FULL = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const MON_NAMES  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const STATUSES   = ['WATCHING','COMPLETED','PLANNED','PAUSED','DROPPED'];
-const STATUS_LABELS     = { WATCHING:'Watching', COMPLETED:'Completed', PLANNED:'Planned', PAUSED:'Paused', DROPPED:'Dropped' };
-const STATUS_CLASS      = { WATCHING:'st-watching', COMPLETED:'st-completed', PLANNED:'st-planning', PAUSED:'st-paused', DROPPED:'st-dropped' };
-const STATUS_COLOR      = { WATCHING:'var(--st-watching)', COMPLETED:'var(--st-completed)', PLANNED:'var(--st-planning)', PAUSED:'var(--st-paused)', DROPPED:'var(--st-dropped)' };
-/** Unicode glyphs used on the status icon button and radial options. */
-const STATUS_ICONS      = { WATCHING:'👁', COMPLETED:'✓', PLANNED:'◷', PAUSED:'⏸', DROPPED:'✕' };
-/** CSS colour class for the filled icon button background. */
-const STATUS_ICON_CLASS = { WATCHING:'si-watching', COMPLETED:'si-completed', PLANNED:'si-planning', PAUSED:'si-paused', DROPPED:'si-dropped' };
-/** Angles (degrees) for the 5 radial picker petals: 130° arc, left-biased above the button. */
-const STATUS_RADIAL_ANGLES = [-85, -53, -20, 13, 45];
+/* Status constants imported from status-picker.js */
 
 /** Refresh interval when WebSocket subscriptions are unavailable (ms). */
 const POLL_INTERVAL_MS = 10_000;
 
 const STATUS_FILTER_KEY = 'starfleet_status_filter';
 const TMDB_IMAGE_BASE   = 'https://image.tmdb.org/t/p/w300';
+const TMDB_BACKDROP_BASE = 'https://image.tmdb.org/t/p/w780';
 
 /* ── TMDB poster cache ────────────────────────────────────── */
 
 /** showId → poster URL string (or null if fetch failed / no result) */
 const posterCache = new Map();
+/** showId → backdrop/banner URL string (or null if unavailable) */
+const backdropCache = new Map();
 
 /**
  * Sequential TMDB request queue — prevents 429 rate-limit errors when many
@@ -86,6 +86,7 @@ async function _doTmdbFetch(show, apiKey) {
 
   try {
     let posterPath = null;
+    let backdropPath = null;
 
     if (tmdbExt) {
       // Direct TMDB lookup — movies use /movie/, series use /tv/
@@ -94,6 +95,7 @@ async function _doTmdbFetch(show, apiKey) {
       if (res.ok) {
         const data = await res.json();
         posterPath = data.poster_path ?? null;
+        backdropPath = data.backdrop_path ?? null;
       }
     }
 
@@ -107,6 +109,7 @@ async function _doTmdbFetch(show, apiKey) {
           ? (data.movie_results ?? [])
           : (data.tv_results ?? []);
         posterPath = results[0]?.poster_path ?? null;
+        backdropPath = results[0]?.backdrop_path ?? null;
       }
     }
 
@@ -117,25 +120,120 @@ async function _doTmdbFetch(show, apiKey) {
       if (res.ok) {
         const data = await res.json();
         posterPath = data.results?.[0]?.poster_path ?? null;
+        if (!backdropPath) backdropPath = data.results?.[0]?.backdrop_path ?? null;
       }
     }
 
-    if (!posterPath) return;
+    if (posterPath) {
+      const url = TMDB_IMAGE_BASE + posterPath;
+      posterCache.set(show.id, url);
 
-    const url = TMDB_IMAGE_BASE + posterPath;
-    posterCache.set(show.id, url);
+      // Patch all rendered art divs for this show
+      document.querySelectorAll(`.card-art[data-show-id="${show.id}"]`).forEach(art => {
+        if (!art.querySelector('img')) {
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = show.displayTitle;
+          art.prepend(img);
+        }
+      });
+      // Also patch planner-cover elements (background-image based)
+      document.querySelectorAll(`.planner-cover[data-show-id="${show.id}"]`).forEach(c => {
+        c.style.backgroundImage = `url(${url})`;
+      });
+    }
 
-    // Patch all rendered art divs for this show
-    document.querySelectorAll(`.card-art[data-show-id="${show.id}"]`).forEach(art => {
-      if (!art.querySelector('img')) {
-        const img = document.createElement('img');
-        img.src = url;
-        img.alt = show.displayTitle;
-        art.prepend(img);
-      }
-    });
+    // Cache backdrop and patch planner bodies missing a banner
+    if (backdropPath) {
+      const bdUrl = TMDB_BACKDROP_BASE + backdropPath;
+      backdropCache.set(show.id, bdUrl);
+      _patchPlannerBanners(show.id, bdUrl);
+    }
   } catch {
     // Network error — leave null in cache, no retry this session
+  }
+}
+
+/** Patch planner body elements that have no banner with a TMDB backdrop. */
+function _patchPlannerBanners(showId, bdUrl) {
+  document.querySelectorAll(`.planner-body[data-show-id="${showId}"]:not(.has-banner)`).forEach(body => {
+    body.classList.add('has-banner');
+    body.style.setProperty('--banner-url', `url(${bdUrl})`);
+  });
+}
+
+/**
+ * Fetch a TMDB backdrop for a specific show (triggered by the art fetch button).
+ * If already cached, patches immediately; otherwise queues behind the TMDB chain.
+ */
+function fetchTmdbBackdrop(show, apiKey) {
+  // Already have a backdrop? Patch immediately.
+  const cached = backdropCache.get(show.id);
+  if (cached) { _patchPlannerBanners(show.id, cached); return; }
+
+  // If a poster fetch is already queued it will capture the backdrop too.
+  // But if the show already has a poster (from LCARS), no poster fetch was ever triggered,
+  // so we need a dedicated backdrop-only fetch.
+  if (posterCache.has(show.id) && posterCache.get(show.id) !== null) {
+    // Poster is known — we need a backdrop-only TMDB call
+    if (backdropCache.has(show.id)) return; // already tried
+    backdropCache.set(show.id, null); // mark in-flight
+    _tmdbChain = _tmdbChain
+      .then(() => new Promise(r => setTimeout(r, TMDB_INTERVAL_MS)))
+      .then(() => _doTmdbBackdropFetch(show, apiKey));
+  } else {
+    // No poster yet either — a full fetch will capture both
+    fetchTmdbPoster(show, apiKey);
+  }
+}
+
+/** Backdrop-only TMDB fetch for shows that already have a poster. */
+async function _doTmdbBackdropFetch(show, apiKey) {
+  if (backdropCache.get(show.id) !== null) return;
+
+  const extIds = (show.externalIds?.edges ?? []).map(e => e.node);
+  const tmdbExt = extIds.find(n => n.service === 'tmdb');
+  const tvdbExt = extIds.find(n => n.service === 'tvdb');
+
+  const isJwt = apiKey.startsWith('eyJ');
+  const tmdbHeaders = isJwt ? { Authorization: `Bearer ${apiKey}` } : {};
+  const tmdbFetch = (path, extraParams = {}) => {
+    const params = new URLSearchParams(extraParams);
+    if (!isJwt) params.set('api_key', apiKey);
+    return fetch(`https://api.themoviedb.org/3${path}?${params}`, { headers: tmdbHeaders });
+  };
+
+  try {
+    let backdropPath = null;
+
+    if (tmdbExt) {
+      const type = show.mediaShape === 'MOVIE' ? 'movie' : 'tv';
+      const res = await tmdbFetch(`/${type}/${tmdbExt.externalId}`, {});
+      if (res.ok) backdropPath = (await res.json()).backdrop_path ?? null;
+    }
+
+    if (!backdropPath && tvdbExt) {
+      const res = await tmdbFetch(`/find/${tvdbExt.externalId}`, { external_source: 'tvdb_id' });
+      if (res.ok) {
+        const data = await res.json();
+        const results = show.mediaShape === 'MOVIE' ? (data.movie_results ?? []) : (data.tv_results ?? []);
+        backdropPath = results[0]?.backdrop_path ?? null;
+      }
+    }
+
+    if (!backdropPath) {
+      const type = show.mediaShape === 'MOVIE' ? 'movie' : 'tv';
+      const res = await tmdbFetch(`/search/${type}`, { query: show.displayTitle, page: 1 });
+      if (res.ok) backdropPath = (await res.json()).results?.[0]?.backdrop_path ?? null;
+    }
+
+    if (!backdropPath) return;
+
+    const bdUrl = TMDB_BACKDROP_BASE + backdropPath;
+    backdropCache.set(show.id, bdUrl);
+    _patchPlannerBanners(show.id, bdUrl);
+  } catch {
+    // Network error — no retry
   }
 }
 
@@ -143,8 +241,11 @@ async function _doTmdbFetch(show, apiKey) {
 
 let state = {
   mode: '3d',       // 'today' | '1d' | '3d' | 'week'
+  layout: 'rows',   // 'rows' | 'planner'
   anchor: new Date(), // local-time reference day (time portion ignored)
 };
+
+const LAYOUT_KEY = 'starfleet_calendar_layout';
 
 /* ── Status filter state ─────────────────────────────────── */
 
@@ -580,12 +681,18 @@ export function buildCard(ep, cfg) {
   title.title = ep.show.displayTitle;
   footer.appendChild(title);
 
-  // Episode count — sits in the footer's normal flow
+  // Episode counts — watched / available / total, centered
+  const w = ep.show.watchedEpisodeCount;
+  const a = ep.show.availableEpisodeCount;
   const total = showTotal(ep.show);
-  if (total !== '?') {
+  if (w != null || a != null || total !== '?') {
     const counts = document.createElement('div');
     counts.className = 'ep-counts';
-    counts.innerHTML = `<span class="c-total">${total} ep</span>`;
+    const parts = [];
+    if (w != null) parts.push(`<span class="c-watched">W-${w}</span>`);
+    if (a != null) { if (parts.length) parts.push(`<span class="c-sep">/</span>`); parts.push(`<span class="c-avail">A-${a}</span>`); }
+    if (total !== '?') { if (parts.length) parts.push(`<span class="c-sep">/</span>`); parts.push(`<span class="c-total">T-${total}</span>`); }
+    counts.innerHTML = parts.join('');
     footer.appendChild(counts);
   }
 
@@ -611,83 +718,14 @@ export function buildCard(ep, cfg) {
   }
 
   // Status button — absolutely pinned to bottom-right of the card itself
-  card.appendChild(buildStatusBtn(ep.show.id, status));
+  card.appendChild(buildStatusBtn({ id: ep.show.id, currentStatus: status, onPick: onStatusChange }));
 
   return card;
 }
 
 /* ── Status icon button + radial picker ──────────────────── */
 
-/**
- * Build a compact status icon button with a semicircle hover-picker.
- * Replaces the old slide-out status-tab overlay on the card art.
- *
- * @param {string} showId
- * @param {string} currentStatus  - one of STATUSES
- * @returns {HTMLElement}  .status-btn-wrap
- */
-export function buildStatusBtn(showId, currentStatus) {
-  const wrap = document.createElement('div');
-  wrap.className = 'status-btn-wrap';
-  wrap.dataset.showId = showId;
-  wrap.dataset.status = currentStatus;
-
-  // Main icon button
-  const mainBtn = document.createElement('button');
-  mainBtn.className = `status-icon-btn ${STATUS_ICON_CLASS[currentStatus] || 'si-watching'}`;
-  mainBtn.title = STATUS_LABELS[currentStatus] || currentStatus;
-  mainBtn.textContent = STATUS_ICONS[currentStatus] || '●';
-  wrap.appendChild(mainBtn);
-
-  // Open/close logic: close only when the cursor is >15 px from every
-  // element in the wrap (button + all petals), measured against their
-  // actual rendered bounding rects (which honour CSS transforms).
-  let _moveHandler = null;
-
-  const closeRadial = () => {
-    wrap.classList.remove('radial-open');
-    if (_moveHandler) {
-      document.removeEventListener('mousemove', _moveHandler);
-      _moveHandler = null;
-    }
-  };
-
-  const openRadial = () => {
-    wrap.classList.add('radial-open');
-    if (_moveHandler) return; // already watching
-    _moveHandler = e => {
-      // Check distance from cursor to the button centre.
-      // Threshold = fan radius (62) + petal half-size (13) + comfort margin (20) = 95 px.
-      // Using a circle avoids racing the CSS transition: we test the static
-      // geometry of the full fan zone rather than each petal's mid-animation rect.
-      const r  = wrap.getBoundingClientRect();
-      const cx = r.left + r.width  / 2;
-      const cy = r.top  + r.height / 2;
-      if (Math.hypot(e.clientX - cx, e.clientY - cy) > 95) closeRadial();
-    };
-    document.addEventListener('mousemove', _moveHandler);
-  };
-
-  wrap.addEventListener('mouseenter', openRadial);
-
-  // Radial picker petals — one per status
-  for (let i = 0; i < STATUSES.length; i++) {
-    const s = STATUSES[i];
-    const opt = document.createElement('button');
-    opt.className = `sr-opt ${STATUS_ICON_CLASS[s]}${s === currentStatus ? ' cur' : ''}`;
-    opt.style.setProperty('--a', `${STATUS_RADIAL_ANGLES[i]}deg`);
-    opt.title = STATUS_LABELS[s];
-    opt.textContent = STATUS_ICONS[s];
-    opt.dataset.status = s;
-    opt.addEventListener('click', e => {
-      e.stopPropagation();
-      onStatusChange(wrap, showId, s);
-    });
-    wrap.appendChild(opt);
-  }
-
-  return wrap;
-}
+/* buildStatusBtn imported from status-picker.js — callers pass { id, currentStatus, onPick }. */
 
 /* ── Interactions ────────────────────────────────────────── */
 
@@ -742,21 +780,7 @@ export async function onStatusChange(wrap, showId, newStatus) {
 
     // Update every status button for this show (multiple episodes may share it)
     document.querySelectorAll(`.status-btn-wrap[data-show-id="${showId}"]`).forEach(w => {
-      w.dataset.status = newStatus;
-
-      // Refresh the main icon button
-      const mainBtn = w.querySelector('.status-icon-btn');
-      if (mainBtn) {
-        for (const s of STATUSES) mainBtn.classList.remove(STATUS_ICON_CLASS[s]);
-        mainBtn.classList.add(STATUS_ICON_CLASS[newStatus]);
-        mainBtn.textContent = STATUS_ICONS[newStatus];
-        mainBtn.title = STATUS_LABELS[newStatus];
-      }
-
-      // Refresh the active ring on each petal
-      w.querySelectorAll('.sr-opt').forEach(opt => {
-        opt.classList.toggle('cur', opt.dataset.status === newStatus);
-      });
+      refreshStatusBtn(w, newStatus);
     });
 
     // Dispatch custom event so show page can react (e.g. bulk-mark watched)
@@ -821,6 +845,7 @@ function renderEpisodes(episodes, cfg) {
   const calendar = document.getElementById('calendar');
   if (!calendar) return;
   calendar.innerHTML = '';
+  calendar.classList.toggle('planner', state.layout === 'planner');
 
   const dayGroups = groupByDay(episodes);
 
@@ -839,16 +864,27 @@ function renderEpisodes(episodes, cfg) {
     return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`;
   })();
 
+  if (state.layout === 'planner') {
+    renderPlanner(dayGroups, todayStr, cfg);
+  } else {
+    renderRows(dayGroups, todayStr, cfg);
+  }
+}
+
+/** Rows layout — day header as left column, cards in right area. */
+function renderRows(dayGroups, todayStr, cfg) {
+  const calendar = document.getElementById('calendar');
   for (const group of dayGroups) {
     const section = document.createElement('section');
     section.className = `day-group${group.dateStr === todayStr ? ' day-today' : ''}`;
 
-    const header = document.createElement('h2');
-    header.className = 'day-header';
+    const header = document.createElement('div');
+    header.className = 'day-label';
     header.innerHTML = group.localDate
-      ? `<span class="day-name">${fmtDayName(group.localDate)}</span>
-         <span class="day-date">${fmtShortDate(group.localDate)}</span>`
-      : `<span class="day-name">Unknown</span>`;
+      ? `<span class="day-date">${group.localDate.getDate()}</span>
+         <span class="day-month">${MON_NAMES[group.localDate.getMonth()]}</span>
+         <span class="day-name">${DAY_NAMES_FULL[group.localDate.getDay()]}</span>`
+      : `<span class="day-name">?</span>`;
     section.appendChild(header);
 
     const row = document.createElement('div');
@@ -869,6 +905,222 @@ function renderEpisodes(episodes, cfg) {
   }
 }
 
+/** Planner layout — days as side-by-side columns. */
+function renderPlanner(dayGroups, todayStr, cfg) {
+  const calendar = document.getElementById('calendar');
+  const container = document.createElement('div');
+  container.className = 'planner-grid';
+  const wideMode = state.mode === '1d' || state.mode === 'today' || state.mode === '3d';
+  container.dataset.mode = state.mode;
+
+  for (const group of dayGroups) {
+    const col = document.createElement('div');
+    col.className = `day-col${group.dateStr === todayStr ? ' day-today' : ''}`;
+
+    const header = document.createElement('div');
+    header.className = 'day-col-header';
+    header.innerHTML = group.localDate
+      ? `${DAY_NAMES_FULL[group.localDate.getDay()].toUpperCase()} ${group.localDate.getDate()} ${MON_NAMES[group.localDate.getMonth()]}`
+      : `?`;
+    col.appendChild(header);
+
+    group.episodes.sort((a, b) => {
+      if (!a.airDateUtc) return 1;
+      if (!b.airDateUtc) return -1;
+      return new Date(a.airDateUtc) - new Date(b.airDateUtc);
+    });
+
+    for (const ep of group.episodes) {
+      // 1d/today/3d planner: use horizontal browse-style cards
+      if (wideMode) {
+        col.appendChild(buildPlannerCard(ep, cfg));
+      } else {
+        col.appendChild(buildCard(ep, cfg));
+      }
+    }
+
+    container.appendChild(col);
+  }
+
+  calendar.appendChild(container);
+}
+
+/**
+ * Build a horizontal browse-style card for planner columns (1–3 cols).
+ * Cover image left, detail pane right with banner art background.
+ */
+function buildPlannerCard(ep, cfg) {
+  const avail  = availState(ep);
+  const aired  = ep.airDateUtc && new Date(ep.airDateUtc) <= new Date();
+  const status = ep.seasonEntity?.status || ep.show.status || 'WATCHING';
+
+  const card = document.createElement('article');
+  card.className = 'planner-card';
+  card.dataset.episodeId = ep.id;
+  card.dataset.showId    = ep.show.id;
+
+  // Cover image (poster art, same min-height as regular calendar cards)
+  const cover = document.createElement('div');
+  cover.className = 'planner-cover';
+  cover.dataset.showId = ep.show.id;
+  const posterUrl = ep.show.posterUrl || posterCache.get(ep.show.id) || null;
+  if (posterUrl) {
+    cover.style.backgroundImage = `url(${posterUrl})`;
+    if (cfg.tmdb_api_key) {
+      const testImg = new Image();
+      testImg.src = posterUrl;
+      testImg.onerror = () => {
+        posterCache.delete(ep.show.id);
+        fetchTmdbPoster(ep.show, cfg.tmdb_api_key);
+      };
+    }
+  } else if (cfg.tmdb_api_key) {
+    fetchTmdbPoster(ep.show, cfg.tmdb_api_key);
+  }
+
+  const filePath = ep.show.mediaShape === 'MOVIE' ? ep.filePathRadarr : ep.filePathSonarr;
+  if (ep.availableLocally) {
+    cover.classList.add('art-playable');
+    cover.addEventListener('click', () => launchMpv(filePath, cfg));
+  }
+
+  card.appendChild(cover);
+
+  // Detail body — banner art background when available
+  const body = document.createElement('div');
+  body.className = 'planner-body';
+  body.dataset.showId = ep.show.id;
+  const bannerSrc = ep.show.bannerUrl || backdropCache.get(ep.show.id) || null;
+  if (bannerSrc) {
+    body.classList.add('has-banner');
+    body.style.setProperty('--banner-url', `url(${bannerSrc})`);
+  } else if (cfg.tmdb_api_key) {
+    // No banner from LCARS or cache — trigger a backdrop fetch
+    fetchTmdbBackdrop(ep.show, cfg.tmdb_api_key);
+  }
+
+  // Title — larger in planner
+  const title = document.createElement('a');
+  title.className = 'planner-title';
+  title.href = `show.html?id=${encodeURIComponent(ep.show.id)}`;
+  title.textContent = ep.show.displayTitle;
+  title.title = ep.show.displayTitle;
+  body.appendChild(title);
+
+  // Episode badge — larger
+  const badge = document.createElement('div');
+  badge.className = 'planner-badge';
+  badge.textContent = fmtEpBadge(ep);
+  body.appendChild(badge);
+
+  // Meta row: air time + avail + watch
+  const meta = document.createElement('div');
+  meta.className = 'planner-meta';
+
+  const airtime = document.createElement('span');
+  airtime.className = 'airtime';
+  airtime.textContent = fmtAirTime(ep.airDateUtc);
+  meta.appendChild(airtime);
+
+  const availIcon = document.createElement('span');
+  availIcon.className = `avail-icon avail-${avail}`;
+  availIcon.textContent = avail === 'ready' ? '▶' : avail === 'future' ? '◷' : '⬇';
+  meta.appendChild(availIcon);
+
+  if (aired) {
+    const watchBtn = document.createElement('button');
+    watchBtn.className = `watch-btn${ep.state === 'WATCHED' ? ' watched' : ''}`;
+    watchBtn.title = ep.state === 'WATCHED' ? 'Watched — click to unmark' : 'Mark as watched';
+    watchBtn.textContent = '✓';
+    watchBtn.dataset.state = ep.state;
+    const existingWid = ep.watchEvents?.edges?.[0]?.node?.id;
+    if (existingWid) watchBtn.dataset.watchEventId = existingWid;
+    watchBtn.addEventListener('click', () => onWatchToggle(watchBtn, ep));
+    meta.appendChild(watchBtn);
+  }
+
+  body.appendChild(meta);
+
+  // Episode counts — larger in planner
+  const w = ep.show.watchedEpisodeCount;
+  const a = ep.show.availableEpisodeCount;
+  const total = showTotal(ep.show);
+  if (w != null || a != null || total !== '?') {
+    const counts = document.createElement('div');
+    counts.className = 'ep-counts planner-counts';
+    const parts = [];
+    if (w != null) parts.push(`<span class="c-watched">W-${w}</span>`);
+    if (a != null) { if (parts.length) parts.push(`<span class="c-sep">/</span>`); parts.push(`<span class="c-avail">A-${a}</span>`); }
+    if (total !== '?') { if (parts.length) parts.push(`<span class="c-sep">/</span>`); parts.push(`<span class="c-total">T-${total}</span>`); }
+    counts.innerHTML = parts.join('');
+    body.appendChild(counts);
+  }
+
+  // Episode title if available
+  if (ep.title) {
+    const epTitle = document.createElement('div');
+    epTitle.className = 'planner-ep-title';
+    epTitle.textContent = ep.title;
+    body.appendChild(epTitle);
+  }
+
+  card.appendChild(body);
+
+  // Fetch art button — always visible on planner cards
+  const fetchBtn = document.createElement('button');
+  fetchBtn.className = 'planner-fetch-art';
+  fetchBtn.title = 'Refresh art from all sources';
+  fetchBtn.textContent = '🖼';
+  fetchBtn.addEventListener('click', async () => {
+    fetchBtn.textContent = '⏳';
+    fetchBtn.disabled = true;
+    try {
+      // Refresh metadata from all sources (AniList, TVDB, TMDB)
+      const updated = await refreshShowMetadata(ep.show.id);
+      const newBanner = updated?.bannerUrl || null;
+      if (newBanner) {
+        body.classList.add('has-banner');
+        body.style.setProperty('--banner-url', `url(${newBanner})`);
+        fetchBtn.textContent = '✓';
+      } else {
+        // LCARS has no banner — try TMDB backdrop as fallback
+        const apiKey = cfg.tmdb_api_key || getConfig()?.tmdb_api_key;
+        if (apiKey) {
+          backdropCache.delete(ep.show.id);
+          fetchTmdbBackdrop(ep.show, apiKey);
+          // Wait for the queued TMDB fetch
+          await new Promise(r => setTimeout(r, 1500));
+          const bdUrl = backdropCache.get(ep.show.id);
+          if (bdUrl) {
+            body.classList.add('has-banner');
+            body.style.setProperty('--banner-url', `url(${bdUrl})`);
+            fetchBtn.textContent = '✓';
+          } else {
+            fetchBtn.textContent = '✗';
+          }
+        } else {
+          fetchBtn.textContent = '✗';
+        }
+      }
+      // Also update poster if returned
+      if (updated?.posterUrl) {
+        document.querySelectorAll(`.planner-cover[data-show-id="${ep.show.id}"]`).forEach(c => {
+          c.style.backgroundImage = `url(${updated.posterUrl})`;
+        });
+      }
+    } catch {
+      fetchBtn.textContent = '✗';
+    }
+    setTimeout(() => { fetchBtn.textContent = '🖼'; fetchBtn.disabled = false; }, 2000);
+  });
+  card.appendChild(fetchBtn);
+
+  // Status flower picker
+  card.appendChild(buildStatusBtn({ id: ep.show.id, currentStatus: status, onPick: onStatusChange }));
+
+  return card;
+}
+
 /**
  * Fetch episodes for the current range, then render.
  * @param {boolean} [silent=false] - If true, suppress the loading banner
@@ -884,7 +1136,7 @@ async function render(silent = false) {
   const label = document.getElementById('date-range-label');
   if (label) label.textContent = fmtRangeLabel(startLocal, endLocal);
 
-  ['prev-btn', 'next-btn'].forEach(id => {
+  ['prev-period-btn', 'prev-day-btn', 'next-day-btn', 'next-period-btn'].forEach(id => {
     const btn = document.getElementById(id);
     if (btn) btn.disabled = state.mode === 'today';
   });
@@ -904,8 +1156,17 @@ async function render(silent = false) {
 
 /* ── Navigation ──────────────────────────────────────────── */
 
-function navigate(delta) {
-  const steps = { today: 0, '1d': 1, '3d': 2, week: 7 };
+/** Navigate by one day (inner ‹/› buttons). */
+function navigateDay(delta) {
+  if (state.mode === 'today') return;
+  state.anchor = addDays(dayOf(state.anchor), delta);
+  render();
+}
+
+/** Navigate by one full period (outer «/» buttons). */
+function navigatePeriod(delta) {
+  if (state.mode === 'today') return;
+  const steps = { today: 0, '1d': 1, '3d': 3, week: 7 };
   state.anchor = addDays(dayOf(state.anchor), delta * steps[state.mode]);
   render();
 }
@@ -914,7 +1175,7 @@ function setMode(mode) {
   state.mode = mode;
   if (mode === 'today') state.anchor = new Date();
 
-  document.querySelectorAll('.view-mode').forEach(btn => {
+  document.querySelectorAll('.view-mode[data-mode]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === mode);
   });
 
@@ -924,14 +1185,17 @@ function setMode(mode) {
 /* ── Keyboard navigation ─────────────────────────────────── */
 
 const KEYBIND_HELP = [
-  ['←  h',  'Previous period'],
-  ['→  l',  'Next period'],
-  ['0',     'Jump to today'],
-  ['1',     '1-day view'],
-  ['3',     '3-day view'],
-  ['7',     'Week view'],
-  ['r',     'Refresh now'],
-  ['?',     'Show this help'],
+  ['←  h',    'Previous day'],
+  ['→  l',    'Next day'],
+  ['⇧←  H',  'Previous period'],
+  ['⇧→  L',  'Next period'],
+  ['0',       'Jump to today'],
+  ['1',       '1-day view'],
+  ['3',       '3-day view'],
+  ['7',       'Week view'],
+  ['p',       'Toggle planner view'],
+  ['r',       'Refresh now'],
+  ['?',       'Show this help'],
 ].map(([k, d]) => `<b>${k}</b> — ${d}`).join('  ·  ');
 
 /** Returns true when a key event should be ignored (focus inside editable). */
@@ -949,16 +1213,33 @@ function initKeyboardNav() {
     // Never fire for modifier combos (ctrl/meta shortcuts are browser's)
     if (e.ctrlKey || e.metaKey || e.altKey) return;
 
-    console.debug('[starfleet] key:', e.key, 'mode:', state.mode);
+    console.debug('[starfleet] key:', e.key, 'shift:', e.shiftKey, 'mode:', state.mode);
     switch (e.key) {
       case 'ArrowLeft':
+        if (state.mode !== 'today') { e.preventDefault(); (e.shiftKey ? navigatePeriod : navigateDay)(-1); }
+        break;
       case 'h':
-        if (state.mode !== 'today') { e.preventDefault(); navigate(-1); }
+        if (state.mode !== 'today') { e.preventDefault(); navigateDay(-1); }
         break;
 
       case 'ArrowRight':
+        if (state.mode !== 'today') { e.preventDefault(); (e.shiftKey ? navigatePeriod : navigateDay)(+1); }
+        break;
       case 'l':
-        if (state.mode !== 'today') { e.preventDefault(); navigate(+1); }
+        if (state.mode !== 'today') { e.preventDefault(); navigateDay(+1); }
+        break;
+
+      case 'H':
+        if (state.mode !== 'today') { e.preventDefault(); navigatePeriod(-1); }
+        break;
+
+      case 'L':
+        if (state.mode !== 'today') { e.preventDefault(); navigatePeriod(+1); }
+        break;
+
+      case 'p':
+        e.preventDefault();
+        toggleLayout();
         break;
 
       case '0':
@@ -1004,6 +1285,20 @@ function initKeyboardNav() {
   });
 }
 
+/* ── Layout toggle ──────────────────────────────────────── */
+
+function toggleLayout() {
+  state.layout = state.layout === 'rows' ? 'planner' : 'rows';
+  try { localStorage.setItem(LAYOUT_KEY, state.layout); } catch {}
+  syncLayoutBtn();
+  renderEpisodes(lastFetchedEpisodes, getConfig());
+}
+
+function syncLayoutBtn() {
+  const btn = document.getElementById('planner-btn');
+  if (btn) btn.classList.toggle('active', state.layout === 'planner');
+}
+
 /* ── Init ────────────────────────────────────────────────── */
 
 /** Wire up controls and kick off first render. */
@@ -1011,16 +1306,30 @@ export async function init() {
   const cfg = await bootstrapConfig();
   if (!cfg) return;
 
-  // View mode buttons
-  document.querySelectorAll('.view-mode').forEach(btn => {
+  // View mode buttons (only those with data-mode, not the planner toggle)
+  document.querySelectorAll('.view-mode[data-mode]').forEach(btn => {
     btn.addEventListener('click', () => setMode(btn.dataset.mode));
   });
 
-  // Prev / Next
-  const prevBtn = document.getElementById('prev-btn');
-  const nextBtn = document.getElementById('next-btn');
-  if (prevBtn) prevBtn.addEventListener('click', () => navigate(-1));
-  if (nextBtn) nextBtn.addEventListener('click', () => navigate(+1));
+  // Navigation buttons: << < period > >>
+  const prevPeriod = document.getElementById('prev-period-btn');
+  const prevDay    = document.getElementById('prev-day-btn');
+  const nextDay    = document.getElementById('next-day-btn');
+  const nextPeriod = document.getElementById('next-period-btn');
+  if (prevPeriod) prevPeriod.addEventListener('click', () => navigatePeriod(-1));
+  if (prevDay)    prevDay.addEventListener('click',    () => navigateDay(-1));
+  if (nextDay)    nextDay.addEventListener('click',    () => navigateDay(+1));
+  if (nextPeriod) nextPeriod.addEventListener('click', () => navigatePeriod(+1));
+
+  // Planner layout toggle
+  const plannerBtn = document.getElementById('planner-btn');
+  if (plannerBtn) plannerBtn.addEventListener('click', () => toggleLayout());
+  // Restore persisted layout
+  try {
+    const saved = localStorage.getItem(LAYOUT_KEY);
+    if (saved === 'planner') state.layout = 'planner';
+  } catch {}
+  syncLayoutBtn();
 
   // Today button
   const todayBtn = document.getElementById('today-btn');
@@ -1032,7 +1341,7 @@ export async function init() {
   }
 
   // Set initial active mode button
-  document.querySelectorAll('.view-mode').forEach(btn => {
+  document.querySelectorAll('.view-mode[data-mode]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === state.mode);
   });
 

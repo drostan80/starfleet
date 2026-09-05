@@ -19,21 +19,21 @@ import {
   fetchShowArt, selectArtAsset, deselectArtAsset, fetchEpisodeSynopses,
   setShowSynopsis, setEpisodeSynopsis, fetchSynopsisCandidates,
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
-  setEpisodeNumber, splitSeason,
-} from './api.js?v=12';
+  setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
+  amendShowArrLink,
+} from './api.js?v=17';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv,
-  buildStatusBtn,
-} from './calendar.js?v=20';
+  onStatusChange,
+} from './calendar.js?v=23';
+import {
+  buildStatusBtn, refreshStatusBtn,
+  STATUSES_5, STATUS_LABELS, STATUS_ICON_CLASS,
+} from './status-picker.js?v=1';
 import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=9';
 import { startDownload } from './downloads.js?v=2';
 
 /* ── Constants ───────────────────────────────────────────── */
-
-const STATUS_LABELS = {
-  WATCHING: 'Watching', COMPLETED: 'Completed',
-  PLANNED: 'Planned', PAUSED: 'Paused', DROPPED: 'Dropped',
-};
 
 /** URL templates for known services — derive URL from externalId.
  *  Templates take (id, mediaShape) so movie shows get correct paths. */
@@ -416,6 +416,17 @@ function renderExtBadges(container, show, cfg) {
   });
   container.appendChild(addBtn);
 
+  // "⇄" button to amend/correct IDs (opens multi-ID editor)
+  const hasEditableIds = (show.externalIds || []).some(e => !READONLY_SVCS.has(e.service));
+  if (hasEditableIds) {
+    const amendBtn = el('button', 'sp-ext-badge sp-ext-amend-inline', '⇄');
+    amendBtn.title = 'Correct external IDs';
+    amendBtn.addEventListener('click', () => {
+      openAmendPanel(container, show, cfg);
+    });
+    container.appendChild(amendBtn);
+  }
+
   // "↻" button to refresh metadata (re-runs server-side ID resolution)
   const refreshBtn = el('button', 'sp-ext-badge sp-ext-add', '↻');
   refreshBtn.title = 'Refresh metadata (re-fetch IDs from AniList/TVDB)';
@@ -496,6 +507,157 @@ async function searchTmdbExternalIds(title, mediaShape, apiKey) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Open a panel to amend/correct all editable external IDs at once.
+ * Changed IDs get saved via linkShowExternalId; if the arr-driving ID
+ * (tvdb for episodic, tmdb for movie) changes, amendShowArrLink handles
+ * the Sonarr/Radarr delete + re-add automatically.
+ */
+function openAmendPanel(container, show, cfg) {
+  // Remove any existing editor/panel
+  container.querySelector('.sp-ext-editor')?.remove();
+  container.querySelector('.sp-amend-panel')?.remove();
+
+  const panel = el('div', 'sp-amend-panel');
+
+  // Which service drives the arr?
+  const arrService = show.mediaShape === 'EPISODIC' ? 'tvdb'
+    : show.mediaShape === 'MOVIE' ? 'tmdb' : null;
+  const arrName = arrService === 'tvdb' ? 'Sonarr' : arrService === 'tmdb' ? 'Radarr' : null;
+
+  // Build a row for each editable external ID
+  const rows = [];
+  for (const ext of (show.externalIds || [])) {
+    if (READONLY_SVCS.has(ext.service)) continue;
+    const row = el('div', 'sp-amend-row');
+
+    const label = el('span', 'sp-amend-label', SVC_NAMES[ext.service] || ext.service);
+    if (ext.service === arrService) {
+      label.classList.add('sp-amend-arr');
+      label.title = `Drives ${arrName} — changing this will delete the old ${arrName} entry and add the correct one`;
+    }
+    row.appendChild(label);
+
+    const idInput = document.createElement('input');
+    idInput.type = 'text';
+    idInput.className = 'sp-ext-input sp-amend-id';
+    idInput.value = ext.externalId;
+    idInput.dataset.service = ext.service;
+    idInput.dataset.original = ext.externalId;
+    row.appendChild(idInput);
+
+    // Delete button for this ID
+    const delBtn = el('button', 'sp-amend-del', '✕');
+    delBtn.title = `Remove ${SVC_NAMES[ext.service] || ext.service}`;
+    delBtn.addEventListener('click', async () => {
+      if (!confirm(`Remove ${SVC_NAMES[ext.service] || ext.service} link?`)) return;
+      try {
+        delBtn.disabled = true;
+        await unlinkShowExternalId(show.id, ext.service);
+        show.externalIds = (show.externalIds || []).filter(e => e.service !== ext.service);
+        renderExtBadges(container, show, cfg);
+        showBanner(`${SVC_NAMES[ext.service] || ext.service} ID removed.`, 'ok');
+      } catch (e) {
+        showBanner(`Failed to remove: ${e.message}`, 'error');
+        delBtn.disabled = false;
+      }
+    });
+    row.appendChild(delBtn);
+
+    panel.appendChild(row);
+    rows.push({ service: ext.service, input: idInput, original: ext.externalId, ext });
+  }
+
+  // Action row
+  const actions = el('div', 'sp-amend-actions');
+
+  const saveBtn = el('button', 'sp-ext-save', 'Save changes');
+  saveBtn.addEventListener('click', async () => {
+    const changes = rows.filter(r => r.input.value.trim() !== r.original && r.input.value.trim());
+    if (!changes.length) {
+      showBanner('No changes to save.', 'error');
+      return;
+    }
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = '…';
+
+    // Check if the arr-driving ID changed
+    const arrChange = changes.find(c => c.service === arrService);
+    const otherChanges = changes.filter(c => c.service !== arrService);
+
+    try {
+      // Handle arr-driving ID change via amend mutation
+      if (arrChange) {
+        const newId = arrChange.input.value.trim();
+        const confirmMsg = `${SVC_NAMES[arrService]} ID changed: ${arrChange.original} → ${newId}\n\n` +
+          `This will:\n` +
+          `1. Validate the new ID against ${arrName}\n` +
+          `2. Delete the old entry from ${arrName}\n` +
+          `3. Add the correct one\n` +
+          `4. Update the LCARS link\n\n` +
+          `Media files will NOT be deleted. Proceed?`;
+        if (!confirm(confirmMsg)) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save changes';
+          return;
+        }
+        const result = await amendShowArrLink(show.id, arrService, newId, false);
+        if (!result.success) {
+          showBanner(result.message, 'error');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save changes';
+          return;
+        }
+        showBanner(result.message, 'ok');
+        // Update local data
+        const existing = (show.externalIds || []).find(e => e.service === arrService);
+        if (existing) {
+          existing.externalId = newId;
+          if (SVC_URL_TEMPLATES[arrService]) {
+            existing.url = SVC_URL_TEMPLATES[arrService](newId, show.mediaShape);
+          }
+        }
+      }
+
+      // Handle other ID changes via simple linkShowExternalId
+      for (const change of otherChanges) {
+        const newId = change.input.value.trim();
+        const url = SVC_URL_TEMPLATES[change.service]
+          ? SVC_URL_TEMPLATES[change.service](newId, show.mediaShape)
+          : change.ext.url;
+        await linkShowExternalId(show.id, change.service, newId, url);
+        // Update local data
+        const existing = (show.externalIds || []).find(e => e.service === change.service);
+        if (existing) {
+          existing.externalId = newId;
+          existing.url = url;
+        }
+      }
+
+      if (otherChanges.length && !arrChange) {
+        showBanner(`${otherChanges.length} ID(s) updated.`, 'ok');
+      }
+      renderExtBadges(container, show, cfg);
+    } catch (e) {
+      showBanner(`Failed: ${e.message}`, 'error');
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save changes';
+    }
+  });
+  actions.appendChild(saveBtn);
+
+  const cancelBtn = el('button', 'sp-ext-cancel', 'Cancel');
+  cancelBtn.addEventListener('click', () => panel.remove());
+  actions.appendChild(cancelBtn);
+
+  panel.appendChild(actions);
+  container.appendChild(panel);
+
+  // Focus first input
+  if (rows.length) rows[0].input.focus();
 }
 
 /**
@@ -694,6 +856,60 @@ function openExtEditor(container, show, cfg, service, extId, url) {
   });
   actions.appendChild(saveBtn);
 
+  // Amend arr link button — only on the service that drives the arr:
+  // episodic → tvdb (Sonarr), movie → tmdb (Radarr)
+  const isArrService = (service === 'tvdb' && show.mediaShape === 'EPISODIC')
+    || (service === 'tmdb' && show.mediaShape === 'MOVIE');
+  if (service && isArrService) {
+    const amendBtn = el('button', 'sp-ext-amend', '⇄');
+    amendBtn.title = `Correct ${service === 'tvdb' ? 'Sonarr' : 'Radarr'} link — delete old, add correct`;
+    amendBtn.addEventListener('click', async () => {
+      const newId = idInput.value.trim();
+      if (!newId) {
+        showBanner('Enter the correct ID first.', 'error');
+        return;
+      }
+      if (newId === extId) {
+        showBanner('New ID is the same as the current one.', 'error');
+        return;
+      }
+      const arrName = service === 'tvdb' ? 'Sonarr' : 'Radarr';
+      const confirmMsg = `This will:\n` +
+        `1. Validate ${service.toUpperCase()} ID ${newId} against ${arrName}\n` +
+        `2. Delete the old entry from ${arrName}\n` +
+        `3. Add the correct one\n` +
+        `4. Update the LCARS link\n\n` +
+        `Media files will NOT be deleted.\nProceed?`;
+      if (!confirm(confirmMsg)) return;
+      try {
+        amendBtn.disabled = true;
+        amendBtn.textContent = '…';
+        const result = await amendShowArrLink(show.id, service, newId, false);
+        if (result.success) {
+          // Update local data
+          const existing = (show.externalIds || []).find(e => e.service === service);
+          if (existing) {
+            existing.externalId = result.newExternalId;
+            // Re-derive URL from template
+            const u = urlInput.value.trim();
+            if (u) existing.url = u;
+          }
+          renderExtBadges(container, show, cfg);
+          showBanner(result.message, 'ok');
+        } else {
+          showBanner(result.message, 'error');
+          amendBtn.disabled = false;
+          amendBtn.textContent = '⇄';
+        }
+      } catch (e) {
+        showBanner(`Amend failed: ${e.message}`, 'error');
+        amendBtn.disabled = false;
+        amendBtn.textContent = '⇄';
+      }
+    });
+    actions.appendChild(amendBtn);
+  }
+
   // Delete button (only for existing entries)
   if (service) {
     const delBtn = el('button', 'sp-ext-del', '✕');
@@ -756,11 +972,16 @@ function renderHero(show, root, cfg) {
   const titleRow = el('div', 'sp-title-row');
   const h1 = el('h1', 'sp-title', show.displayTitle);
   titleRow.appendChild(h1);
-  // Native title as alt
-  const altTitle = show.titleNative || show.titleRomaji;
-  if (altTitle && altTitle !== show.displayTitle) {
-    titleRow.appendChild(el('span', 'sp-alt-title', altTitle));
-  }
+
+  // Title picker button (T) — pick from titles + synonyms + custom + clear
+  const titlePickBtn = el('button', 'sp-title-pick-btn', 'T');
+  titlePickBtn.title = 'Pick display title';
+  titlePickBtn.addEventListener('click', () => openTitlePicker(show, h1, subtitleEl));
+  titleRow.appendChild(titlePickBtn);
+
+  // Subtitle line: show the other two title variants not used as main
+  let subtitleEl = null;
+  buildTitleSubtitle(show, titleRow);
   header.appendChild(titleRow);
 
   // Meta row
@@ -768,7 +989,7 @@ function renderHero(show, root, cfg) {
 
   // Interactive status picker (radial, reused from calendar)
   const statusWrap = el('div', 'sp-status-wrap');
-  const btnWrap = buildStatusBtn(show.id, show.status || 'PLANNED');
+  const btnWrap = buildStatusBtn({ id: show.id, currentStatus: show.status || 'PLANNED', onPick: onStatusChange });
   statusWrap.appendChild(btnWrap);
   const statusLabel = el('span', 'sp-status-label');
   statusLabel.dataset.status = show.status || 'PLANNED';
@@ -873,10 +1094,14 @@ function renderHero(show, root, cfg) {
   }
 
   // Episode progress
-  const watched = countWatched(show.episodes);
+  const watched = show.watchedEpisodeCount ?? countWatched(show.episodes);
+  const available = show.availableEpisodeCount ?? 0;
   const total = show.totalEpisodes || show.episodes.length;
   metaRow.appendChild(el('span', 'sp-meta-label', 'Episodes'));
-  metaRow.appendChild(el('span', 'sp-meta-value', `${watched} / ${total}`));
+  const progressParts = [`${watched} watched`];
+  if (available && available !== total) progressParts.push(`${available} avail`);
+  progressParts.push(`${total} total`);
+  metaRow.appendChild(el('span', 'sp-meta-value', progressParts.join(' / ')));
 
   header.appendChild(metaRow);
 
@@ -2120,54 +2345,53 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
 
   hdr.appendChild(meta);
 
-  // Per-season status chips (only on first segment for split seasons)
+  // Per-season status flower picker (only on first segment for split seasons)
   if (seasonData && idSuffix === '') {
-    const statusChips = el('div', 'sp-season-status-chips');
-    statusChips.addEventListener('click', e => e.stopPropagation());
     const initStatus = seasonData.status || show.status || 'PLANNED';
-    for (const [val, chipLabel] of Object.entries(STATUS_LABELS)) {
-      const chip = el('button', `sp-season-chip${val === initStatus ? ' active' : ''}`,
-        chipLabel);
-      chip.dataset.status = val;
-      chip.addEventListener('click', async () => {
-        // Read live value — seasonData.status is mutated on each click
+    const seasonStatusWrap = el('div', 'sp-season-status-wrap');
+    seasonStatusWrap.addEventListener('click', e => e.stopPropagation());
+
+    const seasonBtnWrap = buildStatusBtn({
+      id: seasonData.id,
+      currentStatus: initStatus,
+      statuses: STATUSES_5,
+      onPick: async (wrap, id, newStatus) => {
+        // If picking the same as current effective → clear to null (inherit)
         const effectiveNow = seasonData.status || show.status || 'PLANNED';
-        const newStatus = val === effectiveNow ? null : val;
+        const setTo = newStatus === effectiveNow ? null : newStatus;
         try {
-          chip.disabled = true;
           try {
-            await setSeasonStatus(seasonData.id, newStatus);
+            await setSeasonStatus(seasonData.id, setTo);
           } catch (err) {
-            // Completion guard — prompt for confirmation
-            if (newStatus === 'COMPLETED' && err.message?.includes('confirmed: true')) {
-              if (!confirm(`Season ${sn} still has unaired episodes. Mark completed anyway?`)) {
-                return;
-              }
-              await setSeasonStatus(seasonData.id, newStatus, true);
-            } else {
-              throw err;
-            }
+            if (setTo === 'COMPLETED' && err.message?.includes('confirmed: true')) {
+              if (!confirm(`Season ${sn} still has unaired episodes. Mark completed anyway?`)) return;
+              await setSeasonStatus(seasonData.id, setTo, true);
+            } else { throw err; }
           }
-          seasonData.status = newStatus;
-          // Update all chips in this set
-          for (const c of statusChips.querySelectorAll('.sp-season-chip')) {
-            const effective = newStatus || show.status || 'PLANNED';
-            c.classList.toggle('active', c.dataset.status === effective);
-          }
-          const bannerText = newStatus
-            ? `Season ${sn} → ${STATUS_LABELS[newStatus]}`
+          seasonData.status = setTo;
+          const effective = setTo || show.status || 'PLANNED';
+          refreshStatusBtn(wrap, effective, STATUSES_5);
+          // Update the inherit label
+          const lbl = seasonStatusWrap.querySelector('.sp-season-inherit');
+          if (lbl) lbl.textContent = setTo ? '' : '(inherited)';
+          const bannerText = setTo
+            ? `Season ${sn} → ${STATUS_LABELS[setTo]}`
             : `Season ${sn} → inherited (${STATUS_LABELS[show.status] || show.status})`;
           showBanner(bannerText, 'info');
           setTimeout(hideBanner, 2000);
         } catch (err) {
           showBanner(`Status error: ${err.message}`, 'error');
-        } finally {
-          chip.disabled = false;
         }
-      });
-      statusChips.appendChild(chip);
-    }
-    hdr.appendChild(statusChips);
+      },
+    });
+    seasonStatusWrap.appendChild(seasonBtnWrap);
+
+    // Show "(inherited)" label when season has no explicit status
+    const inheritLabel = el('span', 'sp-season-inherit');
+    inheritLabel.textContent = seasonData.status ? '' : '(inherited)';
+    seasonStatusWrap.appendChild(inheritLabel);
+
+    hdr.appendChild(seasonStatusWrap);
   }
 
   // Minisode toggle (when season has interwoven minisodes)
@@ -2554,6 +2778,73 @@ function openSeasonMappingEditor(card, seasonNumber, seasonData, show) {
   fields.appendChild(malGroup);
 
   editor.appendChild(fields);
+
+  // AniList search
+  const searchRow = el('div', 'sp-mapping-search-row');
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.className = 'sp-mapping-input sp-mapping-search-input';
+  searchInput.placeholder = 'Search AniList…';
+  searchInput.value = show.displayTitle || '';
+  searchRow.appendChild(searchInput);
+
+  const searchBtn = el('button', 'sp-mapping-search-btn', '🔍');
+  searchBtn.title = 'Search AniList';
+  const resultsDiv = el('div', 'sp-mapping-search-results');
+
+  searchBtn.addEventListener('click', async () => {
+    const q = searchInput.value.trim();
+    if (!q) return;
+    searchBtn.disabled = true;
+    searchBtn.textContent = '…';
+    resultsDiv.innerHTML = '';
+    try {
+      const results = await searchAniList(q);
+      if (!results.length) {
+        resultsDiv.textContent = 'No results';
+      } else {
+        for (const r of results) {
+          const row = el('div', 'sp-al-result');
+          if (r.coverImageUrl) {
+            const img = document.createElement('img');
+            img.src = r.coverImageUrl;
+            img.className = 'sp-al-result-img';
+            row.appendChild(img);
+          }
+          const info = el('div', 'sp-al-result-info');
+          const title = r.titleEnglish || r.titleRomaji || r.titleNative || '?';
+          info.appendChild(el('div', 'sp-al-result-title', title));
+          const meta = [];
+          if (r.format) meta.push(r.format);
+          if (r.episodes) meta.push(`${r.episodes} ep`);
+          if (r.year) meta.push(String(r.year));
+          meta.push(`AL:${r.anilistId}`);
+          if (r.malId) meta.push(`MAL:${r.malId}`);
+          info.appendChild(el('div', 'sp-al-result-meta', meta.join(' · ')));
+          if (r.titleRomaji && r.titleRomaji !== title) {
+            info.appendChild(el('div', 'sp-al-result-romaji', r.titleRomaji));
+          }
+          row.appendChild(info);
+          row.addEventListener('click', () => {
+            alInput.value = r.anilistId;
+            if (r.malId) malInput.value = r.malId;
+            resultsDiv.innerHTML = '';
+            showBanner(`Selected: ${title}`, 'info');
+            setTimeout(hideBanner, 2000);
+          });
+          resultsDiv.appendChild(row);
+        }
+      }
+    } catch (err) {
+      resultsDiv.textContent = `Search failed: ${err.message}`;
+    }
+    searchBtn.disabled = false;
+    searchBtn.textContent = '🔍';
+  });
+
+  searchRow.appendChild(searchBtn);
+  editor.appendChild(searchRow);
+  editor.appendChild(resultsDiv);
 
   // Buttons
   const btnRow = el('div', 'sp-mapping-editor-btns');
@@ -2983,4 +3274,146 @@ export async function init() {
     showBanner(`Error loading show: ${err.message}`, 'error');
     console.error('Show load failed:', err);
   }
+}
+
+/* ── Title picker modal ───────────────────────────────────── */
+
+function openTitlePicker(show, h1El, subtitleEl) {
+  // Collect candidates: English, Romaji, Native, then synonyms
+  const choices = [];
+  const seen = new Set();
+  const add = (label, source) => {
+    if (label && !seen.has(label)) {
+      seen.add(label);
+      choices.push({ label, source });
+    }
+  };
+
+  add(show.titleEnglish, 'English');
+  add(show.titleRomaji, 'Romaji');
+  add(show.titleNative, 'Native');
+  for (const syn of (show.synonyms || [])) add(syn, 'Synonym');
+
+  // Overlay
+  const overlay = el('div', 'sp-art-overlay');
+  const modal = el('div', 'sp-art-modal tp-modal');
+
+  const heading = el('h3', 'sp-art-modal-title', 'Pick display title');
+  modal.appendChild(heading);
+
+  const list = el('div', 'tp-list');
+  for (const ch of choices) {
+    const row = el('button', 'tp-row');
+    row.textContent = ch.label;
+    const badge = el('span', 'tp-badge', ch.source);
+    row.appendChild(badge);
+    if (ch.label === show.displayTitle) row.classList.add('active');
+    row.addEventListener('click', async () => {
+      try {
+        const result = await setDisplayTitle(show.id, ch.label);
+        show.displayTitle = result.displayTitle;
+        show.displayTitleOverride = result.displayTitleOverride;
+        h1El.textContent = result.displayTitle;
+        updateRomajiSubtitle(show, subtitleEl, h1El.parentElement);
+        overlay.remove();
+        showBanner(`Title → ${result.displayTitle}`, 'ok');
+      } catch (err) {
+        showBanner(`Title change failed: ${err.message}`, 'error');
+      }
+    });
+    list.appendChild(row);
+  }
+
+  // Custom entry
+  const customRow = el('div', 'tp-custom-row');
+  const customInput = el('input', 'tp-custom-input');
+  customInput.placeholder = 'Custom title…';
+  customRow.appendChild(customInput);
+  const customBtn = el('button', 'tp-custom-btn', 'Set');
+  customBtn.addEventListener('click', async () => {
+    const val = customInput.value.trim();
+    if (!val) return;
+    try {
+      const result = await setDisplayTitle(show.id, val);
+      show.displayTitle = result.displayTitle;
+      show.displayTitleOverride = result.displayTitleOverride;
+      h1El.textContent = result.displayTitle;
+      updateRomajiSubtitle(show, subtitleEl, h1El.parentElement);
+      overlay.remove();
+      showBanner(`Title → ${result.displayTitle}`, 'ok');
+    } catch (err) {
+      showBanner(`Title change failed: ${err.message}`, 'error');
+    }
+  });
+  customRow.appendChild(customBtn);
+  modal.appendChild(list);
+  modal.appendChild(customRow);
+
+  // Clear override (reset to primary title default)
+  if (show.displayTitleOverride) {
+    const clearBtn = el('button', 'tp-clear-btn', '✕ Clear override');
+    clearBtn.addEventListener('click', async () => {
+      try {
+        const result = await setDisplayTitle(show.id, null);
+        show.displayTitle = result.displayTitle;
+        show.displayTitleOverride = null;
+        h1El.textContent = result.displayTitle;
+        updateRomajiSubtitle(show, subtitleEl, h1El.parentElement);
+        overlay.remove();
+        showBanner(`Title reset to default`, 'ok');
+      } catch (err) {
+        showBanner(`Clear failed: ${err.message}`, 'error');
+      }
+    });
+    modal.appendChild(clearBtn);
+  }
+
+  // Close button
+  const closeBtn = el('button', 'sp-art-close-btn', '✕');
+  closeBtn.addEventListener('click', () => overlay.remove());
+  modal.appendChild(closeBtn);
+
+  overlay.appendChild(modal);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+/**
+ * Build the subtitle line(s) under the main title.
+ * Logic:
+ *   - Main title is displayTitle (could be english, romaji, native, or custom)
+ *   - Subtitle shows the other variants not used as main, separated by " / "
+ *   - If main is english → subtitle = "romaji / native"
+ *   - If main is romaji → subtitle = "english / native"
+ *   - If main is native → subtitle = "english / romaji"
+ *   - If main is a custom override → subtitle = "english / romaji / native"
+ */
+function buildTitleSubtitle(show, parent) {
+  // Remove existing subtitle
+  parent.querySelector('.sp-romaji-subtitle')?.remove();
+
+  const main = show.displayTitle;
+  const eng = show.titleEnglish;
+  const rom = show.titleRomaji;
+  const nat = show.titleNative;
+
+  // Collect titles that are distinct from main and from each other
+  const parts = [];
+  if (eng && eng !== main) parts.push(eng);
+  if (rom && rom !== main && rom !== eng) parts.push(rom);
+  if (nat && nat !== main && nat !== eng && nat !== rom) parts.push(nat);
+
+  if (parts.length === 0) return;
+
+  const sub = el('div', 'sp-romaji-subtitle', parts.join(' / '));
+  const pickBtn = parent.querySelector('.sp-title-pick-btn');
+  if (pickBtn && pickBtn.nextSibling) {
+    parent.insertBefore(sub, pickBtn.nextSibling);
+  } else {
+    parent.appendChild(sub);
+  }
+}
+
+function updateRomajiSubtitle(show, _existingEl, parent) {
+  buildTitleSubtitle(show, parent);
 }

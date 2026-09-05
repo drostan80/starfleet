@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Starfleet — Backlog</title>
+  <title>TEST SHUTTLE — Backlog</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <!-- Poster art hosts — opens the connection before the first <img> is parsed -->
   <link rel="preconnect" href="https://artworks.thetvdb.com">
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=5">
+  <link rel="stylesheet" href="css/main.css?v=15">
   <style>
     /* ── Backlog card size — 20% larger than calendar default ── */
     #backlog-grid {
@@ -194,15 +194,14 @@
 
 <!-- ── Top nav ─────────────────────────────────────────── -->
 <nav class="top-nav">
-  <a href="index.html" class="nav-brand">Starfleet</a>
+  <a href="index.html" class="nav-brand">TEST SHUTTLE</a>
   <ul class="nav-links">
     <li><a href="index.html">Calendar</a></li>
     <li><a href="backlog.html" class="active">Backlog</a></li>
     <li><a href="list.html">List</a></li>
     <li><a href="grabs.html">Grabs</a></li>
-    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
-    <li><a href="downloads.html">Downloads</a></li>
     <li><a href="add.html">Add</a></li>
+    <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
   </ul>
   <div class="nav-spacer"></div>
   <div class="status-filter" id="status-filter">
@@ -223,6 +222,7 @@
       <span class="sf-dot" style="background:var(--st-dropped)"></span>Dropped
     </button>
   </div>
+    <a href="downloads.html" class="nav-icon-btn" title="Downloads">DL</a>
   <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
   <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
 </nav>
@@ -244,12 +244,12 @@
 <script type="module">
   import { getConfig, bootstrapConfig } from './js/config.js?v=3';
   import { initSearch } from './js/search.js?v=2';
-  import { fetchBacklog } from './js/api.js?v=11';
+  import { fetchBacklog } from './js/api.js?v=17';
   import {
     buildCard,
     showBanner, hideBanner,
     fetchTmdbPoster,
-  } from './js/calendar.js?v=20';
+  } from './js/calendar.js?v=28';
 
   await bootstrapConfig();
 

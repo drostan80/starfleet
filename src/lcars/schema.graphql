@@ -236,6 +236,11 @@ type Show {
   "§6.7/B.1 — last time metadata.fetch_and_populate() ran for this show, from any trigger (addShow's own inline fetch, refreshShowMetadata, or Ops's own daily pass). Null if never fetched. The once-per-day ceiling dueForMetadataRefresh reads against."
   metadataLastRefreshedAt: DateTime
 
+  "Count of episodes with at least one watch event."
+  watchedEpisodeCount: Int!
+  "Count of episodes available locally or via Sonarr/Radarr."
+  availableEpisodeCount: Int!
+
   createdAt: DateTime!
   updatedAt: DateTime!
 
@@ -381,6 +386,27 @@ type ShowExternalIdEdge {
 type ShowExternalIdConnection {
   edges: [ShowExternalIdEdge!]!
   pageInfo: PageInfo!
+}
+
+"""
+Result of an amendShowArrLink mutation — reports what happened at
+each step so the client can present clear status.
+"""
+type AmendArrLinkResult {
+  "Whether the operation completed successfully end-to-end."
+  success: Boolean!
+  "What the old external ID was (before amendment)."
+  oldExternalId: String
+  "The new external ID that was set."
+  newExternalId: String!
+  "The title Sonarr/Radarr resolved the new ID to."
+  resolvedTitle: String
+  "Whether the old series/movie was deleted from the arr."
+  arrDeleted: Boolean!
+  "Whether the correct series/movie was added to the arr."
+  arrAdded: Boolean!
+  "Human-readable status message with per-step detail."
+  message: String!
 }
 
 "§5.4 — passive/informational only, never goes through pending_review (unlike show_external_id links)."
@@ -1188,6 +1214,19 @@ type ArrCandidate {
   overview: String
 }
 
+"searchAniList result — one AniList media entry matching the search query. idMal piggybacks on AniList's own data so the picker can fill both AniList and MAL IDs at once."
+type AniListCandidate {
+  anilistId: Int!
+  malId: Int
+  titleRomaji: String
+  titleEnglish: String
+  titleNative: String
+  format: String
+  episodes: Int
+  coverImageUrl: String
+  year: Int
+}
+
 # ---------------------------------------------------------------------------
 # Browse
 # ---------------------------------------------------------------------------
@@ -1300,6 +1339,14 @@ type Query {
   has. A real service failure (unreachable, bad api key) does raise.
   """
   searchArrCandidates(mediaShape: MediaShape!, title: String!): [ArrCandidate!]!
+
+  """
+  Search AniList's anime catalog by title — returns up to 10 results sorted
+  by relevance.  Each result carries the companion MAL ID (idMal) so the
+  season mapping editor can fill both IDs from one pick.  Empty list when
+  no results found; raises on a real AniList service failure.
+  """
+  searchAniList(title: String!): [AniListCandidate!]!
 
   """
   2026-09-02 — look up a show by external-service identity (anilist, tvdb,
@@ -1800,6 +1847,22 @@ type Mutation {
   "Accepts an offered show_service_presence link (§5.4), or adds a crosswalk entry manually."
   linkShowExternalId(showId: ID!, service: String!, externalId: String!, url: String!): ShowExternalId!
   unlinkShowExternalId(showId: ID!, service: String!): Boolean!
+  """
+  Correct a wrong TVDB/TMDB external ID: validates the new ID against
+  Sonarr/Radarr's lookup, deletes the old series/movie from Sonarr/Radarr,
+  adds the correct one, and updates the LCARS external-ID link — all in
+  one call with clear per-step error reporting.
+  `deleteFiles` defaults false — the media files stay on disk.
+  """
+  amendShowArrLink(
+    showId: ID!
+    "The service being corrected — 'tvdb' (Sonarr) or 'tmdb' (Radarr)."
+    service: String!
+    "The correct external ID to replace the wrong one."
+    newExternalId: String!
+    "Delete media files from disk when removing the old series/movie."
+    deleteFiles: Boolean
+  ): AmendArrLinkResult!
   """
   A.7 — the caller supplies candidateTitles already fetched from
   `service`'s own catalog (LCARS makes no outbound HTTP calls itself

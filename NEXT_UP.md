@@ -854,12 +854,12 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
       server-side shared settings (web_setting table), CLI user management (add-user,
       reset-password, list-users), first-login setup with localStorage import. Port 8123
       (direct LCARS) still open as ungated fallback.
-- [ ] Add `watchedEpisodeCount: Int!` and `availableEpisodeCount: Int!` to the `Show` type —
+- [x] Add `watchedEpisodeCount: Int!` and `availableEpisodeCount: Int!` to the `Show` type —
       needed by the web client calendar cards to display accurate per-show progress and
       availability without a separate query. `watchedEpisodeCount` = count of episodes with at
       least one WatchEvent; `availableEpisodeCount` = count of episodes whose
       `availableViaSonarr`/`availableViaRadarr` is AVAILABLE (whichever applies to the
-      show's mediaShape).
+      show's mediaShape). Built 2026-09-05, schema + resolvers + API query + show page display.
 - [x] HTML client video playback: local player vs. browser — **closed 2026-09-04**: mpv
       helper for local playback (already built); remote/tablet playback handled by the
       existing Jellyfin server, no browser `<video>` fallback needed.
@@ -912,8 +912,8 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
       downloads.html page with history view. Hard 401 on auth failure (no redirect — prevents
       login page being written to disk under .mkv filename). Relative URLs (`/download/...`) for
       LAN + Tailscale compatibility. Built 2026-09-04, not yet deployed.
-- [ ] AniList indexes a not-yet-aired season under its romaji title only — handle case-by-case
-      as each season airs, not automated.
+- [x] AniList indexes a not-yet-aired season under its romaji title only — moot: browse fetches
+      by season+year and gets anilistId directly, no title match needed. Closed 2026-09-05.
 - [x] Client changes now sent to LCARS immediately, not buffered (2026-08-26, `~/repos/data`
       `7148d70`). The queue-then-flush buffer dated from when Data wrote to Sonarr/AniList directly;
       Data only talks to LCARS now, so `w`/`m`-status/`S` flush the moment they're made instead of
@@ -929,3 +929,35 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
       episode-state is now written into the local confirmed model too (else the row snapped back to
       the stale value until the next refresh). Data-only, no LCARS change, no deploy — live on next
       Data launch (runs from source). Full Data suite 516 passed.
+
+- **v0.1.100 — SKIP status for browse (2026-09-04)**
+    - New `skipped` value on `show.status` / `season.status` CHECK constraints (migration
+      `a3b7c9e1f042`, table-recreate pattern preserving indexes).
+    - `skipShow` mutation: lightweight tombstone (no metadata fetch, no Sonarr/Radarr, no
+      AniList/MAL push). `tracked=0`.
+    - Browse cross-reference carve-out: skipped shows appear as SKIPPED (not re-shown as
+      NOT_IN_LCARS).
+    - Push functions (`_push_show_status`, `_push_season_status`, `_push_mal_*`) use `.get()`
+      + early-return for `'skipped'` (no AniList/MAL equivalent).
+    - `_recompute_show_status` guards against overwriting `'skipped'` tombstone.
+    - UI: Skip chip in browse (both anime + TMDB), `--faint` colour, inline status feedback.
+    - Deployed, migration verified on production (3091 shows, 1915 seasons, indexes intact).
+
+- [ ] **Passive import** — Ops loop pre-creating untracked stubs from upcoming AniList/TMDB seasons. Nice-to-have, not blocking anything. #future
+- [x] **Amend external IDs** — when a show is added with wrong TVDB/TMDB IDs: correct the IDs in LCARS, delete the wrong show in Sonarr, add the correct one, and re-link. Needs UI + mutation + Sonarr delete/re-add logic. #bug-recovery
+      — 2026-09-05: `amendShowArrLink` mutation + `delete_series`/`delete_movie` in Sonarr/Radarr clients; UI on show page ext-ID editor (⇄ button on tvdb/tmdb badges); validates new ID, deletes old arr entry, adds correct one, updates LCARS link.
+- [x] all instance of choose status (exept filters for lists) to be made with the flower picker #UI
+      — 2026-09-05: extracted `status-picker.js` module from calendar.js; calendar, show page, and
+      browse page all use it; browse gets 6 petals (SKIP), others get 5.
+- [ ] make the web client the basis for an android app, player is VLC app, vlc can have remote share access...
+- [ ] check if list page could grab faster from tmdb or tvdb (which ever it isn't using, or divide and conquer (divide the work between both DB.
+- [x] calendar page #UI day in a small column on the left (more vertical space on page) — done 2026-09-05
+- [x] calendar page #UI option to toggle between current view and planner view where each day is a column — done 2026-09-05
+- [x] calendar page #UI add a move by one day back/forward to teh 3 day and week view — done 2026-09-05
+- [x] show page #UI add a way to add anilist / mal id at season level — already built (season
+      mapping editor); 2026-09-05: fixed visibility (buttons were near-invisible in dark mode,
+      changed from `var(--faint)` opacity 0.7 to `var(--muted)` opacity 0.85).
+- [x] show page #UI can there be an auto seach for anilist / mal as there is for tvdb, imdb and tmdb
+      — 2026-09-05: added `searchAniList` query (AniList public API, no auth, `SEARCH_MATCH`
+      sort, up to 10 results). Each result carries `idMal` so both AL + MAL IDs fill from one
+      pick. Search button in season mapping editor, prefilled with show title.
