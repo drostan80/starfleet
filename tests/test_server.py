@@ -2870,6 +2870,186 @@ async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(cl
     assert anilist_health["lastErrorMessage"] is None
 
 
+# --- AniList→MAL source failover (2026-09-05) --------------------------------
+
+FAKE_MAL_DETAILS = {
+    "title": "Konosuba",
+    "main_picture": {"large": "https://cdn.myanimelist.net/poster.jpg"},
+    "synopsis": "An adventurer's tale from MAL.",
+    "num_episodes": 10,
+    "average_episode_duration": 1440,  # 24 minutes, in seconds
+    "genres": [{"id": 1, "name": "Action"}],
+    "status": "finished_airing",
+}
+
+
+async def test_mal_fallback_fills_null_columns_on_anilist_outage(client, monkeypatch):
+    """When AniList is unreachable, MAL fills poster/synopsis/episodes/duration
+    into columns that are still NULL.  A pending_review still opens for the
+    AniList failure so the user knows to retry for full metadata."""
+    config.set_current(config.Config(mal_client_id="cid"))
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_media",
+        lambda *a, **kw: (_ for _ in ()).throw(anilist_client.AniListError("403 Forbidden")),
+    )
+    monkeypatch.setattr(
+        mal_client,
+        "fetch_anime_details",
+        lambda *a, **kw: FAKE_MAL_DETAILS,
+    )
+    show = await add_show(client, anilistId=12345, malId=99999)
+
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["posterUrl"] == "https://cdn.myanimelist.net/poster.jpg"
+    assert data["show"]["synopsis"] == "An adventurer's tale from MAL."
+    assert data["show"]["totalEpisodes"] is None  # deliberately excluded — see docstring
+    assert data["show"]["durationMinutes"] == 24  # 1440s / 60
+
+    # AniList pending_review still opens — the fallback is gap-fill, not a substitute
+    reviews = await _pending_reviews_for(client, show["id"])
+    assert len(reviews) == 1
+    assert reviews[0]["source"] == "anilist"
+    assert reviews[0]["field"] == "metadata_fetch"
+
+
+async def test_mal_fallback_does_not_overwrite_existing_values(client, monkeypatch):
+    """Non-NULL columns survive the fallback — MAL never overwrites AniList data."""
+    # First, add the show with AniList working so columns get filled
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+    show = await add_show(client, anilistId=12345, malId=99999)
+
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["posterUrl"] == "https://anilist.co/img/cover.jpg"
+
+    # Now AniList goes down — MAL fallback fires on refresh, but existing values stick
+    config.set_current(config.Config(mal_client_id="cid"))
+    different_mal = {
+        **FAKE_MAL_DETAILS,
+        "main_picture": {"large": "https://cdn.myanimelist.net/DIFFERENT.jpg"},
+    }
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_media",
+        lambda *a, **kw: (_ for _ in ()).throw(anilist_client.AniListError("403 Forbidden")),
+    )
+    monkeypatch.setattr(
+        mal_client,
+        "fetch_anime_details",
+        lambda *a, **kw: different_mal,
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { posterUrl } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    # AniList-sourced values survive — MAL can't overwrite them
+    assert data["show"]["posterUrl"] == "https://anilist.co/img/cover.jpg"
+
+
+async def test_mal_fallback_skips_zero_episodes_and_empty_synopsis(client, monkeypatch):
+    """MAL returns 0 for unknown episode count and sometimes empty synopsis —
+    both should be treated as NULL, not written."""
+    config.set_current(config.Config(mal_client_id="cid"))
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_media",
+        lambda *a, **kw: (_ for _ in ()).throw(anilist_client.AniListError("403 Forbidden")),
+    )
+    sparse_mal = {
+        "title": "Mini Anime",
+        "main_picture": {"large": "https://cdn.myanimelist.net/poster.jpg"},
+        "synopsis": "",
+        "num_episodes": 0,
+        "average_episode_duration": 0,
+        "genres": [],
+        "status": "finished_airing",
+    }
+    monkeypatch.setattr(
+        mal_client,
+        "fetch_anime_details",
+        lambda *a, **kw: sparse_mal,
+    )
+    show = await add_show(client, anilistId=12345, malId=99999)
+
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    # poster fills, but synopsis/episodes/duration stay NULL
+    assert data["show"]["posterUrl"] == "https://cdn.myanimelist.net/poster.jpg"
+    assert data["show"]["synopsis"] is None
+    assert data["show"]["totalEpisodes"] is None
+    assert data["show"]["durationMinutes"] is None
+
+
+async def test_mal_fallback_skips_shared_mal_id(client, monkeypatch):
+    """When >1 LCARS show shares the same MAL id (AniList split entries),
+    the fallback skips rather than writing potentially-wrong data."""
+    config.set_current(config.Config(mal_client_id="cid"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+    # Create two shows with different MAL ids initially
+    show1 = await add_show(client, anilistId=11111, malId=88888, titleRomaji="Part 1")
+    show2 = await add_show(client, anilistId=22222, malId=77777, titleRomaji="Part 2")
+
+    # Simulate AniList's split-entry pattern: both shows actually share
+    # the same idMal upstream.  Insert a second external_id row pointing
+    # show2 at show1's MAL id (88888), mimicking what a backfill or
+    # relation-stub promotion would produce.
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE show_external_id SET external_id = '88888'"
+        " WHERE show_id = ? AND service = 'mal'",
+        (show2["id"],),
+    )
+    conn.commit()
+
+    # Now AniList goes down
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_media",
+        lambda *a, **kw: (_ for _ in ()).throw(anilist_client.AniListError("403 Forbidden")),
+    )
+    fetch_called = []
+    monkeypatch.setattr(
+        mal_client,
+        "fetch_anime_details",
+        lambda *a, **kw: fetch_called.append(1) or FAKE_MAL_DETAILS,
+    )
+
+    # Refresh show1 which has mal_id 88888 (shared) — should skip
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { posterUrl } }",
+        {"id": show1["id"]},
+        headers=auth_headers(),
+    )
+    assert fetch_called == [], "MAL should not be called when mal_id is shared"
+
+
+async def test_mal_fallback_double_outage_still_opens_pending_review(client, monkeypatch):
+    """When both AniList and MAL are down, the AniList pending_review still
+    opens — the MAL failure is logged but doesn't suppress the AniList error."""
+    config.set_current(config.Config(mal_client_id="cid"))
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_media",
+        lambda *a, **kw: (_ for _ in ()).throw(anilist_client.AniListError("403 Forbidden")),
+    )
+    monkeypatch.setattr(
+        mal_client,
+        "fetch_anime_details",
+        lambda *a, **kw: (_ for _ in ()).throw(mal_client.MALError("Connection refused")),
+    )
+    show = await add_show(client, anilistId=12345, malId=99999)
+
+    reviews = await _pending_reviews_for(client, show["id"])
+    assert len(reviews) == 1
+    assert reviews[0]["source"] == "anilist"
+
+
 # --- TMDB duration fetch (A.19, §5.1 duration_minutes gap) -------------------
 #
 # Default fixture config has no tmdb_api_key, so every test above this

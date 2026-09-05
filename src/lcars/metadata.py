@@ -47,6 +47,7 @@ recorded.
 """
 
 import json
+import logging
 from collections.abc import Callable
 from datetime import datetime
 
@@ -55,6 +56,7 @@ from lcars import (
     art,
     fribb,
     ids,
+    mal_client,
     pending_review,
     radarr_client,
     season_mapping,
@@ -65,6 +67,8 @@ from lcars import (
     util,
 )
 from lcars.config import get_current
+
+log = logging.getLogger(__name__)
 
 # A.19 — mirrors shows.py's own _EXTERNAL_ID_URL_TEMPLATES/
 # _TMDB_URL_TEMPLATES exactly (migration 7196ca889757's show_external_id
@@ -270,6 +274,24 @@ def _fetch_anilist(conn, show: dict) -> None:
     except anilist_client.AniListError as e:
         service_health.record_failure(conn, "anilist", str(e))
         conn.commit()
+        # Source failover (2026-09-05): AniList is unreachable — try MAL
+        # for scalar metadata (poster, synopsis, total_episodes, duration).
+        # Deliberately fires only on the raise path, never on None (a
+        # genuinely-nonexistent AniList id triggering a MAL fetch against a
+        # possibly-stale mal_id mapping would overwrite good data with a
+        # different show's). Skips studios, characters, relations, sequel
+        # proposals — those carry AniList-namespaced IDs that MAL can't
+        # provide without cross-namespace corruption.
+        #
+        # Still re-raises the AniListError after the fallback attempt:
+        # _guarded logs a pending_review for the AniList failure so the
+        # user knows to retry later for full metadata (studios, cast,
+        # relations, banner, genres — everything MAL can't fill). The
+        # fallback is best-effort gap-fill, not a full substitute.
+        try:
+            _fetch_mal_fallback(conn, show)
+        except Exception:
+            log.exception("MAL fallback also failed during AniList outage")
         raise
     service_health.record_success(conn, "anilist")
     conn.commit()
@@ -345,6 +367,137 @@ def _fetch_anilist(conn, show: dict) -> None:
     # decide whether to add it as a new season.
     if show.get("tracked"):
         _propose_sequel_seasons(conn, show, media)
+
+
+def _fetch_mal_fallback(conn, show: dict) -> None:
+    """AniList→MAL source failover (2026-09-05) — scalars only.
+
+    Called from `_fetch_anilist`'s AniListError handler when the primary
+    source is unreachable. Writes **only into NULL columns**, never
+    overwrites an existing AniList-sourced value — so one outage can't
+    permanently degrade a show's metadata; a later AniList refresh fills
+    authoritatively when it's back.
+
+    Deliberately skips:
+    - **Studios/characters/relations/sequel proposals** — those tables
+      carry AniList-namespaced IDs. MAL IDs in the same columns would
+      silently corrupt cross-show lookups and sequel detection.
+    - **banner_url** — MAL has no banner equivalent; substituting the
+      poster would break layouts that expect a wide banner.
+    - **genres_raw** — MAL's genre vocabulary differs from AniList's
+      (e.g. MAL has "Shounen"/"Shoujo" demographics mixed with genres);
+      mixing vocabularies makes browse-by-genre inconsistent.
+    - **Synonyms** — MAL's `alternative_titles.synonyms` is a different,
+      usually shorter list; mixing sources would need dedup logic that
+      isn't worth it for a fallback path.
+    - **Art assets** — `art.store_anilist_art` assumes AniList CDN URLs;
+      MAL CDN URLs have different path conventions and lifetimes.
+    - **Season upsert** — `_upsert_season` is only safe on the initial
+      addShow fetch (metadata_last_refreshed_at IS NULL guard), and a
+      fallback during an outage is definitionally a refresh, not a first
+      fetch.
+
+    - **total_episodes** — MAL's merged-parent `num_episodes` is the sum
+      across all parts; for a split entry only one part gets tracked,
+      `dueForMetadataRefresh` only revisits watching+airing shows, so a
+      wrong count on a completed part is permanent. Poster/synopsis/
+      duration degrade gracefully (approximately right for a part);
+      total_episodes doesn't — a wrong progress denominator is worse
+      than NULL.
+
+    Uses `mal_client.fetch_anime_details` (public API, client_id only,
+    no user OAuth token needed). Deliberately does **not** record
+    `service_health` for MAL: the public API and the OAuth push path
+    are independent failure domains — a public-API hiccup shouldn't
+    flip the MAL status bar to "unreachable" when token-based sync is
+    fine. If MAL is also unreachable, the caller logs the exception
+    and re-raises the original AniListError so `_guarded` still opens
+    a pending_review.
+
+    Commit note: the UPDATEs below are not explicitly committed here —
+    they ride the caller's commit (`shows.create_show` line 248 /
+    `resolve_refresh_show_metadata` line 2207), same as `_guarded`'s
+    own `pending_review.open_or_extend`.
+    """
+    mal_id_str = _external_id(conn, show["id"], "mal")
+    if mal_id_str is None:
+        log.info("MAL fallback skipped for %s: no MAL external id", show["id"])
+        return
+
+    # Guard: AniList sometimes splits what MAL keeps as one entry into
+    # several Media entries (Ao Haru Ride PAGE.13/unwritten, Summer
+    # Pockets chapters, etc. — see _existing_related_show's docstring).
+    # When >1 LCARS show shares the same mal external_id, writing the
+    # merged MAL entry's data would put wrong values (especially
+    # num_episodes, which is the total across all parts) into each split
+    # part's columns.  Skip instead — the data is ambiguous.
+    (shared_count,) = conn.execute(
+        "SELECT COUNT(DISTINCT show_id) FROM show_external_id"
+        " WHERE service = 'mal' AND external_id = ?",
+        (mal_id_str,),
+    ).fetchone()
+    if shared_count > 1:
+        log.info(
+            "MAL fallback skipped for %s: mal_id %s is shared by %d shows",
+            show["id"], mal_id_str, shared_count,
+        )
+        return
+
+    cfg = get_current()
+    if not cfg.mal_client_id:
+        log.info("MAL fallback skipped: mal_client_id not configured")
+        return
+
+    try:
+        details = mal_client.fetch_anime_details(int(mal_id_str), cfg.mal_client_id)
+    except mal_client.MALError as e:
+        log.warning("MAL fallback also failed for %s: %s", show["id"], e)
+        raise
+    if details is None:
+        log.info("MAL fallback: mal_id %s returned 404", mal_id_str)
+        return
+
+    poster = (details.get("main_picture") or {}).get("large")
+    synopsis = details.get("synopsis")
+    # MAL's average_episode_duration is in seconds; LCARS stores minutes
+    duration_seconds = details.get("average_episode_duration")
+    duration_minutes = round(duration_seconds / 60) if duration_seconds else None
+
+    now = util.now_utc_iso()
+    # Key difference from _fetch_anilist's COALESCE pattern: this uses
+    # "WHERE ... AND column IS NULL" guards so MAL data ONLY fills empty
+    # columns, never overwrites an AniList-sourced value that's already
+    # there. _fetch_anilist uses COALESCE(new, old) which lets the new
+    # value win — that's correct for the primary source, wrong for a
+    # fallback that should never degrade existing data.
+    if poster:
+        conn.execute(
+            "UPDATE show SET poster_url = ?, updated_at = ?"
+            " WHERE id = ? AND poster_url IS NULL",
+            (poster, now, show["id"]),
+        )
+    if synopsis:
+        conn.execute(
+            "UPDATE show SET synopsis = ?, updated_at = ?"
+            " WHERE id = ? AND synopsis IS NULL",
+            (synopsis, now, show["id"]),
+        )
+    if duration_minutes:
+        conn.execute(
+            "UPDATE show SET duration_minutes = ?, updated_at = ?"
+            " WHERE id = ? AND duration_minutes IS NULL",
+            (duration_minutes, now, show["id"]),
+        )
+
+    log.info(
+        "MAL fallback filled metadata for %s (mal_id=%s): "
+        "poster=%s synopsis=%s duration=%s",
+        show["id"],
+        mal_id_str,
+        poster is not None,
+        synopsis is not None,
+        duration_minutes,
+    )
 
 
 def _reconcile_air_dates(conn, show: dict) -> None:

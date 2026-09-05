@@ -177,6 +177,69 @@ def refresh_access_token(
     return payload["access_token"], payload.get("refresh_token", refresh_token)
 
 
+_ANIME_DETAIL_FIELDS = (
+    "title,main_picture,synopsis,num_episodes,average_episode_duration,"
+    "genres,alternative_titles,start_date,end_date,status,media_type"
+)
+
+
+def fetch_anime_details(
+    mal_id: int,
+    client_id: str,
+    client: httpx.Client | None = None,
+) -> dict | None:
+    """Public metadata for one anime — `GET /v2/anime/{id}?fields=...`,
+    authenticated by `X-MAL-CLIENT-ID` header only (no user OAuth token
+    needed). Returns the raw MAL response dict on success, None on 404
+    (genuinely nonexistent id). Raises `MALError` on network/server
+    errors so the caller can log and handle as appropriate.
+
+    Built for AniList→MAL source failover (2026-09-05): when AniList is
+    unreachable, `metadata._fetch_mal_fallback` uses this to fill scalar
+    show fields (poster, synopsis, duration) from MAL instead.
+    Deliberately does NOT require a user access token — public data is
+    available to any registered app's client_id, same as AniList's own
+    `fetch_media` which needs no auth either.  The caller does **not**
+    record `service_health` for MAL from this path — the public API and
+    the OAuth push path are independent failure domains (see
+    `_fetch_mal_fallback`'s own docstring).
+
+    Field mapping notes for callers:
+    - `average_episode_duration` is in **seconds** (MAL's convention);
+      LCARS's `duration_minutes` is minutes — caller must divide by 60.
+    - `main_picture.large` is a poster; MAL has no banner equivalent.
+    - `genres` uses MAL's own vocabulary, which differs from AniList's.
+    """
+    owns_client = client is None
+    client = client or httpx.Client(timeout=10.0)
+    try:
+        try:
+            response = client.get(
+                f"{API_BASE_URL}/anime/{mal_id}?fields={_ANIME_DETAIL_FIELDS}",
+                headers={"X-MAL-CLIENT-ID": client_id},
+            )
+        except httpx.ConnectError as e:
+            raise MALError("Could not connect to MyAnimeList") from e
+        except httpx.TimeoutException as e:
+            raise MALError("Timed out talking to MyAnimeList") from e
+
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("message")
+            except (ValueError, AttributeError):
+                detail = None
+            raise MALError(
+                f"MyAnimeList returned an error: HTTP {response.status_code}"
+                + (f" ({detail})" if detail else "")
+            )
+        return response.json()
+    finally:
+        if owns_client:
+            client.close()
+
+
 def update_my_list_status(
     token: str,
     mal_id: int,
