@@ -961,3 +961,13 @@ See `ui/CLAUDE.md` and `ui/DESIGN.md` for full details.
       — 2026-09-05: added `searchAniList` query (AniList public API, no auth, `SEARCH_MATCH`
       sort, up to 10 results). Each result carries `idMal` so both AL + MAL IDs fill from one
       pick. Search button in season mapping editor, prefilled with show title.
+- [x] art picker: extract to shared `art-picker.js` module (avoids circular dep), planner 🖼
+      button opens full art picker modal, images show at natural aspect ratio (not forced 2/3
+      poster crop), banner/background grid wider columns (240px), aspect ratio displayed in badge.
+      — 2026-09-05 (v0.2.1)
+- [x] week view 1-day navigation: ‹/› buttons now step by 1 day in week mode (previously had no
+      effect due to isoWeekMon snap in computeRange); clicking Week snaps to Monday of current week.
+      — 2026-09-05 (v0.2.1)
+- [x] app name: runtime-derived from hostname (`STARFLEET` in production, `TEST SHUTTLE` on
+      localhost) via `applyAppName()` in `config.js`, replacing hardcoded title/nav-brand strings.
+      — 2026-09-05 (v0.2.1)
