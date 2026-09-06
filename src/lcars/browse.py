@@ -227,6 +227,77 @@ def _cross_reference_by_mal(
     return result
 
 
+def _enrich_tvdb_from_lcars_relations(
+    conn: sqlite3.Connection,
+    mal_ids: list[int],
+    fribb_by_mal: dict[int, dict],
+) -> None:
+    """For browse items that recovered anilist_id/mal_id from Fribb but
+    still lack tvdb_id, walk LCARS's own data: find a stub show matching
+    the mal_id (or anilist_id), follow its SEQUEL/PREQUEL relations to a
+    parent, and grab that parent's tvdb_id. TVDB IDs are show-level — a
+    sequel's tvdb_id is always the same as its parent's.
+
+    Mutates ``fribb_by_mal`` in place — adds ``tvdb_id`` where found."""
+    # Build lookup keys: mal_id → str, anilist_id → str
+    search_ids: list[tuple[str, str, int]] = []  # (service, ext_id_str, mal_id)
+    for mid in mal_ids:
+        fb = fribb_by_mal.get(mid, {})
+        search_ids.append(("mal", str(mid), mid))
+        if fb.get("anilist_id"):
+            search_ids.append(("anilist", str(fb["anilist_id"]), mid))
+
+    if not search_ids:
+        return
+
+    # Find LCARS show_ids for these external IDs (including untracked stubs)
+    mal_to_show: dict[int, str] = {}
+    for service, ext_id, mid in search_ids:
+        row = conn.execute(
+            "SELECT show_id FROM show_external_id WHERE service = ? AND external_id = ?",
+            (service, ext_id),
+        ).fetchone()
+        if row and mid not in mal_to_show:
+            mal_to_show[mid] = row["show_id"]
+
+    if not mal_to_show:
+        return
+
+    # For each matched stub, walk relations to find a show with tvdb_id
+    for mid, show_id in mal_to_show.items():
+        # Check if the stub itself has tvdb_id
+        tvdb_row = conn.execute(
+            "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'tvdb'",
+            (show_id,),
+        ).fetchone()
+        if tvdb_row:
+            fribb_by_mal[mid]["tvdb_id"] = int(tvdb_row["external_id"])
+            continue
+
+        # Walk one hop: SEQUEL or PREQUEL relation → related show's tvdb
+        related_rows = conn.execute(
+            "SELECT sr.related_show_id, sei.external_id"
+            " FROM show_relation sr"
+            " JOIN show_external_id sei ON sei.show_id = sr.related_show_id AND sei.service = 'tvdb'"
+            " WHERE sr.show_id = ?",
+            (show_id,),
+        ).fetchall()
+        if related_rows:
+            fribb_by_mal[mid]["tvdb_id"] = int(related_rows[0]["external_id"])
+            continue
+
+        # Reverse direction: this show is someone else's related_show
+        reverse_rows = conn.execute(
+            "SELECT sr.show_id AS parent_id, sei.external_id"
+            " FROM show_relation sr"
+            " JOIN show_external_id sei ON sei.show_id = sr.show_id AND sei.service = 'tvdb'"
+            " WHERE sr.related_show_id = ?",
+            (show_id,),
+        ).fetchall()
+        if reverse_rows:
+            fribb_by_mal[mid]["tvdb_id"] = int(reverse_rows[0]["external_id"])
+
+
 # ── Flattening ───────────────────────────────────────────────────────
 
 
@@ -469,19 +540,47 @@ def _fetch_seasonal_from_mal(
     mal_ids = [n["id"] for n in nodes if n.get("id")]
     lcars_matches = _cross_reference_by_mal(conn, mal_ids)
 
-    # Fribb dataset — recover anilist/tvdb/imdb for MAL-only items
+    # Fribb dataset — recover anilist/tvdb/imdb for MAL-only items.
+    # Three-pass strategy for tvdb_id:
+    #  1. MAL index: mal_id → {anilist_id, tvdb_id, imdb_id}
+    #  2. Anilist index: if got anilist_id but no tvdb_id, try the
+    #     anilist index (S1's tvdb_id = S2's, since TVDB is show-level)
+    #  3. LCARS relations: if still no tvdb_id, look up the recovered
+    #     anilist_id or mal_id in LCARS's show_external_id — even
+    #     untracked stubs from relation walks carry tvdb_id, and a
+    #     season 2 stub is SEQUEL-linked to its parent whose tvdb_id
+    #     is the same show.
     unmatched_mal_ids = [mid for mid in mal_ids if mid not in lcars_matches]
     fribb_by_mal: dict[int, dict] = {}
     if unmatched_mal_ids:
         try:
             dataset = fribb.load_dataset()
             mal_index = fribb.build_mal_index(dataset)
+            anilist_index = fribb.build_anilist_index(dataset)
             for mid in unmatched_mal_ids:
                 ids = fribb.resolve_ids_for_mal(mal_index, mid)
+                # Pass 2: anilist index fallback for tvdb
+                if ids.get("anilist_id") and not ids.get("tvdb_id"):
+                    tvdb = fribb.resolve_tvdb_id_for_anilist(
+                        anilist_index, ids["anilist_id"]
+                    )
+                    if tvdb:
+                        ids["tvdb_id"] = tvdb
                 if any(ids.values()):
                     fribb_by_mal[mid] = ids
         except Exception:
             log.debug("Fribb MAL lookup failed for browse enrichment", exc_info=True)
+
+    # Pass 3: LCARS relation walk — for items still missing tvdb_id,
+    # check if LCARS has a stub (from a prior relation walk) whose
+    # parent show carries the tvdb_id. TVDB is show-level, so a sequel's
+    # tvdb_id is always the parent's.
+    still_missing_tvdb = [
+        mid for mid in unmatched_mal_ids
+        if mid in fribb_by_mal and not fribb_by_mal[mid].get("tvdb_id")
+    ]
+    if still_missing_tvdb:
+        _enrich_tvdb_from_lcars_relations(conn, still_missing_tvdb, fribb_by_mal)
 
     items = [
         _flatten_mal_media(n, lcars_matches.get(n.get("id")), fribb_by_mal.get(n.get("id")))
