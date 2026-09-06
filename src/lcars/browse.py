@@ -15,10 +15,11 @@ in anilist_client.py: one shared connection, sync execution model.
 """
 
 import logging
+import re
 import sqlite3
 import time
 
-from lcars import anilist_client, fribb, mal_client
+from lcars import anilist_client, fribb, mal_client, sonarr_client
 from lcars import config as cfg
 
 log = logging.getLogger(__name__)
@@ -298,6 +299,106 @@ def _enrich_tvdb_from_lcars_relations(
             fribb_by_mal[mid]["tvdb_id"] = int(reverse_rows[0]["external_id"])
 
 
+# Season/sequel suffixes to strip before Sonarr title search — TVDB is
+# show-level so "X 2nd Season" and "X" resolve to the same series.
+_SEASON_SUFFIX_RE = re.compile(
+    r'\s*(?:'
+    r'(?:\d+(?:st|nd|rd|th)\s+)?[Ss]eason(?:\s*\d+)?'  # "2nd Season", "Season 2"
+    r'|[Pp]art\s*\d+'                                    # "Part 2"
+    r'|[Ss]\d+'                                           # "S2"
+    r'|II+$'                                              # "III" at end
+    r'|Cour\s*\d+'                                        # "Cour 2"
+    r')\s*$'
+)
+
+
+def _strip_season_suffix(title: str) -> str:
+    """Strip season/sequel suffixes from a title for Sonarr search.
+    E.g. "Black Clover 2nd Season" → "Black Clover"."""
+    return _SEASON_SUFFIX_RE.sub('', title).rstrip(' :·-')
+
+
+# In-process cache: title → tvdb_id (or None for "searched, not found").
+# Survives across requests within the same server process — same lifecycle
+# as the browse page cache. Keyed on the cleaned title (after suffix strip).
+_sonarr_title_cache: dict[str, int | None] = {}
+
+
+def _enrich_tvdb_via_sonarr(items: list[dict]) -> None:
+    """Final enrichment pass: for browse items still missing tvdb_id,
+    search Sonarr by title — the same lookup that runs when adding a
+    show. Sonarr's ``series/lookup`` is a local network call to our own
+    instance, backed by TVDB's search. Results are cached per title.
+
+    Mutates items in place — sets ``tvdb_id`` where Sonarr finds a match.
+    Only the first (best-ranked) result is used, since Sonarr returns
+    results sorted by relevance. For titles with season suffixes
+    ("2nd Season", "Part 2"), the suffix is stripped first since TVDB
+    is show-level."""
+    try:
+        conf = cfg.get_current()
+    except RuntimeError:
+        return
+    if not conf.sonarr_url or not conf.sonarr_api_key:
+        return
+
+    # Gather items that still need tvdb_id
+    need_tvdb = [it for it in items if not it.get("tvdb_id")]
+    if not need_tvdb:
+        return
+
+    client = None
+    try:
+        for item in need_tvdb:
+            title = item.get("title_romaji") or item.get("title_english") or ""
+            if not title:
+                continue
+            clean = _strip_season_suffix(title)
+            if not clean:
+                continue
+
+            # Check cache first
+            if clean in _sonarr_title_cache:
+                cached_tvdb = _sonarr_title_cache[clean]
+                if cached_tvdb:
+                    item["tvdb_id"] = cached_tvdb
+                continue
+
+            # Search Sonarr
+            if client is None:
+                client = sonarr_client.SonarrClient(conf.sonarr_url, conf.sonarr_api_key)
+            try:
+                results = client.lookup_series(clean)
+            except Exception:
+                log.debug("Sonarr lookup failed for %r", clean, exc_info=True)
+                _sonarr_title_cache[clean] = None
+                continue
+
+            if results and results[0].get("tvdbId"):
+                tvdb_id = results[0]["tvdbId"]
+                _sonarr_title_cache[clean] = tvdb_id
+                item["tvdb_id"] = tvdb_id
+            else:
+                _sonarr_title_cache[clean] = None
+
+            # Also try the original title if different from cleaned
+            if clean != title and not item.get("tvdb_id") and title not in _sonarr_title_cache:
+                try:
+                    results = client.lookup_series(title)
+                except Exception:
+                    _sonarr_title_cache[title] = None
+                    continue
+                if results and results[0].get("tvdbId"):
+                    tvdb_id = results[0]["tvdbId"]
+                    _sonarr_title_cache[title] = tvdb_id
+                    item["tvdb_id"] = tvdb_id
+                else:
+                    _sonarr_title_cache[title] = None
+    finally:
+        if client:
+            client.close()
+
+
 # ── Flattening ───────────────────────────────────────────────────────
 
 
@@ -501,6 +602,9 @@ def fetch_seasonal_browse(
         for m in media_list
     ]
 
+    # Final pass: Sonarr title search for anything still missing tvdb_id
+    _enrich_tvdb_via_sonarr(items)
+
     return {
         "items": items,
         "current_page": page_info.get("currentPage", page),
@@ -586,6 +690,9 @@ def _fetch_seasonal_from_mal(
         _flatten_mal_media(n, lcars_matches.get(n.get("id")), fribb_by_mal.get(n.get("id")))
         for n in nodes
     ]
+
+    # Final pass: Sonarr title search for anything still missing tvdb_id
+    _enrich_tvdb_via_sonarr(items)
 
     # MAL paging: cursor-based, no total/lastPage — synthesize
     paging = mal_page.get("paging") or {}
