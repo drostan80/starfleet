@@ -19,7 +19,7 @@ import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS,
 } from './status-picker.js?v=1';
-import { _anilistSvg, _malSvg, _tvdbSvg, _tmdbMarkSvg } from './icons.js?v=8';
+import { _anilistSvg, _malSvg, _tvdbSvg, _imdbSvg, _tmdbMarkSvg } from './icons.js?v=8';
 
 // ── Constants ────────────────────────────────────────────
 
@@ -43,6 +43,7 @@ const BROWSE_SVC_DEFS = [
   { key: 'anilist', cls: 'svc-al',   svg: _anilistSvg, label: 'AniList', urlTpl: 'https://anilist.co/anime/{id}' },
   { key: 'mal',     cls: 'svc-mal',  svg: _malSvg,     label: 'MAL',     urlTpl: 'https://myanimelist.net/anime/{id}' },
   { key: 'tvdb',    cls: 'svc-tvdb', svg: _tvdbSvg,    label: 'TheTVDB', urlTpl: 'https://thetvdb.com/dereferrer/series/{id}' },
+  { key: 'imdb',    cls: 'svc-imdb', svg: _imdbSvg,    label: 'IMDb',    urlTpl: 'https://www.imdb.com/title/{id}/' },
   { key: 'tmdb',    cls: 'svc-tmdb', svg: _tmdbMarkSvg, label: 'TMDB',   urlTpl: 'https://www.themoviedb.org/tv/{id}' },
 ];
 
@@ -647,10 +648,13 @@ function createAnimeCard(item) {
     body.appendChild(synopsis);
   }
 
-  // Service links (AniList, MAL, etc.)
+  // Service links (AniList, MAL, TVDB, IMDB, TMDB)
   const links = buildBrowseLinks({
     anilist: item.anilistId,
     mal: item.malId,
+    tvdb: item.tvdbId,
+    imdb: item.imdbId,
+    tmdb: item.tmdbId,
   });
   body.appendChild(links);
 

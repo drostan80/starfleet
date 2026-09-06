@@ -945,7 +945,7 @@ export async function browseSeasonalAnime(season, year, page = 1) {
     query BrowseSeasonal($season: AnimeSeason!, $year: Int!, $page: Int) {
       browseSeasonalAnime(season: $season, year: $year, page: $page) {
         items {
-          anilistId malId
+          anilistId malId tvdbId imdbId tmdbId
           titleRomaji titleEnglish titleNative
           coverImageUrl description
           genres format episodes duration status

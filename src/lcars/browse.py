@@ -18,7 +18,7 @@ import logging
 import sqlite3
 import time
 
-from lcars import anilist_client, mal_client
+from lcars import anilist_client, fribb, mal_client
 from lcars import config as cfg
 
 log = logging.getLogger(__name__)
@@ -81,8 +81,10 @@ def _set_cached(season: str, year: int, page: int, data: dict) -> None:
 def _cross_reference(
     conn: sqlite3.Connection, anilist_ids: list[int]
 ) -> dict[int, dict]:
-    """Return {anilist_id -> {show_id, status, season_id, season_status}}
-    for tracked shows matching the given AniList IDs."""
+    """Return {anilist_id -> {show_id, status, season_id, season_status,
+    external_ids}} for tracked shows matching the given AniList IDs.
+    ``external_ids`` is a dict of {service: external_id_str} for the
+    matched show — used by browse cards to render cross-database links."""
     if not anilist_ids:
         return {}
 
@@ -130,6 +132,20 @@ def _cross_reference(
                 "season_id": row["season_id"],
                 "season_status": row["season_status"],
             }
+
+    # 3. Enrich matched shows with their full external-id set.
+    matched_show_ids = list({m["show_id"] for m in result.values()})
+    ext_ids_by_show: dict[str, dict[str, str]] = {}
+    if matched_show_ids:
+        ph2 = ",".join("?" for _ in matched_show_ids)
+        for row in conn.execute(
+            f"SELECT show_id, service, external_id FROM show_external_id"
+            f" WHERE show_id IN ({ph2})",
+            matched_show_ids,
+        ).fetchall():
+            ext_ids_by_show.setdefault(row["show_id"], {})[row["service"]] = row["external_id"]
+    for m in result.values():
+        m["external_ids"] = ext_ids_by_show.get(m["show_id"], {})
 
     return result
 
@@ -194,6 +210,20 @@ def _cross_reference_by_mal(
                 "season_status": row["season_status"],
             }
 
+    # 3. Enrich matched shows with their full external-id set.
+    matched_show_ids = list({m["show_id"] for m in result.values()})
+    ext_ids_by_show: dict[str, dict[str, str]] = {}
+    if matched_show_ids:
+        ph2 = ",".join("?" for _ in matched_show_ids)
+        for row in conn.execute(
+            f"SELECT show_id, service, external_id FROM show_external_id"
+            f" WHERE show_id IN ({ph2})",
+            matched_show_ids,
+        ).fetchall():
+            ext_ids_by_show.setdefault(row["show_id"], {})[row["service"]] = row["external_id"]
+    for m in result.values():
+        m["external_ids"] = ext_ids_by_show.get(m["show_id"], {})
+
     return result
 
 
@@ -213,12 +243,26 @@ def _format_fuzzy_date(d: dict | None) -> str | None:
     return "-".join(parts)
 
 
-def _flatten_media(media: dict, lcars_match: dict | None) -> dict:
+def _flatten_media(
+    media: dict,
+    lcars_match: dict | None,
+    fribb_tvdb_id: int | None = None,
+) -> dict:
     """Flatten one AniList media item + optional LCARS match into a
-    snake_case dict for ``SeasonalBrowseItem``."""
+    snake_case dict for ``SeasonalBrowseItem``.
+
+    ``fribb_tvdb_id`` is the TVDB ID resolved via the Fribb dataset for
+    untracked items (tracked items get their TVDB ID from
+    ``lcars_match["external_ids"]``).
+    """
+    ext = (lcars_match or {}).get("external_ids", {})
+    tvdb_raw = ext.get("tvdb") or fribb_tvdb_id
     return {
         "anilist_id": media["id"],
         "mal_id": media.get("idMal"),
+        "tvdb_id": int(tvdb_raw) if tvdb_raw else None,
+        "imdb_id": ext.get("imdb") or None,
+        "tmdb_id": int(ext["tmdb"]) if ext.get("tmdb") else None,
         "title_romaji": (media.get("title") or {}).get("romaji"),
         "title_english": (media.get("title") or {}).get("english"),
         "title_native": (media.get("title") or {}).get("native"),
@@ -263,7 +307,8 @@ def _flatten_mal_media(node: dict, lcars_match: dict | None) -> dict:
     ``_flatten_media`` — ``SeasonalBrowseItem``-compatible.
 
     Differences from the AniList path:
-    - ``anilist_id`` is None (MAL doesn't carry AniList IDs)
+    - ``anilist_id`` is None (MAL doesn't carry AniList IDs) — unless
+      the tracked LCARS match has one in its external_ids
     - ``duration`` is derived from ``average_episode_duration`` (seconds → minutes)
     - ``studio_names`` from MAL's studios list
     - ``format`` mapped from MAL's ``media_type``
@@ -281,9 +326,16 @@ def _flatten_mal_media(node: dict, lcars_match: dict | None) -> dict:
     avg_dur = node.get("average_episode_duration")
     duration = avg_dur // 60 if avg_dur and avg_dur > 0 else None
 
+    ext = (lcars_match or {}).get("external_ids", {})
+    anilist_raw = ext.get("anilist")
+    tvdb_raw = ext.get("tvdb")
+
     return {
-        "anilist_id": None,
+        "anilist_id": int(anilist_raw) if anilist_raw else None,
         "mal_id": node.get("id"),
+        "tvdb_id": int(tvdb_raw) if tvdb_raw else None,
+        "imdb_id": ext.get("imdb") or None,
+        "tmdb_id": int(ext["tmdb"]) if ext.get("tmdb") else None,
         "title_romaji": node.get("title"),  # MAL's title field IS the romaji
         "title_english": alt_titles.get("en") or None,  # None when no English title
         "title_native": alt_titles.get("ja"),
@@ -351,9 +403,21 @@ def fetch_seasonal_browse(
     anilist_ids = [m["id"] for m in media_list]
     lcars_matches = _cross_reference(conn, anilist_ids)
 
+    # Fribb dataset — resolve TVDB for items not tracked in LCARS
+    unmatched_ids = [aid for aid in anilist_ids if aid not in lcars_matches]
+    fribb_tvdb: dict[int, int | None] = {}
+    if unmatched_ids:
+        try:
+            dataset = fribb.load_dataset()
+            index = fribb.build_anilist_index(dataset)
+            for aid in unmatched_ids:
+                fribb_tvdb[aid] = fribb.resolve_tvdb_id_for_anilist(index, aid)
+        except Exception:
+            log.debug("Fribb lookup failed for browse TVDB enrichment", exc_info=True)
+
     # Flatten
     items = [
-        _flatten_media(m, lcars_matches.get(m["id"]))
+        _flatten_media(m, lcars_matches.get(m["id"]), fribb_tvdb.get(m["id"]))
         for m in media_list
     ]
 

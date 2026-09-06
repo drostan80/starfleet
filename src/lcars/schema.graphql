@@ -1235,6 +1235,10 @@ type SeasonalBrowseItem {
   "Null when data comes from MAL fallback (MAL doesn't carry AniList IDs)."
   anilistId: Int
   malId: Int
+  "Cross-database IDs — populated from LCARS's own external-id data when available, or from the Fribb dataset for TVDB."
+  tvdbId: Int
+  imdbId: String
+  tmdbId: Int
   titleRomaji: String
   titleEnglish: String
   titleNative: String

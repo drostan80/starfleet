@@ -62,6 +62,12 @@ def mem_db():
         "  anilist_id INTEGER, status TEXT"
         ")"
     )
+    conn.execute(
+        "CREATE TABLE season_external_id ("
+        "  season_id TEXT, service TEXT, external_id TEXT,"
+        "  UNIQUE(season_id, service)"
+        ")"
+    )
     conn.commit()
     return conn
 
@@ -243,6 +249,53 @@ def test_result_shape(mem_db):
     assert result["total"] == 50
     assert result["has_next_page"] is True
     assert len(result["items"]) == 2
+
+
+def test_tracked_show_external_ids_enriched(mem_db):
+    """Tracked shows should carry tvdb/imdb/tmdb from show_external_id."""
+    mem_db.execute("INSERT INTO show VALUES ('s-enr', 'WATCHING', 1)")
+    mem_db.executemany(
+        "INSERT INTO show_external_id VALUES (?, ?, ?)",
+        [
+            ("s-enr", "anilist", "5000"),
+            ("s-enr", "mal", "6000"),
+            ("s-enr", "tvdb", "7000"),
+            ("s-enr", "imdb", "tt1234567"),
+            ("s-enr", "tmdb", "8000"),
+        ],
+    )
+    mem_db.commit()
+
+    page_data = _make_anilist_page([_make_media(5000, mal_id=6000)])
+
+    with patch.object(browse.anilist_client, "fetch_seasonal_page", return_value=page_data):
+        result = browse.fetch_seasonal_browse(mem_db, "FALL", 2026)
+
+    item = result["items"][0]
+    assert item["tvdb_id"] == 7000
+    assert item["imdb_id"] == "tt1234567"
+    assert item["tmdb_id"] == 8000
+
+
+def test_untracked_item_gets_fribb_tvdb(mem_db):
+    """Unmatched items should get tvdb_id from Fribb dataset."""
+    page_data = _make_anilist_page([_make_media(9999)])
+
+    fake_dataset = [{"anilist_id": 9999, "thetvdb_id": 42000}]
+    fake_index = {9999: [{"thetvdb_id": 42000}]}
+
+    with (
+        patch.object(browse.anilist_client, "fetch_seasonal_page", return_value=page_data),
+        patch.object(browse.fribb, "load_dataset", return_value=fake_dataset),
+        patch.object(browse.fribb, "build_anilist_index", return_value=fake_index),
+        patch.object(browse.fribb, "resolve_tvdb_id_for_anilist", return_value=42000),
+    ):
+        result = browse.fetch_seasonal_browse(mem_db, "FALL", 2026)
+
+    item = result["items"][0]
+    assert item["tvdb_id"] == 42000
+    assert item["imdb_id"] is None  # not available from Fribb
+    assert item["tmdb_id"] is None
 
 
 def test_invalid_season_raises(mem_db):
