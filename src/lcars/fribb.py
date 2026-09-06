@@ -65,6 +65,10 @@ _index_cache: dict[int, dict[int, list[dict]]] = {}
 # own docstring for why this exists as a genuinely separate index
 # rather than a lookup derived from build_tvdb_index()'s output.
 _anilist_index_cache: dict[int, dict[int, list[dict]]] = {}
+# 2026-09-06 — keyed by mal_id, same structure as the anilist index.
+# Used by browse's MAL-fallback path to recover tvdb/anilist/imdb IDs
+# when AniList is down and only MAL IDs are available.
+_mal_index_cache: dict[int, dict[int, list[dict]]] = {}
 
 
 def _dataset_is_stale(path: Path, max_age: float) -> bool:
@@ -187,6 +191,46 @@ def resolve_tvdb_id_for_anilist(index: dict[int, list[dict]], anilist_id: int) -
     if len(tvdb_ids) != 1:
         return None
     return tvdb_ids.pop()
+
+
+def build_mal_index(dataset: list[dict]) -> dict[int, list[dict]]:
+    """Keyed by mal_id — same structure as build_anilist_index() above.
+    Used by the browse MAL-fallback path: when AniList is down, browse
+    data only carries MAL IDs, so this index recovers tvdb_id, anilist_id,
+    and imdb_id from the Fribb dataset without any network call."""
+    cached = _mal_index_cache.get(id(dataset))
+    if cached is not None:
+        return cached
+    index: dict[int, list[dict]] = {}
+    for entry in dataset:
+        if entry.get("mal_id") in _MISSING or entry.get("tvdb_id") in _MISSING:
+            continue
+        index.setdefault(entry["mal_id"], []).append(entry)
+    _mal_index_cache.clear()
+    _mal_index_cache[id(dataset)] = index
+    return index
+
+
+def resolve_ids_for_mal(
+    index: dict[int, list[dict]], mal_id: int
+) -> dict[str, int | str | None]:
+    """Resolve tvdb_id, anilist_id, and imdb_id from a MAL ID via Fribb.
+
+    Returns a dict with keys ``tvdb_id``, ``anilist_id``, ``imdb_id``
+    (each nullable). Same "never guess" discipline as
+    resolve_tvdb_id_for_anilist — if the mal_id maps to multiple
+    conflicting tvdb_ids, tvdb_id is None; likewise for anilist_id."""
+    candidates = index.get(mal_id, [])
+    if not candidates:
+        return {"tvdb_id": None, "anilist_id": None, "imdb_id": None}
+    tvdb_ids = {c["tvdb_id"] for c in candidates}
+    tvdb_id = tvdb_ids.pop() if len(tvdb_ids) == 1 else None
+    anilist_ids = {c["anilist_id"] for c in candidates if c.get("anilist_id") not in _MISSING}
+    anilist_id = anilist_ids.pop() if len(anilist_ids) == 1 else None
+    # imdb_id: Fribb stores as a list; take first from the first candidate
+    imdb_list = candidates[0].get("imdb_id") or []
+    imdb_id = imdb_list[0] if isinstance(imdb_list, list) and imdb_list else None
+    return {"tvdb_id": tvdb_id, "anilist_id": anilist_id, "imdb_id": imdb_id}
 
 
 def resolve_season_candidate(

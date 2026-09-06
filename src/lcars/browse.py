@@ -302,13 +302,20 @@ _MAL_FORMAT_MAP = {
 }
 
 
-def _flatten_mal_media(node: dict, lcars_match: dict | None) -> dict:
+def _flatten_mal_media(
+    node: dict,
+    lcars_match: dict | None,
+    fribb_ids: dict | None = None,
+) -> dict:
     """Flatten one MAL anime node into the same snake_case shape as
     ``_flatten_media`` — ``SeasonalBrowseItem``-compatible.
 
+    ``fribb_ids`` is the Fribb-resolved dict for untracked items
+    (keys: ``tvdb_id``, ``anilist_id``, ``imdb_id``).
+
     Differences from the AniList path:
     - ``anilist_id`` is None (MAL doesn't carry AniList IDs) — unless
-      the tracked LCARS match has one in its external_ids
+      the tracked LCARS match or Fribb has one
     - ``duration`` is derived from ``average_episode_duration`` (seconds → minutes)
     - ``studio_names`` from MAL's studios list
     - ``format`` mapped from MAL's ``media_type``
@@ -327,14 +334,16 @@ def _flatten_mal_media(node: dict, lcars_match: dict | None) -> dict:
     duration = avg_dur // 60 if avg_dur and avg_dur > 0 else None
 
     ext = (lcars_match or {}).get("external_ids", {})
-    anilist_raw = ext.get("anilist")
-    tvdb_raw = ext.get("tvdb")
+    fb = fribb_ids or {}
+    anilist_raw = ext.get("anilist") or fb.get("anilist_id")
+    tvdb_raw = ext.get("tvdb") or fb.get("tvdb_id")
+    imdb_raw = ext.get("imdb") or fb.get("imdb_id")
 
     return {
         "anilist_id": int(anilist_raw) if anilist_raw else None,
         "mal_id": node.get("id"),
         "tvdb_id": int(tvdb_raw) if tvdb_raw else None,
-        "imdb_id": ext.get("imdb") or None,
+        "imdb_id": imdb_raw or None,
         "tmdb_id": int(ext["tmdb"]) if ext.get("tmdb") else None,
         "title_romaji": node.get("title"),  # MAL's title field IS the romaji
         "title_english": alt_titles.get("en") or None,  # None when no English title
@@ -460,8 +469,22 @@ def _fetch_seasonal_from_mal(
     mal_ids = [n["id"] for n in nodes if n.get("id")]
     lcars_matches = _cross_reference_by_mal(conn, mal_ids)
 
+    # Fribb dataset — recover anilist/tvdb/imdb for MAL-only items
+    unmatched_mal_ids = [mid for mid in mal_ids if mid not in lcars_matches]
+    fribb_by_mal: dict[int, dict] = {}
+    if unmatched_mal_ids:
+        try:
+            dataset = fribb.load_dataset()
+            mal_index = fribb.build_mal_index(dataset)
+            for mid in unmatched_mal_ids:
+                ids = fribb.resolve_ids_for_mal(mal_index, mid)
+                if any(ids.values()):
+                    fribb_by_mal[mid] = ids
+        except Exception:
+            log.debug("Fribb MAL lookup failed for browse enrichment", exc_info=True)
+
     items = [
-        _flatten_mal_media(n, lcars_matches.get(n.get("id")))
+        _flatten_mal_media(n, lcars_matches.get(n.get("id")), fribb_by_mal.get(n.get("id")))
         for n in nodes
     ]
 

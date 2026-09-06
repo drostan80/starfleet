@@ -13,7 +13,7 @@ import {
   browseSeasonalAnime, browseTmdb,
   searchArrCandidates, addShowWithArr, addShow, skipShow,
   setStatus, setSeasonStatus, setSeasonMapping,
-} from './api.js?v=19';
+} from './api.js?v=20';
 import { showBanner } from './calendar.js?v=23';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -40,11 +40,11 @@ const STATUS_LABELS = { PLANNED: 'Plan', WATCHING: 'Watch', PAUSED: 'Pause', COM
 
 // ── Browse card service link definitions ────────────────
 const BROWSE_SVC_DEFS = [
-  { key: 'anilist', cls: 'svc-al',   svg: _anilistSvg, label: 'AniList', urlTpl: 'https://anilist.co/anime/{id}' },
-  { key: 'mal',     cls: 'svc-mal',  svg: _malSvg,     label: 'MAL',     urlTpl: 'https://myanimelist.net/anime/{id}' },
-  { key: 'tvdb',    cls: 'svc-tvdb', svg: _tvdbSvg,    label: 'TheTVDB', urlTpl: 'https://thetvdb.com/dereferrer/series/{id}' },
-  { key: 'imdb',    cls: 'svc-imdb', svg: _imdbSvg,    label: 'IMDb',    urlTpl: 'https://www.imdb.com/title/{id}/' },
-  { key: 'tmdb',    cls: 'svc-tmdb', svg: _tmdbMarkSvg, label: 'TMDB',   urlTpl: 'https://www.themoviedb.org/tv/{id}' },
+  { key: 'anilist', cls: 'svc-al',   svg: _anilistSvg, label: 'AniList', urlTpl: 'https://anilist.co/anime/{id}',              preview: false },
+  { key: 'mal',     cls: 'svc-mal',  svg: _malSvg,     label: 'MAL',     urlTpl: 'https://myanimelist.net/anime/{id}',          preview: false },
+  { key: 'tvdb',    cls: 'svc-tvdb', svg: _tvdbSvg,    label: 'TheTVDB', urlTpl: 'https://thetvdb.com/dereferrer/series/{id}',  preview: true },
+  { key: 'imdb',    cls: 'svc-imdb', svg: _imdbSvg,    label: 'IMDb',    urlTpl: 'https://www.imdb.com/title/{id}/',            preview: true },
+  { key: 'tmdb',    cls: 'svc-tmdb', svg: _tmdbMarkSvg, label: 'TMDB',   urlTpl: 'https://www.themoviedb.org/tv/{id}',          preview: true },
 ];
 
 // ── State ────────────────────────────────────────────────
@@ -545,19 +545,26 @@ function buildBrowseLinks(ids) {
     a.rel = 'noopener noreferrer';
     a.innerHTML = def.svg;
 
-    // Hover tooltip
     a.dataset.svcLabel = def.label;
     a.dataset.svcId = String(id);
     a.dataset.svcUrl = url;
+    a.dataset.svcPreview = def.preview ? '1' : '';
+
+    // Hover: small tooltip with label + id
     a.addEventListener('mouseenter', showLinkTooltip);
     a.addEventListener('mouseleave', hideLinkTooltip);
+
+    // Click: if previewable, open the preview pane instead of navigating
+    if (def.preview) {
+      a.addEventListener('click', openPreviewPane);
+    }
 
     strip.appendChild(a);
   }
   return strip;
 }
 
-// Shared tooltip element — created once, repositioned on hover.
+// ── Tooltip (small, on hover) ────────────────────────────
 let _linkTip = null;
 
 function showLinkTooltip(e) {
@@ -567,14 +574,14 @@ function showLinkTooltip(e) {
     _linkTip.className = 'browse-link-tip';
     document.body.appendChild(_linkTip);
   }
+  const canPreview = anchor.dataset.svcPreview;
   _linkTip.innerHTML = `
     <strong>${anchor.dataset.svcLabel}</strong>
     <span class="tip-id">${anchor.dataset.svcId}</span>
-    <span class="tip-url">${anchor.dataset.svcUrl}</span>
+    <span class="tip-hint">${canPreview ? 'Click to preview' : 'Opens in new tab'}</span>
   `;
   _linkTip.hidden = false;
 
-  // Position below the icon
   const rect = anchor.getBoundingClientRect();
   _linkTip.style.left = `${rect.left + rect.width / 2}px`;
   _linkTip.style.top = `${rect.bottom + 6}px`;
@@ -582,6 +589,56 @@ function showLinkTooltip(e) {
 
 function hideLinkTooltip() {
   if (_linkTip) _linkTip.hidden = true;
+}
+
+// ── Preview pane (iframe, for TVDB/IMDB/TMDB) ───────────
+let _previewPane = null;
+
+function _ensurePreviewPane() {
+  if (_previewPane) return _previewPane;
+  const pane = document.createElement('div');
+  pane.className = 'browse-preview-pane';
+  pane.hidden = true;
+  pane.innerHTML = `
+    <div class="preview-header">
+      <span class="preview-title"></span>
+      <a class="preview-open" target="_blank" rel="noopener noreferrer" title="Open in new tab">↗</a>
+      <button class="preview-close" title="Close">✕</button>
+    </div>
+    <iframe class="preview-frame" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+  `;
+  pane.querySelector('.preview-close').addEventListener('click', closePreviewPane);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closePreviewPane();
+  });
+  document.body.appendChild(pane);
+  _previewPane = pane;
+  return pane;
+}
+
+function openPreviewPane(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  hideLinkTooltip();
+
+  const anchor = e.currentTarget;
+  const url = anchor.dataset.svcUrl;
+  const label = anchor.dataset.svcLabel;
+  const id = anchor.dataset.svcId;
+
+  const pane = _ensurePreviewPane();
+  pane.querySelector('.preview-title').textContent = `${label} · ${id}`;
+  pane.querySelector('.preview-open').href = url;
+  const iframe = pane.querySelector('.preview-frame');
+  iframe.src = url;
+  pane.hidden = false;
+}
+
+function closePreviewPane() {
+  if (!_previewPane) return;
+  _previewPane.hidden = true;
+  // Stop loading / free resources
+  _previewPane.querySelector('.preview-frame').src = 'about:blank';
 }
 
 // ── Anime card (AniList data) ────────────────────────────
