@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=17">
+  <link rel="stylesheet" href="css/main.css?v=18">
   <style>
     /* Force hidden attribute to work even on elements with explicit display */
     [hidden] { display: none !important; }
@@ -761,6 +761,58 @@
     }
     .browse-load-more:hover { background: var(--surface-2); }
 
+    /* ── Browse card service links ────────────────────────── */
+    .browse-links {
+      display: flex;
+      gap: 6px;
+      margin-top: auto;           /* push to bottom of body */
+      padding-top: 6px;
+      align-items: center;
+    }
+    .browse-links .svc {
+      width: 18px; height: 18px;
+      opacity: 0.7;
+    }
+    .browse-links .svc:hover {
+      opacity: 1;
+      transform: scale(1.25);
+    }
+
+    /* Hover tooltip */
+    .browse-link-tip {
+      position: fixed;
+      z-index: 9999;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      pointer-events: none;
+      transform: translateX(-50%);
+      white-space: nowrap;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    }
+    .browse-link-tip strong {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .browse-link-tip .tip-id {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--accent);
+    }
+    .browse-link-tip .tip-url {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 10px;
+      color: var(--muted);
+      max-width: 350px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     @media (max-width: 600px) {
       .browse-results { grid-template-columns: 1fr; }
       .browse-cover { width: 90px; min-height: 130px; }
@@ -842,7 +894,7 @@ import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDelet
 import { bootstrapConfig, applyAppName } from './js/config.js?v=4';
 import { showBanner, hideBanner } from './js/calendar.js?v=29';
 import { initSearch } from './js/search.js?v=4';
-import { initBrowse, teardownBrowse, setBrowseType } from './js/browse.js?v=4';
+import { initBrowse, teardownBrowse, setBrowseType } from './js/browse.js?v=5';
 
 applyAppName();
 await bootstrapConfig();

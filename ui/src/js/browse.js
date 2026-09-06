@@ -12,13 +12,14 @@
 import {
   browseSeasonalAnime, browseTmdb,
   searchArrCandidates, addShowWithArr, addShow, skipShow,
-  setStatus, setSeasonStatus,
+  setStatus, setSeasonStatus, setSeasonMapping,
 } from './api.js?v=19';
 import { showBanner } from './calendar.js?v=23';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS,
 } from './status-picker.js?v=1';
+import { _anilistSvg, _malSvg, _tvdbSvg, _tmdbMarkSvg } from './icons.js?v=8';
 
 // ── Constants ────────────────────────────────────────────
 
@@ -36,6 +37,14 @@ const MONTH_FULL = [
 
 const STATUSES = ['PLANNED', 'WATCHING', 'PAUSED', 'COMPLETED', 'DROPPED', 'SKIPPED'];
 const STATUS_LABELS = { PLANNED: 'Plan', WATCHING: 'Watch', PAUSED: 'Pause', COMPLETED: 'Done', DROPPED: 'Drop', SKIPPED: 'Skip' };
+
+// ── Browse card service link definitions ────────────────
+const BROWSE_SVC_DEFS = [
+  { key: 'anilist', cls: 'svc-al',   svg: _anilistSvg, label: 'AniList', urlTpl: 'https://anilist.co/anime/{id}' },
+  { key: 'mal',     cls: 'svc-mal',  svg: _malSvg,     label: 'MAL',     urlTpl: 'https://myanimelist.net/anime/{id}' },
+  { key: 'tvdb',    cls: 'svc-tvdb', svg: _tvdbSvg,    label: 'TheTVDB', urlTpl: 'https://thetvdb.com/dereferrer/series/{id}' },
+  { key: 'tmdb',    cls: 'svc-tmdb', svg: _tmdbMarkSvg, label: 'TMDB',   urlTpl: 'https://www.themoviedb.org/tv/{id}' },
+];
 
 // ── State ────────────────────────────────────────────────
 
@@ -57,6 +66,79 @@ let items = [];          // all loaded items (accumulates across pages)
 let hasNextPage = false;
 let activeFilters = new Set();  // active status filters (empty = show all)
 let loading = false;
+
+// ── Sequel / title helpers ──────────────────────────────
+
+/**
+ * Strip common season suffixes from a title for a broader Sonarr search.
+ * "Sasaki and Peeps Season 2"  → "Sasaki and Peeps"
+ * "Solo Leveling: Season 2"    → "Solo Leveling"
+ * "Bookworm Part 3"            → "Bookworm"
+ * "Medalist 2nd Season"        → "Medalist"
+ */
+function stripSeasonSuffix(title) {
+  return title
+    .replace(/[:\s]*\b(?:Season|Part)\s+\d+\s*$/i, '')
+    .replace(/\s+\d+(?:st|nd|rd|th)\s+Season\s*$/i, '')
+    .replace(/\s+S\d+\s*$/i, '')
+    .trim();
+}
+
+/**
+ * Parse a "sequel_of:{json}" error from the server into structured data.
+ * Returns null if the error isn't a sequel detection.
+ */
+function parseSequelError(msg) {
+  if (!msg.startsWith('sequel_of:')) return null;
+  try {
+    return JSON.parse(msg.slice('sequel_of:'.length));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Show a modal confirmation for attaching a sequel as a new season.
+ * Returns a Promise<boolean>.
+ */
+function confirmSequelAttach(sequel) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'sequel-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="sequel-confirm-dialog">
+        <p>This looks like <strong>Season ${sequel.nextSeason}</strong>
+           of <em>${sequel.parentTitle}</em>.</p>
+        <p>Attach as a new season?</p>
+        <div class="sequel-confirm-btns">
+          <button class="btn-confirm">Attach as Season ${sequel.nextSeason}</button>
+          <button class="btn-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.btn-confirm').onclick = () => {
+      overlay.remove();
+      resolve(true);
+    };
+    overlay.querySelector('.btn-cancel').onclick = () => {
+      overlay.remove();
+      resolve(false);
+    };
+  });
+}
+
+/**
+ * Handle a confirmed sequel attach: call setSeasonMapping, then refresh.
+ */
+async function attachSequel(sequel) {
+  await setSeasonMapping(
+    sequel.parentShowId,
+    sequel.nextSeason,
+    sequel.sequelAnilistId,
+    sequel.sequelMalId,
+  );
+}
 
 // ── Season math (anime) ─────────────────────────────────
 
@@ -439,6 +521,68 @@ function renderCards() {
   applyFilters();
 }
 
+// ── Service link strip for browse cards ──────────────────
+
+/**
+ * Build a horizontal row of service-logo links for a browse card.
+ * ids: { anilist, mal, tvdb, tmdb } — values are string/number IDs or falsy.
+ * Returns a DOM element.
+ */
+function buildBrowseLinks(ids) {
+  const strip = document.createElement('div');
+  strip.className = 'browse-links';
+
+  for (const def of BROWSE_SVC_DEFS) {
+    const id = ids[def.key];
+    if (!id) continue;
+    const url = def.urlTpl.replace('{id}', id);
+
+    const a = document.createElement('a');
+    a.className = `svc ${def.cls} on`;
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.innerHTML = def.svg;
+
+    // Hover tooltip
+    a.dataset.svcLabel = def.label;
+    a.dataset.svcId = String(id);
+    a.dataset.svcUrl = url;
+    a.addEventListener('mouseenter', showLinkTooltip);
+    a.addEventListener('mouseleave', hideLinkTooltip);
+
+    strip.appendChild(a);
+  }
+  return strip;
+}
+
+// Shared tooltip element — created once, repositioned on hover.
+let _linkTip = null;
+
+function showLinkTooltip(e) {
+  const anchor = e.currentTarget;
+  if (!_linkTip) {
+    _linkTip = document.createElement('div');
+    _linkTip.className = 'browse-link-tip';
+    document.body.appendChild(_linkTip);
+  }
+  _linkTip.innerHTML = `
+    <strong>${anchor.dataset.svcLabel}</strong>
+    <span class="tip-id">${anchor.dataset.svcId}</span>
+    <span class="tip-url">${anchor.dataset.svcUrl}</span>
+  `;
+  _linkTip.hidden = false;
+
+  // Position below the icon
+  const rect = anchor.getBoundingClientRect();
+  _linkTip.style.left = `${rect.left + rect.width / 2}px`;
+  _linkTip.style.top = `${rect.bottom + 6}px`;
+}
+
+function hideLinkTooltip() {
+  if (_linkTip) _linkTip.hidden = true;
+}
+
 // ── Anime card (AniList data) ────────────────────────────
 
 function createAnimeCard(item) {
@@ -502,6 +646,13 @@ function createAnimeCard(item) {
     synopsis.textContent = item.description;
     body.appendChild(synopsis);
   }
+
+  // Service links (AniList, MAL, etc.)
+  const links = buildBrowseLinks({
+    anilist: item.anilistId,
+    mal: item.malId,
+  });
+  body.appendChild(links);
 
   // Radial status picker on cover
   const picker = buildStatusBtn({
@@ -575,6 +726,24 @@ function createTmdbCard(item) {
     synopsis.textContent = item.overview;
     body.appendChild(synopsis);
   }
+
+  // Service links (TMDB)
+  const tmdbUrlBase = item.mediaType === 'MOVIE'
+    ? 'https://www.themoviedb.org/movie/'
+    : 'https://www.themoviedb.org/tv/';
+  const links = buildBrowseLinks({
+    tmdb: item.tmdbId,
+  });
+  // Fix TMDB URL for movies (the default template uses /tv/)
+  if (item.mediaType === 'MOVIE') {
+    const tmdbLink = links.querySelector('.svc-tmdb');
+    if (tmdbLink) {
+      const movieUrl = `${tmdbUrlBase}${item.tmdbId}`;
+      tmdbLink.href = movieUrl;
+      tmdbLink.dataset.svcUrl = movieUrl;
+    }
+  }
+  body.appendChild(links);
 
   // Radial status picker on cover
   const picker = buildStatusBtn({
@@ -707,8 +876,17 @@ async function onAnimeChipClick(card, item, status) {
       let arrInput = { ...input };
       if (status === 'PAUSED') arrInput.unmonitored = true;
 
+      // Sonarr/Radarr candidate search — try exact title first, then
+      // strip season suffixes ("Sasaki and Peeps Season 2" → base title)
+      // since Sonarr indexes the series under the base name.
       try {
-        const candidates = await searchArrCandidates(mediaShape, title);
+        let candidates = await searchArrCandidates(mediaShape, title);
+        if (!candidates.length) {
+          const base = stripSeasonSuffix(title);
+          if (base !== title) {
+            candidates = await searchArrCandidates(mediaShape, base);
+          }
+        }
         if (candidates.length) {
           if (candidates[0].tvdbId) arrInput.tvdbId = candidates[0].tvdbId;
           if (candidates[0].tmdbId) arrInput.tmdbId = candidates[0].tmdbId;
@@ -721,16 +899,43 @@ async function onAnimeChipClick(card, item, status) {
         const result = await addShowWithArr(arrInput);
         show = result.show;
       } catch (err) {
-        const match = err.message.match(/already tracked \(show ([^)]+)\)/);
-        if (match) {
-          item.lcarsShowId = match[1];
+        // Already tracked — not an error, just inform.
+        const tracked = err.message.match(/already tracked \(show ([^)]+)\)/);
+        if (tracked) {
+          item.lcarsShowId = tracked[1];
           item.lcarsStatus = 'PLANNED';
           refreshCard(card, item);
           showBanner('Already tracked — use Add mode to manage seasons', 'info');
           card.classList.remove('loading');
           return;
         }
-        show = await addShow(input);
+
+        // Sequel detected — ask user to confirm season attach.
+        const sequel = parseSequelError(err.message);
+        if (sequel) {
+          const ok = await confirmSequelAttach(sequel);
+          if (ok) {
+            await attachSequel(sequel);
+            // Apply the status the user originally selected
+            if (status !== 'PLANNED') {
+              await setStatus(sequel.parentShowId, status);
+            }
+            showBanner(
+              `Attached as Season ${sequel.nextSeason} of ${sequel.parentTitle}`,
+              'ok',
+            );
+            item.lcarsShowId = sequel.parentShowId;
+            item.lcarsStatus = status;
+            refreshCard(card, item);
+          } else {
+            showBanner('Cancelled', 'info');
+          }
+          card.classList.remove('loading');
+          return;
+        }
+
+        // Any other error — surface it, do NOT silently create orphan stub.
+        throw err;
       }
 
       if (show.status !== status && status !== 'PLANNED') {
@@ -812,7 +1017,13 @@ async function onTmdbChipClick(card, item, status) {
       // For TV shows, search arr for tvdbId since Sonarr needs it
       if (mediaShape === 'EPISODIC') {
         try {
-          const candidates = await searchArrCandidates(mediaShape, item.title);
+          let candidates = await searchArrCandidates(mediaShape, item.title);
+          if (!candidates.length) {
+            const base = stripSeasonSuffix(item.title);
+            if (base !== item.title) {
+              candidates = await searchArrCandidates(mediaShape, base);
+            }
+          }
           if (candidates.length) {
             if (candidates[0].tvdbId) arrInput.tvdbId = candidates[0].tvdbId;
             if (candidates[0].tmdbId) arrInput.tmdbId = candidates[0].tmdbId;
@@ -826,17 +1037,41 @@ async function onTmdbChipClick(card, item, status) {
         const result = await addShowWithArr(arrInput);
         show = result.show;
       } catch (err) {
-        const match = err.message.match(/already tracked \(show ([^)]+)\)/);
-        if (match) {
-          item.lcarsShowId = match[1];
+        const tracked = err.message.match(/already tracked \(show ([^)]+)\)/);
+        if (tracked) {
+          item.lcarsShowId = tracked[1];
           item.lcarsStatus = 'PLANNED';
           refreshCard(card, item);
           showBanner('Already tracked', 'info');
           card.classList.remove('loading');
           return;
         }
-        // Arr failed — fall back to LCARS-only
-        show = await addShow(input);
+
+        // Sequel detected — ask user to confirm season attach.
+        const sequel = parseSequelError(err.message);
+        if (sequel) {
+          const ok = await confirmSequelAttach(sequel);
+          if (ok) {
+            await attachSequel(sequel);
+            if (status !== 'PLANNED') {
+              await setStatus(sequel.parentShowId, status);
+            }
+            showBanner(
+              `Attached as Season ${sequel.nextSeason} of ${sequel.parentTitle}`,
+              'ok',
+            );
+            item.lcarsShowId = sequel.parentShowId;
+            item.lcarsStatus = status;
+            refreshCard(card, item);
+          } else {
+            showBanner('Cancelled', 'info');
+          }
+          card.classList.remove('loading');
+          return;
+        }
+
+        // Any other error — surface it, do NOT silently create orphan stub.
+        throw err;
       }
 
       if (show.status !== status && status !== 'PLANNED') {
