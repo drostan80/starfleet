@@ -421,6 +421,10 @@ def backfill_untracked_shows(conn) -> dict:
         already_existed = shows.find_existing_show(conn, classification) is not None
         try:
             show_id = shows.create_show(conn, classification)
+        except shows.SequelDetectedError:
+            # Sequel of a tracked show — the backfill shouldn't auto-attach
+            # seasons; the user handles that interactively from browse.
+            continue
         except shows.ShowInputError as e:
             failed.append({"service": entry["service"], "title": entry["title"], "error": str(e)})
             continue

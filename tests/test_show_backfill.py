@@ -603,13 +603,15 @@ def test_backfill_promotes_a_stub_a_relation_walk_created_mid_run_instead_of_dup
     result = show_backfill.backfill_untracked_shows(conn)
     assert result["failed"] == []
     assert [c["service"] for c in result["created"]] == ["sonarr"]  # Show A only, a real new row
-    assert [p["service"] for p in result["promoted"]] == ["sonarr"]  # Show B — the stub, promoted
+    # Show B is a sequel of Show A — the backfill skips it (user handles
+    # sequel-attach interactively from browse, not auto-promoted).
+    assert result["promoted"] == []
 
     rows = conn.execute(
         "SELECT id, title_romaji, tracked FROM show ORDER BY title_romaji"
     ).fetchall()
     assert [r["title_romaji"] for r in rows] == ["Show A", "Show B"]  # not three rows
-    assert rows[1]["tracked"] == 1  # promoted, not left as a bare stub
+    assert rows[1]["tracked"] == 0  # left as a stub — sequel-attach is user-driven
 
     anilist_links = conn.execute(
         "SELECT show_id, external_id FROM show_external_id WHERE service = 'anilist'"

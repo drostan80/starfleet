@@ -56,6 +56,197 @@ class ShowInputError(ValueError):
     error shape unchanged."""
 
 
+class SequelDetectedError(ShowInputError):
+    """Raised when the add flow detects that the requested show is a
+    sequel of an already-tracked show.  Carries structured info so the
+    client can offer a confirmation prompt ("attach as Season N of …?")
+    rather than silently creating a separate show.
+
+    Attributes:
+        parent_show_id:  id of the tracked show this is a sequel of.
+        parent_title:    display title of the parent.
+        next_season:     the season number the sequel would occupy.
+        sequel_anilist_id / sequel_mal_id:  the external ids the caller
+            supplied (passed through so the client doesn't have to
+            re-derive them from the original input after the prompt).
+    """
+
+    def __init__(
+        self, parent_show_id: str, parent_title: str, next_season: int,
+        sequel_anilist_id: int | None = None, sequel_mal_id: int | None = None,
+    ):
+        self.parent_show_id = parent_show_id
+        self.parent_title = parent_title
+        self.next_season = next_season
+        self.sequel_anilist_id = sequel_anilist_id
+        self.sequel_mal_id = sequel_mal_id
+        import json
+        payload = json.dumps({
+            "parentShowId": parent_show_id,
+            "parentTitle": parent_title,
+            "nextSeason": next_season,
+            "sequelAnilistId": sequel_anilist_id,
+            "sequelMalId": sequel_mal_id,
+        }, separators=(",", ":"))
+        super().__init__(f"sequel_of:{payload}")
+
+
+def find_sequel_parent(conn, anilist_id: int | str | None) -> dict | None:
+    """Check whether *anilist_id* belongs to a show that is a sequel of
+    a tracked parent (via ``show_relation`` or a live AniList lookup).
+
+    Returns ``{"parent_show_id", "parent_title", "next_season",
+    "stub_show_id"}`` when a match is found, else ``None``.
+    ``stub_show_id`` is the existing show row for this anilist_id
+    (tracked or not), or ``None`` if no show exists yet.
+
+    Three tiers of lookup:
+      1. Local DB: show_external_id → show_relation → tracked parent.
+         Both forward (parent → SEQUEL → child) and reverse
+         (child → PREQUEL → parent) directions are checked.
+      2. Live AniList: if no local show owns this anilist_id, fetches
+         the media's relations from AniList and checks whether any
+         PREQUEL target is tracked locally.  This covers the common
+         prod case where the batch cleanup or a fresh DB has no stub
+         row at all.
+
+    Matches both explicit SEQUEL relations and NULL-typed relations
+    (common in existing data where relation_type wasn't backfilled).
+    The user always sees a confirmation dialog, so a false positive
+    on a NULL relation just means they click Cancel.
+
+    Excludes relations that are clearly NOT sequels: CHARACTER,
+    ALTERNATIVE, SUMMARY, SPIN_OFF, SIDE_STORY, OTHER, PARENT.
+
+    ``next_season`` is max(existing season_number) + 1 on the parent,
+    defaulting to 2 when the parent has only one season (or none — the
+    implicit S1 that every freshly-added show starts with)."""
+    if anilist_id is None:
+        return None
+    anilist_id_str = str(anilist_id)
+
+    # 1. Find any show that owns this AniList ID (tracked or not).
+    related_row = conn.execute(
+        "SELECT s.id, s.tracked FROM show s"
+        " JOIN show_external_id sei ON s.id = sei.show_id"
+        " WHERE sei.service = 'anilist' AND sei.external_id = ?",
+        (anilist_id_str,),
+    ).fetchone()
+
+    if related_row is not None:
+        # Local path: check show_relation in both directions.
+        parent_row = _find_parent_via_local_relations(conn, related_row["id"])
+        if parent_row is not None:
+            return _build_sequel_result(conn, parent_row, related_row["id"])
+        return None
+
+    # 2. No local show → ask AniList for this media's relations and check
+    #    whether any PREQUEL target is tracked locally.
+    return _find_parent_via_anilist(conn, int(anilist_id))
+
+
+# Relation types that are clearly NOT "this is a sequel of..."
+_NON_SEQUEL_TYPES = (
+    'PREQUEL', 'CHARACTER', 'ALTERNATIVE', 'SUMMARY',
+    'SPIN_OFF', 'SIDE_STORY', 'OTHER', 'PARENT',
+)
+
+
+def _find_parent_via_local_relations(conn, related_id: str) -> dict | None:
+    """Check show_relation in both directions for a tracked parent."""
+    # a) Forward: someone lists us as their SEQUEL (or NULL).
+    parent_row = conn.execute(
+        "SELECT sr.show_id AS parent_id,"
+        "       s.title_english, s.title_romaji, s.primary_title"
+        " FROM show_relation sr"
+        " JOIN show s ON s.id = sr.show_id"
+        " WHERE sr.related_show_id = ?"
+        "   AND sr.show_id != ?"
+        "   AND (sr.relation_type IS NULL OR sr.relation_type NOT IN"
+        f"       ({','.join('?' for _ in _NON_SEQUEL_TYPES)}))"
+        "   AND s.tracked = 1",
+        (related_id, related_id, *_NON_SEQUEL_TYPES),
+    ).fetchone()
+    if parent_row is not None:
+        return parent_row
+    # b) Reverse: we list someone as our PREQUEL.
+    return conn.execute(
+        "SELECT sr.related_show_id AS parent_id,"
+        "       s.title_english, s.title_romaji, s.primary_title"
+        " FROM show_relation sr"
+        " JOIN show s ON s.id = sr.related_show_id"
+        " WHERE sr.show_id = ?"
+        "   AND sr.related_show_id != ?"
+        "   AND sr.relation_type = 'PREQUEL'"
+        "   AND s.tracked = 1",
+        (related_id, related_id),
+    ).fetchone()
+
+
+def _find_parent_via_anilist(conn, anilist_id: int) -> dict | None:
+    """Fetch relations from AniList and check if any PREQUEL target is
+    tracked locally.  Best-effort: AniList errors return None (no
+    sequel detected), same as a missing stub."""
+    from lcars import anilist_client
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        media = anilist_client.fetch_media(anilist_id)
+    except Exception:
+        log.debug("AniList fetch failed for %d during sequel check — skipping", anilist_id)
+        return None
+    if media is None:
+        return None
+    edges = (media.get("relations") or {}).get("edges") or []
+    # Look for PREQUEL relations (this show's prequel = the parent).
+    prequel_anilist_ids = []
+    for edge in edges:
+        rtype = edge.get("relationType")
+        if rtype == "PREQUEL":
+            node = edge.get("node") or {}
+            if node.get("id"):
+                prequel_anilist_ids.append(str(node["id"]))
+    if not prequel_anilist_ids:
+        return None
+    # Check if any of those prequel anilist_ids belong to a tracked show.
+    placeholders = ",".join("?" for _ in prequel_anilist_ids)
+    parent_row = conn.execute(
+        "SELECT sei.show_id AS parent_id,"
+        "       s.title_english, s.title_romaji, s.primary_title"
+        " FROM show_external_id sei"
+        " JOIN show s ON s.id = sei.show_id"
+        f" WHERE sei.service = 'anilist' AND sei.external_id IN ({placeholders})"
+        "   AND s.tracked = 1"
+        " LIMIT 1",
+        prequel_anilist_ids,
+    ).fetchone()
+    if parent_row is None:
+        return None
+    # stub_show_id is None — no local show for this anilist_id yet.
+    return _build_sequel_result(conn, parent_row, stub_show_id=None)
+
+
+def _build_sequel_result(conn, parent_row, stub_show_id: str | None) -> dict:
+    """Common result builder for both local and AniList paths."""
+    parent_id = parent_row["parent_id"]
+    primary = parent_row["primary_title"] or "romaji"
+    parent_title = parent_row[f"title_{primary}"] or parent_row["title_romaji"] or parent_id
+
+    max_row = conn.execute(
+        "SELECT MAX(season_number) AS mx FROM season"
+        " WHERE show_id = ? AND season_number > 0",
+        (parent_id,),
+    ).fetchone()
+    next_season = (max_row["mx"] or 1) + 1
+
+    return {
+        "parent_show_id": parent_id,
+        "parent_title": parent_title,
+        "next_season": next_season,
+        "stub_show_id": stub_show_id,
+    }
+
+
 def find_existing_show(conn, input: dict) -> str | None:
     """Live check against `show_external_id` for any identity `input`
     carries (anilist/tvdb/tmdb/imdb/mal) — B.11d follow-up, real bug
@@ -182,12 +373,37 @@ def create_show(conn, input: dict) -> str:
         existing = conn.execute(
             "SELECT tracked FROM show WHERE id = ?", (existing_show_id,)
         ).fetchone()
+        # Before rejecting a tracked duplicate or promoting a stub,
+        # check whether it's a sequel of a tracked show — the right
+        # action is "add as Season N on the parent", regardless of
+        # whether this show is tracked or not.  SequelDetectedError
+        # carries the parent info so the client can prompt.
+        sequel = find_sequel_parent(conn, input.get("anilist_id"))
+        if sequel is not None:
+            raise SequelDetectedError(
+                sequel["parent_show_id"],
+                sequel["parent_title"],
+                sequel["next_season"],
+                sequel_anilist_id=input.get("anilist_id"),
+                sequel_mal_id=input.get("mal_id"),
+            )
         if existing["tracked"]:
             raise ShowInputError(
                 "a show already exists for one of these external ids and is already"
                 f" tracked (show {existing_show_id}) — refusing to create a duplicate"
             )
         return _promote_stub(conn, existing_show_id, input)
+
+    # No local show at all — still check AniList relations for a sequel.
+    sequel = find_sequel_parent(conn, input.get("anilist_id"))
+    if sequel is not None:
+        raise SequelDetectedError(
+            sequel["parent_show_id"],
+            sequel["parent_title"],
+            sequel["next_season"],
+            sequel_anilist_id=input.get("anilist_id"),
+            sequel_mal_id=input.get("mal_id"),
+        )
 
     show_id = ids.generate_id(conn, "s")
     now = util.now_utc_iso()
@@ -569,6 +785,138 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
     }
 
 
+def ensure_arr_monitored(conn, show_id: str) -> dict | None:
+    """Ensure a show's Sonarr/Radarr entry exists and is monitored.
+
+    Used by the sequel-attach flow: when a new season is added to an
+    existing show, the arr instance must be monitoring that series so it
+    actually grabs future episodes.
+
+    Returns a dict describing what happened, or None if Sonarr/Radarr
+    isn't configured for this show's media shape. Raises ShowInputError
+    on genuine service failures (same as _ensure_in_arr)."""
+    show = conn.execute(
+        "SELECT media_shape, tracking_space FROM show WHERE id = ?",
+        (show_id,),
+    ).fetchone()
+    if show is None:
+        return None
+
+    cfg = config.get_current()
+    media_shape = show["media_shape"]
+    tracking_space = show["tracking_space"]
+
+    if media_shape == "episodic":
+        if not (cfg.sonarr_url and cfg.sonarr_api_key):
+            return None
+        tvdb_row = conn.execute(
+            "SELECT external_id FROM show_external_id"
+            " WHERE show_id = ? AND service = 'tvdb'",
+            (show_id,),
+        ).fetchone()
+        if tvdb_row is None:
+            return None
+        tvdb_id = int(tvdb_row["external_id"])
+        try:
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                existing = client.series_by_tvdb_id(tvdb_id)
+                if existing is not None:
+                    # Already in Sonarr — ensure it's monitored.
+                    if not existing.get("monitored", True):
+                        existing["monitored"] = True
+                        client.update_series(existing)
+                    service_health.record_success(conn, "sonarr")
+                    return {"action": "already_in_sonarr", "monitored": True}
+                # Not in Sonarr — look up and add it.
+                results = client.lookup_series(f"tvdb:{tvdb_id}")
+                if not results:
+                    return {"action": "not_found_in_sonarr"}
+                candidate = results[0]
+                is_anime = tracking_space == "anime"
+                root_folder = (
+                    cfg.sonarr_anime_root_folder if is_anime else cfg.sonarr_tv_root_folder
+                )
+                quality_profile_id = (
+                    cfg.sonarr_anime_quality_profile_id
+                    if is_anime
+                    else cfg.sonarr_tv_quality_profile_id
+                )
+                if not (root_folder and quality_profile_id):
+                    return {"action": "sonarr_not_configured"}
+                payload = {
+                    "title": candidate["title"],
+                    "tvdbId": candidate["tvdbId"],
+                    "qualityProfileId": quality_profile_id,
+                    "titleSlug": candidate.get("titleSlug"),
+                    "images": candidate.get("images", []),
+                    "seasons": candidate.get("seasons", []),
+                    "rootFolderPath": root_folder,
+                    "monitored": True,
+                    "seasonFolder": True,
+                    "addOptions": {
+                        "monitor": "future",
+                        "searchForMissingEpisodes": True,
+                    },
+                }
+                created = client.add_series(payload)
+                title_slug = created.get("titleSlug")
+                if title_slug:
+                    write_arr_external_id(conn, show_id, media_shape, title_slug)
+            service_health.record_success(conn, "sonarr")
+            return {"action": "added_to_sonarr", "monitored": True}
+        except sonarr_client.SonarrError as e:
+            service_health.record_failure(conn, "sonarr", str(e))
+            raise ShowInputError(f"Sonarr monitoring failed: {e}") from e
+
+    else:
+        # Movie → Radarr
+        if not (cfg.radarr_url and cfg.radarr_api_key):
+            return None
+        tmdb_row = conn.execute(
+            "SELECT external_id FROM show_external_id"
+            " WHERE show_id = ? AND service = 'tmdb'",
+            (show_id,),
+        ).fetchone()
+        if tmdb_row is None:
+            return None
+        tmdb_id = int(tmdb_row["external_id"])
+        try:
+            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                existing = client.movie_by_tmdb_id(tmdb_id)
+                if existing is not None:
+                    if not existing.get("monitored", True):
+                        existing["monitored"] = True
+                        client.update_movie(existing)
+                    service_health.record_success(conn, "radarr")
+                    return {"action": "already_in_radarr", "monitored": True}
+                results = client.lookup_movie(f"tmdb:{tmdb_id}")
+                if not results:
+                    return {"action": "not_found_in_radarr"}
+                candidate = results[0]
+                if not (cfg.radarr_root_folder and cfg.radarr_quality_profile_id):
+                    return {"action": "radarr_not_configured"}
+                payload = {
+                    "title": candidate["title"],
+                    "tmdbId": candidate["tmdbId"],
+                    "qualityProfileId": cfg.radarr_quality_profile_id,
+                    "titleSlug": candidate.get("titleSlug"),
+                    "images": candidate.get("images", []),
+                    "rootFolderPath": cfg.radarr_root_folder,
+                    "monitored": True,
+                    "minimumAvailability": candidate.get("minimumAvailability") or "released",
+                    "addOptions": {"searchForMovie": True},
+                }
+                created = client.add_movie(payload)
+                title_slug = created.get("titleSlug")
+                if title_slug:
+                    write_arr_external_id(conn, show_id, media_shape, title_slug)
+            service_health.record_success(conn, "radarr")
+            return {"action": "added_to_radarr", "monitored": True}
+        except radarr_client.RadarrError as e:
+            service_health.record_failure(conn, "radarr", str(e))
+            raise ShowInputError(f"Radarr monitoring failed: {e}") from e
+
+
 def write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str) -> None:
     """2026-08-18 — a real deep link into the *local* Sonarr/Radarr web
     UI (their own `/series/{slug}`/`/movie/{slug}` route) as a
@@ -882,6 +1230,17 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
             "SELECT tracked FROM show WHERE id = ?", (existing_show_id,)
         ).fetchone()
         if existing["tracked"]:
+            # Before refusing, check if this is a sequel — offer
+            # season-attach instead of a duplicate error.
+            sequel = find_sequel_parent(conn, input.get("anilist_id"))
+            if sequel is not None:
+                raise SequelDetectedError(
+                    sequel["parent_show_id"],
+                    sequel["parent_title"],
+                    sequel["next_season"],
+                    sequel_anilist_id=input.get("anilist_id"),
+                    sequel_mal_id=input.get("mal_id"),
+                )
             raise ShowInputError(
                 "a show already exists for one of these external ids and is already"
                 f" tracked (show {existing_show_id}) — refusing to create a duplicate"
@@ -918,6 +1277,18 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
         title_slug = add_result.get("title_slug")
 
     if existing_show_id is not None:
+        # Same sequel gate as create_show — an untracked stub that is
+        # a SEQUEL of a tracked show should be offered as a season-attach,
+        # not promoted to a separate tracked show.
+        sequel = find_sequel_parent(conn, input.get("anilist_id"))
+        if sequel is not None:
+            raise SequelDetectedError(
+                sequel["parent_show_id"],
+                sequel["parent_title"],
+                sequel["next_season"],
+                sequel_anilist_id=input.get("anilist_id"),
+                sequel_mal_id=input.get("mal_id"),
+            )
         show_id = _promote_stub(conn, existing_show_id, resolved_input)
     else:
         show_id = create_show(conn, resolved_input)

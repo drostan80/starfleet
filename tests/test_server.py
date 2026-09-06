@@ -469,28 +469,31 @@ FAKE_ANILIST_MEDIA_WITH_RELATIONS = {
     "relations": {
         "edges": [
             {
+                "relationType": "SIDE_STORY",
                 "node": {
                     "id": 333,
                     "idMal": 433,
                     "format": "TV",
                     "title": {"romaji": "Golden Kamuy 2", "english": None, "native": None},
-                }
+                },
             },
             {
+                "relationType": "SIDE_STORY",
                 "node": {
                     "id": 444,
                     "idMal": None,
                     "format": "MOVIE",
                     "title": {"romaji": "Golden Kamuy Movie", "english": None, "native": None},
-                }
+                },
             },
             {
+                "relationType": "SOURCE",
                 "node": {
                     "id": 999,
                     "idMal": None,
                     "format": "MANGA",
                     "title": {"romaji": "Golden Kamuy (manga)", "english": None, "native": None},
-                }
+                },
             },
         ]
     },
@@ -2455,7 +2458,9 @@ async def test_anime_show_never_overwrites_a_caller_supplied_anilist_id(client, 
     )
     monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     show = await add_show(client, trackingSpace="ANIME", tvdbId=555, anilistId=777)
-    assert fetched == [777]
+    # fetch_media is called once for metadata, and possibly again by
+    # find_sequel_parent's AniList fallback (no local show yet).
+    assert fetched[0] == 777
     data = await gql(
         client,
         """
