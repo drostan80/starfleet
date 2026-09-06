@@ -197,13 +197,24 @@ def build_mal_index(dataset: list[dict]) -> dict[int, list[dict]]:
     """Keyed by mal_id — same structure as build_anilist_index() above.
     Used by the browse MAL-fallback path: when AniList is down, browse
     data only carries MAL IDs, so this index recovers tvdb_id, anilist_id,
-    and imdb_id from the Fribb dataset without any network call."""
+    and imdb_id from the Fribb dataset without any network call.
+
+    Unlike the anilist/tvdb indexes, this does NOT require tvdb_id to be
+    present — the primary value is recovering anilist_id (restoring the
+    AniList link button), with tvdb_id/imdb_id as bonuses when available.
+    Entries with only a mal_id (no anilist, no tvdb) still aren't useful,
+    so we require at least one of anilist_id or tvdb_id."""
     cached = _mal_index_cache.get(id(dataset))
     if cached is not None:
         return cached
     index: dict[int, list[dict]] = {}
     for entry in dataset:
-        if entry.get("mal_id") in _MISSING or entry.get("tvdb_id") in _MISSING:
+        if entry.get("mal_id") in _MISSING:
+            continue
+        # Need at least one recoverable ID to be useful
+        has_anilist = entry.get("anilist_id") not in _MISSING
+        has_tvdb = entry.get("tvdb_id") not in _MISSING
+        if not has_anilist and not has_tvdb:
             continue
         index.setdefault(entry["mal_id"], []).append(entry)
     _mal_index_cache.clear()
@@ -223,7 +234,7 @@ def resolve_ids_for_mal(
     candidates = index.get(mal_id, [])
     if not candidates:
         return {"tvdb_id": None, "anilist_id": None, "imdb_id": None}
-    tvdb_ids = {c["tvdb_id"] for c in candidates}
+    tvdb_ids = {c["tvdb_id"] for c in candidates if c.get("tvdb_id") not in _MISSING}
     tvdb_id = tvdb_ids.pop() if len(tvdb_ids) == 1 else None
     anilist_ids = {c["anilist_id"] for c in candidates if c.get("anilist_id") not in _MISSING}
     anilist_id = anilist_ids.pop() if len(anilist_ids) == 1 else None
