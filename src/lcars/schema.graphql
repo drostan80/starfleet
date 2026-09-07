@@ -98,6 +98,9 @@ enum AirDateSource {
   ANILIST
   ANIMESCHEDULE
   MANUAL
+  TVMAZE
+  ANIDB
+  SYOBOI
 }
 
 "§5.2 — distinct from watch_event's existence; state=SKIPPED still satisfies show-level completion."
@@ -328,6 +331,9 @@ type Episode {
   airDateHistory(first: Int, after: String, last: Int, before: String): AirDateChangeConnection!
   "kind = BONUS_MOVIE only — §5.1/§5.9 addendum, the standalone movie show representing the same film, once reconciled."
   linkedMovieShow: Show
+
+  "Memory Alpha — AniDB episode data resolved through the mapping table. Null when unmapped or when per-episode data hasn't been fetched yet."
+  anidbMapping: AnidbEpisodeMapping
 }
 
 type EpisodeEdge {
@@ -1079,6 +1085,39 @@ type AnilistActivityPollResult {
   reconcileResult: WatchProgressReconcileResult
 }
 
+"pollMemoryAlpha's own confirmation summary — Memory Alpha ops loop. datasetsRefreshed: true when Anime-Lists XML, AniDB titles dump, Wikidata TV bridge, or ARM were stale and re-downloaded this tick (weekly cadence). dripFetched/dripEpisodesStored: AniDB HTTP API calls (anime). tvmazeDripFetched/tvmazeEpisodesStored: TVmaze API calls (TV/movies). syoboiTidsSeeded: Syoboi Calendar TIDs linked via ARM. syoboiProgramsFetched: broadcast events fetched from Syoboi. airdateGapsFilled: episode.air_date_utc nulls filled from AniDB + TVmaze + Syoboi. syoboiAirdatesRewired: existing Sonarr/AniList dates overwritten with Syoboi minute-accurate JST broadcast times."
+type MemoryAlphaPollResult {
+  datasetsRefreshed: Boolean!
+  animeListEntries: Int!
+  anidbTitles: Int!
+  anidbIdsSeeded: Int!
+  episodesMapped: Int!
+  idsPropagated: Int!
+  dripFetched: Int!
+  dripEpisodesStored: Int!
+  titleGapsFilled: Int!
+  tvmazeDripFetched: Int!
+  tvmazeEpisodesStored: Int!
+  syoboiTidsSeeded: Int!
+  syoboiProgramsFetched: Int!
+  syoboiAirdatesRewired: Int!
+  airdateGapsFilled: Int!
+}
+
+"AniDB per-episode data resolved through episode_anidb_mapping → anidb_episode. Null when the episode has no AniDB mapping or when anidb_episode hasn't been fetched yet for that anime."
+type AnidbEpisodeMapping {
+  anidbAnimeId: Int!
+  anidbSeason: Int!
+  "Derived AniDB episode number within the anime entry."
+  anidbEpno: Int
+  titleEn: String
+  titleJa: String
+  titleRomaji: String
+  "Date-only (YYYY-MM-DD), not a full DateTime."
+  airdate: String
+  lengthMinutes: Int
+}
+
 # ---------------------------------------------------------------------------
 # §6.7 per-integration service-health tracking (B.6)
 # ---------------------------------------------------------------------------
@@ -1228,6 +1267,27 @@ type AniListCandidate {
 }
 
 # ---------------------------------------------------------------------------
+# Memory Alpha — AniDB cross-reference
+# ---------------------------------------------------------------------------
+
+"""
+AniDB title search result — one anime entry matching the query across all
+languages in the local titles dump. hasTvdbMapping indicates whether
+Anime-Lists has a TVDB episode offset mapping for this entry.
+"""
+type AniDbCandidate {
+  anidbId: Int!
+  mainTitle: String!
+  matchedTitle: String!
+  matchedLang: String!
+  hasTvdbMapping: Boolean!
+  "Direct link to the AniDB page for human verification."
+  url: String!
+  "AniDB search URL as fallback when no local match is found."
+  searchUrl: String!
+}
+
+# ---------------------------------------------------------------------------
 # Browse
 # ---------------------------------------------------------------------------
 
@@ -1362,6 +1422,21 @@ type Query {
   "already tracked" before the user triggers addShowWithArr.
   """
   showByExternalId(service: String!, externalId: String!): Show
+
+  """
+  Search the local AniDB titles dump by name. Matches across all
+  languages (romaji, English, Japanese, etc.). Returns up to 10
+  candidates ranked by relevance, each with a verification URL.
+  """
+  searchAniDb(title: String!): [AniDbCandidate!]!
+
+  """
+  Suggest AniDB IDs for a tracked show by matching its titles (romaji,
+  English, native, synonyms) plus base-title extraction for sequels.
+  Returns candidates with verification URLs. Empty when no match found
+  — the client should offer a manual search link.
+  """
+  suggestAniDbId(showId: ID!): [AniDbCandidate!]!
 
   "§8/§6.4 — cross-show next-up, across watching-status and paced/catch-up shows, soonest-available-first by default."
   nextUp(first: Int, after: String, last: Int, before: String): NextUpEntryConnection!
@@ -1854,6 +1929,19 @@ type Mutation {
   "Accepts an offered show_service_presence link (§5.4), or adds a crosswalk entry manually."
   linkShowExternalId(showId: ID!, service: String!, externalId: String!, url: String!): ShowExternalId!
   unlinkShowExternalId(showId: ID!, service: String!): Boolean!
+
+  "Memory Alpha: manually link a show to an AniDB ID."
+  linkAniDb(
+    showId: ID!
+    anidbId: Int!
+    "Optional TVDB ID for episode offset mapping."
+    tvdbId: String
+    "Which TVDB season this AniDB entry maps to."
+    defaultTvdbSeason: Int
+    "Episode offset within that season (default 0)."
+    episodeOffset: Int
+  ): Boolean!
+
   """
   Correct a wrong TVDB/TMDB external ID: validates the new ID against
   Sonarr/Radarr's lookup, deletes the old series/movie from Sonarr/Radarr,
@@ -1988,6 +2076,16 @@ type Mutation {
 
   "MAL → LCARS reverse sync (2026-08-26): fetch the whole MAL list, reconcile status + episode progress into LCARS (shared hardening with reconcileWatchProgress), then mirror every real change onward to AniList. No activity-feed pre-check (MAL has none), so the whole list is diffed each call — Ops runs it on its own slower loop. Status + progress only; score reverse-sync not built."
   pollMalList: MalReconcileResult!
+
+  """
+  Memory Alpha ops loop (2026-09-07): refreshes Anime-Lists XML + AniDB
+  titles dump if stale (weekly), re-derives episode mappings on data change,
+  seeds AniDB external IDs from Fribb, drip-fetches per-episode data from
+  the AniDB HTTP API (5 shows/tick, ~10s), and fills episode.title gaps from
+  AniDB English titles. No require_client() — same passive reasoning as
+  pollAnimeSchedule; no human-facing write, no changed_by column.
+  """
+  pollMemoryAlpha: MemoryAlphaPollResult!
 
   # -- 5.6 pending_review ----------------------------------------------------
   """

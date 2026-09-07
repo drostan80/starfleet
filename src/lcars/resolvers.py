@@ -26,6 +26,7 @@ from ariadne import EnumType, MutationType, ObjectType, QueryType, SubscriptionT
 from graphql import GraphQLError
 
 from lcars import (
+    anidb,
     anilist_client,
     animeschedule,
     art,
@@ -105,7 +106,11 @@ ENUMS = [
     _enum("TrackingSpace", "tv", "anime"),
     _enum("ShowStatus", "watching", "planned", "paused", "completed", "dropped", "skipped"),
     _enum("EpisodeKind", "regular", "special", "ova", "bonus_movie"),
-    _enum("AirDateSource", "sonarr", "anilist", "animeschedule", "manual"),
+    _enum(
+        "AirDateSource",
+        "sonarr", "anilist", "animeschedule", "manual",
+        "tvmaze", "anidb", "syoboi",
+    ),
     _enum("EpisodeState", "unwatched", "watched", "skipped"),
     _enum("PersonRoleType", "voice_actor", "actor", "staff"),
     _enum("StudioRoleType", "studio", "publisher", "network"),
@@ -1466,6 +1471,40 @@ def resolve_show_by_external_id(_, info, service, external_id):
     return show
 
 
+@query.field("searchAniDb")
+def resolve_search_anidb(_, info, title):
+    """Search the local AniDB titles dump by name. Matches across all
+    languages. Returns up to 10 candidates ranked by relevance."""
+    conn = db.get_connection()
+    return anidb.search_by_title(conn, title, limit=10)
+
+
+@query.field("suggestAniDbId")
+def resolve_suggest_anidb_id(_, info, show_id):
+    """Suggest AniDB IDs for a tracked show by matching its titles."""
+    conn = db.get_connection()
+    return anidb.suggest_anidb_id(conn, show_id)
+
+
+@mutation.field("linkAniDb")
+def resolve_link_anidb(_, info, show_id, anidb_id, tvdb_id=None,
+                       default_tvdb_season=None, episode_offset=None):
+    """Manually link a show to an AniDB ID."""
+    conn = db.get_connection()
+    show = conn.execute(
+        "SELECT id FROM show WHERE id = ?", (show_id,)
+    ).fetchone()
+    if not show:
+        raise GraphQLError(f"show not found: {show_id}")
+    anidb.link_anidb_manual(
+        conn, show_id, anidb_id,
+        tvdb_id=tvdb_id,
+        default_tvdb_season=default_tvdb_season,
+        episode_offset=episode_offset or 0,
+    )
+    return True
+
+
 @query.field("stats")
 def resolve_stats(_, info):
     """§6.6, A.13 — no ObjectType binding needed for `Stats`/
@@ -1963,6 +2002,32 @@ def resolve_episode_air_date_history(obj, info, **page_args):
     return pagination.paginate(
         db.get_connection(), "air_date_change", "episode_id = ?", (obj["id"],), **page_args
     )
+
+
+@episode_type.field("anidbMapping")
+def resolve_episode_anidb_mapping(obj, info):
+    """Memory Alpha — AniDB mapping + per-episode data for this episode.
+
+    JOINs episode_anidb_mapping → anidb_episode to return titles/airdate
+    in one hop.  Returns None when unmapped or when anidb_episode hasn't
+    been fetched yet for that anime.
+    """
+    conn = db.get_connection()
+    row = conn.execute(
+        """SELECT m.anidb_anime_id, m.anidb_season, m.anidb_epno,
+                  ae.title_en, ae.title_ja, ae.title_romaji,
+                  ae.airdate, ae.length_minutes
+           FROM episode_anidb_mapping m
+           LEFT JOIN anidb_episode ae
+             ON ae.anidb_anime_id = m.anidb_anime_id
+             AND ae.anidb_season = m.anidb_season
+             AND ae.anidb_epno = m.anidb_epno
+           WHERE m.episode_id = ?""",
+        (obj["id"],),
+    ).fetchone()
+    if row is None:
+        return None
+    return dict(row)
 
 
 # --- WatchEvent fields -----------------------------------------------------
@@ -2611,6 +2676,17 @@ def resolve_poll_mal_list(_, info):
     reconcile stamps its own fixed 'mal_reconcile' changed_by."""
     conn = db.get_connection()
     return mal_reconcile.reconcile_mal_progress(conn)
+
+
+@mutation.field("pollMemoryAlpha")
+def resolve_poll_memory_alpha(_, info):
+    """Memory Alpha ops loop (2026-09-07) — refreshes Anime-Lists XML +
+    AniDB titles dump if stale (weekly), re-derives episode mappings on
+    data change, drip-fetches per-episode data from AniDB HTTP API
+    (5 shows/tick), fills episode.title gaps. No require_client() —
+    same passive reasoning as pollAnimeSchedule."""
+    conn = db.get_connection()
+    return anidb.poll_memory_alpha(conn)
 
 
 @query.field("recommendedAvailabilityPollIntervalSeconds")

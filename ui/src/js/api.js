@@ -268,6 +268,10 @@ const SHOW_DETAIL_QUERY = `
           filePathSonarr filePathRadarr
           seasonEntity { malId status }
           linkedMovieShow { id posterUrl displayTitle }
+          anidbMapping {
+            anidbAnimeId anidbSeason anidbEpno
+            titleEn titleJa titleRomaji airdate
+          }
           watchEvents(first: 1) { edges { node { id } } }
         }}
         pageInfo { hasNextPage endCursor }

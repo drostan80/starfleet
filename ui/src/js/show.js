@@ -1278,11 +1278,227 @@ function renderSeasons(show, body, cfg, targetSeason) {
   const section = el('div', 'sp-seasons');
   const sectionLabel = el('div', 'sp-section-label-row');
   sectionLabel.appendChild(el('span', 'sp-section-label', 'Seasons & Episodes'));
+
+  // AniDB order toggle — only for anime with mapped episodes
+  const hasAnidb = show.trackingSpace === 'anime' &&
+    show.episodes.some(ep => ep.anidbMapping);
+  if (hasAnidb) {
+    const toggleBtn = el('button', 'sp-anidb-toggle-btn', '⟳ AniDB Order');
+    toggleBtn.title = 'Toggle AniDB absolute ordering';
+    let anidbMode = false;
+    toggleBtn.addEventListener('click', () => {
+      anidbMode = !anidbMode;
+      toggleBtn.textContent = anidbMode ? '⟳ Broadcast Order' : '⟳ AniDB Order';
+      toggleBtn.classList.toggle('active', anidbMode);
+      // Replace content below the label row
+      const existing = section.querySelector('.sp-season-content');
+      if (existing) existing.remove();
+      const content = el('div', 'sp-season-content');
+      if (anidbMode) {
+        renderAnidbOrder(show, content, cfg);
+      } else {
+        renderBroadcastOrder(show, content, cfg, targetSeason);
+      }
+      section.appendChild(content);
+    });
+    sectionLabel.appendChild(toggleBtn);
+  }
+
   const addSeasonBtn = el('button', 'sp-add-season-btn', '+ Add Season');
   addSeasonBtn.addEventListener('click', () => openAddSeasonForm(section, show, cfg, targetSeason));
   sectionLabel.appendChild(addSeasonBtn);
   section.appendChild(sectionLabel);
 
+  // Initial broadcast order render
+  const content = el('div', 'sp-season-content');
+  renderBroadcastOrder(show, content, cfg, targetSeason);
+  section.appendChild(content);
+
+  body.appendChild(section);
+
+  // Scroll to target season if specified and exists
+  if (targetSeason != null) {
+    requestAnimationFrame(() => {
+      const targetEl = document.getElementById(`sp-season-${targetSeason}`);
+      if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+}
+
+/* ── AniDB absolute order view ────────────────────────── */
+
+function renderAnidbOrder(show, container, cfg) {
+  // Split episodes into mapped vs unmapped
+  const mapped = [];
+  const unmapped = [];
+  for (const ep of show.episodes) {
+    if (ep.anidbMapping && ep.anidbMapping.anidbEpno != null) {
+      mapped.push(ep);
+    } else {
+      unmapped.push(ep);
+    }
+  }
+
+  // Sort mapped by (anidb_season ASC, anidb_epno ASC) — regulars first, then specials
+  mapped.sort((a, b) => {
+    const as = a.anidbMapping.anidbSeason, bs = b.anidbMapping.anidbSeason;
+    if (as !== bs) return bs - as; // season 1 (regular) before season 0 (special)
+    return a.anidbMapping.anidbEpno - b.anidbMapping.anidbEpno;
+  });
+
+  // Render regulars
+  const regulars = mapped.filter(ep => ep.anidbMapping.anidbSeason === 1);
+  if (regulars.length) {
+    const card = el('div', 'sp-season-card');
+    card.classList.add('open');
+    const header = el('div', 'sp-season-header');
+    header.appendChild(el('span', 'sp-season-num', 'AniDB Regular Episodes'));
+    header.appendChild(el('span', 'sp-season-count', `${regulars.length} episodes`));
+    header.addEventListener('click', () => card.classList.toggle('open'));
+    card.appendChild(header);
+
+    const epList = el('div', 'sp-ep-list');
+    for (const ep of regulars) {
+      epList.appendChild(buildAnidbEpRow(ep, show, cfg));
+    }
+    card.appendChild(epList);
+    container.appendChild(card);
+  }
+
+  // Render specials
+  const specials = mapped.filter(ep => ep.anidbMapping.anidbSeason === 0);
+  if (specials.length) {
+    const card = el('div', 'sp-season-card');
+    const header = el('div', 'sp-season-header');
+    header.appendChild(el('span', 'sp-season-num', 'AniDB Specials'));
+    header.appendChild(el('span', 'sp-season-count', `${specials.length} episodes`));
+    header.addEventListener('click', () => card.classList.toggle('open'));
+    card.appendChild(header);
+
+    const epList = el('div', 'sp-ep-list');
+    for (const ep of specials) {
+      epList.appendChild(buildAnidbEpRow(ep, show, cfg));
+    }
+    card.appendChild(epList);
+    container.appendChild(card);
+  }
+
+  // Render unmapped (greyed out, at the bottom)
+  if (unmapped.length) {
+    unmapped.sort((a, b) => {
+      if (a.season !== b.season) return a.season - b.season;
+      return (a.episode ?? 0) - (b.episode ?? 0);
+    });
+    const card = el('div', 'sp-season-card unmapped');
+    const header = el('div', 'sp-season-header');
+    header.appendChild(el('span', 'sp-season-num', 'Unmapped'));
+    header.appendChild(el('span', 'sp-season-count', `${unmapped.length} episodes`));
+    header.addEventListener('click', () => card.classList.toggle('open'));
+    card.appendChild(header);
+
+    const epList = el('div', 'sp-ep-list');
+    for (const ep of unmapped) {
+      const row = el('div', 'sp-ep-row unmapped');
+      row.appendChild(el('span', 'sp-ep-num', fmtEpBadge(ep)));
+      row.appendChild(el('span', 'sp-ep-abs', '—'));
+      const titleCell = el('div', 'sp-ep-title-cell');
+      titleCell.appendChild(el('span', 'sp-ep-title', ep.title || 'TBA'));
+      row.appendChild(titleCell);
+      row.appendChild(el('span', 'sp-ep-airdate', fmtDate(ep.airDateUtc)));
+      epList.appendChild(row);
+    }
+    card.appendChild(epList);
+    container.appendChild(card);
+  }
+}
+
+function buildAnidbEpRow(ep, show, cfg) {
+  const m = ep.anidbMapping;
+  const row = el('div', 'sp-ep-row');
+
+  const avail = epAvailState(ep, show.mediaShape);
+  if (avail === 'future') row.classList.add('future');
+
+  // AniDB episode number badge
+  const prefix = m.anidbSeason === 0 ? 'S' : '';
+  row.appendChild(el('span', 'sp-ep-num', `${prefix}${m.anidbEpno}`));
+
+  // Broadcast reference (small)
+  row.appendChild(el('span', 'sp-ep-abs sp-ep-broadcast-ref',
+    `S${ep.season}E${ep.episode}`));
+
+  // Title cell — prefer AniDB titles, show JA/romaji as subtitles
+  const titleCell = el('div', 'sp-ep-title-cell');
+  const mainTitle = m.titleEn || ep.title || 'TBA';
+  titleCell.appendChild(el('span', 'sp-ep-title', mainTitle));
+  // Japanese + romaji subtitle
+  const subtitles = [m.titleJa, m.titleRomaji].filter(Boolean);
+  if (subtitles.length) {
+    titleCell.appendChild(el('span', 'sp-ep-title-sub', subtitles.join(' / ')));
+  }
+  row.appendChild(titleCell);
+
+  // Air date
+  row.appendChild(el('span', 'sp-ep-airdate', fmtDate(ep.airDateUtc)));
+
+  // mpv play button
+  const mpvCell = el('div', 'sp-ep-mpv');
+  const epFilePath = show.mediaShape === 'MOVIE' ? ep.filePathRadarr : ep.filePathSonarr;
+  if (epFilePath) {
+    const mpvBtn = el('button', 'sp-mpv-btn');
+    mpvBtn.innerHTML = _mpvSvg;
+    mpvBtn.title = 'Play in mpv';
+    mpvBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      launchMpv(cfg, epFilePath);
+    });
+    mpvCell.appendChild(mpvBtn);
+  }
+  row.appendChild(mpvCell);
+
+  // Watch toggle
+  const isWatched = ep.watchEvents?.edges?.length > 0;
+  const watchBtn = el('button', 'sp-ep-watch' + (isWatched ? ' watched' : ''), isWatched ? '✓' : '○');
+  watchBtn.dataset.episodeId = ep.id;
+  watchBtn.dataset.state = isWatched ? 'WATCHED' : 'UNWATCHED';
+  watchBtn.dataset.watchEventId = ep.watchEvents?.edges?.[0]?.node?.id || '';
+  watchBtn.title = isWatched ? 'Watched' : 'Mark watched';
+  watchBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (watchBtn.classList.contains('loading')) return;
+    watchBtn.classList.add('loading');
+    try {
+      if (watchBtn.dataset.state === 'WATCHED') {
+        if (watchBtn.dataset.watchEventId) {
+          await deleteWatchEvent(watchBtn.dataset.watchEventId);
+          watchBtn.dataset.watchEventId = '';
+        }
+        watchBtn.dataset.state = 'UNWATCHED';
+        watchBtn.classList.remove('watched');
+        watchBtn.textContent = '○';
+        watchBtn.title = 'Mark watched';
+      } else {
+        const id = await addWatchEvent(show.id, ep.season, ep.episode);
+        watchBtn.dataset.state = 'WATCHED';
+        watchBtn.dataset.watchEventId = id;
+        watchBtn.classList.add('watched');
+        watchBtn.textContent = '✓';
+        watchBtn.title = 'Watched';
+      }
+    } catch (err) {
+      showBanner(`Watch error: ${err.message}`, 'error');
+    } finally {
+      watchBtn.classList.remove('loading');
+    }
+  });
+  row.appendChild(watchBtn);
+
+  return row;
+}
+
+/* ── Broadcast order (original season/episode layout) ── */
+
+function renderBroadcastOrder(show, section, cfg, targetSeason) {
   // ── 1. Group episodes by season number ──
   const epsBySeason = new Map();
   for (const ep of show.episodes) {
@@ -1490,15 +1706,6 @@ function renderSeasons(show, body, cfg, targetSeason) {
     });
   }
 
-  body.appendChild(section);
-
-  // Scroll to target season if specified and exists
-  if (effectiveTarget != null) {
-    requestAnimationFrame(() => {
-      const targetEl = document.getElementById(`sp-season-${effectiveTarget}`);
-      if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  }
 }
 
 /* ── Special / film interleave card ────────────────────── */
