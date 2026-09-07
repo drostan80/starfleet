@@ -648,7 +648,7 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             ).fetchone()
             if episode_row is None:
                 continue  # not yet fetched into LCARS — A.8's Sonarr fetch's job, not this one's
-            if episode_row["air_date_source"] in ("manual", "animeschedule"):
+            if episode_row["air_date_source"] in ("manual", "animeschedule", "syoboi"):
                 continue  # hard-protected — see this function's own docstring
             new_air_date = util.unix_to_iso(node["airingAt"])
             if episode_row["air_date_utc"] == new_air_date:
