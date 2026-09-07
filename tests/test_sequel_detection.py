@@ -195,7 +195,10 @@ class TestAniListFallback:
         """No stub in DB, but AniList returns a PREQUEL relation
         pointing to a tracked show."""
         # Remove the stub entirely — simulates prod after cleanup.
-        conn.execute("DELETE FROM show_relation WHERE show_id = 's-stub' OR related_show_id = 's-stub'")
+        conn.execute(
+            "DELETE FROM show_relation"
+            " WHERE show_id = 's-stub' OR related_show_id = 's-stub'"
+        )
         conn.execute("DELETE FROM show_external_id WHERE show_id = 's-stub'")
         conn.execute("DELETE FROM show WHERE id = 's-stub'")
         conn.commit()
@@ -223,7 +226,10 @@ class TestAniListFallback:
 
     def test_returns_none_when_anilist_prequel_not_tracked(self, conn, monkeypatch):
         """AniList returns a PREQUEL but that show isn't tracked locally."""
-        conn.execute("DELETE FROM show_relation WHERE show_id = 's-stub' OR related_show_id = 's-stub'")
+        conn.execute(
+            "DELETE FROM show_relation"
+            " WHERE show_id = 's-stub' OR related_show_id = 's-stub'"
+        )
         conn.execute("DELETE FROM show_external_id WHERE show_id = 's-stub'")
         conn.execute("DELETE FROM show WHERE id = 's-stub'")
         conn.execute("UPDATE show SET tracked = 0 WHERE id = 's-parent'")
@@ -244,7 +250,10 @@ class TestAniListFallback:
 
     def test_returns_none_when_anilist_fetch_fails(self, conn, monkeypatch):
         """AniList error should gracefully return None."""
-        conn.execute("DELETE FROM show_relation WHERE show_id = 's-stub' OR related_show_id = 's-stub'")
+        conn.execute(
+            "DELETE FROM show_relation"
+            " WHERE show_id = 's-stub' OR related_show_id = 's-stub'"
+        )
         conn.execute("DELETE FROM show_external_id WHERE show_id = 's-stub'")
         conn.execute("DELETE FROM show WHERE id = 's-stub'")
         conn.commit()
@@ -259,7 +268,10 @@ class TestAniListFallback:
 
     def test_returns_none_when_anilist_has_no_prequel(self, conn, monkeypatch):
         """AniList returns relations but none are PREQUEL."""
-        conn.execute("DELETE FROM show_relation WHERE show_id = 's-stub' OR related_show_id = 's-stub'")
+        conn.execute(
+            "DELETE FROM show_relation"
+            " WHERE show_id = 's-stub' OR related_show_id = 's-stub'"
+        )
         conn.execute("DELETE FROM show_external_id WHERE show_id = 's-stub'")
         conn.execute("DELETE FROM show WHERE id = 's-stub'")
         conn.commit()

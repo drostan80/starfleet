@@ -69,10 +69,24 @@ def upsert_asset(
     return asset_id
 
 
+_KIND_TO_SHOW_COLUMN: dict[str, str] = {
+    "banner": "banner_url",
+    "background": "banner_url",   # banner slot shows both kinds
+    "poster": "poster_url",
+}
+
+
 def select_asset(conn, asset_id: str) -> dict:
     """Mark an asset as the selected art for its (show, season, kind)
     slot, deselecting whatever was previously selected in that slot.
-    Returns the updated asset row."""
+
+    For show-level assets (season_id IS NULL), also writes the URL back
+    to the corresponding ``show`` column (``banner_url`` / ``poster_url``)
+    so that fast-path resolvers (calendar, lists) return the correct
+    value without an ``art_asset`` lookup.
+
+    Returns the updated asset row.
+    """
     asset = conn.execute("SELECT * FROM art_asset WHERE id = ?", (asset_id,)).fetchone()
     if not asset:
         raise ValueError(f"Art asset {asset_id} not found")
@@ -93,19 +107,48 @@ def select_asset(conn, asset_id: str) -> dict:
         )
 
     conn.execute("UPDATE art_asset SET selected = 1 WHERE id = ?", (asset_id,))
+
+    # Denormalise: write URL back to the show row so calendar/list
+    # resolvers (which skip the art_asset table) return the right art.
+    if asset["season_id"] is None:
+        col = _KIND_TO_SHOW_COLUMN.get(asset["kind"])
+        if col:
+            conn.execute(
+                f"UPDATE show SET {col} = ? WHERE id = ?",
+                (asset["url"], asset["show_id"]),
+            )
+
     conn.commit()
     asset["selected"] = 1
     return asset
 
 
 def deselect_asset(conn, asset_id: str) -> dict:
-    """Clear the selected flag on an asset.  Returns the updated row."""
+    """Clear the selected flag on an asset.
+
+    For show-level assets, also clears the corresponding ``show``
+    column (``banner_url`` / ``poster_url``) so the fast-path resolvers
+    don't keep serving the old art.
+
+    Returns the updated row.
+    """
     asset = conn.execute("SELECT * FROM art_asset WHERE id = ?", (asset_id,)).fetchone()
     if not asset:
         raise ValueError(f"Art asset {asset_id} not found")
     conn.execute("UPDATE art_asset SET selected = 0 WHERE id = ?", (asset_id,))
-    conn.commit()
+
+    # Clear the denormalised show column so fast-path resolvers return
+    # NULL (which lets the client fall through to its own fallback).
     asset = dict(asset)
+    if asset["season_id"] is None:
+        col = _KIND_TO_SHOW_COLUMN.get(asset["kind"])
+        if col:
+            conn.execute(
+                f"UPDATE show SET {col} = NULL WHERE id = ?",
+                (asset["show_id"],),
+            )
+
+    conn.commit()
     asset["selected"] = 0
     return asset
 
@@ -237,7 +280,7 @@ def auto_select_best(conn, show_id: str) -> None:
         # Pick best candidate: anilist first, then by source_score desc
         best = conn.execute(
             """
-            SELECT id FROM art_asset
+            SELECT id, url FROM art_asset
             WHERE show_id = ? AND season_id IS ? AND kind = ?
             ORDER BY
                 CASE source WHEN 'anilist' THEN 0 ELSE 1 END,
@@ -249,5 +292,13 @@ def auto_select_best(conn, show_id: str) -> None:
         ).fetchone()
         if best:
             conn.execute("UPDATE art_asset SET selected = 1 WHERE id = ?", (best["id"],))
+            # Denormalise show-level selections
+            if slot["season_id"] is None:
+                col = _KIND_TO_SHOW_COLUMN.get(slot["kind"])
+                if col:
+                    conn.execute(
+                        f"UPDATE show SET {col} = ? WHERE id = ?",
+                        (best["url"], slot["show_id"]),
+                    )
 
     conn.commit()

@@ -1407,3 +1407,52 @@ body {
   font-size: 20px; cursor: pointer; padding: 4px 8px;
 }
 .sp-art-close-btn:hover { color: var(--text); }
+
+/* ── Sequel confirmation dialog ─────────────────────────── */
+
+.sequel-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sequel-confirm-dialog {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px 28px;
+  max-width: 400px;
+  text-align: center;
+  color: var(--text);
+}
+.sequel-confirm-dialog p {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.sequel-confirm-btns {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 16px;
+}
+.sequel-confirm-btns button {
+  padding: 8px 18px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.sequel-confirm-btns .btn-confirm {
+  background: var(--st-watching);
+  color: #000;
+  border-color: var(--st-watching);
+}
+.sequel-confirm-btns .btn-cancel {
+  background: transparent;
+  color: var(--muted);
+}

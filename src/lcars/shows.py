@@ -187,8 +187,9 @@ def _find_parent_via_anilist(conn, anilist_id: int) -> dict | None:
     """Fetch relations from AniList and check if any PREQUEL target is
     tracked locally.  Best-effort: AniList errors return None (no
     sequel detected), same as a missing stub."""
-    from lcars import anilist_client
     import logging
+
+    from lcars import anilist_client
     log = logging.getLogger(__name__)
     try:
         media = anilist_client.fetch_media(anilist_id)

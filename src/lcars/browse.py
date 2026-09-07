@@ -279,7 +279,9 @@ def _enrich_tvdb_from_lcars_relations(
         related_rows = conn.execute(
             "SELECT sr.related_show_id, sei.external_id"
             " FROM show_relation sr"
-            " JOIN show_external_id sei ON sei.show_id = sr.related_show_id AND sei.service = 'tvdb'"
+            " JOIN show_external_id sei"
+            "   ON sei.show_id = sr.related_show_id"
+            "  AND sei.service = 'tvdb'"
             " WHERE sr.show_id = ?",
             (show_id,),
         ).fetchall()

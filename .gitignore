@@ -16,3 +16,6 @@ build/
 lcars.ini
 gdpr_data.json
 config/
+dev.sh
+lcars-dev.db-shm
+lcars-dev.db-wal
