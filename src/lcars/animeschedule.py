@@ -200,7 +200,7 @@ def _apply_or_flag(conn, show_id: str, item: dict) -> str:
 
     episode_row = matches[0]
     if airdate_priority.source_is_protected_from(
-        episode_row.get("air_date_source"), "animeschedule"
+        episode_row["air_date_source"], "animeschedule"
     ):
         return "unchanged"  # higher-priority source — don't overwrite
     if episode_row["air_date_utc"] == item["air_date_utc"]:

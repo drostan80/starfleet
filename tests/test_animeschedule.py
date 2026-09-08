@@ -101,10 +101,10 @@ def test_a_clear_match_updates_the_matching_episode(conn, monkeypatch):
     assert health["status"] == "ok"
 
 
-def test_animeschedule_overrides_a_manual_date(conn, monkeypatch):
-    """§6.7's own explicitly-resolved B.5 question: animeschedule.net IS
-    exempt from the manual-date hard-gate B.4 built for AniList/Sonarr —
-    a real release report is treated as a genuine reschedule signal."""
+def test_animeschedule_skips_manual_date(conn, monkeypatch):
+    """Revised 2026-09-08: animeschedule no longer overrides manual —
+    airdate_priority.py's chain (manual > syoboi > animeschedule) means
+    manual-sourced dates are protected from all automatic sources."""
     _add_show(conn, "s-bbbbbb", title_romaji="Some Show")
     _add_episode(
         conn,
@@ -121,12 +121,13 @@ def test_animeschedule_overrides_a_manual_date(conn, monkeypatch):
         lambda: [_item("Some Show", 6, "2026-08-09T09:00:00Z")],
     )
     result = animeschedule.poll_anime_schedule(conn)
-    assert result == {"episodes_updated": 1, "flagged": 0}
+    assert result == {"episodes_updated": 0, "flagged": 0}
     row = conn.execute(
         "SELECT air_date_utc, air_date_source FROM episode WHERE id = ?", ("e-bbbbbb",)
     ).fetchone()
-    assert row["air_date_utc"] == "2026-08-09T09:00:00Z"
-    assert row["air_date_source"] == "animeschedule"
+    # Manual date preserved — not overwritten
+    assert row["air_date_utc"] == "2030-06-01T00:00:00Z"
+    assert row["air_date_source"] == "manual"
 
 
 def test_is_a_no_op_when_the_value_is_already_correct(conn, monkeypatch):

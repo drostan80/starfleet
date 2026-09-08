@@ -5,7 +5,23 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## Recently shipped — still under testing (Sep 2–7)
+## Recently shipped — still under testing (Sep 2–8)
+
+### v0.2.5 (2026-09-08, not yet deployed)
+
+- **Airdate source priority chain** (`airdate_priority.py`): single source of truth
+  for which automatic source wins. Order: manual > syoboi > animeschedule > anilist >
+  sonarr > anidb > tvmaze. All automatic writers now consult this.
+- **animeschedule demoted to backup**: `animeschedule.py` now skips episodes whose
+  `air_date_source` outranks animeschedule (manual, syoboi). Reverses B.5's earlier
+  decision that animeschedule overrides manual.
+- **Syoboi change-driven sync**: replaces new-shows-only incremental fetch with
+  `proginfo.xml` RSS pulse + `ProgLookup` with `LastUpdate` range. Catches
+  reschedules on existing shows, not just new TIDs. Sync cursor derived from
+  `MAX(last_update)` in `syoboi_program`, backed off 5 minutes.
+- **Rewire air_date_change rows**: `rewire_airdates` now records `air_date_change`
+  rows before bulk UPDATE (preserves schedule-change signal for future calendar
+  "*new schedule time" annotations).
 
 ### v0.2.4 (2026-09-07)
 
@@ -213,9 +229,12 @@ Authoritative cross-source episode mapping layer with AniDB as the ordering auth
     **Divergence measured (corrected)**: 2,336 episodes joinable (primary
     entry only), 437 (18.7%) diverge by >30 minutes from existing dates.
     By source: Sonarr 75.4% exact / 20.0% diverge, AniList 59.4% exact /
-    16.9% diverge. Rewiring (overwriting existing dates with Syoboi's
-    minute-accurate JST times) is the next step, pending user decision.
-    animeschedule stays as backup for ongoing schedule changes.
+    16.9% diverge. ✅ **Rewiring shipped** (v0.2.4 step 8 in ops loop).
+    animeschedule demoted to backup (v0.2.5, `airdate_priority.py`).
+16. ✅ **Change-driven sync** (v0.2.5) — `proginfo.xml` RSS pulse as
+    lightweight "something changed" trigger, then `ProgLookup` with
+    `LastUpdate` range fetches only changed rows. Replaces new-shows-only
+    incremental. Catches reschedules on shows already in `syoboi_program`.
 
 **Budget:** Steps 1–5 required **zero AniDB API calls**. The free dumps + Anime-Lists
 cover ordering for the full backlog. The API drip-fetches episode titles/dates for
@@ -265,8 +284,9 @@ Wrap the existing web client; native Kotlin plugins only for what the web can't 
 - make sure to add the link to all the db as we have ids, new icons to be sourced and checked
 - some ui improvement to make on planner view, including (not limited to) show / season poster not cropped, better organisation location font colour and size / visibility of data in the detail pane as well as rework on how the banner is displayed within
 - we found the correct / good source for airdate for tv show and set up to integrate tvmaze, we need to do the work in finding good sources for anime air date (japan air date and time) we have one in use and need to fine other / backups this is for memory alpha but is also the item in ### better calendar schedule / news sync item on this I think I have the best option
-Syoboi as source of truth and existing anime schedule setup moving as backup
-you can find the input from chat gpt at Downloads/japanese_anime_airdate_syoboi_integration.md
+✅ Syoboi as source of truth, animeschedule demoted to backup (v0.2.5,
+`airdate_priority.py`). Change-driven sync via `proginfo.xml` + `LastUpdate`
+built. Reference doc: Downloads/japanese_anime_airdate_syoboi_integration.md
 - this work on airdate will retire the new air date review, but we may introduce a way to add a note in calendar to indicate a change in schedule, like *new schedule time, or  *no episode this week, or similar (to be defined)
 - the schema evolved so much... do we have a season table? with field like show, linked episodes, franchise... and show table wich also link seasons and episodes linked and franchise and..., and boviously franchise which list shows > season > episodes/movies part of it?
 could and should it be done?
