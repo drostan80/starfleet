@@ -1708,12 +1708,12 @@ type Mutation {
   release) RSS feed, matched by fuzzy title against LCARS's own
   watching+actively-airing anime shows, restricted to those shows'
   currently-airing season(s). A confident single-episode match writes
-  air_date_utc/air_date_source = ANIMESCHEDULE — this source **does**
-  override an existing air_date_source = MANUAL value (§6.7's own
-  priority order), on the reasoning a real animeschedule.net release
-  report is a genuine reschedule signal, not just another opinion to
-  rank; every such overwrite still opens/extends a pending_review, per
-  §5.6, never silent. An RSS item that title-matches a tracked show but
+  air_date_utc/air_date_source = ANIMESCHEDULE — but respects the
+  airdate priority chain (airdate_priority.py): skips episodes whose
+  existing source outranks animeschedule (manual, syoboi). Revised
+  2026-09-08: animeschedule is now backup to Syoboi Calendar.
+  Every overwrite still opens/extends a pending_review, per §5.6,
+  never silent. An RSS item that title-matches a tracked show but
   resolves to zero or more than one candidate episode row is flagged
   (pending_review, field "animeschedule_episode_match") rather than
   guessed. No per-item argument — one call sweeps the whole feed, same
@@ -1837,7 +1837,7 @@ type Mutation {
   markEpisodeRangeWatched(showId: ID!, season: Int!, fromEpisode: Int!, toEpisode: Int!, watchedAt: DateTime): [WatchEvent!]!
 
   # -- 5.2 episode field overrides -----------------------------------------
-  "Sets air_date_source = MANUAL — §6.7's priority order means this then wins over every automatic source."
+  "Sets air_date_source = MANUAL — airdate_priority.py's chain means this wins over every automatic source (manual > syoboi > animeschedule > anilist > sonarr > anidb > tvmaze)."
   setEpisodeAirDate(episodeId: ID!, airDateUtc: DateTime!): Episode!
   """
   archive/todo.md:1209, closed 2026-08-25 — the other half of "a way to correct a schedule

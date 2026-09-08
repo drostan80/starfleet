@@ -13,7 +13,14 @@ API calls:
   TitleLookup — title metadata + per-episode Japanese subtitles
   ChLookup — channel list (288 channels)
 
-No documented rate limit, but we pace at 1s between requests.
+Change detection:
+  proginfo.xml — RSS 2.0 feed at cal.syoboi.jp/proginfo.xml reporting
+  broadcast-data update times.  Used as a lightweight "something changed"
+  pulse: if the feed's newest item is newer than our last sync cursor,
+  we call ProgLookup with LastUpdate to retrieve only the changed rows.
+
+No documented rate limit, but we pace at 2s between requests (429s
+observed at 1s pacing).
 """
 
 import logging
@@ -366,20 +373,30 @@ def fill_airdate_gaps(conn) -> int:
 def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
     """Overwrite existing airdates with Syoboi's minute-accurate JST times.
 
-    Unlike fill_airdate_gaps (NULL-only), this replaces Sonarr/AniList/
-    animeschedule/anidb dates with Syoboi earliest-broadcast times where
-    we have a confident join.  Skips air_date_source='manual' (never
-    overwrite user corrections) and air_date_source='syoboi' (already
-    correct).
+    Unlike fill_airdate_gaps (NULL-only), this replaces lower-priority
+    source dates with Syoboi earliest-broadcast times where we have a
+    confident join.  Respects airdate_priority: skips any source that
+    outranks or equals 'syoboi' (i.e. 'manual' — syoboi itself is
+    already correct and filtered by the != check).
 
     Same multi-entry collision guard as fill_airdate_gaps.
 
     Returns {updated: int, by_source: {old_source: count}}.
     If dry_run=True, returns counts without writing.
     """
+    from lcars import airdate_priority
+
+    # Sources that syoboi must not overwrite (rank <= syoboi's rank)
+    protected = [
+        src for src in ("manual", "syoboi")
+        if airdate_priority.source_is_protected_from(src, "syoboi")
+        or src == "syoboi"  # already correct
+    ]
+    placeholders = ",".join(f"'{s}'" for s in protected)
+
     # Count what would change, broken down by old source
     preview = conn.execute(
-        """SELECT episode.air_date_source, COUNT(*) AS n
+        f"""SELECT episode.air_date_source, COUNT(*) AS n
            FROM episode
            JOIN episode_anidb_mapping m ON m.episode_id = episode.id
            JOIN show_external_id sei_syoboi
@@ -399,7 +416,7 @@ def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
              AND m.anidb_anime_id = CAST(sei_anidb.external_id AS INTEGER)
              AND episode.kind = 'regular'
              AND episode.air_date_utc IS NOT NULL
-             AND episode.air_date_source NOT IN ('manual', 'syoboi')
+             AND episode.air_date_source NOT IN ({placeholders})
              AND episode.air_date_utc != sp_min.earliest_utc
            GROUP BY episode.air_date_source"""
     ).fetchall()
@@ -410,8 +427,12 @@ def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
     if dry_run or total == 0:
         return {"updated": 0, "would_update": total, "by_source": by_source}
 
+    # Record air_date_change rows before the bulk UPDATE (preserves the
+    # schedule-change signal for future calendar annotations).
+    _record_rewire_changes(conn, protected, placeholders)
+
     cursor = conn.execute(
-        """UPDATE episode SET
+        f"""UPDATE episode SET
              air_date_utc = sp_min.earliest_utc,
              air_date_source = 'syoboi'
            FROM episode_anidb_mapping m,
@@ -434,10 +455,308 @@ def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
              AND m.anidb_season = 1
              AND episode.kind = 'regular'
              AND episode.air_date_utc IS NOT NULL
-             AND episode.air_date_source NOT IN ('manual', 'syoboi')
+             AND episode.air_date_source NOT IN ({placeholders})
              AND episode.air_date_utc != sp_min.earliest_utc"""
     )
     updated = cursor.rowcount
     conn.commit()
     log.info("Rewired %d episode airdates to Syoboi (was: %s)", updated, by_source)
     return {"updated": updated, "by_source": by_source}
+
+
+def _record_rewire_changes(conn, protected: list[str], placeholders: str) -> None:
+    """Insert air_date_change rows for episodes about to be rewired.
+
+    Best-effort — a failure here doesn't block the rewire itself.
+    """
+    try:
+        from lcars import ids
+
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        rows = conn.execute(
+            f"""SELECT episode.id, episode.air_date_utc, episode.air_date_source,
+                       sp_min.earliest_utc
+               FROM episode
+               JOIN episode_anidb_mapping m ON m.episode_id = episode.id
+               JOIN show_external_id sei_syoboi
+                 ON sei_syoboi.show_id = episode.show_id
+                AND sei_syoboi.service = 'syoboi'
+               JOIN show_external_id sei_anidb
+                 ON sei_anidb.show_id = episode.show_id
+                AND sei_anidb.service = 'anidb'
+               JOIN (SELECT tid, count, MIN(st_time_utc) AS earliest_utc
+                     FROM syoboi_program
+                     WHERE deleted = 0
+                       AND count IS NOT NULL AND st_time_utc IS NOT NULL
+                     GROUP BY tid, count) sp_min
+                 ON sp_min.tid = CAST(sei_syoboi.external_id AS INTEGER)
+                AND sp_min.count = m.anidb_epno
+               WHERE m.anidb_season = 1
+                 AND m.anidb_anime_id = CAST(sei_anidb.external_id AS INTEGER)
+                 AND episode.kind = 'regular'
+                 AND episode.air_date_utc IS NOT NULL
+                 AND episode.air_date_source NOT IN ({placeholders})
+                 AND episode.air_date_utc != sp_min.earliest_utc"""
+        ).fetchall()
+
+        for row in rows:
+            conn.execute(
+                """INSERT INTO air_date_change
+                   (id, episode_id, previous_air_date_utc, new_air_date_utc,
+                    previous_source, new_source, changed_at, changed_by)
+                   VALUES (?, ?, ?, ?, ?, 'syoboi', ?, 'system')""",
+                (
+                    ids.generate_id(conn, "g"),
+                    row["id"],
+                    row["air_date_utc"],
+                    row["earliest_utc"],
+                    row["air_date_source"],
+                    now,
+                ),
+            )
+    except Exception:
+        log.warning("Failed to record air_date_change rows for rewire", exc_info=True)
+
+
+# ── Change detection via proginfo.xml ──────────────────────────────────
+
+PROGINFO_URL = "https://cal.syoboi.jp/proginfo.xml"
+
+# Back the cursor off by this many seconds to cover rows written during
+# the previous fetch window (Syoboi's LastUpdate is server-side, but our
+# fetches take time and events can be written mid-batch).
+_CURSOR_BACKOFF_SECONDS = 300  # 5 minutes
+
+
+def fetch_proginfo(*, client: httpx.Client | None = None,
+                   timeout: float = 30.0) -> datetime | None:
+    """Poll proginfo.xml for the latest broadcast-data update time.
+
+    Returns the newest item's pubDate as a UTC datetime, or None if the
+    feed is unparseable / unreachable.  Fail-open: callers should treat
+    None as "something may have changed" and proceed with the full sync.
+    """
+    owns_client = client is None
+    c = client or httpx.Client(timeout=timeout, follow_redirects=True)
+    try:
+        _rate_limit()
+        resp = c.get(PROGINFO_URL, headers={"User-Agent": USER_AGENT})
+        resp.raise_for_status()
+        root = ET.fromstring(resp.text)
+    except Exception:
+        log.warning("proginfo.xml fetch/parse failed — treating as changed")
+        return None
+    finally:
+        if owns_client:
+            c.close()
+
+    # RSS 2.0: channel/lastBuildDate or the newest item/pubDate
+    # Try lastBuildDate first (channel-level), fall back to items.
+    last_build = root.findtext(".//channel/lastBuildDate")
+    if last_build:
+        parsed = _parse_rss_date(last_build)
+        if parsed:
+            return parsed
+
+    # Fall back to newest item pubDate
+    newest = None
+    for item in root.findall(".//item/pubDate"):
+        parsed = _parse_rss_date(item.text or "")
+        if parsed and (newest is None or parsed > newest):
+            newest = parsed
+    return newest
+
+
+def _parse_rss_date(date_str: str) -> datetime | None:
+    """Parse an RSS 2.0 date (RFC 822 / RFC 2822) into a UTC datetime."""
+    from email.utils import parsedate_to_datetime
+
+    try:
+        dt = parsedate_to_datetime(date_str.strip())
+        return dt.astimezone(UTC)
+    except Exception:
+        return None
+
+
+def get_sync_cursor(conn) -> str | None:
+    """Derive the sync cursor from the latest last_update in syoboi_program.
+
+    Returns a JST timestamp string (Syoboi's native format) suitable for
+    passing to ProgLookup's LastUpdate parameter, backed off by
+    _CURSOR_BACKOFF_SECONDS.  Returns None if no data exists yet.
+    """
+    row = conn.execute(
+        "SELECT MAX(last_update) AS max_lu FROM syoboi_program"
+    ).fetchone()
+    if not row or not row["max_lu"]:
+        return None
+
+    # last_update is in JST: "YYYY-MM-DD HH:MM:SS"
+    try:
+        dt = datetime.strptime(row["max_lu"], "%Y-%m-%d %H:%M:%S")
+        dt = dt - timedelta(seconds=_CURSOR_BACKOFF_SECONDS)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        log.warning("Unparseable sync cursor: %s", row["max_lu"])
+        return None
+
+
+def incremental_sync(conn, *, force: bool = False) -> dict:
+    """Change-driven Syoboi sync: poll proginfo.xml, then ProgLookup
+    with LastUpdate for changed rows only.
+
+    1. Check proginfo.xml — if feed's latest update <= our cursor and
+       not force, skip (nothing changed).
+    2. Fetch all tracked TIDs' changed programmes via ProgLookup with
+       LastUpdate range.
+    3. Also fetch any NEW TIDs that have no events yet (first-time sync).
+    4. Ingest everything.
+
+    Returns {changed: bool, programs_stored: int, new_tids_fetched: int,
+             titles_stored: int, cursor_before: str, cursor_after: str}.
+    """
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    cursor_before = get_sync_cursor(conn)
+    result = {
+        "changed": False,
+        "programs_stored": 0,
+        "new_tids_fetched": 0,
+        "titles_stored": 0,
+        "cursor_before": cursor_before,
+        "cursor_after": cursor_before,
+    }
+
+    # ── Pulse check ──
+    if cursor_before and not force:
+        feed_latest = fetch_proginfo()
+        if feed_latest is not None:
+            # Convert cursor (JST) to UTC for comparison
+            try:
+                cursor_dt = datetime.strptime(
+                    cursor_before, "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=JST).astimezone(UTC)
+                if feed_latest <= cursor_dt:
+                    log.debug(
+                        "proginfo.xml unchanged (feed=%s, cursor=%s) — skipping",
+                        feed_latest.isoformat(), cursor_dt.isoformat(),
+                    )
+                    return result
+            except ValueError:
+                pass  # fall through to full sync
+        # feed_latest is None → fail-open, proceed with sync
+
+    result["changed"] = True
+
+    # ── Gather tracked TIDs ──
+    all_tid_rows = conn.execute(
+        """SELECT sei.external_id AS tid
+           FROM show_external_id sei
+           JOIN show s ON sei.show_id = s.id
+           WHERE sei.service = 'syoboi'
+             AND s.tracked = 1
+             AND s.tracking_space = 'anime'"""
+    ).fetchall()
+    all_tids = [int(r["tid"]) for r in all_tid_rows]
+
+    if not all_tids:
+        return result
+
+    client = httpx.Client(timeout=60.0, follow_redirects=True)
+    try:
+        # ── Incremental: changed programmes since cursor ──
+        if cursor_before:
+            # ProgLookup LastUpdate range: "from-" means "since"
+            last_update_range = f"{cursor_before}-"
+            incremental_programs = _fetch_programs_all_tids(
+                all_tids, client=client, last_update=last_update_range,
+            )
+            if incremental_programs:
+                stored = ingest_programs(conn, incremental_programs, now_iso)
+                result["programs_stored"] += stored
+                log.info(
+                    "Syoboi incremental: %d changed programmes across %d tracked TIDs",
+                    stored, len(all_tids),
+                )
+
+                # Also fetch titles for TIDs that had changes
+                changed_tids = list({p["tid"] for p in incremental_programs})
+                _fetch_and_ingest_titles(
+                    conn, changed_tids, now_iso, client, result
+                )
+
+        # ── New TIDs: shows with a Syoboi TID but no events yet ──
+        new_tid_rows = conn.execute(
+            """SELECT sei.external_id AS tid
+               FROM show_external_id sei
+               JOIN show s ON sei.show_id = s.id
+               WHERE sei.service = 'syoboi'
+                 AND s.tracked = 1
+                 AND s.tracking_space = 'anime'
+                 AND NOT EXISTS (
+                   SELECT 1 FROM syoboi_program sp
+                   WHERE sp.tid = CAST(sei.external_id AS INTEGER)
+                 )"""
+        ).fetchall()
+        new_tids = [int(r["tid"]) for r in new_tid_rows]
+
+        if new_tids:
+            new_programs = _fetch_programs_all_tids(
+                new_tids, client=client,
+            )
+            if new_programs:
+                stored = ingest_programs(conn, new_programs, now_iso)
+                result["programs_stored"] += stored
+                result["new_tids_fetched"] = len(new_tids)
+                log.info(
+                    "Syoboi new TIDs: %d → %d programmes",
+                    len(new_tids), stored,
+                )
+            _fetch_and_ingest_titles(
+                conn, new_tids, now_iso, client, result
+            )
+    finally:
+        client.close()
+
+    # Update cursor
+    result["cursor_after"] = get_sync_cursor(conn)
+    return result
+
+
+def _fetch_programs_all_tids(
+    tids: list[int], *,
+    client: httpx.Client,
+    last_update: str | None = None,
+    batch_size: int = 50,
+) -> list[dict]:
+    """Fetch programmes for all TIDs in batches, optionally filtered
+    by LastUpdate range.  Returns aggregated list of programme dicts."""
+    all_programs: list[dict] = []
+    for i in range(0, len(tids), batch_size):
+        batch = tids[i:i + batch_size]
+        try:
+            programs = fetch_programs(
+                batch, client=client, last_update=last_update,
+            )
+            all_programs.extend(programs)
+        except httpx.HTTPStatusError as e:
+            log.warning(
+                "Syoboi ProgLookup batch failed (TIDs %d-%d): %s",
+                i, min(i + batch_size, len(tids)), e,
+            )
+    return all_programs
+
+
+def _fetch_and_ingest_titles(
+    conn, tids: list[int], now_iso: str,
+    client: httpx.Client, result: dict,
+    batch_size: int = 50,
+) -> None:
+    """Fetch and ingest title metadata for a list of TIDs."""
+    for i in range(0, len(tids), batch_size):
+        batch = tids[i:i + batch_size]
+        try:
+            titles = fetch_titles(batch, client=client)
+            stored = ingest_titles(conn, titles, now_iso)
+            result["titles_stored"] += stored
+        except httpx.HTTPStatusError as e:
+            log.warning("Syoboi TitleLookup batch failed: %s", e)

@@ -1356,12 +1356,12 @@ def poll_memory_alpha(conn) -> dict:
     except Exception:
         log.exception("TVmaze drip fetch failed")
 
-    # ── 6. Syoboi incremental fetch (anime, new shows only) ──
+    # ── 6. Syoboi change-driven sync (proginfo.xml pulse + LastUpdate) ──
     try:
-        syoboi_fetched = _syoboi_incremental_fetch(conn, syoboi)
-        result["syoboi_programs_fetched"] = syoboi_fetched
+        sync = syoboi.incremental_sync(conn)
+        result["syoboi_programs_fetched"] = sync["programs_stored"]
     except Exception:
-        log.exception("Syoboi incremental fetch failed")
+        log.exception("Syoboi incremental sync failed")
 
     # ── 7. Fill airdate gaps from AniDB + TVmaze + Syoboi ──
     try:
@@ -1382,31 +1382,7 @@ def poll_memory_alpha(conn) -> dict:
     return result
 
 
-def _syoboi_incremental_fetch(conn, syoboi_mod) -> int:
-    """Fetch Syoboi programmes for shows that have a TID but no events yet.
-
-    Batches up to 50 TIDs per API call. Returns total programmes stored.
-    """
-    rows = conn.execute(
-        """SELECT sei.external_id AS tid
-           FROM show_external_id sei
-           JOIN show s ON sei.show_id = s.id
-           WHERE sei.service = 'syoboi'
-             AND s.tracked = 1
-             AND s.tracking_space = 'anime'
-             AND NOT EXISTS (
-               SELECT 1 FROM syoboi_program sp
-               WHERE sp.tid = CAST(sei.external_id AS INTEGER)
-             )"""
-    ).fetchall()
-
-    if not rows:
-        return 0
-
-    tids = [int(r["tid"]) for r in rows]
-    stats = syoboi_mod.batch_fetch_and_ingest(conn, tids, batch_size=50)
-    log.info(
-        "Syoboi incremental: %d TIDs → %d programs, %d titles",
-        len(tids), stats["programs_stored"], stats["titles_stored"],
-    )
-    return stats["programs_stored"]
+# _syoboi_incremental_fetch removed 2026-09-08 — replaced by
+# syoboi.incremental_sync() which uses proginfo.xml pulse +
+# ProgLookup LastUpdate for change-driven sync (catches reschedules
+# on existing shows, not just new TIDs).
