@@ -3381,13 +3381,13 @@ async def test_anilist_air_date_reconciliation_corrects_a_sonarr_seeded_date(cli
     ep = data["show"]["episodes"]["edges"][0]["node"]
     assert ep["airDateUtc"] == "2025-01-01T00:00:00Z"  # AniList's own value, not Sonarr's
     assert ep["airDateSource"] == "ANILIST"
-    # pending_review entries here are keyed by the *episode's* own id
-    # (entity_type="episode"), not the show's — §5.6's own per-row shape.
+    # Retired 2026-09-08 (v0.2.6): AniList air-date corrections for
+    # unprotected sources are now applied silently — no pending_review.
+    # Syoboi is authoritative; the air_date_change table keeps the audit
+    # trail.  The Sonarr+available+delay guard is a separate test below.
     reviews = await _pending_reviews_for(client, ep["id"])
     reviews = [r for r in reviews if r["field"] == "air_date_utc"]
-    assert len(reviews) == 1
-    assert reviews[0]["source"] == "anilist"
-    assert reviews[0]["previousValue"] == "2020-01-01T00:00:00Z"
+    assert len(reviews) == 0
 
 
 async def test_anilist_air_date_reconciliation_does_not_overwrite_a_downloaded_episode_later(
