@@ -62,22 +62,30 @@ changed its mind again," not "the same feed item was re-read on an
 hourly tick" — a real bug caught in review, before this shipped, not a
 hypothetical.
 
-**Manual-override exemption, confirmed 2026-08-09 (B.5)** — the
-question §6.7 explicitly left open when B.4 built AniList's own hard
-manual-date gate: animeschedule.net **does** override
-`air_date_source = 'manual'`, per the user's own B.4 reasoning restated
-and confirmed directly for this case ("the overwrite and log is
-intended for when a new information about an air date is logged...
-those data are likely to come from animeschedule"). Every such
-overwrite still opens/extends a `pending_review` — visible and
-auditable, never silent — same as every other automatic write this
-project makes.
+**Source priority gate, revised 2026-09-08** — animeschedule is now
+demoted to backup behind Syoboi Calendar (see `airdate_priority.py`
+for the full chain: manual > syoboi > animeschedule > …). The earlier
+B.5 reasoning that animeschedule overrides manual has been superseded:
+Syoboi provides minute-accurate JST broadcast times from actual
+Japanese TV schedules, making it the primary source; animeschedule
+fills gaps and provides a cross-check. This function now skips any
+episode whose `air_date_source` outranks or equals `'animeschedule'`
+in the priority chain (i.e. `'manual'` and `'syoboi'`). Every other
+write still opens/extends a `pending_review` — visible and auditable,
+never silent.
 """
 
 import json
 import logging
 
-from lcars import animeschedule_client, fuzzy, pending_review, service_health, util
+from lcars import (
+    airdate_priority,
+    animeschedule_client,
+    fuzzy,
+    pending_review,
+    service_health,
+    util,
+)
 
 logger = logging.getLogger("lcars.animeschedule")
 
@@ -177,7 +185,7 @@ def _apply_or_flag(conn, show_id: str, item: dict) -> str:
         )
     placeholders = ",".join("?" for _ in seasons)
     matches = conn.execute(
-        f"SELECT id, air_date_utc FROM episode"
+        f"SELECT id, air_date_utc, air_date_source FROM episode"
         f" WHERE show_id = ? AND episode = ? AND season IN ({placeholders})",
         (show_id, item["episode"], *seasons),
     ).fetchall()
@@ -191,6 +199,10 @@ def _apply_or_flag(conn, show_id: str, item: dict) -> str:
         )
 
     episode_row = matches[0]
+    if airdate_priority.source_is_protected_from(
+        episode_row.get("air_date_source"), "animeschedule"
+    ):
+        return "unchanged"  # higher-priority source — don't overwrite
     if episode_row["air_date_utc"] == item["air_date_utc"]:
         return "unchanged"
 
