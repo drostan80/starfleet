@@ -1,11 +1,22 @@
 # Next up
 
-Current version: **v0.2.4** (deployed 2026-09-07).
+Current version: **v0.2.5** (deployed 2026-09-08, under testing).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
 ## Recently shipped — still under testing (Sep 2–8)
+
+### v0.2.6 (2026-09-08, not yet deployed)
+
+- **Retire AniList air_date_utc review**: `_reconcile_air_dates` no longer opens
+  `pending_review` for routine AniList air-date changes — silently writes for
+  unprotected sources, skips for protected ones (manual/syoboi/animeschedule).
+  The Sonarr+available+delay guard ("Draw This, Then Die!" bug) is kept.
+- **TVmaze poster art**: `store_tvmaze_art()` in `art.py` extracts `image.medium`
+  and `image.original` from the TVmaze show lookup during `drip_fetch_episodes`
+  (no extra API call). Poster only — TVmaze has no banner. IMDB has no free
+  image API, skipped.
 
 ### v0.2.5 (2026-09-08, not yet deployed)
 
@@ -258,10 +269,13 @@ breakdown, total runtime. Needs date-bucketed watch-event aggregates from LCARS.
 
 `show.studio` gets an id-prefix like other entities for proper browse-by-studio.
 
-### Better calendar schedule / news sync
+### ~~Better calendar schedule / news sync~~ (superseded)
 
-- livechart.me headlines for delay/reschedule news on tracked shows (manual only).
-- animeschedule.net API v3 as a second schedule source.
+✅ Syoboi Calendar is now the authoritative anime schedule source (v0.2.5,
+`airdate_priority.py`). animeschedule demoted to backup. The v3 API is no
+longer needed — Syoboi provides minute-accurate JST broadcast times directly.
+- livechart.me headlines for delay/reschedule news on tracked shows — still a
+  possible nice-to-have, parked.
 
 ### Android app (Capacitor wrapper)
 
@@ -279,15 +293,16 @@ Wrap the existing web client; native Kotlin plugins only for what the web can't 
       research done — see Memory Alpha above).
 
 ### Notes as we are building
-- use tvmaze and imdb to source more posters and banners
+- ✅ TVmaze poster art added (v0.2.6, `store_tvmaze_art`). IMDB has no free image API — skipped.
 - make sure we include correct timezone with the source airdate 
 - make sure to add the link to all the db as we have ids, new icons to be sourced and checked
 - some ui improvement to make on planner view, including (not limited to) show / season poster not cropped, better organisation location font colour and size / visibility of data in the detail pane as well as rework on how the banner is displayed within
-- we found the correct / good source for airdate for tv show and set up to integrate tvmaze, we need to do the work in finding good sources for anime air date (japan air date and time) we have one in use and need to fine other / backups this is for memory alpha but is also the item in ### better calendar schedule / news sync item on this I think I have the best option
-✅ Syoboi as source of truth, animeschedule demoted to backup (v0.2.5,
-`airdate_priority.py`). Change-driven sync via `proginfo.xml` + `LastUpdate`
-built. Reference doc: Downloads/japanese_anime_airdate_syoboi_integration.md
-- this work on airdate will retire the new air date review, but we may introduce a way to add a note in calendar to indicate a change in schedule, like *new schedule time, or  *no episode this week, or similar (to be defined)
+- ✅ Anime airdate sources settled (v0.2.5): Syoboi Calendar (JST minute-accurate) as
+  source of truth, animeschedule demoted to backup, full priority chain in
+  `airdate_priority.py`. Change-driven sync via `proginfo.xml` + `LastUpdate` built.
+  TV airdates from TVmaze already integrated (v0.2.4).
+  Reference doc: Downloads/japanese_anime_airdate_syoboi_integration.md
+- ✅ AniList air_date_utc pending_review retired (v0.2.6). Sonarr+available+delay guard kept (the "Draw This, Then Die!" bug). Future: calendar annotation for schedule changes (*new schedule time, *no episode this week) — to be defined.
 - the schema evolved so much... do we have a season table? with field like show, linked episodes, franchise... and show table wich also link seasons and episodes linked and franchise and..., and boviously franchise which list shows > season > episodes/movies part of it?
 could and should it be done?
 
