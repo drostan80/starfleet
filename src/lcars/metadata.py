@@ -692,15 +692,13 @@ def _reconcile_air_dates(conn, show: dict) -> None:
                 )
                 continue
 
-            pending_review.open_or_extend(
-                conn,
-                "episode",
-                episode_row["id"],
-                "air_date_utc",
-                "anilist",
-                episode_row["air_date_utc"],
-                new_air_date,
-            )
+            # Retired 2026-09-08: Syoboi is now the authoritative anime
+            # schedule source, and airdate_priority.py gates every writer.
+            # AniList air-date changes for unprotected sources are applied
+            # silently — no pending_review noise.  The air_date_change table
+            # (populated by syoboi.rewire_airdates) keeps the audit trail.
+            # The Sonarr+available+delay guard above (:676) is kept — that's
+            # a genuine conflict signal, not schedule noise.
             conn.execute(
                 "UPDATE episode SET air_date_utc = ?, air_date_source = 'anilist',"
                 " updated_at = ? WHERE id = ?",
