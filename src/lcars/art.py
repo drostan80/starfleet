@@ -1,7 +1,7 @@
 """Art asset storage and retrieval (2026-08-30).
 
 Manages the ``art_asset`` table: inserting candidates from external
-sources (AniList, TVDB, TMDB), querying by show/season, and selecting/
+sources (AniList, TVDB, TVmaze), querying by show/season, and selecting/
 deselecting art for display.
 
 The "selected" art for a (show, season, kind) slot is what resolvers
@@ -255,6 +255,28 @@ def store_tvdb_art(
     return count
 
 
+def store_tvmaze_art(
+    conn,
+    show_id: str,
+    show_data: dict,
+) -> None:
+    """Store TVmaze poster image as an art asset.
+
+    TVmaze's show lookup returns ``image.medium`` and ``image.original``
+    — both are poster-type; no banner is available from this source.
+    Called during ``tvmaze.drip_fetch_episodes`` which already has
+    ``show_data`` in hand (no extra API call).
+    """
+    images = show_data.get("image") or {}
+    original = images.get("original")
+    medium = images.get("medium")
+
+    if original:
+        upsert_asset(conn, show_id, None, "poster", "tvmaze", original)
+    if medium and medium != original:
+        upsert_asset(conn, show_id, None, "poster", "tvmaze", medium)
+
+
 def auto_select_best(conn, show_id: str) -> None:
     """For each (show, season, kind) slot that has no selection yet,
     auto-select the highest-scored candidate.  Called after a bulk
@@ -262,7 +284,8 @@ def auto_select_best(conn, show_id: str) -> None:
     choices.
 
     Prefers anilist posters (they match what the user already sees),
-    then tvdb by source_score descending.
+    then tvdb/tvmaze by source_score descending (tvmaze has no
+    source_score, so it ranks below scored TVDB art).
     """
     # Find slots with no selection
     unselected = conn.execute(

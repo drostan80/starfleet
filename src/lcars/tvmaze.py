@@ -277,6 +277,11 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
                 _backfill_id(conn, show_id, "imdb", externals.get("imdb"),
                              "https://www.imdb.com/title/{}/", now)
 
+                # Store TVmaze poster art (no extra API call — show_data
+                # already has image.medium / image.original in hand).
+                from lcars import art
+                art.store_tvmaze_art(conn, show_id, show_data)
+
             # Step 2: fetch episodes
             episodes = fetch_episodes(tvmaze_id, client=client)
             if episodes is None:
