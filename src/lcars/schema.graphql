@@ -1113,7 +1113,7 @@ type AnilistActivityPollResult {
   reconcileResult: WatchProgressReconcileResult
 }
 
-"pollMemoryAlpha's own confirmation summary — Memory Alpha ops loop. datasetsRefreshed: true when Anime-Lists XML, AniDB titles dump, Wikidata TV bridge, or ARM were stale and re-downloaded this tick (weekly cadence). dripFetched/dripEpisodesStored: AniDB HTTP API calls (anime). tvmazeDripFetched/tvmazeEpisodesStored: TVmaze API calls (TV/movies). syoboiTidsSeeded: Syoboi Calendar TIDs linked via ARM. syoboiProgramsFetched: broadcast events fetched from Syoboi. airdateGapsFilled: episode.air_date_utc nulls filled from AniDB + TVmaze + Syoboi. syoboiAirdatesRewired: existing Sonarr/AniList dates overwritten with Syoboi minute-accurate JST broadcast times."
+"pollMemoryAlpha's own confirmation summary — Memory Alpha ops loop. datasetsRefreshed: true when Anime-Lists XML, AniDB titles dump, Wikidata TV bridge, or ARM were stale and re-downloaded this tick (weekly cadence). seasonRowsCreated/episodeSeasonIdsLinked: missing season rows created from episode.season + NULL episode.season_id backfilled. dripFetched/dripEpisodesStored: AniDB HTTP API calls (anime). tvmazeDripFetched/tvmazeEpisodesStored: TVmaze API calls (TV/movies). syoboiTidsSeeded: Syoboi Calendar TIDs linked via ARM. syoboiProgramsFetched: broadcast events fetched from Syoboi. airdateGapsFilled: episode.air_date_utc nulls filled from AniDB + TVmaze + Syoboi. syoboiAirdatesRewired: existing Sonarr/AniList dates overwritten with Syoboi minute-accurate JST broadcast times."
 type MemoryAlphaPollResult {
   datasetsRefreshed: Boolean!
   animeListEntries: Int!
@@ -1121,6 +1121,8 @@ type MemoryAlphaPollResult {
   anidbIdsSeeded: Int!
   episodesMapped: Int!
   idsPropagated: Int!
+  seasonRowsCreated: Int!
+  episodeSeasonIdsLinked: Int!
   dripFetched: Int!
   dripEpisodesStored: Int!
   titleGapsFilled: Int!

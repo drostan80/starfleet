@@ -27,9 +27,12 @@ Two responsibilities, both inert until S3 switches reconcile reads:
    human just resolved the same mismatch value.
 """
 
+import logging
 import sqlite3
 
-from lcars import anilist_client, pending_review, util
+from lcars import anilist_client, ids, pending_review, util
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Width-check internals (ported from scripts/backfill_season_ranges.py so
@@ -228,3 +231,122 @@ def check_subdivision_widths(conn: sqlite3.Connection) -> dict[str, int]:
         flagged += 1
     conn.commit()
     return {"checked": checked, "flagged": flagged}
+
+
+# ---------------------------------------------------------------------------
+# Step 2 — Season row creation + episode.season_id backfill
+# ---------------------------------------------------------------------------
+
+
+def ensure_all_season_rows(conn: sqlite3.Connection) -> int:
+    """Create missing ``season`` rows from ``episode.season`` values.
+
+    For every (show_id, season) pair in the episode table where
+    season > 0 and no matching season row exists, inserts a new season
+    row.  Anime shows go through ``season_mapping.reconcile_season()``
+    (which tries Fribb matching and opens pending_review on failure);
+    TV shows get a direct insert with source='unmatched', matched=0
+    (no Fribb attempt, no review noise — same path reconcile_season
+    already takes for non-anime, but batched).
+
+    Idempotent — safe to call every tick.  Returns the number of
+    season rows created.
+    """
+    from lcars import season_mapping
+
+    # Find all (show_id, season) pairs that have episodes but no season row.
+    # Skip season 0 (specials — no cross-service identity).
+    gaps = conn.execute(
+        "SELECT DISTINCT e.show_id, e.season AS season_number,"
+        "  s.tracking_space"
+        " FROM episode e"
+        " JOIN show s ON s.id = e.show_id"
+        " WHERE e.season > 0"
+        "   AND NOT EXISTS ("
+        "     SELECT 1 FROM season se"
+        "     WHERE se.show_id = e.show_id"
+        "       AND se.season_number = e.season"
+        "   )"
+        " ORDER BY e.show_id, e.season",
+    ).fetchall()
+
+    if not gaps:
+        return 0
+
+    created = 0
+    now = util.now_utc_iso()
+    for row in gaps:
+        show_id = row["show_id"]
+        season_number = row["season_number"]
+        tracking_space = row["tracking_space"]
+
+        if tracking_space == "anime":
+            # Full reconcile — Fribb match attempt + pending_review
+            try:
+                season_mapping.reconcile_season(conn, show_id, season_number)
+            except Exception:
+                # reconcile_season creates the row even on failure
+                # (with source='unmatched'), so the gap is still closed.
+                # _ensure_seasons has the same pattern.
+                season_id = ids.generate_id(conn, "z")
+                conn.execute(
+                    "INSERT INTO season"
+                    " (id, show_id, season_number, status, source, matched,"
+                    "  manual_override, created_at, updated_at)"
+                    " VALUES (?, ?, ?, 'planned', 'unmatched', 0, 0, ?, ?)",
+                    (season_id, show_id, season_number, now, now),
+                )
+                conn.commit()
+        else:
+            # TV/movies — direct creation, no Fribb, no pending_review
+            season_id = ids.generate_id(conn, "z")
+            conn.execute(
+                "INSERT INTO season"
+                " (id, show_id, season_number, status, source, matched,"
+                "  manual_override, created_at, updated_at)"
+                " VALUES (?, ?, ?, 'planned', 'unmatched', 0, 0, ?, ?)",
+                (season_id, show_id, season_number, now, now),
+            )
+            conn.commit()
+
+        created += 1
+
+    if created:
+        log.info("ensure_all_season_rows: created %d season rows", created)
+    return created
+
+
+def backfill_episode_season_id(conn: sqlite3.Connection) -> int:
+    """Set ``episode.season_id`` for episodes that have a season number
+    and a matching ``season`` row but no ``season_id`` yet.
+
+    Strictly NULL-only — never overwrites an existing season_id.
+    Skips season 0 (specials have no season row by design).
+    Idempotent — safe to call every tick.  Returns the count updated.
+
+    This is the episode-first source of truth: once set, season_id is
+    authoritative and is never silently recomputed by this function.
+    """
+    # When subdivisions exist (part_number > 1), default to the
+    # primary part (part_number = 1).  The episode-level cross-database
+    # identity (episode_external_id) is what carries the per-source
+    # season coordinates; season_id here is the grouping convenience.
+    updated = conn.execute(
+        "UPDATE episode SET season_id = ("
+        "  SELECT se.id FROM season se"
+        "  WHERE se.show_id = episode.show_id"
+        "    AND se.season_number = episode.season"
+        "  ORDER BY se.part_number ASC LIMIT 1"
+        ")"
+        " WHERE season_id IS NULL"
+        "   AND season > 0"
+        "   AND EXISTS ("
+        "     SELECT 1 FROM season se"
+        "     WHERE se.show_id = episode.show_id"
+        "       AND se.season_number = episode.season"
+        "   )",
+    ).rowcount
+    if updated:
+        conn.commit()
+        log.info("backfill_episode_season_id: linked %d episodes", updated)
+    return updated

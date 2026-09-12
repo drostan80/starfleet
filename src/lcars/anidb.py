@@ -1377,6 +1377,8 @@ def poll_memory_alpha(conn) -> dict:
         "anidb_ids_seeded": 0,
         "episodes_mapped": 0,
         "ids_propagated": 0,
+        "season_rows_created": 0,
+        "episode_season_ids_linked": 0,
         "drip_fetched": 0,
         "drip_episodes_stored": 0,
         "title_gaps_filled": 0,
@@ -1466,6 +1468,20 @@ def poll_memory_alpha(conn) -> dict:
         )
     except Exception:
         log.exception("ARM Syoboi TID seeding failed")
+
+    # ── 2c. Ensure season rows + backfill episode.season_id ──
+    # Creates missing season rows from episode.season values (TV: direct,
+    # anime: through reconcile_season with Fribb). Then links episodes to
+    # their season rows via NULL-only season_id backfill. Idempotent —
+    # runs every tick, catches newly imported shows and the historical
+    # backlog alike. Must run before drip-fetch so that new season rows
+    # exist before episode-level data gets attached.
+    try:
+        from lcars import season_ranges
+        result["season_rows_created"] = season_ranges.ensure_all_season_rows(conn)
+        result["episode_season_ids_linked"] = season_ranges.backfill_episode_season_id(conn)
+    except Exception:
+        log.exception("Season row / episode.season_id backfill failed")
 
     # ── 3. Drip-fetch episode data from AniDB API ──
     drip = drip_fetch_episodes(conn, limit=5)

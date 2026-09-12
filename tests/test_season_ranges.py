@@ -771,3 +771,175 @@ class TestCheckSubdivisionWidths:
             " WHERE entity_type = 'season' AND entity_id = 'z-bbbbbb'"
         ).fetchone()[0]
         assert pr_s2 == 1
+
+
+# ---------------------------------------------------------------------------
+# ensure_all_season_rows + backfill_episode_season_id (Step 2)
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureAllSeasonRows:
+    def test_creates_tv_season_rows_without_review(self, conn):
+        """TV shows get season rows directly, no pending_review noise."""
+        _show(conn, "s-tv0001", "NCIS", tracking_space="tv")
+        _episode(conn, "e-aa0001", "s-tv0001", 1, 1)
+        _episode(conn, "e-aa0002", "s-tv0001", 1, 2)
+        _episode(conn, "e-aa0003", "s-tv0001", 2, 1)
+        conn.commit()
+
+        created = season_ranges.ensure_all_season_rows(conn)
+        assert created == 2  # season 1 and 2
+
+        seasons = conn.execute(
+            "SELECT season_number, source, matched FROM season"
+            " WHERE show_id = 's-tv0001' ORDER BY season_number"
+        ).fetchall()
+        assert len(seasons) == 2
+        assert seasons[0]["season_number"] == 1
+        assert seasons[0]["source"] == "unmatched"
+        assert seasons[0]["matched"] == 0
+        assert seasons[1]["season_number"] == 2
+
+        # No pending_review rows for TV seasons
+        pr_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_review"
+            " WHERE entity_type = 'season'"
+        ).fetchone()[0]
+        assert pr_count == 0
+
+    def test_skips_season_zero(self, conn):
+        """Season 0 (specials) should not get a season row."""
+        _show(conn, "s-tv0002", "House", tracking_space="tv")
+        _episode(conn, "e-bb0001", "s-tv0002", 0, 1, kind="special")
+        _episode(conn, "e-bb0002", "s-tv0002", 1, 1)
+        conn.commit()
+
+        created = season_ranges.ensure_all_season_rows(conn)
+        assert created == 1  # only season 1
+
+        seasons = conn.execute(
+            "SELECT season_number FROM season WHERE show_id = 's-tv0002'"
+        ).fetchall()
+        assert len(seasons) == 1
+        assert seasons[0]["season_number"] == 1
+
+    def test_idempotent(self, conn):
+        """Running twice creates nothing on the second call."""
+        _show(conn, "s-tv0003", "Dexter", tracking_space="tv")
+        _episode(conn, "e-cc0001", "s-tv0003", 1, 1)
+        conn.commit()
+
+        first = season_ranges.ensure_all_season_rows(conn)
+        assert first == 1
+        second = season_ranges.ensure_all_season_rows(conn)
+        assert second == 0
+
+    def test_does_not_touch_existing_seasons(self, conn):
+        """Pre-existing season rows are untouched."""
+        _show(conn, "s-tv0004", "CSI", tracking_space="tv")
+        _season(conn, "z-exists", "s-tv0004", 1)
+        _episode(conn, "e-dd0001", "s-tv0004", 1, 1)
+        _episode(conn, "e-dd0002", "s-tv0004", 2, 1)
+        conn.commit()
+
+        created = season_ranges.ensure_all_season_rows(conn)
+        assert created == 1  # only season 2
+
+        # Original season row untouched
+        original = conn.execute(
+            "SELECT id FROM season WHERE show_id = 's-tv0004' AND season_number = 1"
+        ).fetchone()
+        assert original["id"] == "z-exists"
+
+
+class TestBackfillEpisodeSeasonId:
+    def test_links_episodes_to_seasons(self, conn):
+        """Episodes with NULL season_id get linked to their season row."""
+        _show(conn, "s-tv0010", "Breaking Bad", tracking_space="tv")
+        _season(conn, "z-bb0001", "s-tv0010", 1)
+        _season(conn, "z-bb0002", "s-tv0010", 2)
+        _episode(conn, "e-ee0001", "s-tv0010", 1, 1)
+        _episode(conn, "e-ee0002", "s-tv0010", 1, 2)
+        _episode(conn, "e-ee0003", "s-tv0010", 2, 1)
+        conn.commit()
+
+        updated = season_ranges.backfill_episode_season_id(conn)
+        assert updated == 3
+
+        e1 = conn.execute("SELECT season_id FROM episode WHERE id = 'e-ee0001'").fetchone()
+        assert e1["season_id"] == "z-bb0001"
+        e3 = conn.execute("SELECT season_id FROM episode WHERE id = 'e-ee0003'").fetchone()
+        assert e3["season_id"] == "z-bb0002"
+
+    def test_null_only(self, conn):
+        """Never overwrites an existing season_id."""
+        _show(conn, "s-tv0011", "Fargo", tracking_space="tv")
+        _season(conn, "z-fg0001", "s-tv0011", 1)
+        _season(conn, "z-fg0002", "s-tv0011", 2)
+        # Episode already linked to season 2 (maybe manually corrected)
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, season_id, episode, kind,"
+            " state, created_at, updated_at)"
+            " VALUES ('e-ff0001', 's-tv0011', 1, 'z-fg0002', 1, 'regular',"
+            " 'unwatched', 'x', 'x')"
+        )
+        conn.commit()
+
+        updated = season_ranges.backfill_episode_season_id(conn)
+        assert updated == 0  # nothing changed
+
+        e = conn.execute("SELECT season_id FROM episode WHERE id = 'e-ff0001'").fetchone()
+        assert e["season_id"] == "z-fg0002"  # still season 2, not overwritten
+
+    def test_skips_season_zero(self, conn):
+        """Specials (season 0) stay with NULL season_id."""
+        _show(conn, "s-tv0012", "Sherlock", tracking_space="tv")
+        _season(conn, "z-sh0001", "s-tv0012", 1)
+        _episode(conn, "e-gg0001", "s-tv0012", 0, 1, kind="special")
+        _episode(conn, "e-gg0002", "s-tv0012", 1, 1)
+        conn.commit()
+
+        updated = season_ranges.backfill_episode_season_id(conn)
+        assert updated == 1  # only the season 1 episode
+
+        special = conn.execute("SELECT season_id FROM episode WHERE id = 'e-gg0001'").fetchone()
+        assert special["season_id"] is None
+
+    def test_idempotent(self, conn):
+        """Running twice does nothing the second time."""
+        _show(conn, "s-tv0013", "Suits", tracking_space="tv")
+        _season(conn, "z-su0001", "s-tv0013", 1)
+        _episode(conn, "e-hh0001", "s-tv0013", 1, 1)
+        conn.commit()
+
+        first = season_ranges.backfill_episode_season_id(conn)
+        assert first == 1
+        second = season_ranges.backfill_episode_season_id(conn)
+        assert second == 0
+
+    def test_combined_flow(self, conn):
+        """ensure_all_season_rows then backfill_episode_season_id — full flow."""
+        _show(conn, "s-tv0014", "The Wire", tracking_space="tv")
+        _episode(conn, "e-ii0001", "s-tv0014", 1, 1)
+        _episode(conn, "e-ii0002", "s-tv0014", 1, 2)
+        _episode(conn, "e-ii0003", "s-tv0014", 2, 1)
+        _episode(conn, "e-ii0004", "s-tv0014", 0, 1, kind="special")
+        conn.commit()
+
+        season_rows = season_ranges.ensure_all_season_rows(conn)
+        assert season_rows == 2
+
+        linked = season_ranges.backfill_episode_season_id(conn)
+        assert linked == 3  # 2 from season 1 + 1 from season 2
+
+        # Special stays NULL
+        sp = conn.execute("SELECT season_id FROM episode WHERE id = 'e-ii0004'").fetchone()
+        assert sp["season_id"] is None
+
+        # Season 1 episodes are linked
+        s1_id = conn.execute(
+            "SELECT id FROM season WHERE show_id = 's-tv0014' AND season_number = 1"
+        ).fetchone()["id"]
+        for eid in ("e-ii0001", "e-ii0002"):
+            e = conn.execute("SELECT season_id FROM episode WHERE id = ?", (eid,)).fetchone()
+            assert e["season_id"] == s1_id
