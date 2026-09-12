@@ -56,9 +56,9 @@ _SHOW_COUNTER = 0
 def _show(conn, show_id="s-aaaaaa", title="Test Show", tracking_space="anime"):
     conn.execute(
         "INSERT INTO show (id, media_shape, tracking_space, title_romaji,"
-        " primary_title, status, tracked, created_at, updated_at)"
-        " VALUES (?, 'episodic', ?, ?, 'romaji', 'watching', 1, 'x', 'x')",
-        (show_id, tracking_space, title),
+        " title_english, primary_title, status, tracked, created_at, updated_at)"
+        " VALUES (?, 'episodic', ?, ?, ?, 'romaji', 'watching', 1, 'x', 'x')",
+        (show_id, tracking_space, title, title),
     )
     return show_id
 
@@ -1003,3 +1003,343 @@ class TestBackfillEpisodeSeasonId:
         for eid in ("e-ii0001", "e-ii0002"):
             e = conn.execute("SELECT season_id FROM episode WHERE id = ?", (eid,)).fetchone()
             assert e["season_id"] == s1_id
+
+
+# ---------------------------------------------------------------------------
+# seed_episode_external_ids (Step 3)
+# ---------------------------------------------------------------------------
+
+
+def _anidb_mapping(conn, episode_id, anidb_anime_id, anidb_season, anidb_epno):
+    conn.execute(
+        "INSERT INTO episode_anidb_mapping"
+        " (episode_id, anidb_anime_id, anidb_season, anidb_epno, confidence, created_at)"
+        " VALUES (?, ?, ?, ?, 'auto', 'x')",
+        (episode_id, anidb_anime_id, anidb_season, anidb_epno),
+    )
+
+
+def _season_ext_id(conn, season_id, service, external_id):
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES (?, ?, ?, 'x')",
+        (season_id, service, str(external_id)),
+    )
+
+
+class TestSeedEpisodeExternalIds:
+    def test_anidb_from_mapping(self, conn):
+        _show(conn, "s-aa0001", "Naruto", tracking_space="anime")
+        _season(conn, "z-aa0001", "s-aa0001", 1)
+        _episode(conn, "e-na0001", "s-aa0001", 1, 1)
+        _episode(conn, "e-na0002", "s-aa0001", 1, 2)
+        _anidb_mapping(conn, "e-na0001", 20, 1, 1)
+        _anidb_mapping(conn, "e-na0002", 20, 1, 2)
+        conn.commit()
+
+        result = season_ranges.seed_episode_external_ids(conn)
+        assert result["anidb"] == 2
+
+        rows = conn.execute(
+            "SELECT episode_id, external_id, season_number, episode_number"
+            " FROM episode_external_id WHERE service = 'anidb'"
+            " ORDER BY episode_id"
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0]["external_id"] == "20:1"
+        assert rows[0]["season_number"] == 1
+        assert rows[0]["episode_number"] == 1
+
+    def test_tvdb_from_sonarr(self, conn):
+        _show(conn, "s-tv0020", "House", tracking_space="tv")
+        _season(conn, "z-tv0020", "s-tv0020", 1)
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, kind,"
+            " sonarr_season, sonarr_episode, state, created_at, updated_at)"
+            " VALUES ('e-hh0010', 's-tv0020', 1, 1, 'regular',"
+            " 1, 1, 'unwatched', 'x', 'x')"
+        )
+        conn.commit()
+
+        result = season_ranges.seed_episode_external_ids(conn)
+        assert result["tvdb"] == 1
+
+        row = conn.execute(
+            "SELECT external_id, season_number, episode_number"
+            " FROM episode_external_id"
+            " WHERE episode_id = 'e-hh0010' AND service = 'tvdb'"
+        ).fetchone()
+        assert row["external_id"] == "1:1"
+        assert row["season_number"] == 1
+        assert row["episode_number"] == 1
+
+    def test_anilist_mal_from_season_ext_id(self, conn):
+        _show(conn, "s-an0010", "Bleach", tracking_space="anime")
+        sid = _season(conn, "z-an0010", "s-an0010", 1)
+        _season_ext_id(conn, "z-an0010", "anilist", 100)
+        _season_ext_id(conn, "z-an0010", "mal", 200)
+        # Link episodes to season
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, season_id, episode, kind,"
+            " state, created_at, updated_at)"
+            " VALUES ('e-bl0010', 's-an0010', 1, 'z-an0010', 1, 'regular',"
+            " 'unwatched', 'x', 'x')"
+        )
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, season_id, episode, kind,"
+            " state, created_at, updated_at)"
+            " VALUES ('e-bl0011', 's-an0010', 1, 'z-an0010', 2, 'regular',"
+            " 'unwatched', 'x', 'x')"
+        )
+        conn.commit()
+
+        result = season_ranges.seed_episode_external_ids(conn)
+        assert result["anilist"] == 2
+        assert result["mal"] == 2
+
+        al_rows = conn.execute(
+            "SELECT episode_id, external_id, episode_number"
+            " FROM episode_external_id WHERE service = 'anilist'"
+            " ORDER BY episode_id"
+        ).fetchall()
+        assert len(al_rows) == 2
+        assert al_rows[0]["external_id"] == "100:1"
+        assert al_rows[0]["episode_number"] == 1
+        assert al_rows[1]["external_id"] == "100:2"
+        assert al_rows[1]["episode_number"] == 2
+
+    def test_idempotent(self, conn):
+        _show(conn, "s-tv0021", "CSI", tracking_space="tv")
+        _season(conn, "z-tv0021", "s-tv0021", 1)
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, kind,"
+            " sonarr_season, sonarr_episode, state, created_at, updated_at)"
+            " VALUES ('e-cs0001', 's-tv0021', 1, 1, 'regular',"
+            " 1, 1, 'unwatched', 'x', 'x')"
+        )
+        conn.commit()
+
+        first = season_ranges.seed_episode_external_ids(conn)
+        assert first["tvdb"] == 1
+        second = season_ranges.seed_episode_external_ids(conn)
+        assert second["tvdb"] == 0
+
+    def test_skips_null_anidb_epno(self, conn):
+        _show(conn, "s-an0011", "Test", tracking_space="anime")
+        _season(conn, "z-an0011", "s-an0011", 1)
+        _episode(conn, "e-te0001", "s-an0011", 1, 1)
+        conn.execute(
+            "INSERT INTO episode_anidb_mapping"
+            " (episode_id, anidb_anime_id, anidb_season, anidb_epno, confidence, created_at)"
+            " VALUES ('e-te0001', 20, 1, NULL, 'auto', 'x')"
+        )
+        conn.commit()
+
+        result = season_ranges.seed_episode_external_ids(conn)
+        assert result["anidb"] == 0
+
+
+# ---------------------------------------------------------------------------
+# backfill_season_names (Step 4)
+# ---------------------------------------------------------------------------
+
+
+def _ensure_anidb_anime(conn, anidb_id):
+    """Insert anidb_anime parent row if missing (FK target for anidb_title)."""
+    if not conn.execute(
+        "SELECT 1 FROM anidb_anime WHERE anidb_id = ?", (anidb_id,)
+    ).fetchone():
+        conn.execute(
+            "INSERT INTO anidb_anime (anidb_id, main_title, fetched_at)"
+            " VALUES (?, 'stub', 'x')",
+            (anidb_id,),
+        )
+
+
+def _anidb_title(conn, anidb_id, title, lang="en", title_type=1):
+    _ensure_anidb_anime(conn, anidb_id)
+    conn.execute(
+        "INSERT INTO anidb_title (anidb_id, title, lang, title_type)"
+        " VALUES (?, ?, ?, ?)",
+        (anidb_id, title, lang, title_type),
+    )
+
+
+class TestBackfillSeasonNames:
+    def test_fills_from_anidb_title(self, conn):
+        _show(conn, "s-an0020", "KnS", tracking_space="anime")
+        _season(conn, "z-an0020", "s-an0020", 1)
+        _season_ext_id(conn, "z-an0020", "anilist", 100)
+        # Link episode to season and to AniDB mapping
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, season_id, episode, kind,"
+            " state, created_at, updated_at)"
+            " VALUES ('e-kn0001', 's-an0020', 1, 'z-an0020', 1, 'regular',"
+            " 'unwatched', 'x', 'x')"
+        )
+        _anidb_mapping(conn, "e-kn0001", 9892, 1, 1)
+        _anidb_title(conn, 9892, "Knights of Sidonia")
+        conn.commit()
+
+        filled = season_ranges.backfill_season_names(conn)
+        assert filled == 1
+
+        row = conn.execute(
+            "SELECT name FROM season_external_id"
+            " WHERE season_id = 'z-an0020' AND service = 'anilist'"
+        ).fetchone()
+        assert row["name"] == "Knights of Sidonia"
+
+    def test_falls_back_to_romaji(self, conn):
+        _show(conn, "s-an0021", "Test", tracking_space="anime")
+        _season(conn, "z-an0021", "s-an0021", 1)
+        _season_ext_id(conn, "z-an0021", "anilist", 101)
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, season_id, episode, kind,"
+            " state, created_at, updated_at)"
+            " VALUES ('e-rm0001', 's-an0021', 1, 'z-an0021', 1, 'regular',"
+            " 'unwatched', 'x', 'x')"
+        )
+        _anidb_mapping(conn, "e-rm0001", 555, 1, 1)
+        # Only romaji title, no English
+        _anidb_title(conn, 555, "Sidonia no Kishi", lang="x-jat")
+        conn.commit()
+
+        filled = season_ranges.backfill_season_names(conn)
+        assert filled == 1
+
+        row = conn.execute(
+            "SELECT name FROM season_external_id"
+            " WHERE season_id = 'z-an0021' AND service = 'anilist'"
+        ).fetchone()
+        assert row["name"] == "Sidonia no Kishi"
+
+    def test_single_season_uses_show_title(self, conn):
+        _show(conn, "s-an0022", "One Piece", tracking_space="anime")
+        _season(conn, "z-an0022", "s-an0022", 1)
+        _season_ext_id(conn, "z-an0022", "anilist", 102)
+        # No AniDB mapping, single season
+        conn.commit()
+
+        filled = season_ranges.backfill_season_names(conn)
+        assert filled == 1
+
+        row = conn.execute(
+            "SELECT name FROM season_external_id"
+            " WHERE season_id = 'z-an0022' AND service = 'anilist'"
+        ).fetchone()
+        assert row["name"] == "One Piece"
+
+    def test_null_only(self, conn):
+        _show(conn, "s-an0023", "Test", tracking_space="anime")
+        _season(conn, "z-an0023", "s-an0023", 1)
+        conn.execute(
+            "INSERT INTO season_external_id"
+            " (season_id, service, external_id, name, created_at)"
+            " VALUES ('z-an0023', 'anilist', '103', 'Custom Name', 'x')"
+        )
+        conn.commit()
+
+        filled = season_ranges.backfill_season_names(conn)
+        assert filled == 0
+
+        row = conn.execute(
+            "SELECT name FROM season_external_id"
+            " WHERE season_id = 'z-an0023' AND service = 'anilist'"
+        ).fetchone()
+        assert row["name"] == "Custom Name"
+
+    def test_idempotent(self, conn):
+        _show(conn, "s-an0024", "FMA", tracking_space="anime")
+        _season(conn, "z-an0024", "s-an0024", 1)
+        _season_ext_id(conn, "z-an0024", "anilist", 104)
+        conn.commit()
+
+        first = season_ranges.backfill_season_names(conn)
+        assert first == 1
+        second = season_ranges.backfill_season_names(conn)
+        assert second == 0
+
+
+# ---------------------------------------------------------------------------
+# fill_season_ranges_bulk (Step 5)
+# ---------------------------------------------------------------------------
+
+
+class TestFillSeasonRangesBulk:
+    def test_anime_from_absolute_number(self, conn):
+        _show(conn, "s-an0030", "Naruto", tracking_space="anime")
+        _season(conn, "z-an0030", "s-an0030", 1)
+        _season(conn, "z-an0031", "s-an0030", 2)
+        for i in range(1, 13):
+            _episode(conn, f"e-nr{i:04d}", "s-an0030", 1, i, absolute_number=i)
+        for i in range(1, 13):
+            _episode(conn, f"e-ns{i:04d}", "s-an0030", 2, i, absolute_number=i + 12)
+        conn.commit()
+
+        updated = season_ranges.fill_season_ranges_bulk(conn)
+        assert updated == 2
+
+        s1 = conn.execute("SELECT abs_start, abs_end FROM season WHERE id = 'z-an0030'").fetchone()
+        assert (s1["abs_start"], s1["abs_end"]) == (1, 12)
+        s2 = conn.execute("SELECT abs_start, abs_end FROM season WHERE id = 'z-an0031'").fetchone()
+        assert (s2["abs_start"], s2["abs_end"]) == (13, 24)
+
+    def test_tv_from_episode_counts(self, conn):
+        _show(conn, "s-tv0030", "House", tracking_space="tv")
+        _season(conn, "z-tv0030", "s-tv0030", 1)
+        _season(conn, "z-tv0031", "s-tv0030", 2)
+        for i in range(1, 23):
+            _episode(conn, f"e-h1{i:04d}", "s-tv0030", 1, i)
+        for i in range(1, 14):
+            _episode(conn, f"e-h2{i:04d}", "s-tv0030", 2, i)
+        conn.commit()
+
+        updated = season_ranges.fill_season_ranges_bulk(conn)
+        assert updated == 2
+
+        s1 = conn.execute("SELECT abs_start, abs_end FROM season WHERE id = 'z-tv0030'").fetchone()
+        assert (s1["abs_start"], s1["abs_end"]) == (1, 22)
+        s2 = conn.execute("SELECT abs_start, abs_end FROM season WHERE id = 'z-tv0031'").fetchone()
+        assert (s2["abs_start"], s2["abs_end"]) == (23, 35)
+
+    def test_tv_respects_existing_ranges(self, conn):
+        _show(conn, "s-tv0031", "CSI", tracking_space="tv")
+        _season(conn, "z-tv0032", "s-tv0031", 1)
+        _season(conn, "z-tv0033", "s-tv0031", 2)
+        # Season 1 already has range set
+        conn.execute(
+            "UPDATE season SET abs_start = 1, abs_end = 24 WHERE id = 'z-tv0032'"
+        )
+        for i in range(1, 25):
+            _episode(conn, f"e-c1{i:04d}", "s-tv0031", 1, i)
+        for i in range(1, 13):
+            _episode(conn, f"e-c2{i:04d}", "s-tv0031", 2, i)
+        conn.commit()
+
+        updated = season_ranges.fill_season_ranges_bulk(conn)
+        assert updated == 1  # only season 2
+
+        s2 = conn.execute("SELECT abs_start, abs_end FROM season WHERE id = 'z-tv0033'").fetchone()
+        assert (s2["abs_start"], s2["abs_end"]) == (25, 36)
+
+    def test_skips_season_zero(self, conn):
+        _show(conn, "s-tv0032", "Dexter", tracking_space="tv")
+        _season(conn, "z-tv0034", "s-tv0032", 0)
+        _episode(conn, "e-dx0001", "s-tv0032", 0, 1, kind="special")
+        conn.commit()
+
+        updated = season_ranges.fill_season_ranges_bulk(conn)
+        assert updated == 0
+
+    def test_idempotent(self, conn):
+        _show(conn, "s-tv0033", "Suits", tracking_space="tv")
+        _season(conn, "z-tv0035", "s-tv0033", 1)
+        for i in range(1, 11):
+            _episode(conn, f"e-su{i:04d}", "s-tv0033", 1, i)
+        conn.commit()
+
+        first = season_ranges.fill_season_ranges_bulk(conn)
+        assert first == 1
+        second = season_ranges.fill_season_ranges_bulk(conn)
+        assert second == 0

@@ -1483,6 +1483,36 @@ def poll_memory_alpha(conn) -> dict:
     except Exception:
         log.exception("Season row / episode.season_id backfill failed")
 
+    # ── 2d. Seed episode_external_id ──
+    # Populates per-episode cross-database coordinates from AniDB mappings,
+    # Sonarr TVDB coords, and AniList/MAL season links.  Idempotent —
+    # INSERT OR IGNORE, safe every tick.  Must run after 2c (needs
+    # episode.season_id set) and after AniDB mapping derivation.
+    try:
+        from lcars import season_ranges as _sr
+        ext_ids = _sr.seed_episode_external_ids(conn)
+        result["episode_ext_ids"] = ext_ids
+    except Exception:
+        log.exception("episode_external_id seeding failed")
+
+    # ── 2e. Backfill season names ──
+    # Fills NULL season_external_id.name from anidb_title (anime) or
+    # show.primary_title (single-season fallback).  Idempotent.
+    try:
+        from lcars import season_ranges as _sr2
+        result["season_names_filled"] = _sr2.backfill_season_names(conn)
+    except Exception:
+        log.exception("season_external_id name backfill failed")
+
+    # ── 2f. Fill abs_start/abs_end ranges ──
+    # Bulk fill season absolute-episode ranges for anime (from Sonarr
+    # absolute_number) and TV (from episode counts per season).
+    try:
+        from lcars import season_ranges as _sr3
+        result["season_ranges_filled"] = _sr3.fill_season_ranges_bulk(conn)
+    except Exception:
+        log.exception("Season range bulk fill failed")
+
     # ── 3. Drip-fetch episode data from AniDB API ──
     drip = drip_fetch_episodes(conn, limit=5)
     result["drip_fetched"] = drip["fetched"]
