@@ -385,6 +385,11 @@
   font-family: 'Syne', sans-serif; font-weight: 700; font-size: 16px;
   white-space: nowrap;
 }
+.sp-season-entry-name {
+  font-size: 13px; color: var(--muted); font-style: italic;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 360px;
+}
 .sp-season-range-label {
   font-family: 'DM Mono', monospace;
   font-size: 11px; color: var(--faint); white-space: nowrap;
@@ -509,6 +514,14 @@
 }
 .sp-ep-abs {
   font-family: 'DM Mono', monospace; font-size: 10px; color: var(--faint);
+}
+.sp-ep-coords {
+  display: flex; gap: 3px; align-items: center; flex-shrink: 0;
+}
+.sp-ep-coord-badge {
+  font-family: 'DM Mono', monospace; font-size: 9px; color: var(--faint);
+  background: var(--surface-3); padding: 1px 4px; border-radius: 3px;
+  white-space: nowrap; line-height: 1.3;
 }
 .sp-ep-title-cell {
   display: flex; flex-direction: row; align-items: center; gap: 2px; min-width: 0;

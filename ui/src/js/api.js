@@ -252,6 +252,7 @@ const SHOW_DETAIL_QUERY = `
         edges { node {
           id seasonNumber anilistId malId status score posterUrl
           startedAt completedAt absStart absEnd source
+          externalIds { service externalId name }
         }}
       }
       externalIds(first: 20) {
@@ -272,6 +273,7 @@ const SHOW_DETAIL_QUERY = `
             anidbAnimeId anidbSeason anidbEpno
             titleEn titleJa titleRomaji airdate
           }
+          externalIds { service externalId seasonNumber episodeNumber }
           watchEvents(first: 1) { edges { node { id } } }
         }}
         pageInfo { hasNextPage endCursor }

@@ -2252,6 +2252,14 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
   const label = sn === 0 ? 'Specials' : `Season ${sn}`;
   hdr.appendChild(el('span', 'sp-season-num', label));
 
+  // Season name from external IDs (e.g. AniList/MAL entry title via AniDB)
+  if (seasonData?.externalIds?.length) {
+    const named = seasonData.externalIds.find(e => e.name);
+    if (named && named.name !== show.displayTitle) {
+      hdr.appendChild(el('span', 'sp-season-entry-name', named.name));
+    }
+  }
+
   // Range label for split seasons, or unmapped indicator
   if (rangeLabel) {
     hdr.appendChild(el('span', 'sp-season-range-label', rangeLabel));
@@ -2686,6 +2694,18 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     // Absolute number
     row.appendChild(el('span', 'sp-ep-abs',
       ep.absoluteNumber != null ? `#${ep.absoluteNumber}` : '—'));
+
+    // Cross-database source coordinates (compact badges)
+    if (ep.externalIds?.length) {
+      const coordWrap = el('div', 'sp-ep-coords');
+      for (const ext of ep.externalIds) {
+        if (ext.service === 'tvdb') continue; // same as sonarr S/E, skip
+        const svcLabel = { anidb: 'ADB', anilist: 'AL', mal: 'MAL' }[ext.service] || ext.service;
+        const coord = ext.episodeNumber != null ? `${svcLabel}:${ext.episodeNumber}` : `${svcLabel}`;
+        coordWrap.appendChild(el('span', 'sp-ep-coord-badge', coord));
+      }
+      if (coordWrap.childElementCount) row.appendChild(coordWrap);
+    }
 
     // Title cell (with kind badge for non-REGULAR episodes, "Mini" for minisodes)
     const titleCell = el('div', 'sp-ep-title-cell');
