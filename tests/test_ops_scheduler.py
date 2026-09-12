@@ -559,7 +559,7 @@ async def test_loop_survives_a_non_lcars_error_and_keeps_ticking(monkeypatch):
 # --- run_forever (wiring only — each loop's own behavior is covered above) --
 
 
-async def test_run_forever_wires_up_all_five_loops(monkeypatch):
+async def test_run_forever_wires_up_all_six_loops(monkeypatch):
     calls = []
 
     async def fake_loop(coro_fn, client, interval_seconds, label):
@@ -579,6 +579,7 @@ async def test_run_forever_wires_up_all_five_loops(monkeypatch):
         monthly_interval_seconds=2592000,
         anilist_activity_interval_seconds=240,
         mal_reconcile_interval_seconds=3600,
+        memory_alpha_interval_seconds=1200,
     )
     assert set(calls) == {
         (
@@ -590,6 +591,7 @@ async def test_run_forever_wires_up_all_five_loops(monkeypatch):
         ("run_monthly_once", 2592000, "monthly+catalog_presence+show_merge"),
         ("run_anilist_activity_once", 240, "anilist_activity"),
         ("run_mal_reconcile_once", 3600, "mal_reconcile"),
+        ("run_memory_alpha_once", 1200, "memory_alpha"),
     }
     assert availability_calls == [client]
 

@@ -157,13 +157,16 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     stats = {"fetched": 0, "episodes_stored": 0, "skipped": 0,
-             "shows_without_tvmaze": 0}
+             "shows_without_tvmaze": 0, "anime_id_only": 0}
 
-    # Find non-anime tracked shows that don't have tvmaze_episode data yet.
+    # Find tracked shows that need TVmaze work.
     # Strategy: shows with a tvmaze external_id but no tvmaze_episode rows,
     # OR shows without a tvmaze external_id (need lookup first).
     #
-    # Phase 1: shows that need TVmaze lookup (no tvmaze external_id)
+    # Phase 1: shows that need TVmaze lookup (no tvmaze external_id).
+    # Covers ALL tracking spaces — TVmaze has anime too, and the ID
+    # itself is useful for cross-referencing even when we don't use
+    # TVmaze episode data for anime airdate fill.
     needs_lookup = conn.execute(
         """SELECT s.id,
                   tvdb.external_id AS tvdb_id,
@@ -174,7 +177,6 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
            LEFT JOIN show_external_id imdb
              ON imdb.show_id = s.id AND imdb.service = 'imdb'
            WHERE s.tracked = 1
-             AND s.tracking_space != 'anime'
              AND NOT EXISTS (
                SELECT 1 FROM show_external_id tm
                WHERE tm.show_id = s.id AND tm.service = 'tvmaze'
@@ -184,7 +186,11 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
         (limit,),
     ).fetchall()
 
-    # Phase 2: shows that have tvmaze ID but no episodes fetched
+    # Phase 2: shows that have tvmaze ID but no episodes fetched.
+    # Non-anime only — anime airdate fill uses Syoboi/AniDB numbering,
+    # not TVmaze's TVDB-compatible (season, episode) pairs, so fetching
+    # TVmaze episodes for anime would risk join mismatches in
+    # fill_airdate_gaps (which is already restricted to non-anime).
     has_id_needs_eps = conn.execute(
         """SELECT s.id, tm.external_id AS tvmaze_id
            FROM show s
@@ -200,6 +206,19 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
            LIMIT ?""",
         (limit,),
     ).fetchall()
+
+    # Build a lookup for anime shows so we can skip episode fetch for them.
+    # Covers both query results — if phase 2's filter is later widened to
+    # include anime, this guard still works.
+    all_show_ids = [row[0] for row in needs_lookup] + [row[0] for row in has_id_needs_eps]
+    anime_show_ids = set()
+    if all_show_ids:
+        anime_rows = conn.execute(
+            """SELECT id FROM show WHERE tracking_space = 'anime'
+               AND id IN ({})""".format(",".join("?" for _ in all_show_ids)),
+            all_show_ids,
+        ).fetchall()
+        anime_show_ids = {row[0] for row in anime_rows}
 
     # Merge — phase 1 first (establishes IDs), then phase 2
     work_items: list[tuple[str, int | None, str | None, str | None]] = []
@@ -270,19 +289,31 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
                 except sqlite3.IntegrityError:
                     pass
 
-                # Also backfill TVDB/IMDB from TVmaze if we're missing them
+                # Also backfill TVDB/IMDB/TMDB from TVmaze if we're missing them
                 externals = show_data.get("externals", {})
                 _backfill_id(conn, show_id, "tvdb", externals.get("thetvdb"),
                              "https://thetvdb.com/dereferrer/series/{}", now)
                 _backfill_id(conn, show_id, "imdb", externals.get("imdb"),
                              "https://www.imdb.com/title/{}/", now)
+                # TVmaze carries TMDB IDs under "themoviedb" in externals
+                tmdb_id = externals.get("themoviedb")
+                if tmdb_id:
+                    # TVmaze doesn't distinguish tv vs movie in its
+                    # externals key; default to /tv/ since drip-fetch
+                    # primarily covers series
+                    _backfill_id(conn, show_id, "tmdb", tmdb_id,
+                                 "https://www.themoviedb.org/tv/{}", now)
 
                 # Store TVmaze poster art (no extra API call — show_data
                 # already has image.medium / image.original in hand).
                 from lcars import art
                 art.store_tvmaze_art(conn, show_id, show_data)
 
-            # Step 2: fetch episodes
+            # Step 2: fetch episodes (non-anime only — anime uses
+            # Syoboi/AniDB numbering, not TVmaze's TVDB-style pairs)
+            if show_id in anime_show_ids:
+                stats["anime_id_only"] += 1
+                continue
             episodes = fetch_episodes(tvmaze_id, client=client)
             if episodes is None:
                 stats["skipped"] += 1

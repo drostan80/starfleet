@@ -258,6 +258,37 @@ class LcarsClient:
         data = await self._query(query)
         return data["pollMalList"]
 
+    async def poll_memory_alpha(self) -> dict:
+        """Memory Alpha cross-reference pipeline (pollMemoryAlpha): one
+        call runs the full 8-step pipeline — dataset refresh, ID
+        propagation, AniDB/TVmaze/Syoboi drip-fetch, title/airdate gap
+        fill. Drip-paced internally (5 shows/tick, 1 req/2s AniDB rate
+        limit), so frequent calls are cheap — the pipeline self-gates
+        on dataset staleness and remaining work."""
+        query = """
+        mutation {
+          pollMemoryAlpha {
+            datasetsRefreshed
+            animeListEntries
+            anidbTitles
+            anidbIdsSeeded
+            episodesMapped
+            idsPropagated
+            dripFetched
+            dripEpisodesStored
+            titleGapsFilled
+            tvmazeDripFetched
+            tvmazeEpisodesStored
+            syoboiTidsSeeded
+            syoboiProgramsFetched
+            syoboiAirdatesRewired
+            airdateGapsFilled
+          }
+        }
+        """
+        data = await self._query(query)
+        return data["pollMemoryAlpha"]
+
     async def backfill_file_availability(self) -> dict:
         """§5.2/§6.7, B.3 — the manual, one-time counterpart to
         poll_file_availability() above: walks each configured service's

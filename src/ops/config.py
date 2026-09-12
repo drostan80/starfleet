@@ -68,6 +68,15 @@ class Config:
     # OPS_MAL_RECONCILE_POLL_INTERVAL_SECONDS if a faster mirror is worth
     # the extra fetches.
     mal_reconcile_poll_interval_seconds: int = 3600
+    # Memory Alpha's own (sixth) loop interval. The pipeline
+    # (pollMemoryAlpha) is drip-paced internally (5 shows/tick for AniDB
+    # and TVmaze drip-fetches, 1 req/2s AniDB rate limit ≈ 10s per
+    # tick), and its dataset-refresh steps self-gate on weekly staleness,
+    # so a frequent tick means "check cheaply, act rarely". 20 minutes:
+    # fast enough to clear the ~270-show AniDB backlog in ~18 hours
+    # (5 shows × 3 ticks/hour × 18h), slow enough that the self-gated
+    # dataset refresh and drip-fetch limits keep per-tick cost small.
+    memory_alpha_poll_interval_seconds: int = 1200
 
 
 def _resolve_secret(value: str | None, env_var: str) -> str | None:
@@ -107,6 +116,10 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
                 "mal_reconcile_poll_interval_seconds",
                 fallback=cfg.mal_reconcile_poll_interval_seconds,
             )
+            cfg.memory_alpha_poll_interval_seconds = parser["ops"].getint(
+                "memory_alpha_poll_interval_seconds",
+                fallback=cfg.memory_alpha_poll_interval_seconds,
+            )
     cfg.lcars_url = os.environ.get("OPS_LCARS_URL", cfg.lcars_url)  # not a secret
     cfg.lcars_bearer_token = _resolve_secret(cfg.lcars_bearer_token, "OPS_LCARS_BEARER_TOKEN")
     env_interval = os.environ.get("OPS_POLL_INTERVAL_SECONDS")
@@ -121,4 +134,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     env_mal_reconcile_interval = os.environ.get("OPS_MAL_RECONCILE_POLL_INTERVAL_SECONDS")
     if env_mal_reconcile_interval is not None:
         cfg.mal_reconcile_poll_interval_seconds = int(env_mal_reconcile_interval)
+    env_memory_alpha_interval = os.environ.get("OPS_MEMORY_ALPHA_POLL_INTERVAL_SECONDS")
+    if env_memory_alpha_interval is not None:
+        cfg.memory_alpha_poll_interval_seconds = int(env_memory_alpha_interval)
     return cfg

@@ -1789,8 +1789,13 @@ def _synthetic_arr_add_edge(show: dict, edges: list[dict]) -> dict | None:
 
 @show_type.field("externalIds")
 def resolve_show_external_ids(obj, info, **page_args):
+    # Filter out tombstone rows (tvmaze external_id='-1') written by
+    # drip-fetch to mark "not found" — they satisfy the drip's NOT
+    # EXISTS gate but are not real links to show in the UI.
     connection = pagination.paginate(
-        db.get_connection(), "show_external_id", "show_id = ?", (obj["id"],), **page_args
+        db.get_connection(), "show_external_id",
+        "show_id = ? AND NOT (service = 'tvmaze' AND external_id = '-1')",
+        (obj["id"],), **page_args
     )
     synthetic = _synthetic_arr_add_edge(obj, connection["edges"])
     if synthetic is not None:

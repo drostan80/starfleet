@@ -251,6 +251,36 @@ async def test_add_show_with_external_ids_creates_crosswalk_rows(client):
     assert links["tvdb"]["externalId"] == "67890"
 
 
+@pytest.mark.anyio
+async def test_tvmaze_tombstone_filtered_from_external_ids(client):
+    """A tvmaze external_id of '-1' (the drip-fetch's "not found"
+    tombstone) is filtered out of the Show.externalIds resolver, while
+    real tvmaze IDs and other services' IDs come through normally."""
+    show = await add_show(client, anilistId=99999)
+    conn = db.get_connection()
+    now = "2026-09-12T00:00:00Z"
+    # Insert a tvmaze tombstone and a real tvmaze row for a different show
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, 'tvmaze', '-1', '', ?)",
+        (show["id"], now),
+    )
+    conn.commit()
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { externalIds { edges { node { service externalId } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    services = {e["node"]["service"] for e in data["show"]["externalIds"]["edges"]}
+    assert "anilist" in services, "real IDs must be present"
+    assert "tvmaze" not in services, "tvmaze tombstone (-1) must be filtered"
+
+
 # --- on-demand metadata fetch (§4 Phase A, A.8) ------------------------------
 #
 # The `client` fixture stubs anilist_client.fetch_media to a no-op and sets

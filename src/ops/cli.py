@@ -31,6 +31,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
                 cfg.monthly_poll_interval_seconds,
                 cfg.anilist_activity_poll_interval_seconds,
                 cfg.mal_reconcile_poll_interval_seconds,
+                cfg.memory_alpha_poll_interval_seconds,
             )
 
     asyncio.run(_main())

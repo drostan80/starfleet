@@ -263,6 +263,14 @@ def propagate_cross_ids(conn, fribb_dataset: list[dict],
     Strictly insert-only — never overwrites existing rows, so manual
     corrections via amendShowArrLink are preserved.
 
+    TVmaze is intentionally NOT a source/target here — TVmaze externals
+    aren't stored locally, so propagation from TVmaze requires a live API
+    call, which the tvmaze drip-fetch already does at lookup time
+    (backfilling TVDB/IMDB/TMDB from TVmaze's externals dict). The
+    bidirectional loop closes via pipeline ordering: this function fills
+    TVDB/IMDB → next tick's drip finds shows by those IDs → TVmaze
+    lookup backfills the reverse direction.
+
     Returns {"mal": n, "tvdb": n, "tmdb": n, "imdb": n} counts.
     """
     import sqlite3

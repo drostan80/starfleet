@@ -361,6 +361,24 @@ async def run_mal_reconcile_once(client: LcarsClient) -> int:
     return changed
 
 
+async def run_memory_alpha_once(client: LcarsClient) -> int:
+    """Memory Alpha cross-reference pipeline — drip-paced, self-gating.
+    Runs the full 8-step pipeline (dataset refresh, ID propagation,
+    AniDB/TVmaze/Syoboi drip-fetch, title/airdate gap fill) via one
+    GraphQL mutation. Returns the sum of items processed."""
+    result = await client.poll_memory_alpha()
+    total = sum(
+        result[k] if isinstance(result[k], int) else (1 if result[k] else 0)
+        for k in result
+    )
+    # Log only when something actually happened
+    interesting = {k: v for k, v in result.items()
+                   if (isinstance(v, int) and v > 0) or (isinstance(v, bool) and v)}
+    if interesting:
+        logger.info("memory_alpha: %s", interesting)
+    return total
+
+
 async def _loop(coro_fn, client: LcarsClient, interval_seconds: int, label: str) -> None:
     """Shared while-loop shape for both timers below — never returns
     under normal operation. Catches bare Exception, not just LcarsError
@@ -408,6 +426,7 @@ async def run_forever(
     monthly_interval_seconds: int,
     anilist_activity_interval_seconds: int = 240,
     mal_reconcile_interval_seconds: int = 3600,
+    memory_alpha_interval_seconds: int = 1200,
 ) -> None:
     """Four concurrent loops, not one shared cadence — B.2's own
     weekly tier is self-gating (dueForSeasonReconciliation only ever
@@ -456,7 +475,15 @@ async def run_forever(
     promptly), but unlike B.5.3 it has no cheap activity-feed pre-check
     (MAL has none), so it fetches and diffs the whole list each tick;
     that per-tick cost is why its default (3600s) is far slower than the
-    AniList activity poll's 240s rather than sharing it."""
+    AniList activity poll's 240s rather than sharing it.
+
+    The Memory Alpha cross-reference pipeline (2026-09-12,
+    pollMemoryAlpha) is its own sixth loop — drip-paced internally (5
+    shows/tick for AniDB and TVmaze lookups, 1 req/2s AniDB rate limit),
+    with dataset refresh self-gated on weekly staleness. It can't ride
+    the hourly tier because the drip-fetch rate-limiting means a faster
+    cadence (20 min default) clears the AniDB/TVmaze backlog in hours
+    rather than days, and each tick is cheap when there's nothing to do."""
     await asyncio.gather(
         _loop(
             run_daily_and_weekly_once,
@@ -483,5 +510,11 @@ async def run_forever(
             client,
             mal_reconcile_interval_seconds,
             "mal_reconcile",
+        ),
+        _loop(
+            run_memory_alpha_once,
+            client,
+            memory_alpha_interval_seconds,
+            "memory_alpha",
         ),
     )
