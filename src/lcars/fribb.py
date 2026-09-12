@@ -69,6 +69,10 @@ _anilist_index_cache: dict[int, dict[int, list[dict]]] = {}
 # Used by browse's MAL-fallback path to recover tvdb/anilist/imdb IDs
 # when AniList is down and only MAL IDs are available.
 _mal_index_cache: dict[int, dict[int, list[dict]]] = {}
+# 2026-09-12 — keyed by anidb_id, same structure.  Used by
+# propagate_cross_ids to bridge AniDB→AniList/MAL/TMDB/IMDB for
+# shows that enter the system via TVDB (Sonarr) and have no AniList.
+_anidb_index_cache: dict[int, dict[int, list[dict]]] = {}
 
 
 def _dataset_is_stale(path: Path, max_age: float) -> bool:
@@ -220,6 +224,71 @@ def build_mal_index(dataset: list[dict]) -> dict[int, list[dict]]:
     _mal_index_cache.clear()
     _mal_index_cache[id(dataset)] = index
     return index
+
+
+def build_anidb_index(dataset: list[dict]) -> dict[int, list[dict]]:
+    """Keyed by anidb_id — bridges AniDB→AniList/MAL/TMDB/IMDB via Fribb.
+
+    Used by propagate_cross_ids for shows that enter the system with only
+    a TVDB ID (e.g. added via Sonarr): TVDB → anime_list_entry → AniDB,
+    then this index recovers all other IDs without needing AniList as root.
+    Same memoization and "never guess" discipline as the other indexes."""
+    cached = _anidb_index_cache.get(id(dataset))
+    if cached is not None:
+        return cached
+    index: dict[int, list[dict]] = {}
+    for entry in dataset:
+        if entry.get("anidb_id") in _MISSING:
+            continue
+        # Need at least one recoverable ID to be useful
+        has_anilist = entry.get("anilist_id") not in _MISSING
+        has_mal = entry.get("mal_id") not in _MISSING
+        if not has_anilist and not has_mal:
+            continue
+        index.setdefault(entry["anidb_id"], []).append(entry)
+    _anidb_index_cache.clear()
+    _anidb_index_cache[id(dataset)] = index
+    return index
+
+
+def resolve_ids_for_anidb(
+    index: dict[int, list[dict]], anidb_id: int
+) -> dict[str, int | str | None]:
+    """Resolve anilist_id, mal_id, tmdb_id, and imdb_id from an AniDB ID.
+
+    Same "never guess" discipline — if the anidb_id maps to multiple
+    conflicting values for a field, that field is None."""
+    candidates = index.get(anidb_id, [])
+    if not candidates:
+        return {"anilist_id": None, "mal_id": None, "tmdb_id": None,
+                "tmdb_kind": None, "imdb_id": None}
+
+    anilist_ids = {c["anilist_id"] for c in candidates
+                   if c.get("anilist_id") not in _MISSING}
+    anilist_id = anilist_ids.pop() if len(anilist_ids) == 1 else None
+
+    mal_ids = {c["mal_id"] for c in candidates
+               if c.get("mal_id") not in _MISSING}
+    mal_id = mal_ids.pop() if len(mal_ids) == 1 else None
+
+    # TMDB: Fribb stores as {"tv": id} or {"movie": id}
+    tmdb_id = None
+    tmdb_kind = None
+    for c in candidates:
+        tmdb = c.get("themoviedb_id")
+        if tmdb:
+            tid = tmdb.get("tv") or tmdb.get("movie")
+            if tid:
+                tmdb_id = tid
+                tmdb_kind = "tv" if tmdb.get("tv") else "movie"
+                break
+
+    # IMDB: Fribb stores as a list
+    imdb_list = candidates[0].get("imdb_id") or []
+    imdb_id = imdb_list[0] if isinstance(imdb_list, list) and imdb_list else None
+
+    return {"anilist_id": anilist_id, "mal_id": mal_id, "tmdb_id": tmdb_id,
+            "tmdb_kind": tmdb_kind, "imdb_id": imdb_id}
 
 
 def resolve_ids_for_mal(

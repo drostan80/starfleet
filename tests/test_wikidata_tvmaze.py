@@ -339,7 +339,10 @@ class TestWikidataTvPropagation:
         self.conn.execute(
             "CREATE TABLE anime_list_entry (id INTEGER PRIMARY KEY,"
             " anidb_id INTEGER, tvdb_id TEXT,"
-            " default_tvdb_season INTEGER, episode_offset INTEGER)"
+            " default_tvdb_season INTEGER, episode_offset INTEGER,"
+            " tmdb_tv INTEGER, tmdb_season INTEGER, tmdb_movie INTEGER,"
+            " imdb_id TEXT, name TEXT,"
+            " source TEXT DEFAULT 'community', fetched_at TEXT)"
         )
 
         # A non-anime show with TMDB but no TVDB
@@ -376,6 +379,172 @@ class TestWikidataTvPropagation:
             " WHERE show_id = 's-tv001' AND service = 'tvdb'"
         ).fetchone()
         assert row[0] == "999"  # unchanged
+
+
+class TestPropagateFullGraph:
+    """Test the full ID propagation graph — TVDB→AniDB→Fribb→everything."""
+
+    def setup_method(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.execute(
+            "CREATE TABLE show (id TEXT PRIMARY KEY,"
+            " tracked INTEGER, tracking_space TEXT, media_shape TEXT)"
+        )
+        self.conn.execute("""
+            CREATE TABLE show_external_id (
+                show_id TEXT, service TEXT, external_id TEXT,
+                url TEXT, created_at TEXT,
+                UNIQUE(show_id, service)
+            )
+        """)
+        self.conn.execute(
+            "CREATE TABLE anime_list_entry (id INTEGER PRIMARY KEY,"
+            " anidb_id INTEGER, tvdb_id TEXT,"
+            " default_tvdb_season INTEGER, episode_offset INTEGER,"
+            " tmdb_tv INTEGER, tmdb_season INTEGER, tmdb_movie INTEGER,"
+            " imdb_id TEXT, name TEXT,"
+            " source TEXT DEFAULT 'community', fetched_at TEXT)"
+        )
+        self.conn.execute("CREATE INDEX ix_anime_list_entry_tvdb_id"
+                          " ON anime_list_entry (tvdb_id)")
+        self.conn.execute("CREATE INDEX ix_anime_list_entry_anidb_id"
+                          " ON anime_list_entry (anidb_id)")
+
+    def test_tvdb_to_anidb_seed(self):
+        """Phase 1: Sonarr-added anime with TVDB seeds AniDB via anime_list_entry."""
+        from lcars.anidb import propagate_cross_ids
+
+        # An anime show with only TVDB
+        self.conn.execute("INSERT INTO show VALUES ('s1', 1, 'anime', 'TV')")
+        self.conn.execute(
+            "INSERT INTO show_external_id VALUES ('s1', 'tvdb', '12345', '', '')")
+        # anime_list_entry maps tvdb 12345 → anidb 9999
+        self.conn.execute(
+            "INSERT INTO anime_list_entry (anidb_id, tvdb_id, episode_offset)"
+            " VALUES (9999, '12345', 0)")
+        self.conn.commit()
+
+        counts = propagate_cross_ids(self.conn, [])
+        assert counts["anidb"] == 1
+
+        row = self.conn.execute(
+            "SELECT external_id FROM show_external_id"
+            " WHERE show_id = 's1' AND service = 'anidb'"
+        ).fetchone()
+        assert row[0] == "9999"
+
+    def test_anidb_rooted_fribb_fallback(self):
+        """Phase 2b: AniDB-only show gets AniList/MAL/TMDB/IMDB from Fribb."""
+        from lcars.anidb import propagate_cross_ids
+
+        # An anime show with only AniDB (no AniList)
+        self.conn.execute("INSERT INTO show VALUES ('s1', 1, 'anime', 'TV')")
+        self.conn.execute(
+            "INSERT INTO show_external_id VALUES ('s1', 'anidb', '9999', '', '')")
+        self.conn.commit()
+
+        # Fribb dataset entry keyed by anidb_id
+        fribb = [{"anidb_id": 9999, "anilist_id": 111, "mal_id": 222,
+                  "themoviedb_id": {"tv": 333}, "imdb_id": ["tt0004444"],
+                  "tvdb_id": 555}]
+
+        counts = propagate_cross_ids(self.conn, fribb)
+        assert counts["anilist"] == 1
+        assert counts["mal"] == 1
+        assert counts["tmdb"] == 1
+        assert counts["imdb"] == 1
+
+        # Check all IDs were inserted
+        ids = dict(self.conn.execute(
+            "SELECT service, external_id FROM show_external_id"
+            " WHERE show_id = 's1' ORDER BY service"
+        ).fetchall())
+        assert ids["anilist"] == "111"
+        assert ids["mal"] == "222"
+        assert ids["tmdb"] == "333"
+        assert ids["imdb"] == "tt0004444"
+
+    def test_anime_lists_tmdb_imdb_propagation(self):
+        """Phase 3: anime_list_entry fills TMDB and IMDB alongside TVDB."""
+        from lcars.anidb import propagate_cross_ids
+
+        # Show with AniDB but no TMDB/IMDB
+        self.conn.execute("INSERT INTO show VALUES ('s1', 1, 'anime', 'TV')")
+        self.conn.execute(
+            "INSERT INTO show_external_id VALUES ('s1', 'anidb', '100', '', '')")
+        self.conn.commit()
+
+        # anime_list_entry with tmdb_tv and imdb_id
+        self.conn.execute(
+            "INSERT INTO anime_list_entry"
+            " (anidb_id, tvdb_id, episode_offset, tmdb_tv, imdb_id)"
+            " VALUES (100, '200', 0, 300, 'tt0000300')")
+        self.conn.commit()
+
+        counts = propagate_cross_ids(self.conn, [])
+        assert counts["tvdb"] == 1
+        assert counts["tmdb"] == 1
+        assert counts["imdb"] == 1
+
+    def test_full_sonarr_cascade(self):
+        """End-to-end: TVDB-only anime → AniDB → AniList/MAL/TMDB/IMDB."""
+        from lcars.anidb import propagate_cross_ids
+
+        # Sonarr adds anime with only TVDB
+        self.conn.execute("INSERT INTO show VALUES ('s1', 1, 'anime', 'TV')")
+        self.conn.execute(
+            "INSERT INTO show_external_id VALUES ('s1', 'tvdb', '12345', '', '')")
+        # anime_list_entry bridges TVDB→AniDB
+        self.conn.execute(
+            "INSERT INTO anime_list_entry (anidb_id, tvdb_id, episode_offset)"
+            " VALUES (9999, '12345', 0)")
+        self.conn.commit()
+
+        # Fribb bridges AniDB→everything
+        fribb = [{"anidb_id": 9999, "anilist_id": 111, "mal_id": 222,
+                  "themoviedb_id": {"tv": 333}, "imdb_id": ["tt0004444"],
+                  "tvdb_id": 12345}]
+
+        counts = propagate_cross_ids(self.conn, fribb)
+
+        # Phase 1 seeded AniDB, phase 2b filled the rest
+        assert counts["anidb"] == 1
+        assert counts["anilist"] == 1
+        assert counts["mal"] == 1
+        assert counts["tmdb"] == 1
+        assert counts["imdb"] == 1
+
+        # Verify all 6 services are populated
+        services = [r[0] for r in self.conn.execute(
+            "SELECT service FROM show_external_id"
+            " WHERE show_id = 's1' ORDER BY service"
+        ).fetchall()]
+        assert sorted(services) == ["anidb", "anilist", "imdb", "mal", "tmdb", "tvdb"]
+
+    def test_insert_only_never_overwrites(self):
+        """Existing IDs (manual corrections) are never overwritten."""
+        from lcars.anidb import propagate_cross_ids
+
+        # Show with AniDB and manually-corrected AniList
+        self.conn.execute("INSERT INTO show VALUES ('s1', 1, 'anime', 'TV')")
+        self.conn.execute(
+            "INSERT INTO show_external_id VALUES ('s1', 'anidb', '9999', '', '')")
+        self.conn.execute(
+            "INSERT INTO show_external_id VALUES ('s1', 'anilist', '999', '', '')")
+        self.conn.commit()
+
+        # Fribb says anilist should be 111, not 999
+        fribb = [{"anidb_id": 9999, "anilist_id": 111, "mal_id": 222,
+                  "themoviedb_id": {}, "tvdb_id": 555}]
+
+        counts = propagate_cross_ids(self.conn, fribb)
+        assert counts["anilist"] == 0  # not overwritten
+
+        row = self.conn.execute(
+            "SELECT external_id FROM show_external_id"
+            " WHERE show_id = 's1' AND service = 'anilist'"
+        ).fetchone()
+        assert row[0] == "999"  # manual correction preserved
 
 
 class TestAirstampNormalize:
