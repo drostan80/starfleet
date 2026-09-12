@@ -199,12 +199,18 @@ Authoritative cross-source episode mapping layer with AniDB as the ordering auth
    regulars block → specials block → unmapped (greyed). JA/romaji subtitles shown
    beneath English titles. Broadcast reference (S×E×) shown as secondary badge.
    `AnidbEpisodeMapping` GraphQL type on `Episode` carries all AniDB data.
-10. ✅ **Cross-database ID propagation** — `propagate_cross_ids` fills missing
-    `show_external_id` rows from Fribb (MAL, TMDB, IMDB) and Anime-Lists (TVDB).
-    Runs every `pollMemoryAlpha` tick, strictly insert-only (never overwrites manual
-    corrections). First run: +858 MAL, +62 TMDB, +61 IMDB, +26 TVDB. Coverage now:
-    MAL 1131/1151, TMDB 1012, IMDB 1007, TVDB 977. Idempotent — 0 on second run.
-    Foundation for future: browse prefill + add-confirmation UI.
+10. ✅ **Cross-database ID propagation (full graph)** — `propagate_cross_ids` fills
+    missing `show_external_id` rows via a 4-phase pipeline:
+    - Phase 1: TVDB→AniDB (anime_list_entry reverse, never-guess on ambiguity)
+    - Phase 2a: AniList→MAL/TMDB/IMDB (Fribb, anilist-keyed)
+    - Phase 2b: AniDB→AniList/MAL/TMDB/IMDB (Fribb anidb_index, alongside 2a)
+    - Phase 3: anime-lists→TVDB/TMDB/IMDB
+    - Phase 4: TMDB/IMDB→TVDB (Wikidata bridge, non-anime)
+    Sonarr-add scenario works end-to-end: TVDB → AniDB → all other DBs (same tick).
+    TVmaze closes the loop via drip-fetch on next tick.
+    Strictly insert-only (never overwrites manual corrections).
+    Coverage: AniList 100%, MAL 99%, AniDB 91%, TMDB 89%, IMDB 88%, TVDB 85%.
+    Heals missing IDs; does NOT correct disagreements (needs review lifecycle rework).
 11. ✅ **Wikidata TV bridge** — `wikidata.py` downloads SPARQL dump of 46,842 TV
     series with TVDB↔TMDB↔IMDB IDs. Cached weekly like Fribb. `propagate_cross_ids`
     extended for TV/movies: TMDB→TVDB and IMDB→TVDB lookups via Wikidata indexes.

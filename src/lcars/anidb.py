@@ -296,6 +296,7 @@ def propagate_cross_ids(conn, fribb_dataset: list[dict],
     Returns counts per service of newly inserted rows.
     """
     import sqlite3
+
     from lcars import fribb as fribb_mod
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
