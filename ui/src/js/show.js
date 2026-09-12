@@ -46,6 +46,9 @@ const SVC_URL_TEMPLATES = {
     : `https://www.themoviedb.org/tv/${id}`,
   tvdb:    id => `https://thetvdb.com/dereferrer/series/${id}`,
   imdb:    id => `https://www.imdb.com/title/${id}`,
+  anidb:   id => `https://anidb.net/anime/${id}`,
+  syoboi:  id => `https://cal.syoboi.jp/tid/${id}`,
+  tvmaze:  id => `https://www.tvmaze.com/shows/${id}`,
 };
 
 const SVC_COLORS = {
@@ -53,19 +56,23 @@ const SVC_COLORS = {
   tmdb: 'var(--svc-tmdb)', tvdb: 'var(--svc-tvdb)',
   sonarr: 'var(--svc-sonarr)', radarr: 'var(--svc-radarr)',
   imdb: 'var(--svc-imdb)',
+  anidb: 'var(--svc-anidb)', syoboi: 'var(--svc-syoboi)',
+  tvmaze: 'var(--svc-tvmaze)',
 };
 const SVC_ABBREVS = {
   anilist: 'AL', mal: 'ML', tmdb: 'TM', tvdb: 'TV',
   sonarr: 'S', radarr: 'R', imdb: 'IM',
+  anidb: 'ADB', syoboi: 'SY', tvmaze: 'MZ',
 };
 const SVC_NAMES = {
   anilist: 'AniList', mal: 'MAL', tmdb: 'TMDB', tvdb: 'TVDB',
   sonarr: 'Sonarr', radarr: 'Radarr', imdb: 'IMDb',
+  anidb: 'AniDB', syoboi: 'Syoboi', tvmaze: 'TVmaze',
 };
 /** Services managed by LCARS crosswalk — read-only in the UI. */
-const READONLY_SVCS = new Set(['sonarr', 'radarr']);
+const READONLY_SVCS = new Set(['sonarr', 'radarr', 'anidb', 'syoboi', 'tvmaze']);
 /** All known services in display order. */
-const ALL_SERVICES = ['anilist', 'mal', 'tmdb', 'tvdb', 'imdb', 'sonarr', 'radarr'];
+const ALL_SERVICES = ['anilist', 'mal', 'tmdb', 'tvdb', 'imdb', 'anidb', 'syoboi', 'tvmaze', 'sonarr', 'radarr'];
 const REWRITE_SVCS = new Set(['sonarr', 'radarr']);
 
 /** Known episode kind badges. */

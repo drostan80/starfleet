@@ -45,6 +45,9 @@ const BROWSE_SVC_DEFS = [
   { key: 'tvdb',    cls: 'svc-tvdb', svg: _tvdbSvg,    label: 'TheTVDB', urlTpl: 'https://thetvdb.com/dereferrer/series/{id}',  preview: true },
   { key: 'imdb',    cls: 'svc-imdb', svg: _imdbSvg,    label: 'IMDb',    urlTpl: 'https://www.imdb.com/title/{id}/',            preview: true },
   { key: 'tmdb',    cls: 'svc-tmdb', svg: _tmdbMarkSvg, label: 'TMDB',   urlTpl: 'https://www.themoviedb.org/tv/{id}',          preview: true },
+  { key: 'anidb',   cls: 'svc-anidb',  svg: null, label: 'AniDB',  urlTpl: 'https://anidb.net/anime/{id}',                 preview: false },
+  { key: 'syoboi',  cls: 'svc-syoboi', svg: null, label: 'Syoboi', urlTpl: 'https://cal.syoboi.jp/tid/{id}',               preview: false },
+  { key: 'tvmaze',  cls: 'svc-tvmaze', svg: null, label: 'TVmaze', urlTpl: 'https://www.tvmaze.com/shows/{id}',            preview: true },
 ];
 
 // ── State ────────────────────────────────────────────────
@@ -543,7 +546,17 @@ function buildBrowseLinks(ids) {
     a.href = url;
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
-    a.innerHTML = def.svg;
+    if (def.svg) {
+      a.innerHTML = def.svg;
+    } else {
+      a.textContent = def.label.slice(0, 3).toUpperCase();
+      a.style.fontSize = '9px';
+      a.style.fontWeight = '700';
+      a.style.lineHeight = '1';
+      a.style.display = 'inline-flex';
+      a.style.alignItems = 'center';
+      a.style.justifyContent = 'center';
+    }
 
     a.dataset.svcLabel = def.label;
     a.dataset.svcId = String(id);

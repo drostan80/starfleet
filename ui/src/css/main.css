@@ -28,6 +28,9 @@
   --svc-tvdb:   #6cd491;
   --svc-tmdb:   #01b4e4;
   --svc-imdb:   #f6c700;
+  --svc-anidb:  #2d5fa0;
+  --svc-syoboi: #e74c3c;
+  --svc-tvmaze: #3c948b;
   --svc-player: #22c55e;
   --danger:      #ef4444;
 
@@ -810,6 +813,9 @@ body {
 .svc-tmdb     { background: transparent; border-radius: 4px; }
 .svc-tvdb img,
 .svc-imdb img { object-fit: contain; }
+.svc-anidb,
+.svc-syoboi,
+.svc-tvmaze   { background: transparent; border-radius: 4px; }
 .svc-sonarr,
 .svc-radarr,
 .svc-player  { background: transparent; border-radius: 50%; }

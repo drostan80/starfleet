@@ -421,6 +421,9 @@ const SVC_DEFS = [
   { key: 'tvdb',    cls: 'svc-tvdb',   title: 'TVDB',    rewrite: false, svg: _tvdbSvg,             always: false },
   { key: 'imdb',    cls: 'svc-imdb',   title: 'IMDb',    rewrite: false, svg: _imdbMarkSvg,         always: false },
   { key: 'tmdb',    cls: 'svc-tmdb',   title: 'TMDB',    rewrite: false, svg: _tmdbMarkSvg,         always: false },
+  { key: 'anidb',   cls: 'svc-anidb',  title: 'AniDB',   rewrite: false, svg: null,               always: false },
+  { key: 'syoboi',  cls: 'svc-syoboi', title: 'Syoboi',  rewrite: false, svg: null,               always: false },
+  { key: 'tvmaze',  cls: 'svc-tvmaze', title: 'TVmaze',  rewrite: false, svg: null,               always: false },
   { key: 'sonarr',  cls: 'svc-sonarr', title: 'Sonarr',  rewrite: true,  svg: arrIcon('#00C8FF'), always: true  },
   { key: 'radarr',  cls: 'svc-radarr', title: 'Radarr',  rewrite: true,  svg: arrIcon('#FFC230'), always: true  },
 ];
@@ -514,7 +517,14 @@ export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cf
     // Full colour (.on) only for real links, not :add synthetics
     a.className = `svc ${def.cls}${realLink ? ' on' : ''}`;
     a.title = def.title;
-    a.innerHTML = def.svg;
+    if (def.svg) {
+      a.innerHTML = def.svg;
+    } else {
+      a.textContent = def.title.slice(0, 3).toUpperCase();
+      a.style.fontSize = '8px';
+      a.style.fontWeight = '700';
+      a.style.lineHeight = '1';
+    }
 
     if (linked) {
       const url = def.rewrite
