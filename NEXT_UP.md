@@ -1,13 +1,29 @@
 # Next up
 
-Current version: **v0.2.12** (deployed 2026-09-12).
+Current version: **v0.2.14** (deployed 2026-09-12).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## Recently shipped — still under testing (Sep 2–8)
+## Recently shipped — still under testing (Sep 2–12)
 
-### v0.2.6 (2026-09-08, not yet deployed)
+### v0.2.14 (2026-09-12)
+
+- **Episode-first schema Steps 3–5**: `seed_episode_external_ids` (AniDB/TVDB/AniList/MAL
+  synthetic composites), `backfill_season_names` (from anidb_title + show display title),
+  `fill_season_ranges_bulk` (abs_start/abs_end from Sonarr absolute numbers + cumulative
+  episode counts). All wired into ops loop as steps 2d/2e/2f.
+- **GraphQL + UI wiring (Step 7)**: season entry names in card headers (italic, muted),
+  per-episode source coordinate badges (ADB/AL/MAL) on episode rows. TVDB skipped
+  (redundant with Sonarr S/E).
+- **Score sync paused**: `syncScoreDrift` call commented out in ops loop — AniList/MAL
+  per-entry vs LCARS show-level scoring mismatch needs redesign. Existing reviews
+  bulk-closed.
+- **Double-insert guard**: anime season fallback in `ensure_all_season_rows` now uses
+  INSERT OR IGNORE to prevent unique constraint violations.
+- 15 new tests (60 total in `test_season_ranges.py`).
+
+### v0.2.6 (2026-09-08)
 
 - **Retire AniList air_date_utc review**: `_reconcile_air_dates` no longer opens
   `pending_review` for routine AniList air-date changes — silently writes for
@@ -18,7 +34,7 @@ Full build history archived to `~/repos/starfleet-archive`.
   (no extra API call). Poster only — TVmaze has no banner. IMDB has no free
   image API, skipped.
 
-### v0.2.5 (2026-09-08, not yet deployed)
+### v0.2.5 (2026-09-08)
 
 - **Airdate source priority chain** (`airdate_priority.py`): single source of truth
   for which automatic source wins. Order: manual > syoboi > animeschedule > anilist >
