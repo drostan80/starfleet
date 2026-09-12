@@ -309,6 +309,22 @@ Wrap the existing web client; native Kotlin plugins only for what the web can't 
   TV airdates from TVmaze already integrated (v0.2.4).
   Reference doc: Downloads/japanese_anime_airdate_syoboi_integration.md
 - ✅ AniList air_date_utc pending_review retired (v0.2.6). Sonarr+available+delay guard kept (the "Draw This, Then Die!" bug). Future: calendar annotation for schedule changes (*new schedule time, *no episode this week) — to be defined.
-- the schema evolved so much... do we have a season table? with field like show, linked episodes, franchise... and show table wich also link seasons and episodes linked and franchise and..., and boviously franchise which list shows > season > episodes/movies part of it?
-could and should it be done?
+### Episode-first cross-database identity (schema completion)
+
+Building toward: franchise → show → season → episode, where episode is the atomic
+source of truth. Each episode carries per-source coordinates (AniList S2E14 vs TVDB
+S2pt2E2); seasons are grouping conveniences with per-source labels.
+
+1. ✅ **Schema migration** (2026-09-12): `season.part_number` + `season.label`,
+   `season_external_id` with `name`/`url`/open-ended `service`/TEXT `external_id`,
+   new `episode_external_id` table (PK `episode_id, service`). GraphQL types +
+   resolvers wired. All 1,165 tests pass.
+2. ⏳ **TV season rows + episode.season_id backfill**: 365 TV shows need season rows,
+   then 11,584 episodes get `season_id`.
+3. ⏳ **Seed episode_external_id**: from `episode_anidb_mapping` (3,640 rows), TVDB
+   (sonarr_season/episode), AniList/MAL (from season external IDs).
+4. ⏳ **Backfill season_external_id.name**: pull names from Fribb/AniDB/MAL/AniList.
+5. ⏳ **abs_start/abs_end ranges**: from AniDB mappings (anime) + episode counts (TV).
+6. ⏳ **Franchise auto-seed**: walk show_relation SEQUEL/PREQUEL → 115 groups.
+7. ⏳ **GraphQL resolvers + UI**: wire the new data into the show page.
 
