@@ -53,10 +53,12 @@ class LcarsClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _query(self, query: str, variables: dict | None = None) -> dict:
+    async def _query(self, query: str, variables: dict | None = None,
+                     timeout: float | None = None) -> dict:
         try:
             response = await self._client.post(
-                "/", json={"query": query, "variables": variables or {}}
+                "/", json={"query": query, "variables": variables or {}},
+                timeout=timeout,
             )
         except httpx.ConnectError as e:
             raise LcarsError("Could not connect to LCARS") from e
@@ -286,7 +288,10 @@ class LcarsClient:
           }
         }
         """
-        data = await self._query(query)
+        # pollMemoryAlpha does sync drip-fetching (AniDB 5×2s + TVmaze
+        # 5×0.5s + Syoboi batches + dataset downloads on first run) —
+        # easily exceeds the default 10s client timeout.
+        data = await self._query(query, timeout=120.0)
         return data["pollMemoryAlpha"]
 
     async def backfill_file_availability(self) -> dict:
