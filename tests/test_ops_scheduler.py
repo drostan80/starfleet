@@ -461,9 +461,9 @@ async def test_run_daily_and_weekly_once_sums_all_ten_tiers():
     count = await run_daily_and_weekly_once(client)
     # 1 (show refresh) + 1 (season reconcile) + 2 (animeschedule) + 1 (local
     # presence) + 1 (episode movie links) + 1 (mal refresh) + 2 (untracked) +
-    # 1 (tvdb backfill) + 4 (season subdivision checked+flagged) +
-    # 6 (score sync anilistChecked+anilistFlagged) = 20
-    assert count == 20
+    # 1 (tvdb backfill) + 4 (season subdivision checked+flagged) = 14
+    # score_sync disabled (scoring model redesign, 2026-09-12)
+    assert count == 14
     assert client.refreshed == ["s-a"]
     assert client.reconciled == [("s-b", 1)]
 
