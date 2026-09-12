@@ -1,6 +1,6 @@
 # Next up
 
-Current version: **v0.2.5** (deployed 2026-09-08, under testing).
+Current version: **v0.2.12** (deployed 2026-09-12).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
@@ -323,10 +323,20 @@ S2pt2E2); seasons are grouping conveniences with per-source labels.
    + `backfill_episode_season_id` in `season_ranges.py`, wired into ops loop step 2c.
    +861 season rows (TV direct, anime via reconcile_season), +10,211 episodes linked.
    Season 0 excluded by design. Double-insert guard on anime fallback. 11 tests.
-3. ⏳ **Seed episode_external_id**: from `episode_anidb_mapping` (3,640 rows), TVDB
-   (sonarr_season/episode), AniList/MAL (from season external IDs).
-4. ⏳ **Backfill season_external_id.name**: pull names from Fribb/AniDB/MAL/AniList.
-5. ⏳ **abs_start/abs_end ranges**: from AniDB mappings (anime) + episode counts (TV).
-6. ⏳ **Franchise auto-seed**: walk show_relation SEQUEL/PREQUEL → 115 groups.
-7. ⏳ **GraphQL resolvers + UI**: wire the new data into the show page.
+3. ✅ **Seed episode_external_id** (2026-09-12): `seed_episode_external_ids` in
+   `season_ranges.py`, wired as ops step 2d. Synthetic composites: AniDB (3,651
+   from mapping), TVDB (~19k from Sonarr coords), AniList (~4k), MAL (~3.9k).
+   Idempotent INSERT OR IGNORE, runs every tick.
+4. ✅ **Backfill season_external_id.name** (2026-09-12): `backfill_season_names`,
+   ops step 2e. From anidb_title (English, romaji fallback) for anime, show
+   display title for single-season fallback. 2,814/3,375 names filled (83%).
+5. ✅ **abs_start/abs_end ranges** (2026-09-12): `fill_season_ranges_bulk`, ops
+   step 2f. Anime from Sonarr absolute_number, TV from episode counts per season
+   (cumulative). 1,178 seasons filled.
+6. ⏳ **Franchise auto-seed**: deferred — SEQUEL/PREQUEL edges are show-level
+   season chains, not true cross-media franchises. Needs a broader definition
+   covering TV+movies+anime. Not a must-have.
+7. ✅ **GraphQL + UI** (2026-09-12): season entry name shown in card header
+   (italic, from season_external_id.name). Per-episode source coordinate badges
+   (AL:3, ADB:3, MAL:3) on episode rows. TVDB skipped (same as Sonarr S/E).
 
