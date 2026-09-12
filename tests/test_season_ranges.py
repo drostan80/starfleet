@@ -852,6 +852,66 @@ class TestEnsureAllSeasonRows:
         assert original["id"] == "z-exists"
 
 
+    def test_anime_uses_reconcile_season(self, conn):
+        """Anime shows go through reconcile_season, not direct insert."""
+        _show(conn, "s-an0001", "Naruto", tracking_space="anime")
+        _episode(conn, "e-na0001", "s-an0001", 1, 1)
+        conn.commit()
+
+        with mock.patch("lcars.season_mapping.reconcile_season") as mock_rec:
+            # reconcile_season should create the row — simulate that
+            def fake_reconcile(c, show_id, season_number):
+                sid = "z-fake01"
+                c.execute(
+                    "INSERT INTO season"
+                    " (id, show_id, season_number, status, source, matched,"
+                    "  manual_override, created_at, updated_at)"
+                    " VALUES (?, ?, ?, 'planned', 'fribb', 1, 0, 'x', 'x')",
+                    (sid, show_id, season_number),
+                )
+                c.commit()
+
+            mock_rec.side_effect = fake_reconcile
+            created = season_ranges.ensure_all_season_rows(conn)
+
+        assert created == 1
+        mock_rec.assert_called_once()
+        row = conn.execute(
+            "SELECT source FROM season WHERE show_id = 's-an0001' AND season_number = 1"
+        ).fetchone()
+        assert row["source"] == "fribb"
+
+    def test_anime_fallback_guards_double_insert(self, conn):
+        """If reconcile_season commits a row then raises, fallback skips insert."""
+        _show(conn, "s-an0002", "Bleach", tracking_space="anime")
+        _episode(conn, "e-bl0001", "s-an0002", 1, 1)
+        conn.commit()
+
+        with mock.patch("lcars.season_mapping.reconcile_season") as mock_rec:
+            # Simulate: reconcile commits the season row, then raises
+            def fake_reconcile_then_fail(c, show_id, season_number):
+                sid = "z-fake02"
+                c.execute(
+                    "INSERT INTO season"
+                    " (id, show_id, season_number, status, source, matched,"
+                    "  manual_override, created_at, updated_at)"
+                    " VALUES (?, ?, ?, 'planned', 'unmatched', 0, 0, 'x', 'x')",
+                    (sid, show_id, season_number),
+                )
+                c.commit()
+                raise RuntimeError("pending_review failed")
+
+            mock_rec.side_effect = fake_reconcile_then_fail
+            created = season_ranges.ensure_all_season_rows(conn)
+
+        assert created == 1
+        # Only one season row, not two
+        count = conn.execute(
+            "SELECT COUNT(*) FROM season WHERE show_id = 's-an0002' AND season_number = 1"
+        ).fetchone()[0]
+        assert count == 1
+
+
 class TestBackfillEpisodeSeasonId:
     def test_links_episodes_to_seasons(self, conn):
         """Episodes with NULL season_id get linked to their season row."""

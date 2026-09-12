@@ -319,8 +319,10 @@ S2pt2E2); seasons are grouping conveniences with per-source labels.
    `season_external_id` with `name`/`url`/open-ended `service`/TEXT `external_id`,
    new `episode_external_id` table (PK `episode_id, service`). GraphQL types +
    resolvers wired. All 1,165 tests pass.
-2. ⏳ **TV season rows + episode.season_id backfill**: 365 TV shows need season rows,
-   then 11,584 episodes get `season_id`.
+2. ✅ **TV season rows + episode.season_id backfill** (2026-09-12): `ensure_all_season_rows`
+   + `backfill_episode_season_id` in `season_ranges.py`, wired into ops loop step 2c.
+   +861 season rows (TV direct, anime via reconcile_season), +10,211 episodes linked.
+   Season 0 excluded by design. Double-insert guard on anime fallback. 11 tests.
 3. ⏳ **Seed episode_external_id**: from `episode_anidb_mapping` (3,640 rows), TVDB
    (sonarr_season/episode), AniList/MAL (from season external IDs).
 4. ⏳ **Backfill season_external_id.name**: pull names from Fribb/AniDB/MAL/AniList.

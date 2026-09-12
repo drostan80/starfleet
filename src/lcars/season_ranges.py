@@ -285,18 +285,24 @@ def ensure_all_season_rows(conn: sqlite3.Connection) -> int:
             try:
                 season_mapping.reconcile_season(conn, show_id, season_number)
             except Exception:
-                # reconcile_season creates the row even on failure
-                # (with source='unmatched'), so the gap is still closed.
-                # _ensure_seasons has the same pattern.
-                season_id = ids.generate_id(conn, "z")
-                conn.execute(
-                    "INSERT INTO season"
-                    " (id, show_id, season_number, status, source, matched,"
-                    "  manual_override, created_at, updated_at)"
-                    " VALUES (?, ?, ?, 'planned', 'unmatched', 0, 0, ?, ?)",
-                    (season_id, show_id, season_number, now, now),
-                )
-                conn.commit()
+                # reconcile_season may have already committed the row before
+                # raising (e.g. INSERT succeeded but pending_review failed).
+                # Guard against double-insert hitting the UNIQUE constraint.
+                exists = conn.execute(
+                    "SELECT 1 FROM season"
+                    " WHERE show_id = ? AND season_number = ?",
+                    (show_id, season_number),
+                ).fetchone()
+                if not exists:
+                    season_id = ids.generate_id(conn, "z")
+                    conn.execute(
+                        "INSERT INTO season"
+                        " (id, show_id, season_number, status, source, matched,"
+                        "  manual_override, created_at, updated_at)"
+                        " VALUES (?, ?, ?, 'planned', 'unmatched', 0, 0, ?, ?)",
+                        (season_id, show_id, season_number, now, now),
+                    )
+                    conn.commit()
         else:
             # TV/movies — direct creation, no Fribb, no pending_review
             season_id = ids.generate_id(conn, "z")
