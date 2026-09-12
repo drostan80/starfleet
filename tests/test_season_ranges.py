@@ -1075,7 +1075,7 @@ class TestSeedEpisodeExternalIds:
 
     def test_anilist_mal_from_season_ext_id(self, conn):
         _show(conn, "s-an0010", "Bleach", tracking_space="anime")
-        sid = _season(conn, "z-an0010", "s-an0010", 1)
+        _season(conn, "z-an0010", "s-an0010", 1)
         _season_ext_id(conn, "z-an0010", "anilist", 100)
         _season_ext_id(conn, "z-an0010", "mal", 200)
         # Link episodes to season
