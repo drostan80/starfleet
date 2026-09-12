@@ -70,23 +70,44 @@ def upsert_season_external_id(
     anilist_id: int | None,
     mal_id: int | None,
     now: str,
+    *,
+    anilist_name: str | None = None,
+    mal_name: str | None = None,
 ) -> None:
     """Mirror anilist_id/mal_id into season_external_id.
 
     Uses INSERT ... ON CONFLICT so it's idempotent — safe to call on
     every write, not just first-time. Deletes a mapping row if the
     caller sets the id to NULL (the season was unlinked).
+
+    Optional name parameters carry the source database's own title for
+    this season/entry (e.g. AniList's media title). Name is only written
+    if provided and non-None — existing names are preserved on a plain
+    ID-only upsert.
     """
+    names = {"anilist": anilist_name, "mal": mal_name}
     for service, ext_id in [("anilist", anilist_id), ("mal", mal_id)]:
         if ext_id is not None:
-            conn.execute(
-                "INSERT INTO season_external_id"
-                " (season_id, service, external_id, created_at)"
-                " VALUES (?, ?, ?, ?)"
-                " ON CONFLICT (season_id, service)"
-                " DO UPDATE SET external_id = excluded.external_id",
-                (season_id, service, ext_id, now),
-            )
+            name = names.get(service)
+            if name is not None:
+                conn.execute(
+                    "INSERT INTO season_external_id"
+                    " (season_id, service, external_id, name, created_at)"
+                    " VALUES (?, ?, ?, ?, ?)"
+                    " ON CONFLICT (season_id, service)"
+                    " DO UPDATE SET external_id = excluded.external_id,"
+                    " name = excluded.name",
+                    (season_id, service, str(ext_id), name, now),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO season_external_id"
+                    " (season_id, service, external_id, created_at)"
+                    " VALUES (?, ?, ?, ?)"
+                    " ON CONFLICT (season_id, service)"
+                    " DO UPDATE SET external_id = excluded.external_id",
+                    (season_id, service, str(ext_id), now),
+                )
         else:
             # If the id was cleared, remove the mapping row if it exists
             conn.execute(
@@ -175,13 +196,13 @@ def check_subdivision_widths(conn: sqlite3.Connection) -> dict[str, int]:
     if not rows:
         return {"checked": 0, "flagged": 0}
 
-    unique_ids = sorted({r["anilist_id"] for r in rows})
+    unique_ids = sorted({int(r["anilist_id"]) for r in rows})
     anilist_counts = _fetch_anilist_episode_counts(unique_ids)
 
     checked = 0
     flagged = 0
     for r in rows:
-        anilist_eps = anilist_counts.get(r["anilist_id"])
+        anilist_eps = anilist_counts.get(int(r["anilist_id"]))
         if anilist_eps is None:
             # null (airing) or not returned by AniList — skip both
             continue

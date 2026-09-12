@@ -96,7 +96,7 @@ def test_export_includes_every_table(source_db):
     data = json.loads(blob)
     assert data["schema_version"] == export_import.SCHEMA_VERSION
     assert set(data["tables"]) == set(export_import.EXPORT_IMPORT_TABLES)
-    assert len(data["tables"]) == 28  # 27 + season_external_id (2026-08-26)
+    assert len(data["tables"]) == 29  # 28 + episode_external_id (2026-09-12)
 
 
 def test_export_import_round_trip_restores_everything(source_db, target_db):
@@ -124,7 +124,7 @@ def test_export_import_round_trip_restores_everything(source_db, target_db):
         "SELECT external_id FROM season_external_id"
         " WHERE season_id = 'z-exp001' AND service = 'anilist'"
     ).fetchone()
-    assert sxid["external_id"] == 108268  # range-based external mapping round-trips
+    assert str(sxid["external_id"]) == "108268"  # range-based external mapping round-trips
 
     episode = dict(target_db.execute("SELECT * FROM episode WHERE id = 'e-exp001'").fetchone())
     # the generated column: excluded from the INSERT, recomputed fresh by SQLite

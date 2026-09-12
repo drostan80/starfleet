@@ -492,7 +492,7 @@ def test_merge_clears_season_external_id_for_skipped_seasons(conn):
     winner_mapping = conn.execute(
         "SELECT external_id FROM season_external_id WHERE season_id = 'z-seawid'"
     ).fetchone()
-    assert winner_mapping is not None and winner_mapping["external_id"] == 999
+    assert winner_mapping is not None and str(winner_mapping["external_id"]) == "999"
 
 
 def test_merge_preserves_season_external_id_for_moved_seasons(conn):
@@ -518,4 +518,4 @@ def test_merge_preserves_season_external_id_for_moved_seasons(conn):
     mapping = conn.execute(
         "SELECT external_id FROM season_external_id WHERE season_id = 'z-sealmd'"
     ).fetchone()
-    assert mapping is not None and mapping["external_id"] == 888
+    assert mapping is not None and str(mapping["external_id"]) == "888"

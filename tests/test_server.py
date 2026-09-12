@@ -10940,7 +10940,7 @@ async def test_split_season_external_id_wired(client, monkeypatch):
         (new_season["id"],),
     ).fetchone()
     assert ext is not None
-    assert ext["external_id"] == 200001
+    assert str(ext["external_id"]) == "200001"
 
 
 async def test_split_season_resolves_subdivision_review(client, monkeypatch):

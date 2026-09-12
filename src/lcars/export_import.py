@@ -43,6 +43,7 @@ EXPORT_IMPORT_TABLES = [
     "season",
     "season_external_id",  # depends on season (range-based external mapping, 2026-08-26)
     "episode",
+    "episode_external_id",  # depends on episode (per-episode cross-database identity, 2026-09-12)
     "watch_event",
     "episode_movie_link",
     "show_external_id",

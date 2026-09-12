@@ -334,6 +334,19 @@ type Episode {
 
   "Memory Alpha — AniDB episode data resolved through the mapping table. Null when unmapped or when per-episode data hasn't been fetched yet."
   anidbMapping: AnidbEpisodeMapping
+
+  "Cross-database identity: this episode's coordinates in each source database (AniList, MAL, AniDB, TVDB, etc). Each entry carries that database's own season/episode numbering."
+  externalIds: [EpisodeExternalId!]!
+}
+
+"Cross-database identity for an episode — each source database's own numbering for this episode."
+type EpisodeExternalId {
+  service: String!
+  externalId: String!
+  "The source database's season number for this episode (may differ from LCARS's own season number)."
+  seasonNumber: Int
+  "The source database's episode number within its own season."
+  episodeNumber: Int
 }
 
 type EpisodeEdge {
@@ -461,8 +474,14 @@ type Season {
   id: ID!
   show: Show!
   seasonNumber: Int!
+  "Subdivision within a broadcast season (default 1). When a source splits one broadcast season into parts (e.g. 'Season 3 Part 1' and 'Season 3 Part 2'), each part gets its own season row sharing the same seasonNumber but with partNumber 1 and 2."
+  partNumber: Int!
+  "Source-provided label for this subdivision (e.g. 'Part 2', 'Wano Country Arc'). Null for unsplit seasons."
+  label: String
   anilistId: Int
   malId: Int
+  "Per-source names and IDs for this season — each database may name the same subdivision differently."
+  externalIds: [SeasonExternalId!]!
   "Per-season status; nullable (null = inherits show.status). Set via setSeasonStatus mutation."
   status: ShowStatus
   "A.9 — this season's own personal score (0-20 quarter-point scale, same as Show.score); nullable, falls back to Show.score for the AniList push when unset (§6.1)."
@@ -485,6 +504,15 @@ type Season {
   lastReconciledAt: DateTime
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+"Cross-database identity for a season — each source database's own ID and name for this subdivision."
+type SeasonExternalId {
+  service: String!
+  externalId: String!
+  "The source database's own name for this season/entry (e.g. AniList's title, MAL's title). Null when not yet fetched."
+  name: String
+  url: String
 }
 
 type SeasonEdge {

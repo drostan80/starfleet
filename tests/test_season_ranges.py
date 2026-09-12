@@ -101,8 +101,8 @@ class TestUpsertSeasonExternalId:
             " WHERE season_id = 'z-aaaaaa' ORDER BY service"
         ).fetchall()
         assert len(rows) == 2
-        assert (rows[0]["service"], rows[0]["external_id"]) == ("anilist", 100)
-        assert (rows[1]["service"], rows[1]["external_id"]) == ("mal", 200)
+        assert (rows[0]["service"], rows[0]["external_id"]) == ("anilist", "100")
+        assert (rows[1]["service"], rows[1]["external_id"]) == ("mal", "200")
 
     def test_upsert_overwrites_existing(self, conn):
         _show(conn, "s-aaaaaa")
@@ -119,7 +119,7 @@ class TestUpsertSeasonExternalId:
             "SELECT external_id FROM season_external_id"
             " WHERE season_id = 'z-aaaaaa' AND service = 'anilist'"
         ).fetchone()
-        assert row["external_id"] == 999
+        assert row["external_id"] == "999"
 
     def test_null_id_deletes_mapping(self, conn):
         _show(conn, "s-aaaaaa")
@@ -326,8 +326,8 @@ class TestComputeSeasonRanges:
             " WHERE season_id = 'z-aaaaaa' ORDER BY service"
         ).fetchall()
         assert len(ext_rows) == 2
-        assert (ext_rows[0]["service"], ext_rows[0]["external_id"]) == ("anilist", 100)
-        assert (ext_rows[1]["service"], ext_rows[1]["external_id"]) == ("mal", 200)
+        assert (ext_rows[0]["service"], ext_rows[0]["external_id"]) == ("anilist", "100")
+        assert (ext_rows[1]["service"], ext_rows[1]["external_id"]) == ("mal", "200")
 
     def test_skips_non_anime(self, conn):
         _show(conn, "s-aaaaaa", tracking_space="tv")
@@ -458,8 +458,8 @@ class TestComputeSeasonRanges:
             " WHERE service = 'anilist' ORDER BY season_id"
         ).fetchall()
         assert len(ext_rows) == 2
-        assert ext_rows[0]["external_id"] == 100
-        assert ext_rows[1]["external_id"] == 100
+        assert ext_rows[0]["external_id"] == "100"
+        assert ext_rows[1]["external_id"] == "100"
 
 
 # ---------------------------------------------------------------------------

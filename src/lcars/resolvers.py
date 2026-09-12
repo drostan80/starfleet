@@ -85,6 +85,8 @@ person_type = ObjectType("Person")
 studio_type = ObjectType("Studio")
 cast_credit_type = ObjectType("CastCredit")
 studio_credit_type = ObjectType("StudioCredit")
+season_external_id_type = ObjectType("SeasonExternalId")
+episode_external_id_type = ObjectType("EpisodeExternalId")
 franchise_type = ObjectType("Franchise")
 franchise_entry_type = ObjectType("FranchiseEntry")
 next_up_override_type = ObjectType("NextUpOverride")
@@ -140,6 +142,8 @@ BINDABLES = [
     watch_event_type,
     show_external_id_type,
     season_type,
+    season_external_id_type,
+    episode_external_id_type,
     episode_numbering_mapping_type,
     episode_movie_link_type,
     pending_review_type,
@@ -2087,6 +2091,27 @@ def resolve_season_art_assets(obj, info):
 @season_type.field("show")
 def resolve_season_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])
+
+
+@season_type.field("externalIds")
+def resolve_season_external_ids(obj, info):
+    conn = db.get_connection()
+    rows = conn.execute(
+        "SELECT service, external_id, name, url FROM season_external_id WHERE season_id = ?",
+        (obj["id"],),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@episode_type.field("externalIds")
+def resolve_episode_external_ids(obj, info):
+    conn = db.get_connection()
+    rows = conn.execute(
+        "SELECT service, external_id, season_number, episode_number"
+        " FROM episode_external_id WHERE episode_id = ?",
+        (obj["id"],),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 @episode_numbering_mapping_type.field("show")
@@ -4112,6 +4137,11 @@ def resolve_split_season(
     conn.execute("PRAGMA foreign_keys = OFF")
 
     # --- 3. Shift subsequent seasons (descending to avoid UNIQUE collisions) --
+    # NOTE: This shift assumes every season has part_number=1 (the default).
+    # Once subdivisions exist (part_number > 1), the WHERE clause below
+    # matches multiple rows per season_number and the shift will collide on
+    # UNIQUE(show_id, season_number, part_number).  Subdivisions need their
+    # own shift logic — revisit when part_number is used in production.
     subsequent = conn.execute(
         "SELECT season_number FROM season"
         " WHERE show_id = ? AND season_number > ? ORDER BY season_number DESC",

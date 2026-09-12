@@ -158,7 +158,7 @@ def _push_status_onward(conn, service: str, show_id: str, lcars_status: str) -> 
     # rather than the legacy season.{anilist_id,mal_id} columns — both are kept
     # in sync by the S2 dual-write, but reading from one source avoids drift.
     seasons = conn.execute(
-        "SELECT s.id, sei.external_id AS ext_id"
+        "SELECT s.id, CAST(sei.external_id AS INTEGER) AS ext_id"
         " FROM season_external_id sei JOIN season s ON s.id = sei.season_id"
         " WHERE s.show_id = ? AND sei.service = ?",
         (show_id, service),
@@ -182,7 +182,8 @@ def _push_progress_onward(conn, service: str, season_id: str) -> None:
     cfg = config.get_current()
     # S3: read ext_id from season_external_id (same source as _apply_remote_list).
     season = conn.execute(
-        "SELECT s.id, s.show_id, s.season_number, sei.external_id AS ext_id"
+        "SELECT s.id, s.show_id, s.season_number,"
+        " CAST(sei.external_id AS INTEGER) AS ext_id"
         " FROM season s LEFT JOIN season_external_id sei"
         " ON sei.season_id = s.id AND sei.service = ?"
         " WHERE s.id = ?",
@@ -242,7 +243,8 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     # it will also express the coarse-source / multi-fine-season case once S4
     # introduces real subdivision, which the column can't represent.
     seasons = conn.execute(
-        "SELECT s.id, s.show_id, s.season_number, sei.external_id AS ext_id"
+        "SELECT s.id, s.show_id, s.season_number,"
+        " CAST(sei.external_id AS INTEGER) AS ext_id"
         " FROM season_external_id sei JOIN season s ON s.id = sei.season_id"
         " WHERE sei.service = ?",
         (service,),
