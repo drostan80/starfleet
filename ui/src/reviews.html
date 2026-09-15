@@ -1236,6 +1236,7 @@
     const isConflict = r.field.includes('_conflict');
     const isScore = r.field === 'score' && r.entityType === 'season';
     const isSequel = r.field.startsWith('sequel_season:') && r.entityType === 'show';
+    const isMerge = r.field === 'cross_service_merge';
 
     // Header with poster + title
     let headerHtml = '';
@@ -1355,6 +1356,15 @@
             ` : ''}
           </div>
           ${seasonListHtml}
+        </div>
+      `;
+    } else if (isMerge) {
+      diffHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">Proposed merge</div>
+          <div class="conflict-compare" id="merge-compare">
+            <div class="conflict-loading"><span class="spinner"></span> Loading both shows…</div>
+          </div>
         </div>
       `;
     } else if (hasVal) {
@@ -1480,6 +1490,9 @@
           </div>
         `;
         note = `<div class="action-note">Creates the season mapping with AniList ${esc(sequelAlId)}${sequelMalId != null ? ' / MAL ' + esc(String(sequelMalId)) : ''}. If the show was completed, it will reopen as watching.</div>`;
+      } else if (isMerge) {
+        buttons += `<button class="btn-primary btn-approve" id="btn-merge-${uid}">Merge</button>`;
+        note = `<div class="action-note">Merges the loser into the winner — loser is demoted (untracked), its data moves to the winner. Reversible via reverseShowMerge.</div>`;
       } else if (isAnilistId) {
         const extIds = info.externalIds || {};
         const seasons = info.seasons || [];
@@ -1878,6 +1891,61 @@
       }
     }
 
+    // Async-load merge comparison
+    if (isMerge && !resolved) {
+      const mergeEl = document.getElementById('merge-compare');
+      const winnerId = latest;
+      const loserId = r.entityId;
+      if (mergeEl && winnerId) {
+        (async () => {
+          try {
+            const [winCard, loseCard] = await Promise.all([
+              fetchShowCard(winnerId), fetchShowCard(loserId),
+            ]);
+            if (_selected !== r.id) return;
+
+            function renderMergeCard(show, label) {
+              if (!show) return `<div class="conflict-card"><em>Show not found</em></div>`;
+              const statusClass = show.status === 'WATCHING' ? 'watching' : show.status === 'PLANNED' ? 'planned' : '';
+              const trackedClass = show.tracked ? 'tracked' : 'untracked';
+              const extIdLines = [];
+              for (const svc of ['anilist', 'tvdb', 'mal']) {
+                const e = show.externalIds[svc];
+                if (e) extIdLines.push(`${svc}: <a href="${esc(e.url)}" target="_blank">${esc(e.id)}</a>`);
+              }
+              return `
+                <div class="conflict-card${label.includes('Winner') ? ' this-side' : ''}">
+                  <div class="conflict-label">${esc(label)}</div>
+                  <div class="conflict-card-header">
+                    ${show.posterUrl ? `<img class="conflict-card-poster" src="${esc(show.posterUrl)}" alt="" onerror="this.style.display='none'">` : ''}
+                    <div>
+                      <div class="conflict-card-title">${esc(show.displayTitle)}</div>
+                      <div class="conflict-card-meta">
+                        <span class="conflict-tag ${statusClass}">${show.status}</span>
+                        <span class="conflict-tag ${trackedClass}">${show.tracked ? 'tracked' : 'untracked'}</span>
+                        ${show.totalEpisodes ? `<span class="conflict-tag">${show.totalEpisodes} eps</span>` : ''}
+                        ${show.hasEpisodes ? '' : '<span class="conflict-tag untracked">no episodes</span>'}
+                        ${show.lastWatched ? `<span class="conflict-tag">watched ${fmtDate(show.lastWatched)}</span>` : ''}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="conflict-ids">${extIdLines.join('<br>') || '<em>no external IDs</em>'}</div>
+                </div>
+              `;
+            }
+
+            mergeEl.innerHTML =
+              renderMergeCard(winCard, 'Winner (keeps data)') +
+              renderMergeCard(loseCard, 'Loser (demoted)');
+          } catch (err) {
+            if (_selected === r.id && mergeEl) {
+              mergeEl.innerHTML = `<div class="conflict-loading" style="color:var(--st-dropped)">Failed to load: ${esc(err.message)}</div>`;
+            }
+          }
+        })();
+      }
+    }
+
     // Wire up action buttons
     if (!resolved) {
       const uid = r.id.replace(/[^a-z0-9]/gi, '');
@@ -2116,6 +2184,30 @@
           } catch (err) {
             setStatus(`Error: ${err.message}`, 'err');
             sequelBtn.disabled = false;
+          }
+        });
+      }
+
+      // Merge (cross_service_merge reviews)
+      const mergeBtn = document.getElementById(`btn-merge-${uid}`);
+      if (mergeBtn) {
+        mergeBtn.addEventListener('click', async () => {
+          mergeBtn.disabled = true;
+          setStatus('Merging…');
+          try {
+            const winnerId = latestValue(r.proposedValueChain);
+            const loserId = r.entityId;
+            await gql(`mutation Merge($w: ID!, $l: ID!, $m: String!) {
+              applyShowMerge(winnerId: $w, loserId: $l, matchedOn: $m) { id }
+            }`, { w: winnerId, l: loserId, m: noteVal() || 'confirmed duplicate via web review' });
+            r.resolvedAt = new Date().toISOString();
+            renderList(); renderPills(); renderBulkBar();
+            const visible = filteredReviews();
+            const nextOpen = visible.find(x => !x.resolvedAt && x.id !== r.id);
+            if (nextOpen) selectReview(nextOpen); else renderDetail(r);
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            mergeBtn.disabled = false;
           }
         });
       }
