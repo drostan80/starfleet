@@ -587,13 +587,10 @@ def apply_show_merge(conn, winner_id: str, loser_id: str, matched_on: str, chang
 
     Guards a real orphaning bug that predates this function (the old
     sweep's own `claimed_winner_ids` set existed for exactly this): if
-    the winner already carries a service the loser also has (most
-    commonly `tvdb`, since a winner only starts out on this path
-    *without* one), it's already absorbed a different loser earlier —
-    merging a second one in would hit that table's own per-slot
-    conflict handling, which leaves the loser's copy in place but still
-    demotes it, silently orphaning a still-linked, now-untracked show.
-    Refused outright here rather than silently corrupting.
+    the winner already carries a non-arr service the loser also has,
+    it's already absorbed a different loser earlier — refused outright.
+    Arr services (sonarr/radarr) are excluded from this check because
+    sharing the same arr slug is the matching criterion itself.
     """
     winner_services = {
         row["service"]
@@ -607,7 +604,11 @@ def apply_show_merge(conn, winner_id: str, loser_id: str, matched_on: str, chang
             "SELECT service FROM show_external_id WHERE show_id = ?", (loser_id,)
         ).fetchall()
     }
-    overlap = winner_services & loser_services
+    # Arr services (sonarr/radarr) overlap is expected — it's the
+    # matching signal for cross-service merges.  merge_shows skips
+    # duplicates safely.  Only non-arr overlap signals a double-merge.
+    arr_services = {"sonarr", "radarr"}
+    overlap = (winner_services & loser_services) - arr_services
     if overlap:
         raise ValueError(
             f"winner {winner_id} already has a linked {sorted(overlap)[0]} id — "
