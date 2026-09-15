@@ -344,6 +344,33 @@ def test_sweep_show_merges_isolates_one_pairs_failure(conn, monkeypatch):
     )
 
 
+def test_sweep_show_merges_skips_an_already_resolved_pair(conn):
+    """Once a (loser, winner) review is resolved — whether merged or
+    rejected — the sweep never re-proposes it."""
+    _show(conn, "s-swpl04", "Resolved Pair", tracking_space="tv")
+    _external_id(conn, "s-swpl04", "tvdb", "111")
+    _show(conn, "s-swpw04", "Resolved Pair", tracking_space="anime")
+    _external_id(conn, "s-swpw04", "anilist", "222")
+    conn.commit()
+
+    show_merge.sweep_show_merges(conn)
+    conn.execute(
+        "UPDATE pending_review SET resolved_at = 'x', resolved_by_client = 'data',"
+        " resolution_note = 'not a duplicate'"
+        " WHERE entity_id = 's-swpl04' AND field = 'cross_service_merge'",
+    )
+    conn.commit()
+
+    result = show_merge.sweep_show_merges(conn)
+    assert result == {"candidates_found": 1, "reviews_opened": 0}
+    unresolved = conn.execute(
+        "SELECT COUNT(*) c FROM pending_review"
+        " WHERE entity_id = 's-swpl04' AND field = 'cross_service_merge'"
+        " AND resolved_at IS NULL"
+    ).fetchone()
+    assert unresolved["c"] == 0
+
+
 # --- apply_show_merge (2026-08-12) ----------------------------------------------
 
 

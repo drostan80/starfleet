@@ -75,11 +75,10 @@ an automatic sweep), and resolves the matching review entry as part of
 the same call so the queue doesn't keep listing something already
 acted on.
 
-A rejected (never applied) candidate is not remembered anywhere as
-"already reviewed, don't re-suggest" — a future sweep will propose the
-exact same pair again, since both shows still independently satisfy
-the loser/winner criteria until one of them changes. Not solved here;
-noted as a real, known gap in the current design, not an oversight.
+A rejected candidate is remembered via `already_resolved_with()` —
+once a review for a specific (loser, winner) pair is resolved, the
+sweep skips that pair permanently. A *different* winner proposed for
+the same loser still surfaces normally.
 """
 
 import json
@@ -551,6 +550,10 @@ def sweep_show_merges(conn) -> dict:
     pairs = find_candidate_pairs(conn)
     reviews_opened = 0
     for loser_id, winner_id, matched_on in pairs:
+        if pending_review.already_resolved_with(
+            conn, "show", loser_id, "cross_service_merge", winner_id
+        ):
+            continue
         try:
             pending_review.open_or_extend(
                 conn, "show", loser_id, "cross_service_merge", "show_merge", None, winner_id
