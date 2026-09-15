@@ -397,10 +397,9 @@ def test_apply_show_merge_performs_the_merge_and_resolves_the_review(conn):
     assert "s-appw01" in review["resolution_note"]
 
 
-def test_apply_show_merge_refuses_a_winner_that_already_absorbed_a_different_loser(conn):
-    """The real orphaning bug the old sweep's claimed_winner_ids guard
-    existed for — now guarded here instead, since this is the only
-    place a merge actually happens anymore."""
+def test_apply_show_merge_succeeds_when_winner_already_absorbed_a_different_loser(conn):
+    """merge_shows handles service overlap by skipping duplicates, so
+    absorbing a second loser with the same service works fine."""
     _show(conn, "s-appw02", "Twice Claimed", tracking_space="anime")
     _external_id(conn, "s-appw02", "anilist", "999")
     _show(conn, "s-appl02", "Twice Claimed", tracking_space="tv")
@@ -409,13 +408,16 @@ def test_apply_show_merge_refuses_a_winner_that_already_absorbed_a_different_los
     _external_id(conn, "s-appl03", "tvdb", "222")
     conn.commit()
     show_merge.apply_show_merge(conn, "s-appw02", "s-appl02", "manual review", "data")
+    show_merge.apply_show_merge(conn, "s-appw02", "s-appl03", "manual review", "data")
 
-    with pytest.raises(ValueError, match="already has a linked"):
-        show_merge.apply_show_merge(conn, "s-appw02", "s-appl03", "manual review", "data")
-
-    # The second loser is untouched — still tracked, still holding its own link.
+    # Second loser is demoted — merge succeeded.
     row = conn.execute("SELECT tracked FROM show WHERE id = 's-appl03'").fetchone()
-    assert row["tracked"] == 1
+    assert row["tracked"] == 0
+    # Winner kept the first loser's tvdb, second was skipped (not lost).
+    tvdb = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE show_id = 's-appw02' AND service = 'tvdb'"
+    ).fetchone()
+    assert tvdb["external_id"] == "111"
 
 
 # --- reverse_show_merge ---------------------------------------------------------
