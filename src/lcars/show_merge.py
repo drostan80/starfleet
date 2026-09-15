@@ -177,15 +177,11 @@ def merge_shows(conn, winner_id: str, loser_id: str, matched_on: str) -> str:
     skipped: list[str] = []
 
     # `defer_foreign_keys` only stays effective for the transaction it's
-    # set within — sqlite3's default (deferred/autocommit-between-
-    # statements) mode means a bare PRAGMA here, with no transaction
-    # explicitly open yet, gets silently reset the moment the *next*
-    # statement runs as its own autocommitted one (confirmed empirically:
-    # a single interleaved SELECT was enough to reproduce the exact
-    # "FOREIGN KEY constraint failed" this whole PRAGMA exists to avoid).
-    # BEGIN IMMEDIATE first keeps one real transaction open around every
-    # statement below, so the PRAGMA's effect actually lasts until commit.
-    conn.execute("BEGIN IMMEDIATE")
+    # set within.  The shared connection may already be mid-transaction
+    # (Python's sqlite3 default isolation_level="" auto-begins on DML),
+    # so only BEGIN if we're not already in one.
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     conn.execute("PRAGMA defer_foreign_keys = ON")
 
     # show_external_id — UNIQUE(show_id, service)
@@ -617,7 +613,8 @@ def reverse_show_merge(conn, merge_id: str, changed_by: str) -> dict:
     now = util.now_utc_iso()
 
     # Same BEGIN-before-PRAGMA requirement merge_shows() documents above.
-    conn.execute("BEGIN IMMEDIATE")
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     conn.execute("PRAGMA defer_foreign_keys = ON")
 
     if moved["show_external_id"]:
