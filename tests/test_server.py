@@ -9945,9 +9945,11 @@ async def test_apply_show_merge_performs_the_merge_and_resolves_the_review_throu
     assert row["resolvedByClient"] == "DATA"
 
 
-async def test_apply_show_merge_refuses_a_winner_that_already_absorbed_a_different_loser(
+async def test_apply_show_merge_succeeds_when_winner_already_absorbed_a_different_loser(
     client, migrated_db
 ):
+    """merge_shows handles service overlap by skipping duplicates, so
+    absorbing a second loser with the same service works."""
     winner = await add_show(client, titleRomaji="Twice Claimed", trackingSpace="ANIME")
     loser_a = await add_show(
         client, titleRomaji="Twice Claimed", trackingSpace="TV", mediaShape="EPISODIC"
@@ -9979,28 +9981,20 @@ async def test_apply_show_merge_refuses_a_winner_that_already_absorbed_a_differe
         headers=auth_headers("data"),
     )
 
-    resp = await client.post(
-        "/",
-        json={
-            "query": APPLY_SHOW_MERGE,
-            "variables": {
-                "winnerId": winner["id"],
-                "loserId": loser_b["id"],
-                "matchedOn": "test",
-            },
-        },
+    data = await gql(
+        client,
+        APPLY_SHOW_MERGE,
+        {"winnerId": winner["id"], "loserId": loser_b["id"], "matchedOn": "test"},
         headers=auth_headers("data"),
     )
-    body = resp.json()
-    assert "errors" in body
-    assert "already has a linked" in body["errors"][0]["message"]
+    assert data["applyShowMerge"]["id"] is not None
     show_data = await gql(
         client,
         "query($id: ID!) { show(id: $id) { tracked } }",
         {"id": loser_b["id"]},
         headers=auth_headers(),
     )
-    assert show_data["show"]["tracked"] is True  # untouched, not orphaned
+    assert show_data["show"]["tracked"] is False  # demoted by merge
 
 
 async def test_reverse_show_merge_requires_a_client_header(client, migrated_db):
