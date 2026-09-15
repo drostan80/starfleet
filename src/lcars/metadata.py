@@ -359,12 +359,11 @@ def _fetch_anilist(conn, show: dict) -> None:
         if node.get("id") is not None and is_trackable:
             _link_relation(conn, show["id"], node, edge.get("relationType"))
 
-    # B.4.2 — sequel-season review queue.  For each SEQUEL edge on a
-    # tracked show, check whether the sequel's AniList id is already
-    # mapped to ANY season (not just on this show — a DIFF case where
-    # the sequel is S1 on another show is already handled, not a useful
-    # proposal).  If unmapped, open a pending_review so a human can
-    # decide whether to add it as a new season.
+    # B.4.2 — sequel-season review queue.  Season-aware guard: if the
+    # sequel's AniList id is already a season on *this* show, skip.
+    # If on *another* show that shares a Sonarr/Radarr slug, that show
+    # is an orphan stub (same arr series = same episodes) — proceed.
+    # If on an unrelated show, skip (DIFF case).
     if show.get("tracked"):
         _propose_sequel_seasons(conn, show, media)
 
@@ -793,8 +792,11 @@ def _propose_sequel_seasons(conn, show: dict, media: dict) -> None:
     *different* show — proposing it here would be wrong advice).
 
     Guards:
-    - Global ``SELECT 1 FROM season WHERE anilist_id = ?`` — kills same-
-      show AND cross-show duplicates in one check.
+    - Season-aware ``already_mapped`` — checks whether the sequel's
+      AniList id is mapped to a season on another show.  If that show
+      shares a Sonarr/Radarr slug with this one it's an orphan stub
+      (same arr series = same episodes), and the check is skipped so
+      the proposal can proceed.
     - Existing unresolved review for this (show, sequel) — prevents
       ``open_or_extend`` from appending an identical entry on every
       refresh cycle.
@@ -813,12 +815,35 @@ def _propose_sequel_seasons(conn, show: dict, media: dict) -> None:
 
         sequel_al_id_str = str(sequel_al_id)
 
-        # Already mapped to a season somewhere? Nothing to propose.
-        already_mapped = conn.execute(
-            "SELECT 1 FROM season WHERE anilist_id = ?", (sequel_al_id,)
+        # Already mapped as a season on THIS show? Nothing to propose.
+        on_self = conn.execute(
+            "SELECT 1 FROM season WHERE anilist_id = ? AND show_id = ?",
+            (sequel_al_id, show["id"]),
         ).fetchone()
-        if already_mapped is not None:
+        if on_self is not None:
             continue
+
+        # Mapped on another show — skip unless that show shares an arr
+        # slug with this one (orphan stub: same Sonarr/Radarr series =
+        # same episodes, so the stub is a wrongly-split copy).
+        mapped_elsewhere = conn.execute(
+            "SELECT show_id FROM season"
+            " WHERE anilist_id = ? AND show_id != ?",
+            (sequel_al_id, show["id"]),
+        ).fetchone()
+        if mapped_elsewhere is not None:
+            shared_arr = conn.execute(
+                "SELECT 1 FROM show_external_id a"
+                " JOIN show_external_id b"
+                "   ON a.service = b.service"
+                "  AND a.external_id = b.external_id"
+                " WHERE a.show_id = ? AND b.show_id = ?"
+                "   AND a.service IN ('sonarr', 'radarr')",
+                (show["id"], mapped_elsewhere["show_id"]),
+            ).fetchone()
+            if shared_arr is None:
+                # Mapped on an unrelated show — DIFF case, skip.
+                continue
 
         field = f"sequel_season:{sequel_al_id_str}"
         value = f"anilist:{sequel_al_id_str}"
