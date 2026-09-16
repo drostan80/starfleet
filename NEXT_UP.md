@@ -1,6 +1,6 @@
 # Next up
 
-Current version: **v0.2.20** (deployed 2026-09-15).
+Current version: **v0.2.22** (deployed 2026-09-16).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
