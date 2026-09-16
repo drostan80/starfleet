@@ -43,6 +43,8 @@
   --ctrl-h: 44px;
   --card-w: 185px;
   --art-h:  255px;
+  --planner-card-w: 148px;
+  --planner-art-h:  204px;
 }
 
 /* ── Light theme ──────────────────────────────────────────── */
@@ -483,7 +485,7 @@ body {
 /* Wide planner modes need room for horizontal cards */
 .planner-grid[data-mode="1d"] .day-col,
 .planner-grid[data-mode="today"] .day-col { min-width: 400px; }
-.planner-grid[data-mode="3d"] .day-col { min-width: 340px; }
+.planner-grid[data-mode="3d"] .day-col { min-width: 380px; }
 
 /* 1d: banner fills full width — no max-width cap */
 
@@ -505,16 +507,27 @@ body {
   box-shadow: 0 4px 20px rgba(0,0,0,0.35);
 }
 
-.planner-cover {
-  width: var(--card-w);
-  min-height: var(--art-h);
-  flex-shrink: 0;
-  background-size: cover;
-  background-position: center;
-  background-color: var(--surface-2);
+/* Service strip on the left edge of planner cards */
+.planner-card > .svc-strip {
   border-radius: 7px 0 0 7px;
+  border-right: 1px solid var(--border);
+}
+
+.planner-cover {
+  width: var(--planner-card-w);
+  min-height: var(--planner-art-h);
+  flex-shrink: 0;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   position: relative;
   overflow: hidden;
+}
+.planner-cover img {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 .planner-cover.art-playable { cursor: pointer; }
 .planner-cover.art-playable::after {
@@ -560,7 +573,7 @@ body {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(135deg, rgba(13,15,20,0.55) 0%, rgba(13,15,20,0.25) 100%);
+  background: linear-gradient(135deg, rgba(13,15,20,0.70) 0%, rgba(13,15,20,0.40) 100%);
   border-radius: inherit;
   pointer-events: none;
 }
@@ -571,7 +584,7 @@ body {
 
 .planner-title {
   font-family: 'Syne', sans-serif;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--text);
   text-decoration: none;
@@ -580,16 +593,75 @@ body {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  padding-right: 24px;
+  padding-right: 36px;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.5);
 }
 .planner-title:hover { color: var(--accent); }
 
+/* Badge + airtime row directly under title */
+.planner-badge-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .planner-badge {
   font-family: 'DM Mono', monospace;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
   color: var(--accent);
   letter-spacing: 0.02em;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+
+.planner-airtime {
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+/* Action buttons: right-side vertical stack on the detail pane */
+.planner-actions {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  z-index: 3;
+}
+
+.planner-avail-btn {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: 2px solid;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  color: #fff;
+  padding: 0;
+  background: transparent;
+  transition: transform 0.12s, opacity 0.15s;
+  z-index: 3;
+  position: relative;
+}
+.planner-avail-btn:hover { transform: scale(1.1); }
+.planner-avail-btn.avail-ready       { border-color: var(--av-ready); color: var(--av-ready); }
+.planner-avail-btn.avail-downloading { border-color: var(--av-downloading); color: var(--av-downloading); }
+.planner-avail-btn.avail-missing     { border-color: var(--av-missing); color: var(--av-missing); }
+.planner-avail-btn.avail-future      { border-color: var(--av-future); color: var(--av-future); }
+
+.planner-card .watch-btn {
+  width: 32px; height: 32px;
+  font-size: 16px;
+  border-width: 2px;
+  z-index: 3;
+  position: relative;
 }
 
 .planner-meta {
@@ -603,15 +675,14 @@ body {
 .planner-counts {
   justify-content: flex-start;
   padding: 0;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .planner-ep-title {
-  font-family: 'DM Mono', monospace;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--accent);
-  letter-spacing: 0.02em;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+  opacity: 0.85;
   line-height: 1.3;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -641,39 +712,6 @@ body {
 }
 .planner-fetch-art:hover { background: var(--accent); border-color: var(--accent); }
 .planner-fetch-art:disabled { cursor: default; opacity: 0.4; }
-
-/* Play overlay on banner art — z-index 1 so interactive children (watch btn)
-   at z-index 3+ stay clickable above it */
-.planner-play-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 3rem;
-  color: rgba(255,255,255,0.8);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  z-index: 1;
-}
-.planner-card:hover .planner-play-overlay { opacity: 1; }
-.planner-play-overlay:hover { color: #fff; }
-
-/* Watch button inside planner cards — bigger tap target, above play overlay */
-.planner-card .watch-btn {
-  width: 28px; height: 28px;
-  font-size: 14px;
-  border-width: 2px;
-  z-index: 3;
-  position: relative;
-}
-
-/* Service strip inside planner detail pane */
-.planner-body .svc-strip {
-  margin-top: auto;
-  padding-top: 6px;
-}
 
 /* Status button inside planner cards */
 .planner-card .status-btn-wrap {
@@ -814,8 +852,8 @@ body {
 .svc-tvdb img,
 .svc-imdb img { object-fit: contain; }
 .svc-anidb,
-.svc-syoboi,
-.svc-tvmaze   { background: transparent; border-radius: 4px; }
+.svc-syoboi   { background: transparent; border-radius: 4px; }
+.svc-tvmaze   { background: #fff; border-radius: 4px; }
 .svc-sonarr,
 .svc-radarr,
 .svc-player  { background: transparent; border-radius: 50%; }

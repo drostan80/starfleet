@@ -80,6 +80,32 @@ def _lookup_show(
             client.close()
 
 
+def fetch_show_images(
+    tvmaze_id: int, *, client: httpx.Client | None = None
+) -> list[dict] | None:
+    """Fetch all images for a TVmaze show via /shows/{id}/images.
+
+    Returns list of image dicts with keys: type (poster/banner/background),
+    resolutions.original.url, resolutions.original.width/height.
+    Returns None on 404, empty list on error.
+    """
+    _rate_limit()
+    owns_client = client is None
+    client = client or httpx.Client(timeout=30.0, follow_redirects=True)
+    try:
+        resp = client.get(f"{BASE_URL}/shows/{tvmaze_id}/images")
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPError as e:
+        log.warning("TVmaze images failed (id=%d): %s", tvmaze_id, e)
+        return []
+    finally:
+        if owns_client:
+            client.close()
+
+
 def fetch_episodes(
     tvmaze_id: int, *, client: httpx.Client | None = None
 ) -> list[dict] | None:

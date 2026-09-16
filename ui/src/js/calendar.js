@@ -16,7 +16,7 @@ import {
   STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,
   STATUS_ICONS, STATUS_ICON_CLASS,
 } from './status-picker.js?v=1';
-import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, SVC_ICONS } from './icons.js?v=8';
+import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg, SVC_ICONS } from './icons.js?v=16';
 import { startDownload } from './downloads.js?v=2';
 
 /* ── Constants ────────────────────────────────────────────── */
@@ -138,9 +138,14 @@ async function _doTmdbFetch(show, apiKey) {
           art.prepend(img);
         }
       });
-      // Also patch planner-cover elements (background-image based)
+      // Also patch planner-cover elements (img-based)
       document.querySelectorAll(`.planner-cover[data-show-id="${show.id}"]`).forEach(c => {
-        c.style.backgroundImage = `url(${url})`;
+        if (!c.querySelector('img')) {
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = show.displayTitle;
+          c.appendChild(img);
+        }
       });
     }
 
@@ -421,9 +426,9 @@ const SVC_DEFS = [
   { key: 'tvdb',    cls: 'svc-tvdb',   title: 'TVDB',    rewrite: false, svg: _tvdbSvg,             always: false },
   { key: 'imdb',    cls: 'svc-imdb',   title: 'IMDb',    rewrite: false, svg: _imdbMarkSvg,         always: false },
   { key: 'tmdb',    cls: 'svc-tmdb',   title: 'TMDB',    rewrite: false, svg: _tmdbMarkSvg,         always: false },
-  { key: 'anidb',   cls: 'svc-anidb',  title: 'AniDB',   rewrite: false, svg: null,               always: false },
-  { key: 'syoboi',  cls: 'svc-syoboi', title: 'Syoboi',  rewrite: false, svg: null,               always: false },
-  { key: 'tvmaze',  cls: 'svc-tvmaze', title: 'TVmaze',  rewrite: false, svg: null,               always: false },
+  { key: 'anidb',   cls: 'svc-anidb',  title: 'AniDB',   rewrite: false, svg: _anidbMarkSvg,      always: false },
+  { key: 'syoboi',  cls: 'svc-syoboi', title: 'Syoboi',  rewrite: false, svg: _syoboiSvg,         always: false },
+  { key: 'tvmaze',  cls: 'svc-tvmaze', title: 'TVmaze',  rewrite: false, svg: _tvmazeMarkSvg,     always: false },
   { key: 'sonarr',  cls: 'svc-sonarr', title: 'Sonarr',  rewrite: true,  svg: arrIcon('#00C8FF'), always: true  },
   { key: 'radarr',  cls: 'svc-radarr', title: 'Radarr',  rewrite: true,  svg: arrIcon('#FFC230'), always: true  },
 ];
@@ -956,8 +961,20 @@ function renderPlanner(dayGroups, todayStr, cfg) {
 }
 
 /**
+ * Format air time only (no date) for planner badge row.
+ * Returns e.g. "17:00 London" or "—" if no airdate.
+ */
+function fmtTimeOnly(isoUtc) {
+  if (!isoUtc) return '';
+  const d = new Date(isoUtc);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone?.split('/').pop()?.replace('_', ' ') || '';
+  return `${time} ${tz}`.trim();
+}
+
+/**
  * Build a horizontal browse-style card for planner columns (1–3 cols).
- * Cover image left, detail pane right with banner art background.
+ * Layout: [svc-strip] [poster img, scaled] [detail pane with optional banner bg]
  */
 function buildPlannerCard(ep, cfg) {
   const avail  = availState(ep);
@@ -969,26 +986,34 @@ function buildPlannerCard(ep, cfg) {
   card.dataset.episodeId = ep.id;
   card.dataset.showId    = ep.show.id;
 
-  // Cover image (poster art, same min-height as regular calendar cards)
+  const filePath = ep.show.mediaShape === 'MOVIE' ? ep.filePathRadarr : ep.filePathSonarr;
+
+  // Service strip — same vertical icon bar as regular calendar cards
+  const externalIds = ep.show.externalIds?.edges?.map(e => e.node) || [];
+  const malId = ep.seasonEntity?.malId ?? null;
+  card.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg));
+
+  // Cover image — full poster, scaled (not cropped)
   const cover = document.createElement('div');
   cover.className = 'planner-cover';
   cover.dataset.showId = ep.show.id;
   const posterUrl = ep.show.posterUrl || posterCache.get(ep.show.id) || null;
   if (posterUrl) {
-    cover.style.backgroundImage = `url(${posterUrl})`;
+    const img = document.createElement('img');
+    img.src = posterUrl;
+    img.alt = ep.show.displayTitle;
     if (cfg.tmdb_api_key) {
-      const testImg = new Image();
-      testImg.src = posterUrl;
-      testImg.onerror = () => {
+      img.onerror = () => {
+        img.remove();
         posterCache.delete(ep.show.id);
         fetchTmdbPoster(ep.show, cfg.tmdb_api_key);
       };
     }
+    cover.appendChild(img);
   } else if (cfg.tmdb_api_key) {
     fetchTmdbPoster(ep.show, cfg.tmdb_api_key);
   }
 
-  const filePath = ep.show.mediaShape === 'MOVIE' ? ep.filePathRadarr : ep.filePathSonarr;
   if (ep.availableLocally) {
     cover.classList.add('art-playable');
     cover.addEventListener('click', () => launchMpv(filePath, cfg));
@@ -1005,21 +1030,10 @@ function buildPlannerCard(ep, cfg) {
     body.classList.add('has-banner');
     body.style.setProperty('--banner-url', `url(${bannerSrc})`);
   } else if (cfg.tmdb_api_key) {
-    // No banner from LCARS or cache — trigger a backdrop fetch
     fetchTmdbBackdrop(ep.show, cfg.tmdb_api_key);
   }
 
-  // Play triangle overlay on banner when episode is available
-  if (ep.availableLocally) {
-    body.classList.add('body-playable');
-    const playOverlay = document.createElement('div');
-    playOverlay.className = 'planner-play-overlay';
-    playOverlay.textContent = '▶';
-    playOverlay.addEventListener('click', () => launchMpv(filePath, cfg));
-    body.appendChild(playOverlay);
-  }
-
-  // Title — larger in planner
+  // Title
   const title = document.createElement('a');
   title.className = 'planner-title';
   title.href = `show.html?id=${encodeURIComponent(ep.show.id)}`;
@@ -1027,25 +1041,39 @@ function buildPlannerCard(ep, cfg) {
   title.title = ep.show.displayTitle;
   body.appendChild(title);
 
-  // Episode badge — larger
-  const badge = document.createElement('div');
+  // Badge row: S01E02 + air time (time only, no date)
+  const badgeRow = document.createElement('div');
+  badgeRow.className = 'planner-badge-row';
+  const badge = document.createElement('span');
   badge.className = 'planner-badge';
   badge.textContent = fmtEpBadge(ep);
-  body.appendChild(badge);
+  badgeRow.appendChild(badge);
+  const timeStr = fmtTimeOnly(ep.airDateUtc);
+  if (timeStr) {
+    const airtime = document.createElement('span');
+    airtime.className = 'planner-airtime';
+    airtime.textContent = timeStr;
+    badgeRow.appendChild(airtime);
+  }
+  body.appendChild(badgeRow);
 
-  // Meta row: air time + avail + watch
-  const meta = document.createElement('div');
-  meta.className = 'planner-meta';
+  // Action row: avail/play button + watch button
+  const actions = document.createElement('div');
+  actions.className = 'planner-actions';
 
-  const airtime = document.createElement('span');
-  airtime.className = 'airtime';
-  airtime.textContent = fmtAirTime(ep.airDateUtc);
-  meta.appendChild(airtime);
-
-  const availIcon = document.createElement('span');
-  availIcon.className = `avail-icon avail-${avail}`;
-  availIcon.textContent = avail === 'ready' ? '▶' : avail === 'future' ? '◷' : '⬇';
-  meta.appendChild(availIcon);
+  const availBtn = document.createElement('button');
+  availBtn.className = `planner-avail-btn avail-${avail}`;
+  availBtn.title = {
+    ready:       'Play in mpv',
+    downloading: 'Downloading',
+    missing:     'Aired — not available',
+    future:      'Not yet aired',
+  }[avail];
+  availBtn.textContent = avail === 'ready' ? '▶' : avail === 'future' ? '◷' : '⬇';
+  if (avail === 'ready' && ep.availableLocally) {
+    availBtn.addEventListener('click', () => launchMpv(filePath, cfg));
+  }
+  actions.appendChild(availBtn);
 
   if (aired) {
     const watchBtn = document.createElement('button');
@@ -1056,12 +1084,10 @@ function buildPlannerCard(ep, cfg) {
     const existingWid = ep.watchEvents?.edges?.[0]?.node?.id;
     if (existingWid) watchBtn.dataset.watchEventId = existingWid;
     watchBtn.addEventListener('click', () => onWatchToggle(watchBtn, ep));
-    meta.appendChild(watchBtn);
+    actions.appendChild(watchBtn);
   }
 
-  body.appendChild(meta);
-
-  // Episode counts — larger in planner
+  // Episode counts
   const w = ep.show.watchedEpisodeCount;
   const a = ep.show.availableEpisodeCount;
   const total = showTotal(ep.show);
@@ -1084,10 +1110,8 @@ function buildPlannerCard(ep, cfg) {
     body.appendChild(epTitle);
   }
 
-  // Service links strip — at the bottom of the detail pane over banner art
-  const externalIds = ep.show.externalIds?.edges?.map(e => e.node) || [];
-  const malId = ep.seasonEntity?.malId ?? null;
-  body.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg));
+  // Action buttons (absolutely positioned right side — appended last)
+  body.appendChild(actions);
 
   card.appendChild(body);
 
@@ -1100,18 +1124,13 @@ function buildPlannerCard(ep, cfg) {
     fetchBtn.textContent = '⏳';
     fetchBtn.disabled = true;
     try {
-      // Read existing art assets (episodes query doesn't include them)
       const result = await getShowArtAssets(ep.show.id);
-      // Build a mutable show-like object the picker can update
       const showObj = { id: ep.show.id, artAssets: result.artAssets || [] };
       openArtPicker(showObj, null, 'banner', null, (url) => {
-        // Persist so re-renders (poll) keep the chosen banner
         ep.show.bannerUrl = url;
         backdropCache.set(ep.show.id, url);
-        // Update this card's banner
         body.classList.add('has-banner');
         body.style.setProperty('--banner-url', `url(${url})`);
-        // Patch sibling cards for the same show
         document.querySelectorAll(`.planner-card .planner-body[data-show-id="${ep.show.id}"]`).forEach(b => {
           if (b !== body) {
             b.classList.add('has-banner');

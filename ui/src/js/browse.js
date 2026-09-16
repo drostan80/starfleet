@@ -19,7 +19,7 @@ import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS,
 } from './status-picker.js?v=1';
-import { _anilistSvg, _malSvg, _tvdbSvg, _imdbSvg, _tmdbMarkSvg } from './icons.js?v=8';
+import { _anilistSvg, _malSvg, _tvdbSvg, _imdbSvg, _tmdbMarkSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg } from './icons.js?v=16';
 
 // ── Constants ────────────────────────────────────────────
 
@@ -45,9 +45,9 @@ const BROWSE_SVC_DEFS = [
   { key: 'tvdb',    cls: 'svc-tvdb', svg: _tvdbSvg,    label: 'TheTVDB', urlTpl: 'https://thetvdb.com/dereferrer/series/{id}',  preview: true },
   { key: 'imdb',    cls: 'svc-imdb', svg: _imdbSvg,    label: 'IMDb',    urlTpl: 'https://www.imdb.com/title/{id}/',            preview: true },
   { key: 'tmdb',    cls: 'svc-tmdb', svg: _tmdbMarkSvg, label: 'TMDB',   urlTpl: 'https://www.themoviedb.org/tv/{id}',          preview: true },
-  { key: 'anidb',   cls: 'svc-anidb',  svg: null, label: 'AniDB',  urlTpl: 'https://anidb.net/anime/{id}',                 preview: false },
-  { key: 'syoboi',  cls: 'svc-syoboi', svg: null, label: 'Syoboi', urlTpl: 'https://cal.syoboi.jp/tid/{id}',               preview: false },
-  { key: 'tvmaze',  cls: 'svc-tvmaze', svg: null, label: 'TVmaze', urlTpl: 'https://www.tvmaze.com/shows/{id}',            preview: true },
+  { key: 'anidb',   cls: 'svc-anidb',  svg: _anidbMarkSvg, label: 'AniDB',  urlTpl: 'https://anidb.net/anime/{id}',              preview: false },
+  { key: 'syoboi',  cls: 'svc-syoboi', svg: _syoboiSvg, label: 'Syoboi', urlTpl: 'https://cal.syoboi.jp/tid/{id}',        preview: false },
+  { key: 'tvmaze',  cls: 'svc-tvmaze', svg: _tvmazeMarkSvg, label: 'TVmaze', urlTpl: 'https://www.tvmaze.com/shows/{id}',     preview: true },
 ];
 
 // ── State ────────────────────────────────────────────────

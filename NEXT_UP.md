@@ -1,11 +1,20 @@
 # Next up
 
-Current version: **v0.2.14** (deployed 2026-09-12).
+Current version: **v0.2.20** (deployed 2026-09-15).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## Recently shipped — still under testing (Sep 2–12)
+## Recently shipped — still under testing (Sep 2–15)
+
+### v0.2.15–v0.2.20 (2026-09-12–15)
+
+- **Sequel-season guard fixes**: orphan stubs sharing arr slug no longer block sequel
+  proposals (1935a2c). Cross-service merge allowed when only arr slugs overlap (a211807).
+  Overly aggressive overlap guard removed from `apply_show_merge` (575372a). BEGIN
+  IMMEDIATE transaction fix (4142b85).
+- **Apply Merge button** for `cross_service_merge` reviews on the review page (9adba16).
+- **Re-proposal suppression**: resolved show-merge candidates no longer re-proposed (c993204).
 
 ### v0.2.14 (2026-09-12)
 
@@ -144,6 +153,131 @@ Full build history archived to `~/repos/starfleet-archive`.
 ---
 
 ## Outstanding
+
+### Add Path Rework — season rules enforcement
+
+The add, browse, and backfill paths need to follow a unified set of rules for how
+new seasons and shows are created. Several assumptions have changed since the original
+implementation; this section defines what must change.
+
+**Assumptions that no longer hold:**
+
+1. "AniList is the sequel authority" — sequel detection must work when AniList is down.
+   `find_sequel_parent()` takes only `anilist_id` and `_find_parent_via_anilist()` swallows
+   all exceptions → returns `None` → show created as S1. TVDB/Fribb should be primary.
+2. "Backfill silently skips sequels" — `backfill_untracked_shows()` catches
+   `SequelDetectedError` and `continue`s (show_backfill.py:424). Sequels should be
+   auto-attached and reported on the browse page, not silently dropped.
+3. "`season.anilist_id` is the season identity column" — migrating to `season_external_id`.
+   `_cross_reference()` in browse.py reads `season.anilist_id` (the legacy INTEGER column)
+   but does NOT check `season_external_id` for AniList matches. An auto-created season
+   whose AniList ID only lives in `season_external_id` is invisible on browse → shows as
+   NOT_IN_LCARS → invites duplicate add.
+4. "Only Sonarr-followed shows get episode rows" — true today (both `INSERT INTO episode`
+   paths in metadata.py come from Sonarr data). This means `ensure_all_season_rows()` only
+   fires for Sonarr shows. Status inheritance for non-Sonarr shows must live in the
+   attach/proposal path, not in `ensure_all_season_rows`.
+
+**Status rules for new seasons (all entry points):**
+
+| Parent state | Sonarr-followed? | New season status |
+|---|---|---|
+| any status | yes | `planned` (Sonarr-followed always means planned) |
+| watching / completed / planned | no | `planned` |
+| dropped | no | `dropped` |
+| paused | no | `paused` |
+| skipped (tracked=0) | — | sequel surfaces on browse with "sequel of skipped" note; not auto-added |
+
+**Invariant:** Sonarr-followed shows CANNOT be paused or dropped. Setting a show to
+paused or dropped must unmonitor it in Sonarr/Radarr (same as `_unmonitor_in_arr_on_drop`
+already does for `setTracked(false)` and `softDeleteShow`). Today `setStatus` does NOT
+call `_unmonitor_in_arr_on_drop` — this is a gap (see W0 below).
+
+**Changes required:**
+
+- [ ] **P0 — Prerequisites**
+      a) Confirm all drip fetches are complete (AniDB, TVmaze, Syoboi, cross-ID propagation).
+      b) Copy completed prod database + Memory Alpha datasets to dev environment
+         (localhost:8889, lcars-dev.db).
+      c) All work built and tested in dev first. No push to prod until fully built and tested.
+
+- [ ] **W0 — `setStatus`: unmonitor Sonarr/Radarr on paused/dropped** (`resolvers.py`)
+      `setStatus` does not call `_unmonitor_in_arr_on_drop` when status is set to paused
+      or dropped. This breaks the invariant that Sonarr-followed shows cannot be
+      paused/dropped. Add the call so the states are mutually exclusive, same as
+      `setTracked(false)` and `softDeleteShow` already do.
+
+- [ ] **W1 — `find_sequel_parent`: add full Memory Alpha lookup** (`shows.py`)
+      Today: local DB relations → live AniList (unreliable).
+      Target: local DB relations → Fribb TVDB collision (same TVDB ID = same franchise)
+      → Fribb season-number resolve (which season is this?) → anime-lists abs offset
+      → Wikidata TVDB/TMDB/IMDB bridge → ARM AniList↔MAL↔Syoboi bridge → `propagate_cross_ids`
+      graph → AniList relations *last*. Accept `tvdb_id` alongside `anilist_id`. Use the
+      full Memory Alpha framework (Fribb, anime-lists, Wikidata, ARM, Sonarr title search)
+      not just Fribb/TVDB. This is the single most load-bearing change — it makes sequel
+      detection work without AniList and covers TV/TMDB shows that currently bypass the
+      check entirely (`onTmdbChipClick` sends no `anilistId`).
+
+- [ ] **W2 — `ensure_all_season_rows`: inherit status** (`season_ranges.py`)
+      Currently always creates with `status='planned'`. Look up parent show status and
+      apply the table above. Same in the fallback INSERT (line 302) and the TV direct
+      INSERT (line 313). Also applies to `reconcile_season()` (season_mapping.py:82,125)
+      which hardcodes `'planned'`.
+
+- [ ] **W3 — Auto-attach sequels + post-add reconciliation** (`show_backfill.py`, `metadata.py`)
+      Two parts:
+      a) `backfill_untracked_shows`: instead of `continue` on `SequelDetectedError`,
+         auto-attach the season to its parent via `reconcile_season` or a direct INSERT
+         with `source='auto'`, `manual_override=0` — explicitly NOT through
+         `setSeasonMapping`'s manual path (that stamps `source='manual', manual_override=1`,
+         which locks the row against future Fribb reconciles and requires
+         `RESOLVING_CLIENTS` + gap validation that would raise on this exact case).
+         Apply status rules from the table above. Record the attachment for browse page
+         surfacing (e.g., `pending_review` with category `'sequel_auto_attached'`, or a
+         flag on the season row).
+      b) Post-add reconciliation: any show already added that is later discovered (via
+         Memory Alpha's cross-ID graph, Fribb season resolve, anime-lists offset, etc.)
+         to actually contain episodes belonging to an existing show's subsequent season
+         must be automatically reconciled — merged into the parent show as a new season,
+         following the same rules as `apply_show_merge` but triggered automatically by
+         the ops loop rather than waiting for manual review.
+
+- [ ] **W4 — `_cross_reference`: read `season_external_id`** (`browse.py`)
+      Migration hardening: AniList path (step 2, line 115) only reads `season.anilist_id`.
+      Today every writer dual-writes both columns, so this isn't a live bug. But as the
+      schema migrates toward `season_external_id` as the canonical location, any future
+      writer that only populates the new table would create an invisible season on browse.
+      Add a `season_external_id` lookup alongside the `season.anilist_id` one to future-proof.
+
+- [ ] **W5 — Browse page: surface auto-created sequel seasons** (`browse.py` + `browse.js`)
+      Two parts:
+      a) TVDB-based cross-reference: after the existing AniList-ID cross-reference,
+         for items still showing NOT_IN_LCARS, use the Fribb-resolved TVDB ID (already
+         computed at line 596 for display) to check if any tracked show shares that TVDB
+         ID. If so, mark the card with that show's status. Without this, an auto-created
+         season with no `anilist_id` (Fribb unmatched) is invisible on browse — the
+         season row exists in LCARS but browse can't find it because it only looks up
+         by AniList ID. This is the gap that would let a card show NOT_IN_LCARS when the
+         show is already tracked with a new season.
+      b) Status badges: when `_cross_reference` (or the new TVDB lookup) finds a
+         season-level match with `source='unmatched'` or `matched=0`, surface it on the
+         browse card as "auto-added, unconfirmed" rather than a plain status badge. Lets
+         the user confirm or correct the mapping. Also surface sequels of skipped shows
+         with a "sequel of skipped show" note.
+
+- [ ] **W6 — Pre-add check for "is this actually S2+"** (`shows.py`)
+      When adding a brand new show (not followed anywhere on LCARS), before creating as
+      S1, use the full Memory Alpha framework (Fribb season resolve, anime-lists offset,
+      Wikidata bridge, ARM, Sonarr lookup) to check whether this show's episodes start at
+      a non-first season. If so, create the show with the correct season number rather
+      than defaulting to S1.
+      **Tension:** `setSeasonMapping`'s gap validation forbids adding S3 without S1-S2
+      existing. Either stub the earlier seasons or bypass that validation on the auto-create
+      path. To be resolved during implementation.
+
+- [ ] **W7 — `setSeasonMapping` resolver: apply status rules** (`resolvers.py:3956`)
+      Currently creates new season rows with `status='planned'` unconditionally. When
+      creating a new season via the attach path, apply the same status inheritance table.
 
 - [ ] **B.5.3a — Scoped reconcile**: target a single show instead of sweeping the full
       AniList list every time. Good-to-have, not urgent.
@@ -317,7 +451,8 @@ Wrap the existing web client; native Kotlin plugins only for what the web can't 
 ### Notes as we are building
 - ✅ TVmaze poster art added (v0.2.6, `store_tvmaze_art`). IMDB has no free image API — skipped.
 - make sure we include correct timezone with the source airdate 
-- make sure to add the link to all the db as we have ids, new icons to be sourced and checked
+- make sure to add the link to all the db as we have ids
+- ✅ Service icons for TVmaze, AniDB, Syoboi added to web UI (Inkscape SVG traces for TVmaze + AniDB, 暦 kanji SVG for Syoboi). Wired into calendar, browse, and show pages.
 - some ui improvement to make on planner view, including (not limited to) show / season poster not cropped, better organisation location font colour and size / visibility of data in the detail pane as well as rework on how the banner is displayed within
 - ✅ Anime airdate sources settled (v0.2.5): Syoboi Calendar (JST minute-accurate) as
   source of truth, animeschedule demoted to backup, full priority chain in

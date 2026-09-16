@@ -1807,27 +1807,29 @@ def _fetch_radarr(conn, show: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def fetch_show_art(conn, show_id: str) -> int:
-    """Fetch artwork from TVDB (and AniList per-season) for a show,
-    storing results in the art_asset table. Returns total assets stored.
+    """Fetch artwork from all available sources for a show, storing
+    results in the art_asset table.  Returns total assets stored.
 
-    TVDB art is only available for shows with a ``tvdb`` external id
-    link. Movies have no TVDB art path (Fribb maps only episodic shows).
-
-    Also fetches per-season AniList cover art — each season with its own
-    ``anilist_id`` gets a separate AniList fetch for cover/banner images.
+    Sources queried:
+      - AniList: per-season poster + banner (anime shows with anilist_id)
+      - TVDB: poster + banner + background (shows with tvdb external id)
+      - TVmaze: poster + banner + background via /shows/{id}/images
+      - TMDB: poster + backdrop (shows with tmdb external id)
+      - MAL: poster (anime shows with mal external id)
     """
     from lcars import tvdb_client as tvdb_mod
+    from lcars import tvmaze
 
     cfg = get_current()
     show = dict(conn.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone())
     count = 0
 
-    # -- Per-season AniList art -------------------------------------------------
     seasons = conn.execute(
         "SELECT id, season_number, anilist_id FROM season WHERE show_id = ?",
         (show_id,),
     ).fetchall()
 
+    # -- Per-season AniList art -------------------------------------------------
     for sn_row in seasons:
         al_id = sn_row["anilist_id"]
         if al_id is None:
@@ -1870,12 +1872,63 @@ def fetch_show_art(conn, show_id: str) -> int:
                 finally:
                     client.close()
 
-                # Build season_number → LCARS season_id map
                 season_map = {}
                 for sn_row in seasons:
                     season_map[sn_row["season_number"]] = sn_row["id"]
 
                 count += art.store_tvdb_art(conn, show_id, artworks, season_map)
+
+    # -- TVmaze art (poster + banner + background) ------------------------------
+    tvmaze_id_row = conn.execute(
+        "SELECT external_id FROM show_external_id"
+        " WHERE show_id = ? AND service = 'tvmaze'",
+        (show_id,),
+    ).fetchone()
+    if tvmaze_id_row:
+        try:
+            tvmaze_id = int(tvmaze_id_row["external_id"])
+        except (TypeError, ValueError):
+            tvmaze_id = None
+        if tvmaze_id is not None:
+            try:
+                images = tvmaze.fetch_show_images(tvmaze_id)
+            except Exception:
+                images = None
+            if images:
+                count += art.store_tvmaze_images(conn, show_id, images)
+
+    # -- TMDB art (poster + backdrop) -------------------------------------------
+    if cfg.tmdb_api_key:
+        tmdb_id_str = _external_id(conn, show_id, "tmdb")
+        if tmdb_id_str:
+            try:
+                tmdb_id = int(tmdb_id_str)
+            except (TypeError, ValueError):
+                tmdb_id = None
+            if tmdb_id is not None:
+                with tmdb_client.TmdbClient(cfg.tmdb_api_key) as client:
+                    try:
+                        if show["media_shape"] == "movie":
+                            images_data = client.movie_images(tmdb_id)
+                        else:
+                            images_data = client.tv_images(tmdb_id)
+                    except Exception:
+                        images_data = {"posters": [], "backdrops": []}
+                count += art.store_tmdb_art(conn, show_id, images_data)
+
+    # -- MAL art (poster only) ----------------------------------------------------
+    if cfg.mal_client_id:
+        mal_id_str = _external_id(conn, show_id, "mal")
+        if mal_id_str:
+            try:
+                mal_data = mal_client.fetch_anime_details(
+                    int(mal_id_str), cfg.mal_client_id,
+                )
+            except Exception:
+                mal_data = None
+            if mal_data:
+                art.store_mal_art(conn, show_id, None, mal_data)
+                count += 1
 
     # Auto-select best candidates for slots that don't have one yet
     art.auto_select_best(conn, show_id)

@@ -30,7 +30,7 @@ import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5, STATUS_LABELS, STATUS_ICON_CLASS,
 } from './status-picker.js?v=1';
-import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=9';
+import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=16';
 import { startDownload } from './downloads.js?v=2';
 import { openArtPicker } from './art-picker.js?v=1';
 

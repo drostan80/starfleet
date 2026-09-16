@@ -124,6 +124,21 @@ class TmdbClient:
         run_times = (data or {}).get("episode_run_time") or []
         return run_times[-1] if run_times else None
 
+    # ── Images ─────────────────────────────────────────────
+
+    def tv_images(self, tmdb_id: int) -> dict:
+        """Fetch poster and backdrop images for a TV show.
+
+        Returns ``{posters: [{file_path, width, height, ...}], backdrops: [...]}``.
+        """
+        data = self._get(f"tv/{tmdb_id}/images")
+        return data or {"posters": [], "backdrops": []}
+
+    def movie_images(self, tmdb_id: int) -> dict:
+        """Fetch poster and backdrop images for a movie."""
+        data = self._get(f"movie/{tmdb_id}/images")
+        return data or {"posters": [], "backdrops": []}
+
     # ── Discover (browse) ───────────────────────────────────
 
     def discover_tv(self, air_date_gte: str, air_date_lte: str,

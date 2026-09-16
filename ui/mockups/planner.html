@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planner View Mockup</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../src/css/main.css">
+<style>
+  .mockup-section-label {
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 20px 20px 8px;
+  }
+  .mockup-divider {
+    border: none;
+    border-top: 2px dashed var(--faint);
+    margin: 30px 20px;
+  }
+  /* Mockup text-based svc icons */
+  .svc-text {
+    width: 17px; height: 17px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 7px;
+    font-weight: 700;
+    font-family: 'DM Mono', monospace;
+    text-decoration: none;
+    flex-shrink: 0;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+
+  /* ── Play + watch: right-side vertical stack ── */
+  .planner-actions {
+    position: absolute;
+    top: 50%;
+    right: 14px;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    z-index: 3;
+  }
+</style>
+</head>
+<body>
+
+<nav class="top-nav">
+  <a class="nav-brand" href="#">TEST SHUTTLE</a>
+  <ul class="nav-links">
+    <li><a class="active" href="#">Calendar</a></li>
+    <li><a href="#">Shows</a></li>
+    <li><a href="#">Add</a></li>
+  </ul>
+</nav>
+
+<div class="view-controls">
+  <div class="view-modes">
+    <button class="view-mode">Today</button>
+    <button class="view-mode">1D</button>
+    <button class="view-mode active">3D</button>
+    <button class="view-mode">Week</button>
+  </div>
+  <div class="ctrl-sep"></div>
+  <div class="date-nav">
+    <button class="date-btn">&laquo;</button>
+    <button class="date-btn">&lsaquo;</button>
+    <span class="date-range-label">Tue 16 &mdash; Thu 18 Sep 2026</span>
+    <button class="date-btn">&rsaquo;</button>
+    <button class="date-btn">&raquo;</button>
+  </div>
+  <button class="today-btn">Today</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<div class="mockup-section-label">With banner art</div>
+
+<div class="calendar planner" style="padding-top: 0;">
+  <div class="planner-grid" data-mode="3d">
+
+    <!-- ── TUESDAY ── -->
+    <div class="day-col day-today">
+      <div class="day-col-header">TUESDAY 16 SEP</div>
+
+      <!-- Librarians -->
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/bQS43HSLZzMjZkcHJz4fGc9fgwz.jpg" alt="Dandadan">
+        </div>
+        <div class="planner-body has-banner" style="--banner-url: url(https://image.tmdb.org/t/p/w780/vjcGVsCKkO2V6GorAEMreJlPfZN.jpg);">
+          <a class="planner-title" href="#">The Librarians: The Next Chapter</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S02E12</span>
+            <span class="planner-airtime">20:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-2</span><span class="c-sep">/</span><span class="c-avail">A-12</span><span class="c-sep">/</span><span class="c-total">T-12</span>
+          </div>
+          <div class="planner-ep-title">And the Final Curtain</div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn" title="Mark as watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+
+      <!-- Oblivious Saint -->
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/9PFonBhy4cQy7Jz20NpMygczOkv.jpg" alt="Solo Leveling">
+        </div>
+        <div class="planner-body has-banner" style="--banner-url: url(https://image.tmdb.org/t/p/w780/geCRueV3ElhRTr0xtJuEWJt6dJ1.jpg);">
+          <a class="planner-title" href="#">The Oblivious Saint Can't Contain Her Power</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S01E11</span>
+            <span class="planner-airtime">01:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-10</span><span class="c-sep">/</span><span class="c-avail">A-10</span><span class="c-sep">/</span><span class="c-total">T-12</span>
+          </div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-downloading" title="Downloading">&#11015;</button>
+            <button class="watch-btn" title="Mark as watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+
+      <!-- Ghost in the Shell -->
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/lIuJRTMhHfAH2UBvSJSaYvmDXpO.jpg" alt="Frieren">
+        </div>
+        <div class="planner-body has-banner" style="--banner-url: url(https://image.tmdb.org/t/p/w780/bkzFH0VySKiUrcBWHfea95ibpHj.jpg);">
+          <a class="planner-title" href="#">The Ghost in the Shell</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S01E10</span>
+            <span class="planner-airtime">21:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-9</span><span class="c-sep">/</span><span class="c-avail">A-26</span><span class="c-sep">/</span><span class="c-total">T-26</span>
+          </div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn" title="Mark as watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+    </div>
+
+    <!-- ── WEDNESDAY ── -->
+    <div class="day-col">
+      <div class="day-col-header">WEDNESDAY 17 SEP</div>
+
+      <!-- Reacher -->
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/qZjEy1N8oV07DFBfCzKPBV0PkVD.jpg" alt="Chainsaw Man">
+        </div>
+        <div class="planner-body has-banner" style="--banner-url: url(https://image.tmdb.org/t/p/w780/9xxLWtnFxkpJ2h1uthpvCRK6vta.jpg);">
+          <a class="planner-title" href="#">Reacher</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S03E07</span>
+            <span class="planner-airtime">08:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-7</span><span class="c-sep">/</span><span class="c-avail">A-8</span><span class="c-sep">/</span><span class="c-total">T-8</span>
+          </div>
+          <div class="planner-ep-title">Small World</div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn" title="Mark as watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+
+      <!-- Clevatess -->
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/nEczSYRhkGS1628ORqV3W2BIPZ9.jpg" alt="Oshi no Ko">
+        </div>
+        <div class="planner-body has-banner" style="--banner-url: url(https://image.tmdb.org/t/p/w780/uRBkuEhNs3UE0VKHSGsbsxVmi6p.jpg);">
+          <a class="planner-title" href="#">Clevatess</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S02E10</span>
+            <span class="planner-airtime">21:30 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-9</span><span class="c-sep">/</span><span class="c-avail">A-9</span><span class="c-sep">/</span><span class="c-total">T-12</span>
+          </div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-future" title="Not yet aired">&#9719;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+
+      <!-- Saga of Tanya -->
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/k7eYdWvhYQyRQoU2TB2A2Xu2TfD.jpg" alt="Jujutsu Kaisen">
+        </div>
+        <div class="planner-body has-banner" style="--banner-url: url(https://image.tmdb.org/t/p/w780/dFaBbWIEwdaOBvLMOA3MXAjtpDH.jpg);">
+          <a class="planner-title" href="#">Saga of Tanya the Evil</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S01E10</span>
+            <span class="planner-airtime">21:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-10</span><span class="c-sep">/</span><span class="c-avail">A-12</span><span class="c-sep">/</span><span class="c-total">T-12</span>
+          </div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn watched" title="Watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+    </div>
+
+    <!-- ── THURSDAY ── -->
+    <div class="day-col">
+      <div class="day-col-header">THURSDAY 18 SEP</div>
+
+      <!-- Star Trek -->
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/rweIrveL43TaxUN0akQEaAXL6x0.jpg" alt="Attack on Titan">
+        </div>
+        <div class="planner-body has-banner" style="--banner-url: url(https://image.tmdb.org/t/p/w780/sHim6U0ANsbzxcmNXLJRMISBer1.jpg);">
+          <a class="planner-title" href="#">Star Trek: Strange New Worlds</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S04E08</span>
+            <span class="planner-airtime">20:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-4</span><span class="c-sep">/</span><span class="c-avail">A-8</span><span class="c-sep">/</span><span class="c-total">T-10</span>
+          </div>
+          <div class="planner-ep-title">Under the Cloak of War</div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn watched" title="Watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+
+      <!-- Dara-san -->
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/kDp1vUBnMpe8ak4rjgl3cLELqjU.jpg" alt="Spy x Family">
+        </div>
+        <div class="planner-body has-banner" style="--banner-url: url(https://image.tmdb.org/t/p/w780/3Tkv2d1JRhkblr99XH4w6cDJLQy.jpg);">
+          <a class="planner-title" href="#">Dara-san of the Reiwa Era</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S01E11</span>
+            <span class="planner-airtime">19:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-11</span><span class="c-sep">/</span><span class="c-avail">A-12</span><span class="c-sep">/</span><span class="c-total">T-12</span>
+          </div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn" title="Mark as watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<hr class="mockup-divider">
+<div class="mockup-section-label">Without banner art</div>
+
+<div class="calendar planner" style="padding-top: 0;">
+  <div class="planner-grid" data-mode="3d">
+
+    <!-- ── TUESDAY ── -->
+    <div class="day-col day-today">
+      <div class="day-col-header">TUESDAY 16 SEP</div>
+
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/bQS43HSLZzMjZkcHJz4fGc9fgwz.jpg" alt="Dandadan">
+        </div>
+        <div class="planner-body">
+          <a class="planner-title" href="#">The Librarians: The Next Chapter</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S02E12</span>
+            <span class="planner-airtime">20:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-2</span><span class="c-sep">/</span><span class="c-avail">A-12</span><span class="c-sep">/</span><span class="c-total">T-12</span>
+          </div>
+          <div class="planner-ep-title">And the Final Curtain</div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn" title="Mark as watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/9PFonBhy4cQy7Jz20NpMygczOkv.jpg" alt="Solo Leveling">
+        </div>
+        <div class="planner-body">
+          <a class="planner-title" href="#">The Oblivious Saint Can't Contain Her Power</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S01E11</span>
+            <span class="planner-airtime">01:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-10</span><span class="c-sep">/</span><span class="c-avail">A-10</span><span class="c-sep">/</span><span class="c-total">T-12</span>
+          </div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-downloading" title="Downloading">&#11015;</button>
+            <button class="watch-btn" title="Mark as watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/lIuJRTMhHfAH2UBvSJSaYvmDXpO.jpg" alt="Frieren">
+        </div>
+        <div class="planner-body">
+          <a class="planner-title" href="#">The Ghost in the Shell</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S01E10</span>
+            <span class="planner-airtime">21:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-9</span><span class="c-sep">/</span><span class="c-avail">A-26</span><span class="c-sep">/</span><span class="c-total">T-26</span>
+          </div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn" title="Mark as watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+    </div>
+
+    <!-- ── WEDNESDAY ── -->
+    <div class="day-col">
+      <div class="day-col-header">WEDNESDAY 17 SEP</div>
+
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/qZjEy1N8oV07DFBfCzKPBV0PkVD.jpg" alt="Chainsaw Man">
+        </div>
+        <div class="planner-body">
+          <a class="planner-title" href="#">Reacher</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S03E07</span>
+            <span class="planner-airtime">08:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-7</span><span class="c-sep">/</span><span class="c-avail">A-8</span><span class="c-sep">/</span><span class="c-total">T-8</span>
+          </div>
+          <div class="planner-ep-title">Small World</div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn" title="Mark as watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/nEczSYRhkGS1628ORqV3W2BIPZ9.jpg" alt="Oshi no Ko">
+        </div>
+        <div class="planner-body">
+          <a class="planner-title" href="#">Clevatess</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S02E10</span>
+            <span class="planner-airtime">21:30 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-9</span><span class="c-sep">/</span><span class="c-avail">A-9</span><span class="c-sep">/</span><span class="c-total">T-12</span>
+          </div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-future" title="Not yet aired">&#9719;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+    </div>
+
+    <!-- ── THURSDAY ── -->
+    <div class="day-col">
+      <div class="day-col-header">THURSDAY 18 SEP</div>
+
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/rweIrveL43TaxUN0akQEaAXL6x0.jpg" alt="Attack on Titan">
+        </div>
+        <div class="planner-body">
+          <a class="planner-title" href="#">Star Trek: Strange New Worlds</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S04E08</span>
+            <span class="planner-airtime">20:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-4</span><span class="c-sep">/</span><span class="c-avail">A-8</span><span class="c-sep">/</span><span class="c-total">T-10</span>
+          </div>
+          <div class="planner-ep-title">Under the Cloak of War</div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn watched" title="Watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+
+      <article class="planner-card">
+        <div class="svc-strip" style="border-radius: 7px 0 0 7px; border-right: 1px solid var(--border);">
+          <a class="svc-text svc-al on" style="color: var(--svc-al);" href="#">AL</a>
+          <a class="svc-text svc-mal on" style="color: var(--svc-mal);" href="#">MAL</a>
+          <a class="svc-text svc-sonarr on" style="color: var(--svc-sonarr);" href="#">SON</a>
+          <a class="svc-text" style="opacity: 0.18;">RAD</a>
+          <a class="svc-text svc-player on" style="color: var(--svc-player);" href="#">&#9654;</a>
+        </div>
+        <div class="planner-cover">
+          <img src="https://image.tmdb.org/t/p/w300/kDp1vUBnMpe8ak4rjgl3cLELqjU.jpg" alt="Spy x Family">
+        </div>
+        <div class="planner-body">
+          <a class="planner-title" href="#">Dara-san of the Reiwa Era</a>
+          <div class="planner-badge-row">
+            <span class="planner-badge">S01E11</span>
+            <span class="planner-airtime">19:00 London</span>
+          </div>
+          <div class="ep-counts planner-counts">
+            <span class="c-watched">W-11</span><span class="c-sep">/</span><span class="c-avail">A-12</span><span class="c-sep">/</span><span class="c-total">T-12</span>
+          </div>
+          <div class="planner-actions">
+            <button class="planner-avail-btn avail-ready" title="Play">&#9654;</button>
+            <button class="watch-btn" title="Mark as watched" style="width:32px;height:32px;font-size:16px;border-width:2px;">&#10003;</button>
+          </div>
+        </div>
+        <button class="planner-fetch-art" title="Choose banner art">&#128444;</button>
+      </article>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

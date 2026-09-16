@@ -260,12 +260,14 @@ def store_tvmaze_art(
     show_id: str,
     show_data: dict,
 ) -> None:
-    """Store TVmaze poster image as an art asset.
+    """Store TVmaze poster image from the show lookup payload.
 
     TVmaze's show lookup returns ``image.medium`` and ``image.original``
-    — both are poster-type; no banner is available from this source.
-    Called during ``tvmaze.drip_fetch_episodes`` which already has
-    ``show_data`` in hand (no extra API call).
+    — poster-type only.  Called during ``tvmaze.drip_fetch_episodes``
+    which already has ``show_data`` in hand (no extra API call).
+
+    For banner/background, use ``store_tvmaze_images`` with the
+    ``/shows/{id}/images`` endpoint response.
     """
     images = show_data.get("image") or {}
     original = images.get("original")
@@ -275,6 +277,108 @@ def store_tvmaze_art(
         upsert_asset(conn, show_id, None, "poster", "tvmaze", original)
     if medium and medium != original:
         upsert_asset(conn, show_id, None, "poster", "tvmaze", medium)
+
+
+def store_mal_art(
+    conn,
+    show_id: str,
+    season_id: str | None,
+    mal_data: dict,
+) -> None:
+    """Store MAL poster image as an art asset.
+
+    ``mal_data`` is the response from ``mal_client.fetch_anime_details``.
+    MAL provides ``main_picture.large`` and ``main_picture.medium``
+    (poster only — no banner equivalent).
+    """
+    pics = mal_data.get("main_picture") or {}
+    large = pics.get("large")
+    medium = pics.get("medium")
+    if large:
+        upsert_asset(conn, show_id, season_id, "poster", "mal", large)
+    if medium and medium != large:
+        upsert_asset(conn, show_id, season_id, "poster", "mal", medium)
+
+
+_TVMAZE_TYPE_MAP = {"poster": "poster", "banner": "banner", "background": "background"}
+
+
+def store_tvmaze_images(
+    conn,
+    show_id: str,
+    images: list[dict],
+) -> int:
+    """Store TVmaze images from the ``/shows/{id}/images`` endpoint.
+
+    Each image dict has ``type`` (poster/banner/background/typography)
+    and ``resolutions.original.url`` / width / height.
+    Returns count of assets stored.
+    """
+    count = 0
+    for img in images:
+        kind = _TVMAZE_TYPE_MAP.get(img.get("type"))
+        if kind is None:
+            continue
+        resolutions = img.get("resolutions") or {}
+        original = resolutions.get("original") or {}
+        url = original.get("url")
+        if not url:
+            continue
+        upsert_asset(
+            conn, show_id, None, kind, "tvmaze", url,
+            width=original.get("width"),
+            height=original.get("height"),
+        )
+        count += 1
+    return count
+
+
+TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
+
+
+def store_tmdb_art(
+    conn,
+    show_id: str,
+    images_data: dict,
+) -> int:
+    """Store TMDB images (posters + backdrops) as art assets.
+
+    ``images_data`` is the response from ``TmdbClient.tv_images`` or
+    ``movie_images`` — contains ``posters`` and ``backdrops`` lists,
+    each entry having ``file_path``, ``width``, ``height``,
+    ``iso_639_1`` (language), ``vote_average`` (score).
+
+    TMDB returns file paths (e.g. ``/abc123.jpg``), not full URLs —
+    we prefix with the TMDB image base URL.
+    """
+    count = 0
+    for poster in images_data.get("posters") or []:
+        path = poster.get("file_path")
+        if not path:
+            continue
+        upsert_asset(
+            conn, show_id, None, "poster", "tmdb",
+            TMDB_IMAGE_BASE + path,
+            width=poster.get("width"),
+            height=poster.get("height"),
+            language=poster.get("iso_639_1"),
+            source_score=int((poster.get("vote_average") or 0) * 10),
+        )
+        count += 1
+    for backdrop in images_data.get("backdrops") or []:
+        path = backdrop.get("file_path")
+        if not path:
+            continue
+        upsert_asset(
+            conn, show_id, None, "background", "tmdb",
+            TMDB_IMAGE_BASE + path,
+            width=backdrop.get("width"),
+            height=backdrop.get("height"),
+            language=backdrop.get("iso_639_1"),
+            source_score=int((backdrop.get("vote_average") or 0) * 10),
+        )
+        count += 1
+    return count
 
 
 def auto_select_best(conn, show_id: str) -> None:
