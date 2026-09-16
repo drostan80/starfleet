@@ -619,19 +619,15 @@ export function buildCard(ep, cfg) {
   availIcon.textContent = avail === 'ready' ? '▶' : avail === 'future' ? '◷' : '⬇';
   meta.appendChild(availIcon);
 
-  // Watch button — only for aired episodes
-  if (aired) {
-    const watchBtn = document.createElement('button');
-    watchBtn.className = `watch-btn${ep.state === 'WATCHED' ? ' watched' : ''}`;
-    watchBtn.title = ep.state === 'WATCHED' ? 'Watched — click to unmark' : 'Mark as watched';
-    watchBtn.textContent = '✓';
-    watchBtn.dataset.state = ep.state;
-    // Pre-populate watchEventId from the query so unwatch works without refetch
-    const existingWid = ep.watchEvents?.edges?.[0]?.node?.id;
-    if (existingWid) watchBtn.dataset.watchEventId = existingWid;
-    watchBtn.addEventListener('click', () => onWatchToggle(watchBtn, ep));
-    meta.appendChild(watchBtn);
-  }
+  const watchBtn = document.createElement('button');
+  watchBtn.className = `watch-btn${ep.state === 'WATCHED' ? ' watched' : ''}`;
+  watchBtn.title = ep.state === 'WATCHED' ? 'Watched — click to unmark' : 'Mark as watched';
+  watchBtn.textContent = '✓';
+  watchBtn.dataset.state = ep.state;
+  const existingWid = ep.watchEvents?.edges?.[0]?.node?.id;
+  if (existingWid) watchBtn.dataset.watchEventId = existingWid;
+  watchBtn.addEventListener('click', () => onWatchToggle(watchBtn, ep));
+  meta.appendChild(watchBtn);
 
   card.appendChild(meta);
 
@@ -856,6 +852,7 @@ function groupByDay(episodes) {
 /** Render episodes into the calendar DOM (no network call). */
 function renderEpisodes(episodes, cfg) {
   if (!cfg) return;
+  _lastEpisodes = episodes;
 
   const calendar = document.getElementById('calendar');
   if (!calendar) return;
@@ -886,6 +883,142 @@ function renderEpisodes(episodes, cfg) {
   }
 }
 
+/* ── Show grouping (collapse 4+ episodes of the same show) ── */
+
+const GROUP_THRESHOLD = 4;
+const _expandedShows = new Set();
+
+function groupByShow(episodes) {
+  const byShow = new Map();
+  for (const ep of episodes) {
+    const sid = ep.show.id;
+    if (!byShow.has(sid)) byShow.set(sid, { show: ep.show, episodes: [] });
+    byShow.get(sid).episodes.push(ep);
+  }
+  return byShow;
+}
+
+function buildGroupCard(showGroup, cfg, cardBuilder) {
+  const card = document.createElement('div');
+  card.className = 'group-card';
+
+  const artDiv = document.createElement('div');
+  artDiv.className = 'group-art';
+  const posterUrl = showGroup.show.posterUrl;
+  if (posterUrl) {
+    const img = document.createElement('img');
+    img.src = posterUrl;
+    img.alt = showGroup.show.displayTitle;
+    if (cfg.tmdb_api_key) {
+      img.onerror = () => { img.remove(); fetchTmdbPoster(showGroup.show, cfg.tmdb_api_key); };
+    }
+    artDiv.appendChild(img);
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'group-overlay';
+  const count = document.createElement('div');
+  count.className = 'group-count';
+  count.textContent = showGroup.episodes.length;
+  overlay.appendChild(count);
+  const label = document.createElement('div');
+  label.className = 'group-label';
+  label.textContent = 'episodes';
+  overlay.appendChild(label);
+  artDiv.appendChild(overlay);
+  card.appendChild(artDiv);
+
+  const footer = document.createElement('div');
+  footer.className = 'group-footer';
+  const title = document.createElement('div');
+  title.className = 'group-title';
+  title.textContent = showGroup.show.displayTitle;
+  title.title = showGroup.show.displayTitle;
+  footer.appendChild(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'group-meta';
+  const firstEp = showGroup.episodes[0];
+  const lastEp = showGroup.episodes[showGroup.episodes.length - 1];
+  const range = `S${String(firstEp.season ?? 0).padStart(2, '0')}E${String(firstEp.episode ?? 0).padStart(2, '0')}–E${String(lastEp.episode ?? 0).padStart(2, '0')}`;
+  meta.textContent = `${range} · click to expand`;
+  footer.appendChild(meta);
+  card.appendChild(footer);
+
+  card.addEventListener('click', () => {
+    _expandedShows.add(showGroup.show.id);
+    renderEpisodes(_lastEpisodes, cfg);
+  });
+
+  return card;
+}
+
+function buildExpandedGroup(showGroup, cfg, cardBuilder) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'group-expanded';
+
+  const header = document.createElement('div');
+  header.className = 'group-expanded-header';
+
+  if (showGroup.show.posterUrl) {
+    const img = document.createElement('img');
+    img.src = showGroup.show.posterUrl;
+    img.alt = '';
+    img.onerror = () => { img.style.display = 'none'; };
+    header.appendChild(img);
+  }
+
+  const info = document.createElement('div');
+  info.className = 'group-expanded-info';
+  const title = document.createElement('div');
+  title.className = 'group-expanded-title';
+  title.textContent = showGroup.show.displayTitle;
+  info.appendChild(title);
+  const meta = document.createElement('div');
+  meta.className = 'group-expanded-meta';
+  meta.textContent = `${showGroup.episodes.length} episodes`;
+  info.appendChild(meta);
+  header.appendChild(info);
+
+  const collapseBtn = document.createElement('button');
+  collapseBtn.className = 'group-expanded-collapse';
+  collapseBtn.textContent = '▴ Collapse';
+  header.appendChild(collapseBtn);
+
+  header.addEventListener('click', () => {
+    _expandedShows.delete(showGroup.show.id);
+    renderEpisodes(_lastEpisodes, cfg);
+  });
+  wrapper.appendChild(header);
+
+  const cardsDiv = document.createElement('div');
+  cardsDiv.className = 'group-expanded-cards';
+  for (const ep of showGroup.episodes) {
+    cardsDiv.appendChild(cardBuilder(ep, cfg));
+  }
+  wrapper.appendChild(cardsDiv);
+
+  return wrapper;
+}
+
+function appendGroupedEpisodes(container, episodes, cfg, cardBuilder) {
+  const byShow = groupByShow(episodes);
+  for (const [, showGroup] of byShow) {
+    const isExpanded = _expandedShows.has(showGroup.show.id);
+    if (showGroup.episodes.length >= GROUP_THRESHOLD && !isExpanded) {
+      container.appendChild(buildGroupCard(showGroup, cfg, cardBuilder));
+    } else if (showGroup.episodes.length >= GROUP_THRESHOLD && isExpanded) {
+      container.appendChild(buildExpandedGroup(showGroup, cfg, cardBuilder));
+    } else {
+      for (const ep of showGroup.episodes) {
+        container.appendChild(cardBuilder(ep, cfg));
+      }
+    }
+  }
+}
+
+let _lastEpisodes = [];
+
 /** Rows layout — day header as left column, cards in right area. */
 function renderRows(dayGroups, todayStr, cfg) {
   const calendar = document.getElementById('calendar');
@@ -911,9 +1044,7 @@ function renderRows(dayGroups, todayStr, cfg) {
       return new Date(a.airDateUtc) - new Date(b.airDateUtc);
     });
 
-    for (const ep of group.episodes) {
-      row.appendChild(buildCard(ep, cfg));
-    }
+    appendGroupedEpisodes(row, group.episodes, cfg, buildCard);
 
     section.appendChild(row);
     calendar.appendChild(section);
@@ -945,14 +1076,8 @@ function renderPlanner(dayGroups, todayStr, cfg) {
       return new Date(a.airDateUtc) - new Date(b.airDateUtc);
     });
 
-    for (const ep of group.episodes) {
-      // 1d/today/3d planner: use horizontal browse-style cards
-      if (wideMode) {
-        col.appendChild(buildPlannerCard(ep, cfg));
-      } else {
-        col.appendChild(buildCard(ep, cfg));
-      }
-    }
+    const cardFn = wideMode ? buildPlannerCard : buildCard;
+    appendGroupedEpisodes(col, group.episodes, cfg, cardFn);
 
     container.appendChild(col);
   }
@@ -1075,17 +1200,15 @@ function buildPlannerCard(ep, cfg) {
   }
   actions.appendChild(availBtn);
 
-  if (aired) {
-    const watchBtn = document.createElement('button');
-    watchBtn.className = `watch-btn${ep.state === 'WATCHED' ? ' watched' : ''}`;
-    watchBtn.title = ep.state === 'WATCHED' ? 'Watched — click to unmark' : 'Mark as watched';
-    watchBtn.textContent = '✓';
-    watchBtn.dataset.state = ep.state;
-    const existingWid = ep.watchEvents?.edges?.[0]?.node?.id;
-    if (existingWid) watchBtn.dataset.watchEventId = existingWid;
-    watchBtn.addEventListener('click', () => onWatchToggle(watchBtn, ep));
-    actions.appendChild(watchBtn);
-  }
+  const watchBtn = document.createElement('button');
+  watchBtn.className = `watch-btn${ep.state === 'WATCHED' ? ' watched' : ''}`;
+  watchBtn.title = ep.state === 'WATCHED' ? 'Watched — click to unmark' : 'Mark as watched';
+  watchBtn.textContent = '✓';
+  watchBtn.dataset.state = ep.state;
+  const existingWid = ep.watchEvents?.edges?.[0]?.node?.id;
+  if (existingWid) watchBtn.dataset.watchEventId = existingWid;
+  watchBtn.addEventListener('click', () => onWatchToggle(watchBtn, ep));
+  actions.appendChild(watchBtn);
 
   // Episode counts
   const w = ep.show.watchedEpisodeCount;
