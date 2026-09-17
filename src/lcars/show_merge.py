@@ -856,11 +856,6 @@ def detect_franchise_collisions(conn) -> dict:
                     f"tvdb collision (tvdb_id={tvdb_id})",
                     _commit=False,
                 )
-
-                pending_review.open_or_extend(
-                    conn, "show", child["id"], "franchise_auto_merge",
-                    "show_merge", None, parent["id"],
-                )
                 conn.commit()
             except Exception:
                 logger.exception(
