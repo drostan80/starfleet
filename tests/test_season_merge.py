@@ -287,7 +287,7 @@ class TestMergeSeasonIntoShow:
         _insert_parent(conn)
         _insert_child_stub(conn)
 
-        merge_id = show_merge.merge_season_into_show(
+        show_merge.merge_season_into_show(
             conn, "s-par001", "s-chi001", 3, "tvdb collision"
         )
 

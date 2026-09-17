@@ -141,7 +141,16 @@ backfilled `watching` show starts with every episode unwatched, so
 progress by hand.
 """
 
-from lcars import anilist_client, fribb, ids, local_audit, pending_review, season_ranges, shows, util
+from lcars import (
+    anilist_client,
+    fribb,
+    ids,
+    local_audit,
+    pending_review,
+    season_ranges,
+    shows,
+    util,
+)
 from lcars.config import get_current
 
 # The reverse of resolvers.py's own _STATUS_TO_ANILIST (A.9's push-

@@ -828,29 +828,11 @@ def detect_franchise_collisions(conn) -> dict:
             # Determine target season number.
             target_season = _determine_target_season(conn, parent, child)
 
-            # Read titles for the review message.
-            child_title = conn.execute(
-                "SELECT COALESCE(title_english, title_romaji) AS t FROM show WHERE id = ?",
-                (child["id"],),
-            ).fetchone()
-            parent_title = conn.execute(
-                "SELECT COALESCE(title_english, title_romaji) AS t FROM show WHERE id = ?",
-                (parent["id"],),
-            ).fetchone()
-
             # Check for season collision BEFORE mutating: if the parent
             # already has the target season and every child episode slot
             # collides, merging would be a no-op that still demotes the
             # child.  Open a review asking for the correct season instead.
             if _would_be_season_collision(conn, parent["id"], child["id"], target_season):
-                review_value = json.dumps({
-                    "parent_id": parent["id"],
-                    "parent_title": parent_title["t"] if parent_title else parent["id"],
-                    "child_id": child["id"],
-                    "child_title": child_title["t"] if child_title else child["id"],
-                    "target_season": target_season,
-                    "tvdb_id": tvdb_id,
-                })
                 try:
                     pending_review.open_or_extend(
                         conn, "show", child["id"], "franchise_season_collision",
@@ -866,7 +848,7 @@ def detect_franchise_collisions(conn) -> dict:
                 continue
 
             try:
-                merge_id = merge_season_into_show(
+                merge_season_into_show(
                     conn,
                     parent["id"],
                     child["id"],
@@ -1097,7 +1079,8 @@ def merge_season_into_show(
     # rare but possible), move them too at an offset.
     if child_seasons and len(child_seasons) > 1:
         for extra in child_seasons[1:]:
-            offset_season = target_season + extra["season_number"] - child_seasons[0]["season_number"]
+            base = child_seasons[0]["season_number"]
+            offset_season = target_season + extra["season_number"] - base
             existing = conn.execute(
                 "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?",
                 (parent_id, offset_season),

@@ -2558,7 +2558,7 @@ def resolve_resolve_franchise_merge(
                 raise GraphQLError("confirm on a season collision requires correctSeason")
             merge_id = show_merge.merge_season_into_show(
                 conn, correct_parent_id or parent_id_from_chain, child_id, correct_season,
-                f"manual season correction (tvdb collision)",
+                "manual season correction (tvdb collision)",
             )
             conn.execute(
                 "UPDATE pending_review SET resolved_at = ?, resolved_by_client = ?,"

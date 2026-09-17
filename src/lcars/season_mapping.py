@@ -125,7 +125,8 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
             " (id, show_id, season_number, status, anilist_id, mal_id, source, matched,"
             "  manual_override, last_reconciled_at, created_at, updated_at)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
-            (season_id, show_id, season_number, status, anilist_id, mal_id, source, matched, now, now, now),
+            (season_id, show_id, season_number, status,
+             anilist_id, mal_id, source, matched, now, now, now),
         )
         if not matched:
             pending_review.open_or_extend(
