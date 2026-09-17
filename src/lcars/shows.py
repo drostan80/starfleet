@@ -620,6 +620,11 @@ def create_show(conn, input: dict) -> str:
         existing = conn.execute(
             "SELECT tracked FROM show WHERE id = ?", (existing_show_id,)
         ).fetchone()
+        if existing is None:
+            # Orphaned show_external_id row — show was deleted but the
+            # external ID link survived.  Treat as no match.
+            existing_show_id = None
+    if existing_show_id is not None:
         # Before rejecting a tracked duplicate or promoting a stub,
         # check whether it's a sequel of a tracked show — the right
         # action is "add as Season N on the parent", regardless of
@@ -749,6 +754,9 @@ def skip_show(conn, input: dict) -> str:
         existing = conn.execute(
             "SELECT tracked, status FROM show WHERE id = ?", (existing_show_id,)
         ).fetchone()
+        if existing is None:
+            existing_show_id = None
+    if existing_show_id is not None:
         if existing["tracked"]:
             return existing_show_id  # already tracked — no-op
         if existing["status"] != "skipped":
@@ -1487,6 +1495,9 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
         existing = conn.execute(
             "SELECT tracked FROM show WHERE id = ?", (existing_show_id,)
         ).fetchone()
+        if existing is None:
+            existing_show_id = None
+    if existing_show_id is not None:
         if existing["tracked"]:
             # Before refusing, check if this is a sequel — offer
             # season-attach instead of a duplicate error.
