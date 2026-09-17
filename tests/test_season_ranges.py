@@ -1343,3 +1343,63 @@ class TestFillSeasonRangesBulk:
         assert first == 1
         second = season_ranges.fill_season_ranges_bulk(conn)
         assert second == 0
+
+
+# ---------------------------------------------------------------------------
+# W2 — inherit_season_status
+# ---------------------------------------------------------------------------
+
+class TestInheritSeasonStatus:
+
+    def test_watching_show_gets_planned(self, conn):
+        _show(conn, "s-watc01", tracking_space="anime")
+        conn.execute("UPDATE show SET status = 'watching' WHERE id = 's-watc01'")
+        conn.commit()
+        assert season_ranges.inherit_season_status(conn, "s-watc01") == "planned"
+
+    def test_dropped_show_gets_dropped(self, conn):
+        _show(conn, "s-drop01", tracking_space="anime")
+        conn.execute("UPDATE show SET status = 'dropped' WHERE id = 's-drop01'")
+        conn.commit()
+        assert season_ranges.inherit_season_status(conn, "s-drop01") == "dropped"
+
+    def test_paused_show_gets_paused(self, conn):
+        _show(conn, "s-paus01", tracking_space="anime")
+        conn.execute("UPDATE show SET status = 'paused' WHERE id = 's-paus01'")
+        conn.commit()
+        assert season_ranges.inherit_season_status(conn, "s-paus01") == "paused"
+
+    def test_planned_show_gets_planned(self, conn):
+        _show(conn, "s-plan01", tracking_space="anime")
+        conn.execute("UPDATE show SET status = 'planned' WHERE id = 's-plan01'")
+        conn.commit()
+        assert season_ranges.inherit_season_status(conn, "s-plan01") == "planned"
+
+    def test_completed_show_gets_planned(self, conn):
+        _show(conn, "s-comp01", tracking_space="anime")
+        conn.execute("UPDATE show SET status = 'completed' WHERE id = 's-comp01'")
+        conn.commit()
+        assert season_ranges.inherit_season_status(conn, "s-comp01") == "planned"
+
+    def test_dropped_but_sonarr_followed_gets_planned(self, conn):
+        _show(conn, "s-drps01", tracking_space="anime")
+        conn.execute("UPDATE show SET status = 'dropped' WHERE id = 's-drps01'")
+        conn.execute(
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES ('s-drps01', 'sonarr', 'test-slug', 'http://sonarr/series/test', 'x')"
+        )
+        conn.commit()
+        assert season_ranges.inherit_season_status(conn, "s-drps01") == "planned"
+
+    def test_paused_but_radarr_followed_gets_planned(self, conn):
+        _show(conn, "s-psrd01", tracking_space="anime")
+        conn.execute("UPDATE show SET status = 'paused' WHERE id = 's-psrd01'")
+        conn.execute(
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES ('s-psrd01', 'radarr', 'test-slug', 'http://radarr/movie/test', 'x')"
+        )
+        conn.commit()
+        assert season_ranges.inherit_season_status(conn, "s-psrd01") == "planned"
+
+    def test_missing_show_defaults_to_planned(self, conn):
+        assert season_ranges.inherit_season_status(conn, "s-noex01") == "planned"

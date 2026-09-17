@@ -2518,6 +2518,165 @@ def resolve_reverse_show_merge(_, info, id):
     return _get_show_merge(conn, id)
 
 
+@mutation.field("resolveFranchiseMerge")
+def resolve_resolve_franchise_merge(
+    _, info, review_id, action,
+    correct_parent_id=None, correct_season=None,
+    corrected_tvdb_id=None, corrected_anilist_id=None,
+):
+    conn = db.get_connection()
+    client = require_client(info)
+    if client not in RESOLVING_CLIENTS:
+        raise GraphQLError(
+            f"{client!r} cannot resolve a franchise merge — only "
+            f"{sorted(RESOLVING_CLIENTS)} can"
+        )
+
+    review = conn.execute(
+        "SELECT * FROM pending_review WHERE id = ?"
+        " AND field IN ('franchise_auto_merge', 'franchise_season_collision')",
+        (review_id,),
+    ).fetchone()
+    if review is None:
+        raise GraphQLError(f"no such franchise merge review: {review_id}")
+    if review["resolved_at"] is not None:
+        raise GraphQLError(f"review {review_id} already resolved")
+
+    is_season_collision = review["field"] == "franchise_season_collision"
+    chain = json.loads(review["proposed_value_chain"])
+    # The last chain entry is the parent_id (used as the dedup key).
+    parent_id_from_chain = chain[-1]
+    now = util.now_utc_iso()
+
+    if is_season_collision:
+        # Season collision reviews have no merge — only confirm (with correct
+        # season) or reject.
+        child_id = review["entity_id"]
+
+        if action == "confirm":
+            if correct_season is None:
+                raise GraphQLError("confirm on a season collision requires correctSeason")
+            merge_id = show_merge.merge_season_into_show(
+                conn, correct_parent_id or parent_id_from_chain, child_id, correct_season,
+                f"manual season correction (tvdb collision)",
+            )
+            conn.execute(
+                "UPDATE pending_review SET resolved_at = ?, resolved_by_client = ?,"
+                " resolution_note = ? WHERE id = ?",
+                (now, client, f"confirmed as S{correct_season}", review_id),
+            )
+            conn.commit()
+            return _get_show_merge(conn, merge_id)
+
+        if action == "reject":
+            _correct_child_ids(
+                conn, child_id, corrected_tvdb_id, corrected_anilist_id, now
+            )
+            conn.execute(
+                "UPDATE pending_review SET resolved_at = ?, resolved_by_client = ?,"
+                " resolution_note = ? WHERE id = ?",
+                (now, client, "rejected — IDs corrected", review_id),
+            )
+            conn.commit()
+            # No merge to return — return the parent show's merge row if any,
+            # or raise.
+            existing = conn.execute(
+                "SELECT id FROM show_merge WHERE winner_show_id = ? AND loser_show_id = ?"
+                " ORDER BY merged_at DESC LIMIT 1",
+                (parent_id_from_chain, child_id),
+            ).fetchone()
+            if existing:
+                return _get_show_merge(conn, existing["id"])
+            raise GraphQLError(
+                "rejected season collision (no merge existed to return)"
+            )
+
+        raise GraphQLError(
+            f"season collision reviews support confirm/reject, not {action!r}"
+        )
+
+    # franchise_auto_merge — a merge exists.
+    merge_row = conn.execute(
+        "SELECT id FROM show_merge"
+        " WHERE winner_show_id = ? AND loser_show_id = ? AND reversed_at IS NULL"
+        " ORDER BY merged_at DESC LIMIT 1",
+        (parent_id_from_chain, review["entity_id"]),
+    ).fetchone()
+    if merge_row is None:
+        raise GraphQLError(f"no unreversed merge found for review {review_id}")
+    merge_id = merge_row["id"]
+
+    if action == "confirm":
+        conn.execute(
+            "UPDATE pending_review SET resolved_at = ?, resolved_by_client = ?,"
+            " resolution_note = ? WHERE id = ?",
+            (now, client, "confirmed", review_id),
+        )
+        conn.commit()
+        return _get_show_merge(conn, merge_id)
+
+    if action == "redirect":
+        if correct_season is None:
+            raise GraphQLError("redirect requires correctSeason")
+        redirect_parent = correct_parent_id or parent_id_from_chain
+        show_merge.reverse_season_merge(conn, merge_id, client)
+        child_id = review["entity_id"]
+        new_merge_id = show_merge.merge_season_into_show(
+            conn, redirect_parent, child_id, correct_season,
+            f"manual redirect from {parent_id_from_chain}",
+        )
+        conn.execute(
+            "UPDATE pending_review SET resolved_at = ?, resolved_by_client = ?,"
+            " resolution_note = ? WHERE id = ?",
+            (now, client, f"redirected to {redirect_parent} S{correct_season}", review_id),
+        )
+        conn.commit()
+        return _get_show_merge(conn, new_merge_id)
+
+    if action == "reject":
+        show_merge.reverse_season_merge(conn, merge_id, client)
+        child_id = review["entity_id"]
+        _correct_child_ids(
+            conn, child_id, corrected_tvdb_id, corrected_anilist_id, now
+        )
+        conn.execute(
+            "UPDATE pending_review SET resolved_at = ?, resolved_by_client = ?,"
+            " resolution_note = ? WHERE id = ?",
+            (now, client, "rejected — IDs corrected", review_id),
+        )
+        conn.commit()
+        return _get_show_merge(conn, merge_id)
+
+    raise GraphQLError(f"unknown action: {action!r} (expected confirm/redirect/reject)")
+
+
+def _correct_child_ids(conn, child_id, corrected_tvdb_id, corrected_anilist_id, now):
+    """Apply corrected external IDs on a rejected franchise merge child."""
+    if corrected_tvdb_id is not None:
+        conn.execute(
+            "UPDATE show_external_id SET external_id = ? WHERE show_id = ? AND service = 'tvdb'",
+            (corrected_tvdb_id, child_id),
+        )
+    if corrected_anilist_id is not None:
+        existing = conn.execute(
+            "SELECT 1 FROM show_external_id WHERE show_id = ? AND service = 'anilist'",
+            (child_id,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE show_external_id SET external_id = ?"
+                " WHERE show_id = ? AND service = 'anilist'",
+                (str(corrected_anilist_id), child_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+                " VALUES (?, 'anilist', ?, ?, ?)",
+                (child_id, str(corrected_anilist_id),
+                 f"https://anilist.co/anime/{corrected_anilist_id}", now),
+            )
+
+
 @show_merge_type.field("winnerShow")
 def resolve_show_merge_winner_show(obj, info):
     return _get_show(db.get_connection(), obj["winner_show_id"])
@@ -2966,6 +3125,8 @@ def resolve_set_status(_, info, show_id, status, confirmed=False):
         ).fetchall():
             _try_complete_season(conn, show_id, season_row["season_number"], now)
     conn.commit()
+    if status in ("paused", "dropped"):
+        _unmonitor_in_arr_on_drop(conn, show_id)
     return _get_show(conn, show_id)
 
 
@@ -4024,12 +4185,13 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
                     "Add previous seasons first."
                 )
         season_id = ids.generate_id(conn, "z")
+        status = season_ranges.inherit_season_status(conn, show_id)
         conn.execute(
             "INSERT INTO season"
             " (id, show_id, season_number, status, anilist_id, mal_id, source, matched,"
             "  manual_override, created_at, updated_at)"
-            " VALUES (?, ?, ?, 'planned', ?, ?, 'manual', 1, 1, ?, ?)",
-            (season_id, show_id, season_number, anilist_id, mal_id, now, now),
+            " VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, 1, ?, ?)",
+            (season_id, show_id, season_number, status, anilist_id, mal_id, now, now),
         )
         # auto-sync, todo.md — "if a new season is added then move back to
         # watching" (user's own rule); only this one of the five real

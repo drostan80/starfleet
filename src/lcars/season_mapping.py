@@ -75,12 +75,13 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
             conn.commit()
             return get_season(conn, existing["id"])
         season_id = ids.generate_id(conn, "z")
+        status = season_ranges.inherit_season_status(conn, show_id)
         conn.execute(
             "INSERT INTO season"
             " (id, show_id, season_number, status, anilist_id, mal_id, source, matched,"
             "  manual_override, last_reconciled_at, created_at, updated_at)"
-            " VALUES (?, ?, ?, 'planned', NULL, NULL, 'unmatched', 0, 0, ?, ?, ?)",
-            (season_id, show_id, season_number, now, now, now),
+            " VALUES (?, ?, ?, ?, NULL, NULL, 'unmatched', 0, 0, ?, ?, ?)",
+            (season_id, show_id, season_number, status, now, now, now),
         )
         conn.commit()
         return get_season(conn, season_id)
@@ -118,12 +119,13 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
         )
     else:
         season_id = ids.generate_id(conn, "z")
+        status = season_ranges.inherit_season_status(conn, show_id)
         conn.execute(
             "INSERT INTO season"
             " (id, show_id, season_number, status, anilist_id, mal_id, source, matched,"
             "  manual_override, last_reconciled_at, created_at, updated_at)"
-            " VALUES (?, ?, ?, 'planned', ?, ?, ?, ?, 0, ?, ?, ?)",
-            (season_id, show_id, season_number, anilist_id, mal_id, source, matched, now, now, now),
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+            (season_id, show_id, season_number, status, anilist_id, mal_id, source, matched, now, now, now),
         )
         if not matched:
             pending_review.open_or_extend(

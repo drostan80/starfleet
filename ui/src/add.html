@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=18">
+  <link rel="stylesheet" href="css/main.css?v=19">
   <style>
     /* Force hidden attribute to work even on elements with explicit display */
     [hidden] { display: none !important; }
@@ -694,6 +694,21 @@
     .browse-card.loading { opacity: 0.6; pointer-events: none; }
     .browse-card.loading .cand-spinner { display: block; }
 
+    .browse-auto-badge {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      background: color-mix(in srgb, var(--warning, #f59e0b) 85%, transparent);
+      color: #000;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      z-index: 2;
+      pointer-events: auto;
+      cursor: help;
+    }
+
     .browse-cover {
       width: 120px;
       min-height: 170px;
@@ -948,7 +963,7 @@
 <script type="module">
 import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=18';
 import { bootstrapConfig, applyAppName } from './js/config.js?v=4';
-import { showBanner, hideBanner } from './js/calendar.js?v=38';
+import { showBanner, hideBanner } from './js/calendar.js?v=39';
 import { initSearch } from './js/search.js?v=4';
 import { initBrowse, teardownBrowse, setBrowseType } from './js/browse.js?v=13';
 

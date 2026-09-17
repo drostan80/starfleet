@@ -91,58 +91,301 @@ class SequelDetectedError(ShowInputError):
         super().__init__(f"sequel_of:{payload}")
 
 
-def find_sequel_parent(conn, anilist_id: int | str | None) -> dict | None:
-    """Check whether *anilist_id* belongs to a show that is a sequel of
-    a tracked parent (via ``show_relation`` or a live AniList lookup).
+class LaterSeasonError(ShowInputError):
+    """Raised when the add flow detects that the requested show is S2+
+    of a franchise where *no* season is tracked yet.  Carries S1's info
+    so the client can offer "Add Season 1 instead?".
+    """
+
+    def __init__(
+        self, season_number: int,
+        s1_anilist_id: int, s1_mal_id: int | None,
+        s1_title_romaji: str | None, s1_title_english: str | None,
+    ):
+        self.season_number = season_number
+        self.s1_anilist_id = s1_anilist_id
+        self.s1_mal_id = s1_mal_id
+        self.s1_title_romaji = s1_title_romaji
+        self.s1_title_english = s1_title_english
+        import json
+        payload = json.dumps({
+            "seasonNumber": season_number,
+            "s1AnilistId": s1_anilist_id,
+            "s1MalId": s1_mal_id,
+            "s1TitleRomaji": s1_title_romaji,
+            "s1TitleEnglish": s1_title_english,
+        }, separators=(",", ":"))
+        super().__init__(f"later_season:{payload}")
+
+
+def find_sequel_parent(
+    conn,
+    anilist_id: int | str | None = None,
+    *,
+    tvdb_id: int | str | None = None,
+    tmdb_id: int | str | None = None,
+    imdb_id: str | None = None,
+    mal_id: int | str | None = None,
+) -> dict | None:
+    """Check whether the given IDs belong to a show that is a sequel of
+    a tracked parent.
 
     Returns ``{"parent_show_id", "parent_title", "next_season",
     "stub_show_id"}`` when a match is found, else ``None``.
-    ``stub_show_id`` is the existing show row for this anilist_id
-    (tracked or not), or ``None`` if no show exists yet.
 
-    Three tiers of lookup:
-      1. Local DB: show_external_id → show_relation → tracked parent.
-         Both forward (parent → SEQUEL → child) and reverse
-         (child → PREQUEL → parent) directions are checked.
-      2. Live AniList: if no local show owns this anilist_id, fetches
-         the media's relations from AniList and checks whether any
-         PREQUEL target is tracked locally.  This covers the common
-         prod case where the batch cleanup or a fresh DB has no stub
-         row at all.
+    Tiers of lookup (stops at first hit):
+      1. Local DB relations (show_relation, both directions).
+      2. TVDB franchise collision — same TVDB ID = same franchise.
+         Resolves TVDB from input, or via Fribb (anilist/mal→tvdb)
+         or Wikidata (tmdb/imdb→tvdb), cache-only (no network).
+      3. Live AniList relations — last resort, only when no local
+         stub exists (no show_external_id row for any provided ID
+         except tvdb, which is franchise-level and excluded from
+         stub lookup).
 
-    Matches both explicit SEQUEL relations and NULL-typed relations
-    (common in existing data where relation_type wasn't backfilled).
-    The user always sees a confirmation dialog, so a false positive
-    on a NULL relation just means they click Cancel.
+    Matches both explicit SEQUEL relations and NULL-typed relations.
+    Excludes CHARACTER, ALTERNATIVE, SUMMARY, SPIN_OFF, SIDE_STORY,
+    OTHER, PARENT.
 
-    Excludes relations that are clearly NOT sequels: CHARACTER,
-    ALTERNATIVE, SUMMARY, SPIN_OFF, SIDE_STORY, OTHER, PARENT.
+    ``next_season`` is max(existing season_number) + 1 on the parent."""
+    if all(v is None for v in (anilist_id, tvdb_id, tmdb_id, imdb_id, mal_id)):
+        return None
 
-    ``next_season`` is max(existing season_number) + 1 on the parent,
-    defaulting to 2 when the parent has only one season (or none — the
-    implicit S1 that every freshly-added show starts with)."""
+    # Find any existing stub for this show across all provided IDs.
+    stub_show_id = _find_stub_show(conn, anilist_id, tvdb_id, tmdb_id, imdb_id, mal_id)
+
+    # Tier 1: Local DB relations.
+    if stub_show_id is not None:
+        parent_row = _find_parent_via_local_relations(conn, stub_show_id)
+        if parent_row is not None:
+            return _build_sequel_result(conn, parent_row, stub_show_id)
+
+    # Tier 2: TVDB franchise collision.
+    resolved_tvdb = _resolve_tvdb_for_sequel(tvdb_id, anilist_id, mal_id, tmdb_id, imdb_id)
+    if resolved_tvdb is not None:
+        parent_row = _find_parent_via_tvdb(conn, resolved_tvdb, stub_show_id)
+        if parent_row is not None:
+            fribb_season = _resolve_fribb_season(anilist_id)
+            if fribb_season is not None:
+                already = conn.execute(
+                    "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?",
+                    (parent_row["parent_id"], fribb_season),
+                ).fetchone()
+                if already is not None:
+                    return None
+                return _build_sequel_result(
+                    conn, parent_row, stub_show_id, next_season=fribb_season,
+                )
+            return _build_sequel_result(conn, parent_row, stub_show_id)
+
+    # Tier 3: AniList live relations (last resort, no-stub only).
+    if anilist_id is not None and stub_show_id is None:
+        return _find_parent_via_anilist(conn, int(anilist_id))
+
+    return None
+
+
+def _find_stub_show(conn, anilist_id, tvdb_id, tmdb_id, imdb_id, mal_id) -> str | None:
+    """Find an existing show row that owns any of the provided IDs.
+
+    Excludes tvdb_id: TVDB groups a franchise under one series ID, so
+    the incoming sequel's tvdb_id IS the parent's — looking it up here
+    would find the parent and then self-exclude it in the TVDB collision
+    tier, defeating the purpose."""
+    for service, value in (
+        ("anilist", anilist_id), ("tmdb", tmdb_id),
+        ("imdb", imdb_id), ("mal", mal_id),
+    ):
+        if value is None:
+            continue
+        row = conn.execute(
+            "SELECT show_id FROM show_external_id"
+            " WHERE service = ? AND external_id = ?",
+            (service, str(value)),
+        ).fetchone()
+        if row is not None:
+            return row["show_id"]
+    return None
+
+
+def _resolve_tvdb_for_sequel(tvdb_id, anilist_id, mal_id, tmdb_id, imdb_id) -> str | None:
+    """Best-effort TVDB ID resolution from available IDs, cache-only."""
+    if tvdb_id is not None:
+        return str(tvdb_id)
+
+    # Fribb: anilist/mal → tvdb (anime shows).
+    dataset = _try_load_fribb_dataset()
+    if dataset is not None:
+        from lcars import fribb as fribb_mod
+        if anilist_id is not None:
+            index = fribb_mod.build_anilist_index(dataset)
+            result = fribb_mod.resolve_tvdb_id_for_anilist(index, int(anilist_id))
+            if result is not None:
+                return str(result)
+        if mal_id is not None:
+            mal_index = fribb_mod.build_mal_index(dataset)
+            candidates = mal_index.get(int(mal_id), [])
+            tvdb_ids = {c["tvdb_id"] for c in candidates
+                        if c.get("tvdb_id") not in (None, "", "unknown")}
+            if len(tvdb_ids) == 1:
+                return str(tvdb_ids.pop())
+
+    # Wikidata: tmdb/imdb → tvdb (TV shows).
+    if tmdb_id is not None or imdb_id is not None:
+        resolved = _try_wikidata_to_tvdb(tmdb_id, imdb_id)
+        if resolved is not None:
+            return resolved
+
+    return None
+
+
+def _try_load_fribb_dataset():
+    """Return the Fribb dataset if cached on disk, None otherwise."""
+    from lcars import fribb as fribb_mod
+    if not fribb_mod.DATASET_CACHE_PATH.exists():
+        return None
+    try:
+        return fribb_mod.load_dataset(max_age=float("inf"))
+    except Exception:
+        return None
+
+
+def _try_wikidata_to_tvdb(tmdb_id, imdb_id) -> str | None:
+    """Resolve TVDB ID via Wikidata bridge, cache-only."""
+    from lcars import wikidata
+    if not wikidata.CACHE_PATH.exists():
+        return None
+    try:
+        dataset = wikidata.load_dataset(max_age=float("inf"))
+    except Exception:
+        return None
+    if tmdb_id is not None:
+        index = wikidata.build_tmdb_to_tvdb_index(dataset)
+        result = index.get(str(tmdb_id))
+        if result is not None:
+            return result
+    if imdb_id is not None:
+        index = wikidata.build_imdb_to_tvdb_index(dataset)
+        result = index.get(str(imdb_id))
+        if result is not None:
+            return result
+    return None
+
+
+def _resolve_fribb_season(anilist_id) -> int | None:
+    """Which TVDB season does this AniList entry represent? Cache-only."""
     if anilist_id is None:
         return None
-    anilist_id_str = str(anilist_id)
-
-    # 1. Find any show that owns this AniList ID (tracked or not).
-    related_row = conn.execute(
-        "SELECT s.id, s.tracked FROM show s"
-        " JOIN show_external_id sei ON s.id = sei.show_id"
-        " WHERE sei.service = 'anilist' AND sei.external_id = ?",
-        (anilist_id_str,),
-    ).fetchone()
-
-    if related_row is not None:
-        # Local path: check show_relation in both directions.
-        parent_row = _find_parent_via_local_relations(conn, related_row["id"])
-        if parent_row is not None:
-            return _build_sequel_result(conn, parent_row, related_row["id"])
+    dataset = _try_load_fribb_dataset()
+    if dataset is None:
         return None
+    from lcars import fribb as fribb_mod
+    index = fribb_mod.build_anilist_index(dataset)
+    entries = index.get(int(anilist_id), [])
+    if len(entries) != 1:
+        return None
+    season_info = entries[0].get("season")
+    if not isinstance(season_info, dict):
+        return None
+    tvdb_season = season_info.get("tvdb")
+    if isinstance(tvdb_season, int) and tvdb_season > 0:
+        return tvdb_season
+    return None
 
-    # 2. No local show → ask AniList for this media's relations and check
-    #    whether any PREQUEL target is tracked locally.
-    return _find_parent_via_anilist(conn, int(anilist_id))
+
+def _check_later_season_pre_add(conn, anilist_id) -> None:
+    """Raise LaterSeasonError if Fribb says this AniList entry is S2+
+    of a franchise with no tracked seasons.  Called before creating the
+    show so the client can offer to add S1 instead."""
+    if anilist_id is None:
+        return
+    dataset = _try_load_fribb_dataset()
+    if dataset is None:
+        return
+    from lcars import fribb as fribb_mod
+
+    anilist_index = fribb_mod.build_anilist_index(dataset)
+    entries = anilist_index.get(int(anilist_id), [])
+    if len(entries) != 1:
+        return
+    season_info = entries[0].get("season")
+    if not isinstance(season_info, dict):
+        return
+    tvdb_season = season_info.get("tvdb")
+    if not isinstance(tvdb_season, int) or tvdb_season <= 1:
+        return
+
+    tvdb_id = entries[0].get("tvdb_id")
+    if tvdb_id in (None, "", "unknown"):
+        return
+
+    # If a tracked show already owns this TVDB ID, the franchise IS
+    # tracked — SequelDetectedError (or normal add) handles that path.
+    tracked_owner = conn.execute(
+        "SELECT 1 FROM show_external_id sei"
+        " JOIN show s ON s.id = sei.show_id"
+        " WHERE sei.service = 'tvdb' AND sei.external_id = ?"
+        "   AND s.tracked = 1"
+        " LIMIT 1",
+        (str(tvdb_id),),
+    ).fetchone()
+    if tracked_owner is not None:
+        return
+
+    # Find S1's entry: same TVDB ID, season.tvdb == 1.
+    tvdb_index = fribb_mod.build_tvdb_index(dataset)
+    tvdb_entries = tvdb_index.get(tvdb_id, [])
+    s1_matches = [
+        e for e in tvdb_entries
+        if isinstance(e.get("season"), dict)
+        and e["season"].get("tvdb") == 1
+        and e.get("anilist_id") not in (None, "", "unknown")
+        and e["anilist_id"] != int(anilist_id)
+    ]
+    if len(s1_matches) != 1:
+        return
+    s1 = s1_matches[0]
+    s1_anilist_id = s1["anilist_id"]
+    s1_mal_id = s1.get("mal_id")
+    if s1_mal_id in ("", "unknown"):
+        s1_mal_id = None
+
+    # Fetch S1's titles from AniList (interactive add path — one API
+    # call is acceptable).
+    from lcars import anilist_client
+    try:
+        media = anilist_client.fetch_media(s1_anilist_id)
+    except Exception:
+        return
+    if media is None:
+        return
+    titles = media.get("title") or {}
+    raise LaterSeasonError(
+        season_number=tvdb_season,
+        s1_anilist_id=s1_anilist_id,
+        s1_mal_id=s1_mal_id,
+        s1_title_romaji=titles.get("romaji"),
+        s1_title_english=titles.get("english"),
+    )
+
+
+def _find_parent_via_tvdb(conn, tvdb_id_str: str, exclude_show_id: str | None) -> dict | None:
+    """Find a tracked show sharing the same TVDB ID (franchise collision)."""
+    params: list = [tvdb_id_str]
+    exclude = ""
+    if exclude_show_id is not None:
+        exclude = " AND s.id != ?"
+        params.append(exclude_show_id)
+    return conn.execute(
+        "SELECT sei.show_id AS parent_id,"
+        "       s.title_english, s.title_romaji, s.primary_title"
+        " FROM show_external_id sei"
+        " JOIN show s ON s.id = sei.show_id"
+        " WHERE sei.service = 'tvdb' AND sei.external_id = ?"
+        f"   AND s.tracked = 1{exclude}"
+        " LIMIT 1",
+        params,
+    ).fetchone()
 
 
 # Relation types that are clearly NOT "this is a sequel of..."
@@ -227,18 +470,21 @@ def _find_parent_via_anilist(conn, anilist_id: int) -> dict | None:
     return _build_sequel_result(conn, parent_row, stub_show_id=None)
 
 
-def _build_sequel_result(conn, parent_row, stub_show_id: str | None) -> dict:
-    """Common result builder for both local and AniList paths."""
+def _build_sequel_result(
+    conn, parent_row, stub_show_id: str | None, *, next_season: int | None = None,
+) -> dict:
+    """Common result builder for all sequel-detection tiers."""
     parent_id = parent_row["parent_id"]
     primary = parent_row["primary_title"] or "romaji"
     parent_title = parent_row[f"title_{primary}"] or parent_row["title_romaji"] or parent_id
 
-    max_row = conn.execute(
-        "SELECT MAX(season_number) AS mx FROM season"
-        " WHERE show_id = ? AND season_number > 0",
-        (parent_id,),
-    ).fetchone()
-    next_season = (max_row["mx"] or 1) + 1
+    if next_season is None:
+        max_row = conn.execute(
+            "SELECT MAX(season_number) AS mx FROM season"
+            " WHERE show_id = ? AND season_number > 0",
+            (parent_id,),
+        ).fetchone()
+        next_season = (max_row["mx"] or 1) + 1
 
     return {
         "parent_show_id": parent_id,
@@ -379,7 +625,11 @@ def create_show(conn, input: dict) -> str:
         # action is "add as Season N on the parent", regardless of
         # whether this show is tracked or not.  SequelDetectedError
         # carries the parent info so the client can prompt.
-        sequel = find_sequel_parent(conn, input.get("anilist_id"))
+        sequel = find_sequel_parent(
+            conn, input.get("anilist_id"),
+            tvdb_id=input.get("tvdb_id"), tmdb_id=input.get("tmdb_id"),
+            imdb_id=input.get("imdb_id"), mal_id=input.get("mal_id"),
+        )
         if sequel is not None:
             raise SequelDetectedError(
                 sequel["parent_show_id"],
@@ -395,8 +645,12 @@ def create_show(conn, input: dict) -> str:
             )
         return _promote_stub(conn, existing_show_id, input)
 
-    # No local show at all — still check AniList relations for a sequel.
-    sequel = find_sequel_parent(conn, input.get("anilist_id"))
+    # No local show at all — still check relations for a sequel.
+    sequel = find_sequel_parent(
+        conn, input.get("anilist_id"),
+        tvdb_id=input.get("tvdb_id"), tmdb_id=input.get("tmdb_id"),
+        imdb_id=input.get("imdb_id"), mal_id=input.get("mal_id"),
+    )
     if sequel is not None:
         raise SequelDetectedError(
             sequel["parent_show_id"],
@@ -405,6 +659,8 @@ def create_show(conn, input: dict) -> str:
             sequel_anilist_id=input.get("anilist_id"),
             sequel_mal_id=input.get("mal_id"),
         )
+
+    _check_later_season_pre_add(conn, input.get("anilist_id"))
 
     show_id = ids.generate_id(conn, "s")
     now = util.now_utc_iso()
@@ -463,6 +719,7 @@ def create_show(conn, input: dict) -> str:
     # queryable even if every branch of the fetch below fails outright.
     metadata.fetch_and_populate(conn, show_id)
     conn.commit()
+
     return show_id
 
 
@@ -1233,7 +1490,11 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
         if existing["tracked"]:
             # Before refusing, check if this is a sequel — offer
             # season-attach instead of a duplicate error.
-            sequel = find_sequel_parent(conn, input.get("anilist_id"))
+            sequel = find_sequel_parent(
+                conn, input.get("anilist_id"),
+                tvdb_id=input.get("tvdb_id"), tmdb_id=input.get("tmdb_id"),
+                imdb_id=input.get("imdb_id"), mal_id=input.get("mal_id"),
+            )
             if sequel is not None:
                 raise SequelDetectedError(
                     sequel["parent_show_id"],
@@ -1281,7 +1542,11 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
         # Same sequel gate as create_show — an untracked stub that is
         # a SEQUEL of a tracked show should be offered as a season-attach,
         # not promoted to a separate tracked show.
-        sequel = find_sequel_parent(conn, input.get("anilist_id"))
+        sequel = find_sequel_parent(
+            conn, input.get("anilist_id"),
+            tvdb_id=input.get("tvdb_id"), tmdb_id=input.get("tmdb_id"),
+            imdb_id=input.get("imdb_id"), mal_id=input.get("mal_id"),
+        )
         if sequel is not None:
             raise SequelDetectedError(
                 sequel["parent_show_id"],

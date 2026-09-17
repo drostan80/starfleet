@@ -201,13 +201,13 @@ call `_unmonitor_in_arr_on_drop` — this is a gap (see W0 below).
          (localhost:8889, lcars-dev.db).
       c) All work built and tested in dev first. No push to prod until fully built and tested.
 
-- [ ] **W0 — `setStatus`: unmonitor Sonarr/Radarr on paused/dropped** (`resolvers.py`)
+- [x] **W0 — `setStatus`: unmonitor Sonarr/Radarr on paused/dropped** (`resolvers.py`) ✅
       `setStatus` does not call `_unmonitor_in_arr_on_drop` when status is set to paused
       or dropped. This breaks the invariant that Sonarr-followed shows cannot be
       paused/dropped. Add the call so the states are mutually exclusive, same as
       `setTracked(false)` and `softDeleteShow` already do.
 
-- [ ] **W1 — `find_sequel_parent`: add full Memory Alpha lookup** (`shows.py`)
+- [x] **W1 — `find_sequel_parent`: add full Memory Alpha lookup** (`shows.py`) ✅
       Today: local DB relations → live AniList (unreliable).
       Target: local DB relations → Fribb TVDB collision (same TVDB ID = same franchise)
       → Fribb season-number resolve (which season is this?) → anime-lists abs offset
@@ -218,66 +218,62 @@ call `_unmonitor_in_arr_on_drop` — this is a gap (see W0 below).
       detection work without AniList and covers TV/TMDB shows that currently bypass the
       check entirely (`onTmdbChipClick` sends no `anilistId`).
 
-- [ ] **W2 — `ensure_all_season_rows`: inherit status** (`season_ranges.py`)
+- [x] **W2 — `ensure_all_season_rows`: inherit status** (`season_ranges.py`) ✅
       Currently always creates with `status='planned'`. Look up parent show status and
       apply the table above. Same in the fallback INSERT (line 302) and the TV direct
       INSERT (line 313). Also applies to `reconcile_season()` (season_mapping.py:82,125)
       which hardcodes `'planned'`.
 
-- [ ] **W3 — Auto-attach sequels + post-add reconciliation** (`show_backfill.py`, `metadata.py`)
-      Two parts:
-      a) `backfill_untracked_shows`: instead of `continue` on `SequelDetectedError`,
-         auto-attach the season to its parent via `reconcile_season` or a direct INSERT
-         with `source='auto'`, `manual_override=0` — explicitly NOT through
-         `setSeasonMapping`'s manual path (that stamps `source='manual', manual_override=1`,
-         which locks the row against future Fribb reconciles and requires
-         `RESOLVING_CLIENTS` + gap validation that would raise on this exact case).
-         Apply status rules from the table above. Record the attachment for browse page
-         surfacing (e.g., `pending_review` with category `'sequel_auto_attached'`, or a
-         flag on the season row).
-      b) Post-add reconciliation: any show already added that is later discovered (via
-         Memory Alpha's cross-ID graph, Fribb season resolve, anime-lists offset, etc.)
-         to actually contain episodes belonging to an existing show's subsequent season
-         must be automatically reconciled — merged into the parent show as a new season,
-         following the same rules as `apply_show_merge` but triggered automatically by
-         the ops loop rather than waiting for manual review.
+- [x] **W3(a) — Auto-attach sequels in backfill** (`show_backfill.py`) ✅
+- [x] **W3(b) — Post-add reconciliation** (`show_merge.py`) ✅
+      `detect_franchise_collisions` runs as step 2g in `poll_memory_alpha`, after
+      `propagate_cross_ids`. Detects TVDB collisions (multiple shows sharing a TVDB
+      external_id), determines parent/child direction via Fribb season.tvdb + absolute
+      episode ordering, and auto-merges child into parent as a new season via
+      `merge_season_into_show` (renumbering primitive — unlike `merge_shows`, this
+      renumbers the child's S1 into season N on the parent). Records `pending_review`
+      with field `'franchise_auto_merge'` in the same transaction (atomic).
+      `resolveFranchiseMerge` mutation handles 3 resolution paths: confirm, redirect
+      (reverse + re-merge into correct parent/season), reject (reverse + correct IDs).
+      `reverse_season_merge` undoes the renumbering using manifest-recorded originals.
+      Tested against real dev DB: 148 collisions, 206 merges, all plausible.
+      **Gaps fixed (2026-09-17)**:
+      - Case 3 (no tracked parent): promotes via `_promote_stub` so metadata gets fetched.
+      - Case 2 (season collision): detects collision BEFORE merging (no demotion/no-op
+        merge); opens `franchise_season_collision` review asking for correct season.
+      - Skip guard: uses `parent_id` as dedup key (not JSON blob) so resolved pairs
+        aren't re-proposed on next sweep.
+      - Resolver handles both `franchise_auto_merge` and `franchise_season_collision`.
+      23 tests (including sweep→resolve→re-sweep churn test).
 
-- [ ] **W4 — `_cross_reference`: read `season_external_id`** (`browse.py`)
-      Migration hardening: AniList path (step 2, line 115) only reads `season.anilist_id`.
-      Today every writer dual-writes both columns, so this isn't a live bug. But as the
-      schema migrates toward `season_external_id` as the canonical location, any future
-      writer that only populates the new table would create an invisible season on browse.
-      Add a `season_external_id` lookup alongside the `season.anilist_id` one to future-proof.
+- [x] **W4 — `_cross_reference`: read `season_external_id`** (`browse.py`) ✅
+      Added step 2b in `_cross_reference`: queries `season_external_id` for AniList IDs,
+      same pattern `_cross_reference_by_mal` already uses. Future-proofs against writers
+      that only populate `season_external_id` (not `season.anilist_id`). 2 new tests.
 
-- [ ] **W5 — Browse page: surface auto-created sequel seasons** (`browse.py` + `browse.js`)
-      Two parts:
-      a) TVDB-based cross-reference: after the existing AniList-ID cross-reference,
-         for items still showing NOT_IN_LCARS, use the Fribb-resolved TVDB ID (already
-         computed at line 596 for display) to check if any tracked show shares that TVDB
-         ID. If so, mark the card with that show's status. Without this, an auto-created
-         season with no `anilist_id` (Fribb unmatched) is invisible on browse — the
-         season row exists in LCARS but browse can't find it because it only looks up
-         by AniList ID. This is the gap that would let a card show NOT_IN_LCARS when the
-         show is already tracked with a new season.
-      b) Status badges: when `_cross_reference` (or the new TVDB lookup) finds a
-         season-level match with `source='unmatched'` or `matched=0`, surface it on the
-         browse card as "auto-added, unconfirmed" rather than a plain status badge. Lets
-         the user confirm or correct the mapping. Also surface sequels of skipped shows
-         with a "sequel of skipped show" note.
+- [x] **W5 — Browse page: surface auto-created sequel seasons** (`browse.py` + `browse.js`) ✅
+      a) TVDB-based cross-reference: `_cross_reference_by_tvdb` runs after Fribb TVDB
+         resolution, matching unmatched browse items by TVDB ID against tracked shows.
+         Cards that were invisible (season exists but no AniList ID on it) now show status.
+      b) Auto-added badge: `_cross_reference` now returns `season_source` and
+         `season_matched`. Unconfirmed seasons (`matched=0`) get an "auto-added" badge
+         on the browse card. New GraphQL fields: `lcarsSeasonSource`, `lcarsSeasonMatched`
+         on `SeasonalBrowseItem`.
 
-- [ ] **W6 — Pre-add check for "is this actually S2+"** (`shows.py`)
-      When adding a brand new show (not followed anywhere on LCARS), before creating as
-      S1, use the full Memory Alpha framework (Fribb season resolve, anime-lists offset,
-      Wikidata bridge, ARM, Sonarr lookup) to check whether this show's episodes start at
-      a non-first season. If so, create the show with the correct season number rather
-      than defaulting to S1.
-      **Tension:** `setSeasonMapping`'s gap validation forbids adding S3 without S1-S2
-      existing. Either stub the earlier seasons or bypass that validation on the auto-create
-      path. To be resolved during implementation.
+- [x] **W6 — Pre-add check for "is this actually S2+"** (`shows.py` + `browse.js`) ✅
+      When adding a show from browse whose AniList entry maps to TVDB season > 1
+      (via Fribb) and the franchise is not tracked, `LaterSeasonError` is raised
+      BEFORE creating the show. The error carries S1's AniList/MAL IDs and titles
+      (fetched from AniList). Client shows "This appears to be Season X of Y (not
+      tracked). Add Season 1 instead?" — yes adds S1 as a new show, no cancels.
+      Backfill callers catch this as `ShowInputError` and skip gracefully.
+      Shared `handleAddError` function in browse.js de-duplicates the sequel/later-season/
+      tracked error handling across both addShow and addShowWithArr paths.
+      8 new tests in `test_sequel_detection.py`.
 
-- [ ] **W7 — `setSeasonMapping` resolver: apply status rules** (`resolvers.py:3956`)
-      Currently creates new season rows with `status='planned'` unconditionally. When
-      creating a new season via the attach path, apply the same status inheritance table.
+- [x] **W7 — `setSeasonMapping` resolver: apply status rules** (`resolvers.py`) ✅
+      New season rows now use `inherit_season_status` instead of hardcoded `'planned'`.
+      Dropped/paused shows without arr links get the correct inherited status. 1 new test.
 
 - [ ] **B.5.3a — Scoped reconcile**: target a single show instead of sweeping the full
       AniList list every time. Good-to-have, not urgent.

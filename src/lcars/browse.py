@@ -115,6 +115,7 @@ def _cross_reference(
     # 2. season.anilist_id (INTEGER) — may find season-level matches
     season_rows = conn.execute(
         f"SELECT s.id AS season_id, s.anilist_id, s.show_id, s.status AS season_status,"
+        f" s.source AS season_source, s.matched AS season_matched,"
         f" sh.status AS show_status, sh.tracked"
         f" FROM season s"
         f" JOIN show sh ON sh.id = s.show_id"
@@ -123,15 +124,42 @@ def _cross_reference(
     ).fetchall()
     for row in season_rows:
         if not row["tracked"] and row["show_status"] != "skipped":
-            continue  # ignore untracked stubs (but keep skipped tombstones)
+            continue
         aid = row["anilist_id"]
-        # Prefer season-level match over show-level when available
         if aid not in result or result[aid]["season_id"] is None:
             result[aid] = {
                 "show_id": row["show_id"],
                 "status": row["show_status"],
                 "season_id": row["season_id"],
                 "season_status": row["season_status"],
+                "season_source": row["season_source"],
+                "season_matched": bool(row["season_matched"]),
+            }
+
+    # 2b. season_external_id — AniList IDs at season level (canonical
+    # location as schema migrates away from season.anilist_id).
+    sei_rows = conn.execute(
+        f"SELECT se.external_id, se.season_id, s.show_id, s.status AS season_status,"
+        f" s.source AS season_source, s.matched AS season_matched,"
+        f" sh.status AS show_status, sh.tracked"
+        f" FROM season_external_id se"
+        f" JOIN season s ON s.id = se.season_id"
+        f" JOIN show sh ON sh.id = s.show_id"
+        f" WHERE se.service = 'anilist' AND se.external_id IN ({placeholders})",
+        str_ids,
+    ).fetchall()
+    for row in sei_rows:
+        if not row["tracked"] and row["show_status"] != "skipped":
+            continue
+        aid = int(row["external_id"])
+        if aid not in result or result[aid]["season_id"] is None:
+            result[aid] = {
+                "show_id": row["show_id"],
+                "status": row["show_status"],
+                "season_id": row["season_id"],
+                "season_status": row["season_status"],
+                "season_source": row["season_source"],
+                "season_matched": bool(row["season_matched"]),
             }
 
     # 3. Enrich matched shows with their full external-id set.
@@ -225,6 +253,65 @@ def _cross_reference_by_mal(
     for m in result.values():
         m["external_ids"] = ext_ids_by_show.get(m["show_id"], {})
 
+    return result
+
+
+def _cross_reference_by_tvdb(
+    conn: sqlite3.Connection, anilist_to_tvdb: dict[int, int]
+) -> dict[int, dict]:
+    """Return {anilist_id -> match_dict} for shows sharing a TVDB ID.
+
+    ``anilist_to_tvdb`` maps AniList IDs (from the browse page) to their
+    Fribb-resolved TVDB IDs.  For each unique TVDB ID, finds tracked
+    shows in LCARS sharing that ID and returns a match keyed by the
+    original AniList ID — so the browse card can show the LCARS status.
+    """
+    if not anilist_to_tvdb:
+        return {}
+    unique_tvdb = set(str(t) for t in anilist_to_tvdb.values())
+    placeholders = ",".join("?" for _ in unique_tvdb)
+    tvdb_strs = list(unique_tvdb)
+    rows = conn.execute(
+        f"SELECT sei.external_id AS tvdb_id, sei.show_id, sh.status, sh.tracked"
+        f" FROM show_external_id sei"
+        f" JOIN show sh ON sh.id = sei.show_id"
+        f" WHERE sei.service = 'tvdb' AND sei.external_id IN ({placeholders})",
+        tvdb_strs,
+    ).fetchall()
+    tvdb_to_show: dict[str, dict] = {}
+    for row in rows:
+        if not row["tracked"] and row["status"] != "skipped":
+            continue
+        tvdb_str = row["tvdb_id"]
+        if tvdb_str not in tvdb_to_show:
+            tvdb_to_show[tvdb_str] = {
+                "show_id": row["show_id"],
+                "status": row["status"],
+                "season_id": None,
+                "season_status": None,
+                "external_ids": {},
+            }
+
+    if not tvdb_to_show:
+        return {}
+
+    # Enrich with external IDs.
+    matched_ids = list({m["show_id"] for m in tvdb_to_show.values()})
+    ph2 = ",".join("?" for _ in matched_ids)
+    for row in conn.execute(
+        f"SELECT show_id, service, external_id FROM show_external_id"
+        f" WHERE show_id IN ({ph2})",
+        matched_ids,
+    ).fetchall():
+        for m in tvdb_to_show.values():
+            if m["show_id"] == row["show_id"]:
+                m["external_ids"][row["service"]] = row["external_id"]
+
+    result: dict[int, dict] = {}
+    for aid, tvdb_id in anilist_to_tvdb.items():
+        match = tvdb_to_show.get(str(tvdb_id))
+        if match is not None:
+            result[aid] = match
     return result
 
 
@@ -457,6 +544,12 @@ def _flatten_media(
         "lcars_season_status": (
             lcars_match["season_status"] if lcars_match else None
         ),
+        "lcars_season_source": (
+            lcars_match.get("season_source") if lcars_match else None
+        ),
+        "lcars_season_matched": (
+            lcars_match.get("season_matched") if lcars_match else None
+        ),
     }
 
 
@@ -537,6 +630,12 @@ def _flatten_mal_media(
         "lcars_season_status": (
             lcars_match["season_status"] if lcars_match else None
         ),
+        "lcars_season_source": (
+            lcars_match.get("season_source") if lcars_match else None
+        ),
+        "lcars_season_matched": (
+            lcars_match.get("season_matched") if lcars_match else None
+        ),
     }
 
 
@@ -597,6 +696,18 @@ def fetch_seasonal_browse(
                 fribb_tvdb[aid] = fribb.resolve_tvdb_id_for_anilist(index, aid)
         except Exception:
             log.debug("Fribb lookup failed for browse TVDB enrichment", exc_info=True)
+
+    # W5(a): TVDB-based cross-reference for items still unmatched —
+    # catches auto-created sequel seasons that have no anilist_id on
+    # the season row (Fribb unmatched) but share a TVDB ID with a
+    # tracked show.
+    tvdb_ids_to_check = {
+        aid: tvdb for aid, tvdb in fribb_tvdb.items()
+        if tvdb is not None and aid not in lcars_matches
+    }
+    if tvdb_ids_to_check:
+        tvdb_matches = _cross_reference_by_tvdb(conn, tvdb_ids_to_check)
+        lcars_matches.update(tvdb_matches)
 
     # Flatten
     items = [

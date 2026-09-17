@@ -1099,3 +1099,8 @@ a.sp-special-title:hover { color: var(--accent); }
 .sp-season-card.unmapped .sp-season-header {
   opacity: 0.6;
 }
+
+/* Hide watched episode rows when the toggle is off */
+#show-root.hide-watched .sp-ep-row:has([data-state="WATCHED"]) {
+  display: none;
+}

@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=18">
+  <link rel="stylesheet" href="css/main.css?v=19">
   <style>
     /* ── Backlog card size — 20% larger than calendar default ── */
     #backlog-grid {
@@ -222,6 +222,7 @@
       <span class="sf-dot" style="background:var(--st-dropped)"></span>Dropped
     </button>
   </div>
+  <span id="watched-toggle-mount"></span>
     <a href="downloads.html" class="nav-icon-btn" title="Downloads">DL</a>
   <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
   <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
@@ -249,9 +250,14 @@
     buildCard,
     showBanner, hideBanner,
     fetchTmdbPoster,
-  } from './js/calendar.js?v=38';
+  } from './js/calendar.js?v=39';
+  import { buildWatchedToggle } from './js/watched-toggle.js?v=1';
 
   applyAppName();
+
+  // Watched toggle (disabled — backlog is unwatched-only by definition)
+  const wtMount = document.getElementById('watched-toggle-mount');
+  if (wtMount) wtMount.appendChild(buildWatchedToggle({ disabled: true }));
   await bootstrapConfig();
 
   const STATUSES = ['WATCHING','COMPLETED','PLANNED','PAUSED','DROPPED'];

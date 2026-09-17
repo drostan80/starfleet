@@ -18,6 +18,7 @@ import {
 } from './status-picker.js?v=1';
 import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg, SVC_ICONS } from './icons.js?v=16';
 import { startDownload } from './downloads.js?v=2';
+import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 
 /* ── Constants ────────────────────────────────────────────── */
 
@@ -257,6 +258,9 @@ const LAYOUT_KEY = 'starfleet_calendar_layout';
 
 /** Set of status values currently visible. Persisted in localStorage. */
 let activeStatuses = loadStatusFilter();
+
+/** Whether watched episodes are visible. Persisted in localStorage. */
+let _showWatched = loadShowWatched();
 
 function loadStatusFilter() {
   try {
@@ -832,6 +836,7 @@ function groupByDay(episodes) {
     if (!ep.show.tracked) continue;                      // skip merged-away duplicates
     const epStatus = ep.seasonEntity?.status || ep.show.status;
     if (!activeStatuses.has(epStatus)) continue;  // status filter
+    if (!_showWatched && ep.state === 'WATCHED') continue;
 
     const localDate = ep.airDateUtc ? new Date(ep.airDateUtc) : null;
     const dateStr   = localDate
@@ -1509,6 +1514,17 @@ export async function init() {
     pill.classList.toggle('active', activeStatuses.has(status));
     pill.addEventListener('click', () => toggleStatus(status));
   });
+
+  // Watched toggle
+  const wtMount = document.getElementById('watched-toggle-mount');
+  if (wtMount) {
+    wtMount.appendChild(buildWatchedToggle({
+      onChange(on) {
+        _showWatched = on;
+        renderEpisodes(lastFetchedEpisodes, getConfig());
+      },
+    }));
+  }
 
   // Keyboard navigation
   initKeyboardNav();

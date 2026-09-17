@@ -965,11 +965,21 @@ type FailedBackfillItem {
   error: String!
 }
 
+"W3 — a sequel that backfillUntrackedShows auto-attached as a new season on its parent, instead of creating a separate show."
+type SequelAttachedItem {
+  parentShowId: ID!
+  parentTitle: String!
+  seasonNumber: Int!
+  service: String!
+  title: String!
+}
+
 "B.11d — backfillUntrackedShows' own confirmation summary. `promoted` split from `created` in the same-day follow-up fix: a candidate whose external id an *earlier* candidate in this same run had already stub-created (via that show's own AniList relations walk, A.21) gets its stub promoted in place (tracked = true, SCOPE.md §5.1's own documented path) instead of a second row — 86 real collision pairs found live before this fix shipped. See show_backfill.py's own module docstring for the full story."
 type ShowBackfillResult {
   created: [BackfilledShow!]!
   promoted: [BackfilledShow!]!
   failed: [FailedBackfillItem!]!
+  sequelAttached: [SequelAttachedItem!]!
 }
 
 "B.11e — one persisted row from the ongoing untracked-show sweep (pollUntrackedShows), same underlying computation previewShowBackfill runs one-shot. Only ever removed by no longer appearing in a fresh sweep (the show got tracked some other way, or genuinely disappeared from its source) — no separate resolve/dismiss action, unlike PendingReview."
@@ -1132,6 +1142,8 @@ type MemoryAlphaPollResult {
   syoboiProgramsFetched: Int!
   syoboiAirdatesRewired: Int!
   airdateGapsFilled: Int!
+  franchiseCollisionsFound: Int!
+  franchiseMergesPerformed: Int!
 }
 
 "AniDB per-episode data resolved through episode_anidb_mapping → anidb_episode. Null when the episode has no AniDB mapping or when anidb_episode hasn't been fetched yet for that anime."
@@ -1349,6 +1361,10 @@ type SeasonalBrowseItem {
   lcarsSeasonId: ID
   "If matched via a season row, the season's own status override (null = inherits show status)."
   lcarsSeasonStatus: ShowStatus
+  "If matched via a season row, the season's source (fribb, manual, unmatched, auto). Null when no season match."
+  lcarsSeasonSource: SeasonSource
+  "If matched via a season row, whether the season's ID mapping is confirmed. Null when no season match."
+  lcarsSeasonMatched: Boolean
 }
 
 type SeasonalBrowseResult {
@@ -1733,6 +1749,21 @@ type Mutation {
   on why no RESOLVING_CLIENTS-style restriction applies here).
   """
   reverseShowMerge(id: ID!): ShowMerge!
+  """
+  W3(b) — resolve a franchise_auto_merge pending_review.
+  action: "confirm" (merge stands), "redirect" (reverse + re-merge into
+  correctParentId as correctSeason), or "reject" (reverse, restore child
+  as standalone, optionally correct its TVDB/AniList via correctedTvdbId/
+  correctedAnilistId so the collision doesn't recur).
+  """
+  resolveFranchiseMerge(
+    reviewId: ID!
+    action: String!
+    correctParentId: ID
+    correctSeason: Int
+    correctedTvdbId: String
+    correctedAnilistId: Int
+  ): ShowMerge!
   """
   §6.7, B.5 — a global sweep of animeschedule.net's raw (native/Japan
   release) RSS feed, matched by fuzzy title against LCARS's own

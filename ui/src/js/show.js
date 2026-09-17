@@ -25,7 +25,8 @@ import {
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv,
   onStatusChange,
-} from './calendar.js?v=29';
+} from './calendar.js?v=39';
+import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5, STATUS_LABELS, STATUS_ICON_CLASS,
@@ -3360,6 +3361,17 @@ export async function init() {
 
     const root = document.getElementById('show-root');
     root.innerHTML = '';
+    if (!loadShowWatched()) root.classList.add('hide-watched');
+
+    // Mount watched toggle in nav
+    const wtMount = document.getElementById('watched-toggle-mount');
+    if (wtMount && !wtMount.hasChildNodes()) {
+      wtMount.appendChild(buildWatchedToggle({
+        onChange(on) {
+          root.classList.toggle('hide-watched', !on);
+        },
+      }));
+    }
 
     renderBanner(show, root);
     renderHero(show, root, cfg);

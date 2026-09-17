@@ -133,6 +133,51 @@ function confirmSequelAttach(sequel) {
 }
 
 /**
+ * Parse a "later_season:{json}" error — S2+ of an untracked franchise.
+ * Returns null if not a later-season error.
+ */
+function parseLaterSeasonError(msg) {
+  if (!msg.startsWith('later_season:')) return null;
+  try {
+    return JSON.parse(msg.slice('later_season:'.length));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Show a modal asking the user whether to add S1 instead.
+ * Returns a Promise<boolean>.
+ */
+function confirmAddSeason1(info) {
+  const title = info.s1TitleEnglish || info.s1TitleRomaji || 'this franchise';
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'sequel-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="sequel-confirm-dialog">
+        <p>This appears to be <strong>Season ${info.seasonNumber}</strong>
+           of <em>${title}</em> (not tracked).</p>
+        <p>Add Season 1 instead?</p>
+        <div class="sequel-confirm-btns">
+          <button class="btn-confirm">Add Season 1</button>
+          <button class="btn-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.btn-confirm').onclick = () => {
+      overlay.remove();
+      resolve(true);
+    };
+    overlay.querySelector('.btn-cancel').onclick = () => {
+      overlay.remove();
+      resolve(false);
+    };
+  });
+}
+
+/**
  * Handle a confirmed sequel attach: call setSeasonMapping, then refresh.
  */
 async function attachSequel(sequel) {
@@ -669,6 +714,15 @@ function createAnimeCard(item) {
     card.style.setProperty('--tracked-color', statusColor(eff));
   }
 
+  // Auto-added unconfirmed badge
+  if (item.lcarsSeasonSource && !item.lcarsSeasonMatched) {
+    const badge = document.createElement('div');
+    badge.className = 'browse-auto-badge';
+    badge.textContent = 'auto-added';
+    badge.title = 'This season was auto-detected — confirm or correct the mapping on the show page';
+    card.appendChild(badge);
+  }
+
   // Cover art
   const cover = document.createElement('div');
   cover.className = 'browse-cover';
@@ -940,7 +994,13 @@ async function onAnimeChipClick(card, item, status) {
     }
 
     if (status === 'COMPLETED' || status === 'DROPPED') {
-      show = await addShow(input);
+      try {
+        show = await addShow(input);
+      } catch (err) {
+        const handled = await handleAddError(err, card, item, input, status);
+        if (handled) return;
+        throw err;
+      }
       if (show.status !== status) {
         await setStatus(show.id, status);
         show.status = status;
@@ -973,42 +1033,8 @@ async function onAnimeChipClick(card, item, status) {
         const result = await addShowWithArr(arrInput);
         show = result.show;
       } catch (err) {
-        // Already tracked — not an error, just inform.
-        const tracked = err.message.match(/already tracked \(show ([^)]+)\)/);
-        if (tracked) {
-          item.lcarsShowId = tracked[1];
-          item.lcarsStatus = 'PLANNED';
-          refreshCard(card, item);
-          showBanner('Already tracked — use Add mode to manage seasons', 'info');
-          card.classList.remove('loading');
-          return;
-        }
-
-        // Sequel detected — ask user to confirm season attach.
-        const sequel = parseSequelError(err.message);
-        if (sequel) {
-          const ok = await confirmSequelAttach(sequel);
-          if (ok) {
-            await attachSequel(sequel);
-            // Apply the status the user originally selected
-            if (status !== 'PLANNED') {
-              await setStatus(sequel.parentShowId, status);
-            }
-            showBanner(
-              `Attached as Season ${sequel.nextSeason} of ${sequel.parentTitle}`,
-              'ok',
-            );
-            item.lcarsShowId = sequel.parentShowId;
-            item.lcarsStatus = status;
-            refreshCard(card, item);
-          } else {
-            showBanner('Cancelled', 'info');
-          }
-          card.classList.remove('loading');
-          return;
-        }
-
-        // Any other error — surface it, do NOT silently create orphan stub.
+        const handled = await handleAddError(err, card, item, input, status);
+        if (handled) return;
         throw err;
       }
 
@@ -1028,6 +1054,80 @@ async function onAnimeChipClick(card, item, status) {
   } finally {
     card.classList.remove('loading');
   }
+}
+
+/**
+ * Shared error handler for addShow / addShowWithArr errors.
+ * Returns true if the error was handled (caller should return),
+ * false if the error should be re-thrown.
+ */
+async function handleAddError(err, card, item, input, status) {
+  // Already tracked — not an error, just inform.
+  const tracked = err.message.match(/already tracked \(show ([^)]+)\)/);
+  if (tracked) {
+    item.lcarsShowId = tracked[1];
+    item.lcarsStatus = 'PLANNED';
+    refreshCard(card, item);
+    showBanner('Already tracked', 'info');
+    card.classList.remove('loading');
+    return true;
+  }
+
+  // Sequel detected — ask user to confirm season attach.
+  const sequel = parseSequelError(err.message);
+  if (sequel) {
+    const ok = await confirmSequelAttach(sequel);
+    if (ok) {
+      await attachSequel(sequel);
+      if (status !== 'PLANNED') {
+        await setStatus(sequel.parentShowId, status);
+      }
+      showBanner(
+        `Attached as Season ${sequel.nextSeason} of ${sequel.parentTitle}`,
+        'ok',
+      );
+      item.lcarsShowId = sequel.parentShowId;
+      item.lcarsStatus = status;
+      refreshCard(card, item);
+    } else {
+      showBanner('Cancelled', 'info');
+    }
+    card.classList.remove('loading');
+    return true;
+  }
+
+  // Later season of untracked franchise — offer to add S1.
+  const laterSeason = parseLaterSeasonError(err.message);
+  if (laterSeason) {
+    const ok = await confirmAddSeason1(laterSeason);
+    if (ok) {
+      const s1Input = {
+        mediaShape: input.mediaShape,
+        trackingSpace: input.trackingSpace,
+        primaryTitle: laterSeason.s1TitleEnglish ? 'ENGLISH' : 'ROMAJI',
+        titleEnglish: laterSeason.s1TitleEnglish || undefined,
+        titleRomaji: laterSeason.s1TitleRomaji || undefined,
+        anilistId: laterSeason.s1AnilistId,
+        malId: laterSeason.s1MalId || undefined,
+      };
+      const show = await addShow(s1Input);
+      if (show.status !== status && status !== 'PLANNED') {
+        await setStatus(show.id, status);
+        show.status = status;
+      }
+      item.lcarsShowId = show.id;
+      item.lcarsStatus = show.status || status;
+      refreshCard(card, item);
+      const title = laterSeason.s1TitleEnglish || laterSeason.s1TitleRomaji;
+      showBanner(`Added: ${title} [${STATUS_LABELS[status]}]`, 'ok');
+    } else {
+      showBanner('Cancelled', 'info');
+    }
+    card.classList.remove('loading');
+    return true;
+  }
+
+  return false;
 }
 
 // ── TMDB chip click (add / status change) ────────────────
@@ -1079,7 +1179,13 @@ async function onTmdbChipClick(card, item, status) {
     }
 
     if (status === 'COMPLETED' || status === 'DROPPED') {
-      show = await addShow(input);
+      try {
+        show = await addShow(input);
+      } catch (err) {
+        const handled = await handleAddError(err, card, item, input, status);
+        if (handled) return;
+        throw err;
+      }
       if (show.status !== status) {
         await setStatus(show.id, status);
         show.status = status;
@@ -1111,40 +1217,8 @@ async function onTmdbChipClick(card, item, status) {
         const result = await addShowWithArr(arrInput);
         show = result.show;
       } catch (err) {
-        const tracked = err.message.match(/already tracked \(show ([^)]+)\)/);
-        if (tracked) {
-          item.lcarsShowId = tracked[1];
-          item.lcarsStatus = 'PLANNED';
-          refreshCard(card, item);
-          showBanner('Already tracked', 'info');
-          card.classList.remove('loading');
-          return;
-        }
-
-        // Sequel detected — ask user to confirm season attach.
-        const sequel = parseSequelError(err.message);
-        if (sequel) {
-          const ok = await confirmSequelAttach(sequel);
-          if (ok) {
-            await attachSequel(sequel);
-            if (status !== 'PLANNED') {
-              await setStatus(sequel.parentShowId, status);
-            }
-            showBanner(
-              `Attached as Season ${sequel.nextSeason} of ${sequel.parentTitle}`,
-              'ok',
-            );
-            item.lcarsShowId = sequel.parentShowId;
-            item.lcarsStatus = status;
-            refreshCard(card, item);
-          } else {
-            showBanner('Cancelled', 'info');
-          }
-          card.classList.remove('loading');
-          return;
-        }
-
-        // Any other error — surface it, do NOT silently create orphan stub.
+        const handled = await handleAddError(err, card, item, input, status);
+        if (handled) return;
         throw err;
       }
 

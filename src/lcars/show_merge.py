@@ -712,3 +712,626 @@ def reverse_show_merge(conn, merge_id: str, changed_by: str) -> dict:
     )
     conn.commit()
     return dict(conn.execute("SELECT * FROM show_merge WHERE id = ?", (merge_id,)).fetchone())
+
+
+# ---------------------------------------------------------------------------
+# Franchise collision detection — W3(b) ops-loop sweep
+# ---------------------------------------------------------------------------
+
+
+def detect_franchise_collisions(conn) -> dict:
+    """Find shows sharing a TVDB external_id and auto-merge the child into
+    the parent as a new season.
+
+    Runs after ``propagate_cross_ids`` in the ops loop.  Uses Fribb's
+    ``season.tvdb`` for direction (which show is the child + what season
+    number), falling back to absolute-episode ordering (the show with the
+    higher abs range is the later season) and then creation time.
+
+    Each merge is recorded in ``show_merge`` and a ``pending_review`` is
+    opened so the user can confirm, redirect, or reject.
+
+    Returns ``{"collisions_found": int, "merges_performed": int}``.
+    """
+    # Find TVDB IDs shared by more than one show.
+    collision_groups = conn.execute(
+        """SELECT sei.external_id AS tvdb_id,
+                  GROUP_CONCAT(sei.show_id) AS show_ids
+           FROM show_external_id sei
+           JOIN show s ON s.id = sei.show_id
+           WHERE sei.service = 'tvdb'
+           GROUP BY sei.external_id
+           HAVING COUNT(*) > 1"""
+    ).fetchall()
+
+    merges_performed = 0
+
+    for group in collision_groups:
+        tvdb_id = group["tvdb_id"]
+        show_ids = group["show_ids"].split(",")
+
+        shows = conn.execute(
+            f"SELECT s.id, s.tracked, s.created_at,"
+            f"  (SELECT MAX(COALESCE(e.absolute_number, 0))"
+            f"     FROM episode e WHERE e.show_id = s.id) AS max_abs,"
+            f"  (SELECT MAX(z.season_number)"
+            f"     FROM season z WHERE z.show_id = s.id) AS max_season"
+            f" FROM show s WHERE s.id IN ({','.join('?' * len(show_ids))})"
+            f" ORDER BY s.tracked DESC, s.created_at ASC",
+            show_ids,
+        ).fetchall()
+
+        if len(shows) < 2:
+            continue
+
+        tracked = [s for s in shows if s["tracked"]]
+        untracked = [s for s in shows if not s["tracked"]]
+
+        if not tracked:
+            # Case 3: no tracked shows — promote the one with most content
+            # via _promote_stub so metadata gets fetched.
+            untracked.sort(key=lambda s: (-(s["max_abs"] or 0), s["created_at"]))
+            promote_id = untracked[0]["id"]
+            try:
+                from lcars.shows import _promote_stub
+                _promote_stub(conn, promote_id, {"tvdb_id": tvdb_id})
+            except Exception:
+                logger.exception(
+                    "franchise collision: failed to promote %s (tvdb=%s)",
+                    promote_id, tvdb_id,
+                )
+                conn.rollback()
+                continue
+            logger.info(
+                "franchise collision: promoted %s as parent (tvdb=%s, no tracked shows)",
+                promote_id, tvdb_id,
+            )
+            # Re-query so the promoted show appears as tracked.
+            shows = conn.execute(
+                f"SELECT s.id, s.tracked, s.created_at,"
+                f"  (SELECT MAX(COALESCE(e.absolute_number, 0))"
+                f"     FROM episode e WHERE e.show_id = s.id) AS max_abs,"
+                f"  (SELECT MAX(z.season_number)"
+                f"     FROM season z WHERE z.show_id = s.id) AS max_season"
+                f" FROM show s WHERE s.id IN ({','.join('?' * len(show_ids))})"
+                f" ORDER BY s.tracked DESC, s.created_at ASC",
+                show_ids,
+            ).fetchall()
+            tracked = [s for s in shows if s["tracked"]]
+            untracked = [s for s in shows if not s["tracked"]]
+
+        # Tracked shows with real episode data are parent candidates.
+        parent_candidates = [s for s in tracked if s["max_abs"] and s["max_abs"] > 0]
+        if not parent_candidates:
+            parent_candidates = tracked
+
+        parent_candidates.sort(key=lambda s: (s["max_abs"] or 0, s["created_at"]))
+        parent = parent_candidates[0]
+
+        children = untracked + [t for t in tracked if t["id"] != parent["id"]]
+
+        for child in children:
+            # Skip if already merged (check for existing unreversed merge).
+            existing_merge = conn.execute(
+                "SELECT 1 FROM show_merge"
+                " WHERE winner_show_id = ? AND loser_show_id = ?"
+                "   AND reversed_at IS NULL",
+                (parent["id"], child["id"]),
+            ).fetchone()
+            if existing_merge is not None:
+                continue
+
+            # Skip if already reviewed and resolved for this pair (either field).
+            if _already_resolved_franchise(conn, child["id"], parent["id"]):
+                continue
+
+            # Determine target season number.
+            target_season = _determine_target_season(conn, parent, child)
+
+            # Read titles for the review message.
+            child_title = conn.execute(
+                "SELECT COALESCE(title_english, title_romaji) AS t FROM show WHERE id = ?",
+                (child["id"],),
+            ).fetchone()
+            parent_title = conn.execute(
+                "SELECT COALESCE(title_english, title_romaji) AS t FROM show WHERE id = ?",
+                (parent["id"],),
+            ).fetchone()
+
+            # Check for season collision BEFORE mutating: if the parent
+            # already has the target season and every child episode slot
+            # collides, merging would be a no-op that still demotes the
+            # child.  Open a review asking for the correct season instead.
+            if _would_be_season_collision(conn, parent["id"], child["id"], target_season):
+                review_value = json.dumps({
+                    "parent_id": parent["id"],
+                    "parent_title": parent_title["t"] if parent_title else parent["id"],
+                    "child_id": child["id"],
+                    "child_title": child_title["t"] if child_title else child["id"],
+                    "target_season": target_season,
+                    "tvdb_id": tvdb_id,
+                })
+                try:
+                    pending_review.open_or_extend(
+                        conn, "show", child["id"], "franchise_season_collision",
+                        "show_merge", None, parent["id"],
+                    )
+                    conn.commit()
+                except Exception:
+                    logger.exception(
+                        "franchise collision review failed: parent=%s child=%s tvdb=%s",
+                        parent["id"], child["id"], tvdb_id,
+                    )
+                    conn.rollback()
+                continue
+
+            try:
+                merge_id = merge_season_into_show(
+                    conn,
+                    parent["id"],
+                    child["id"],
+                    target_season,
+                    f"tvdb collision (tvdb_id={tvdb_id})",
+                    _commit=False,
+                )
+
+                pending_review.open_or_extend(
+                    conn, "show", child["id"], "franchise_auto_merge",
+                    "show_merge", None, parent["id"],
+                )
+                conn.commit()
+            except Exception:
+                logger.exception(
+                    "franchise collision merge failed: parent=%s child=%s tvdb=%s",
+                    parent["id"], child["id"], tvdb_id,
+                )
+                conn.rollback()
+                continue
+
+            merges_performed += 1
+
+    return {"collisions_found": len(collision_groups), "merges_performed": merges_performed}
+
+
+def _already_resolved_franchise(conn, child_id: str, parent_id: str) -> bool:
+    """Check if a franchise collision pair has already been resolved
+    (either as an auto_merge or a season_collision)."""
+    return (
+        pending_review.already_resolved_with(
+            conn, "show", child_id, "franchise_auto_merge", parent_id
+        )
+        or pending_review.already_resolved_with(
+            conn, "show", child_id, "franchise_season_collision", parent_id
+        )
+    )
+
+
+def _would_be_season_collision(
+    conn, parent_id: str, child_id: str, target_season: int
+) -> bool:
+    """True when the parent already has the target season and every child
+    episode slot would collide — merging would move nothing."""
+    parent_has_season = conn.execute(
+        "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?",
+        (parent_id, target_season),
+    ).fetchone()
+    if parent_has_season is None:
+        return False
+    parent_keys = {
+        (r["season"], r["episode"])
+        for r in conn.execute(
+            "SELECT season, episode FROM episode WHERE show_id = ?", (parent_id,)
+        ).fetchall()
+    }
+    child_episodes = conn.execute(
+        "SELECT episode FROM episode WHERE show_id = ?", (child_id,)
+    ).fetchall()
+    if not child_episodes:
+        return False
+    return all(
+        (target_season, row["episode"]) in parent_keys for row in child_episodes
+    )
+
+
+def _determine_target_season(conn, parent: dict, child: dict) -> int:
+    """Figure out what season number the child should become on the parent.
+
+    Priority:
+    1. Fribb ``season.tvdb`` — if the child has an AniList ID that Fribb
+       resolves to a specific TVDB season number, use that.
+    2. Absolute episode ordering — if the child's episodes start after the
+       parent's highest abs number, it's the next season.
+    3. Fallback: ``max(parent.season_number) + 1``.
+    """
+    from lcars.shows import _resolve_fribb_season
+
+    # Try Fribb resolution from the child's AniList ID.
+    child_anilist = conn.execute(
+        "SELECT external_id FROM show_external_id"
+        " WHERE show_id = ? AND service = 'anilist'",
+        (child["id"],),
+    ).fetchone()
+    if child_anilist is not None:
+        fribb_season = _resolve_fribb_season(int(child_anilist["external_id"]))
+        if fribb_season is not None:
+            return fribb_season
+
+    # Try absolute episode ordering.
+    parent_max_abs = conn.execute(
+        "SELECT MAX(absolute_number) AS m FROM episode WHERE show_id = ?",
+        (parent["id"],),
+    ).fetchone()
+    child_min_abs = conn.execute(
+        "SELECT MIN(absolute_number) AS m FROM episode WHERE show_id = ?",
+        (child["id"],),
+    ).fetchone()
+    if (
+        parent_max_abs and parent_max_abs["m"] is not None
+        and child_min_abs and child_min_abs["m"] is not None
+        and child_min_abs["m"] > parent_max_abs["m"]
+    ):
+        # Find which parent season the child's abs range falls after.
+        parent_seasons = conn.execute(
+            "SELECT season_number, abs_end FROM season"
+            " WHERE show_id = ? AND abs_end IS NOT NULL"
+            " ORDER BY abs_end DESC",
+            (parent["id"],),
+        ).fetchall()
+        if parent_seasons:
+            return parent_seasons[0]["season_number"] + 1
+
+    # Fallback: next season number.
+    max_s = parent["max_season"] if "max_season" in parent.keys() else None
+    if max_s is None:
+        max_s = conn.execute(
+            "SELECT MAX(season_number) AS m FROM season WHERE show_id = ?",
+            (parent["id"],),
+        ).fetchone()
+        max_s = (max_s["m"] if max_s else None) or 0
+    return max_s + 1
+
+
+# ---------------------------------------------------------------------------
+# Season-level merge — W3(b): a show that is actually season N of another
+# ---------------------------------------------------------------------------
+
+
+def merge_season_into_show(
+    conn,
+    parent_id: str,
+    child_id: str,
+    target_season: int,
+    matched_on: str,
+    _commit: bool = True,
+) -> str:
+    """Merge a child show (that is really season N of the parent) into the
+    parent as ``target_season``.
+
+    Unlike ``merge_shows`` (which reparents rows at the same numbering),
+    this **renumbers** the child's content: every episode on the child
+    becomes ``(season=target_season, episode=<original episode>)`` on the
+    parent, and the child's season row (if any) becomes the parent's
+    season row for ``target_season``.
+
+    The child is demoted to ``tracked = 0`` afterwards — same reversible
+    demotion ``merge_shows`` uses, never deletion.
+
+    Returns the ``show_merge`` row id.  The manifest records enough to
+    reverse the renumbering exactly (original show_id, season, episode,
+    season_id per moved episode).
+    """
+    parent = conn.execute("SELECT id, tracked FROM show WHERE id = ?", (parent_id,)).fetchone()
+    child = conn.execute("SELECT id, tracked FROM show WHERE id = ?", (child_id,)).fetchone()
+    if parent is None:
+        raise ValueError(f"no such show: {parent_id}")
+    if child is None:
+        raise ValueError(f"no such show: {child_id}")
+    if parent_id == child_id:
+        raise ValueError("cannot merge a show into itself")
+
+    now = util.now_utc_iso()
+    moved: dict = {
+        "season": None,
+        "season_created": False,
+        "episodes": [],
+        "watch_events": [],
+        "show_external_id": [],
+        "show_service_presence": [],
+    }
+    skipped: list[str] = []
+
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    conn.execute("PRAGMA defer_foreign_keys = ON")
+
+    # -- Season row ----------------------------------------------------------
+    # If the parent already has this season number, reuse it; otherwise move
+    # or create one.
+    parent_season = conn.execute(
+        "SELECT id FROM season WHERE show_id = ? AND season_number = ?",
+        (parent_id, target_season),
+    ).fetchone()
+
+    child_seasons = conn.execute(
+        "SELECT id, season_number, anilist_id, mal_id, abs_start, abs_end"
+        " FROM season WHERE show_id = ? ORDER BY season_number",
+        (child_id,),
+    ).fetchall()
+
+    target_season_id = None
+
+    if parent_season is not None:
+        target_season_id = parent_season["id"]
+        skipped.append(
+            f"season[{target_season}]: parent already has it ({target_season_id})"
+        )
+    elif child_seasons:
+        # Move the child's first season row, renumber it.
+        src = child_seasons[0]
+        conn.execute(
+            "UPDATE season SET show_id = ?, season_number = ?, updated_at = ? WHERE id = ?",
+            (parent_id, target_season, now, src["id"]),
+        )
+        moved["season"] = {
+            "id": src["id"],
+            "original_show_id": child_id,
+            "original_season_number": src["season_number"],
+        }
+        target_season_id = src["id"]
+    else:
+        # Child has no season rows at all — create one on the parent.
+        from lcars import season_ranges
+        season_id = ids.generate_id(conn, "z")
+        status = season_ranges.inherit_season_status(conn, parent_id)
+        conn.execute(
+            "INSERT INTO season"
+            " (id, show_id, season_number, status, source, matched,"
+            "  manual_override, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, 'auto', 0, 0, ?, ?)",
+            (season_id, parent_id, target_season, status, now, now),
+        )
+        moved["season_created"] = season_id
+        target_season_id = season_id
+
+    # If we moved extra season rows from the child (multi-season child,
+    # rare but possible), move them too at an offset.
+    if child_seasons and len(child_seasons) > 1:
+        for extra in child_seasons[1:]:
+            offset_season = target_season + extra["season_number"] - child_seasons[0]["season_number"]
+            existing = conn.execute(
+                "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?",
+                (parent_id, offset_season),
+            ).fetchone()
+            if existing:
+                skipped.append(
+                    f"season[{extra['season_number']}→{offset_season}]: "
+                    f"parent already has season {offset_season}"
+                )
+                continue
+            conn.execute(
+                "UPDATE season SET show_id = ?, season_number = ?, updated_at = ? WHERE id = ?",
+                (parent_id, offset_season, now, extra["id"]),
+            )
+            moved.setdefault("extra_seasons", []).append({
+                "id": extra["id"],
+                "original_show_id": child_id,
+                "original_season_number": extra["season_number"],
+                "new_season_number": offset_season,
+            })
+
+    # -- Episodes ------------------------------------------------------------
+    # Renumber every child episode into (target_season, episode) on the parent.
+    # If a conflict exists (parent already has that slot), skip it.
+    parent_episode_keys = {
+        (r["season"], r["episode"])
+        for r in conn.execute(
+            "SELECT season, episode FROM episode WHERE show_id = ?", (parent_id,)
+        ).fetchall()
+    }
+
+    for row in conn.execute(
+        "SELECT id, season, episode, season_id, absolute_number"
+        " FROM episode WHERE show_id = ? ORDER BY absolute_number, season, episode",
+        (child_id,),
+    ).fetchall():
+        new_key = (target_season, row["episode"])
+        if new_key in parent_episode_keys:
+            skipped.append(
+                f"episode[s{row['season']}e{row['episode']}→"
+                f"s{target_season}e{row['episode']}]: parent already has this slot"
+            )
+            continue
+
+        original = {
+            "id": row["id"],
+            "original_show_id": child_id,
+            "original_season": row["season"],
+            "original_episode": row["episode"],
+            "original_season_id": row["season_id"],
+        }
+
+        conn.execute(
+            "UPDATE episode SET show_id = ?, season = ?, season_id = ?, updated_at = ?"
+            " WHERE id = ?",
+            (parent_id, target_season, target_season_id, now, row["id"]),
+        )
+        moved["episodes"].append(original)
+        parent_episode_keys.add(new_key)
+
+        # Watch events follow the episode's (show_id, season, episode) FK.
+        we_rows = conn.execute(
+            "SELECT id FROM watch_event"
+            " WHERE show_id = ? AND season = ? AND episode = ?",
+            (child_id, row["season"], row["episode"]),
+        ).fetchall()
+        for we in we_rows:
+            conn.execute(
+                "UPDATE watch_event SET show_id = ?, season = ?"
+                " WHERE id = ?",
+                (parent_id, target_season, we["id"]),
+            )
+            moved["watch_events"].append({
+                "id": we["id"],
+                "original_show_id": child_id,
+                "original_season": row["season"],
+            })
+
+    # -- show_external_id: move services the parent doesn't have -----------
+    parent_services = {
+        r["service"]
+        for r in conn.execute(
+            "SELECT service FROM show_external_id WHERE show_id = ?", (parent_id,)
+        ).fetchall()
+    }
+    for row in conn.execute(
+        "SELECT service FROM show_external_id WHERE show_id = ?", (child_id,)
+    ).fetchall():
+        if row["service"] in parent_services:
+            skipped.append(
+                f"show_external_id[{row['service']}]: parent already has it"
+            )
+            continue
+        conn.execute(
+            "UPDATE show_external_id SET show_id = ? WHERE show_id = ? AND service = ?",
+            (parent_id, child_id, row["service"]),
+        )
+        moved["show_external_id"].append(row["service"])
+
+    # -- show_service_presence: same pattern --------------------------------
+    parent_presence = {
+        r["service"]
+        for r in conn.execute(
+            "SELECT service FROM show_service_presence WHERE show_id = ?", (parent_id,)
+        ).fetchall()
+    }
+    for row in conn.execute(
+        "SELECT service FROM show_service_presence WHERE show_id = ?", (child_id,)
+    ).fetchall():
+        if row["service"] in parent_presence:
+            skipped.append(
+                f"show_service_presence[{row['service']}]: parent already has it"
+            )
+            continue
+        conn.execute(
+            "UPDATE show_service_presence SET show_id = ? WHERE show_id = ? AND service = ?",
+            (parent_id, child_id, row["service"]),
+        )
+        moved["show_service_presence"].append(row["service"])
+
+    # -- Demote child -------------------------------------------------------
+    conn.execute(
+        "UPDATE show SET tracked = 0, updated_at = ? WHERE id = ?", (now, child_id)
+    )
+    conn.execute("UPDATE show SET updated_at = ? WHERE id = ?", (now, parent_id))
+
+    manifest = json.dumps({
+        "type": "season_merge",
+        "target_season": target_season,
+        "moved": moved,
+        "skipped": skipped,
+    })
+    merge_id = ids.generate_id(conn, "y")
+    conn.execute(
+        """INSERT INTO show_merge
+            (id, winner_show_id, loser_show_id, matched_on, manifest,
+             merged_at, reversed_at, reversed_by_client)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)""",
+        (merge_id, parent_id, child_id, matched_on, manifest, now),
+    )
+    if _commit:
+        conn.commit()
+    return merge_id
+
+
+def reverse_season_merge(conn, merge_id: str, changed_by: str) -> dict:
+    """Reverses a ``merge_season_into_show`` operation using the manifest's
+    recorded original values.  Raises ValueError if the merge doesn't exist,
+    was already reversed, or isn't a season_merge type."""
+    row = conn.execute("SELECT * FROM show_merge WHERE id = ?", (merge_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"no such show_merge: {merge_id}")
+    if row["reversed_at"] is not None:
+        raise ValueError(f"show_merge {merge_id} was already reversed at {row['reversed_at']}")
+
+    raw = json.loads(row["manifest"])
+    if raw.get("type") != "season_merge":
+        raise ValueError(
+            f"show_merge {merge_id} is not a season_merge (type={raw.get('type')!r})"
+        )
+
+    parent_id = row["winner_show_id"]
+    child_id = row["loser_show_id"]
+    moved = raw["moved"]
+    now = util.now_utc_iso()
+
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    conn.execute("PRAGMA defer_foreign_keys = ON")
+
+    # -- Watch events: restore original show_id + season --------------------
+    for we in moved["watch_events"]:
+        conn.execute(
+            "UPDATE watch_event SET show_id = ?, season = ? WHERE id = ?",
+            (we["original_show_id"], we["original_season"], we["id"]),
+        )
+
+    # -- Episodes: restore original show_id, season, episode, season_id -----
+    for ep in moved["episodes"]:
+        conn.execute(
+            "UPDATE episode SET show_id = ?, season = ?, season_id = ? WHERE id = ?",
+            (
+                ep["original_show_id"],
+                ep["original_season"],
+                ep["original_season_id"],
+                ep["id"],
+            ),
+        )
+
+    # -- Extra seasons: move back -------------------------------------------
+    for extra in moved.get("extra_seasons", []):
+        conn.execute(
+            "UPDATE season SET show_id = ?, season_number = ?, updated_at = ? WHERE id = ?",
+            (extra["original_show_id"], extra["original_season_number"], now, extra["id"]),
+        )
+
+    # -- Season row: move back or delete if we created it -------------------
+    if moved.get("season_created"):
+        created_id = moved["season_created"]
+        conn.execute(
+            "DELETE FROM season_external_id WHERE season_id = ?", (created_id,)
+        )
+        conn.execute("DELETE FROM season WHERE id = ?", (created_id,))
+    elif moved.get("season"):
+        s = moved["season"]
+        conn.execute(
+            "UPDATE season SET show_id = ?, season_number = ?, updated_at = ? WHERE id = ?",
+            (s["original_show_id"], s["original_season_number"], now, s["id"]),
+        )
+
+    # -- show_external_id: move back ----------------------------------------
+    if moved["show_external_id"]:
+        placeholders = ",".join("?" * len(moved["show_external_id"]))
+        conn.execute(
+            f"UPDATE show_external_id SET show_id = ?"
+            f" WHERE show_id = ? AND service IN ({placeholders})",
+            (child_id, parent_id, *moved["show_external_id"]),
+        )
+
+    # -- show_service_presence: move back -----------------------------------
+    if moved["show_service_presence"]:
+        placeholders = ",".join("?" * len(moved["show_service_presence"]))
+        conn.execute(
+            f"UPDATE show_service_presence SET show_id = ?"
+            f" WHERE show_id = ? AND service IN ({placeholders})",
+            (child_id, parent_id, *moved["show_service_presence"]),
+        )
+
+    # -- Re-promote child ---------------------------------------------------
+    conn.execute("UPDATE show SET tracked = 1, updated_at = ? WHERE id = ?", (now, child_id))
+    conn.execute("UPDATE show SET updated_at = ? WHERE id = ?", (now, parent_id))
+    conn.execute(
+        "UPDATE show_merge SET reversed_at = ?, reversed_by_client = ? WHERE id = ?",
+        (now, changed_by, merge_id),
+    )
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM show_merge WHERE id = ?", (merge_id,)).fetchone())

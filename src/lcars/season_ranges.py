@@ -34,6 +34,35 @@ from lcars import anilist_client, ids, pending_review, util
 
 log = logging.getLogger(__name__)
 
+
+def inherit_season_status(conn: sqlite3.Connection, show_id: str) -> str:
+    """Determine the status a new season row should inherit from its show.
+
+    Rules (NEXT_UP.md §Add Path Rework):
+      - Sonarr/Radarr-followed → 'planned'
+      - watching / completed / planned → 'planned'
+      - dropped → 'dropped'
+      - paused → 'paused'
+    """
+    row = conn.execute(
+        "SELECT status FROM show WHERE id = ?", (show_id,),
+    ).fetchone()
+    if row is None:
+        return "planned"
+    show_status = row["status"]
+    if show_status in ("dropped", "paused"):
+        arr = conn.execute(
+            "SELECT 1 FROM show_external_id"
+            " WHERE show_id = ? AND service IN ('sonarr', 'radarr')"
+            " LIMIT 1",
+            (show_id,),
+        ).fetchone()
+        if arr is not None:
+            return "planned"
+        return show_status
+    return "planned"
+
+
 # ---------------------------------------------------------------------------
 # Width-check internals (ported from scripts/backfill_season_ranges.py so
 # the same logic is reachable from the live server, not only the one-time
@@ -295,23 +324,25 @@ def ensure_all_season_rows(conn: sqlite3.Connection) -> int:
                 ).fetchone()
                 if not exists:
                     season_id = ids.generate_id(conn, "z")
+                    status = inherit_season_status(conn, show_id)
                     conn.execute(
                         "INSERT INTO season"
                         " (id, show_id, season_number, status, source, matched,"
                         "  manual_override, created_at, updated_at)"
-                        " VALUES (?, ?, ?, 'planned', 'unmatched', 0, 0, ?, ?)",
-                        (season_id, show_id, season_number, now, now),
+                        " VALUES (?, ?, ?, ?, 'unmatched', 0, 0, ?, ?)",
+                        (season_id, show_id, season_number, status, now, now),
                     )
                     conn.commit()
         else:
             # TV/movies — direct creation, no Fribb, no pending_review
             season_id = ids.generate_id(conn, "z")
+            status = inherit_season_status(conn, show_id)
             conn.execute(
                 "INSERT INTO season"
                 " (id, show_id, season_number, status, source, matched,"
                 "  manual_override, created_at, updated_at)"
-                " VALUES (?, ?, ?, 'planned', 'unmatched', 0, 0, ?, ?)",
-                (season_id, show_id, season_number, now, now),
+                " VALUES (?, ?, ?, ?, 'unmatched', 0, 0, ?, ?)",
+                (season_id, show_id, season_number, status, now, now),
             )
             conn.commit()
 

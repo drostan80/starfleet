@@ -957,7 +957,7 @@ export async function browseSeasonalAnime(season, year, page = 1) {
           genres format episodes duration status
           studioNames startDate
           lcarsShowId lcarsStatus
-          lcarsSeasonId lcarsSeasonStatus
+          lcarsSeasonId lcarsSeasonStatus lcarsSeasonSource lcarsSeasonMatched
         }
         currentPage lastPage total hasNextPage source
       }

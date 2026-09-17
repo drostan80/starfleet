@@ -9,8 +9,8 @@
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=18">
-  <link rel="stylesheet" href="css/show.css?v=20">
+  <link rel="stylesheet" href="css/main.css?v=19">
+  <link rel="stylesheet" href="css/show.css?v=21">
 </head>
 <body>
 
@@ -26,6 +26,7 @@
     <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
   </ul>
   <div class="nav-spacer"></div>
+  <span id="watched-toggle-mount"></span>
     <a href="downloads.html" class="nav-icon-btn" title="Downloads">DL</a>
   <button class="nav-search-btn" id="nav-search-btn" title="Search  /"><span>⌕</span></button>
   <a href="settings.html" class="nav-icon-btn" title="Settings">⚙</a>
@@ -38,7 +39,7 @@
 <div id="show-root"></div>
 
 <script type="module">
-  import { init } from './js/show.js?v=44';
+  import { init } from './js/show.js?v=45';
   import { initSearch } from './js/search.js?v=2';
   await init();
   initSearch();

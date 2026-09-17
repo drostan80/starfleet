@@ -6739,6 +6739,28 @@ async def test_set_season_mapping_gap_validation_allows_season_1(client, migrate
     assert data["setSeasonMapping"]["id"]
 
 
+async def test_set_season_mapping_inherits_dropped_status(client, migrated_db):
+    """W7: new season on a dropped show inherits 'dropped', not 'planned'."""
+    show = await add_show(client)
+    await _create_season(client, show["id"], 1)
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: DROPPED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert (await _show_status(client, show["id"])) == "DROPPED"
+
+    data = await gql(
+        client,
+        "mutation($id: ID!, $s: Int!) {"
+        " setSeasonMapping(showId: $id, seasonNumber: $s) { id status } }",
+        {"id": show["id"], "s": 2},
+        headers=auth_headers(),
+    )
+    assert data["setSeasonMapping"]["status"] == "DROPPED"
+
+
 async def test_set_season_status_completion_guard_blocks_airing_season(
     client, migrated_db
 ):
@@ -6970,6 +6992,54 @@ async def test_soft_delete_show_unmonitors_in_sonarr(client, monkeypatch):
     update_calls = [c for c in fake.calls if c[0] == "update_series"]
     assert len(update_calls) == 1
     assert update_calls[0][1]["monitored"] is False
+
+
+@pytest.mark.parametrize("status", ["PAUSED", "DROPPED"])
+async def test_set_status_paused_or_dropped_unmonitors_in_sonarr(client, monkeypatch, status):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    show = await add_show(client)
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show["id"], "externalId": "421855", "url": "https://thetvdb.com/x"},
+        headers=auth_headers(),
+    )
+    seasons = [{"seasonNumber": 1, "monitored": True}]
+    fake = _FakeSonarrClient(series={"id": 4, "monitored": True, "seasons": seasons})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        "mutation($id: ID!, $s: ShowStatus!) { setStatus(showId: $id, status: $s) { status } }",
+        {"id": show["id"], "s": status},
+        headers=auth_headers(),
+    )
+    assert data["setStatus"]["status"] == status
+    update_calls = [c for c in fake.calls if c[0] == "update_series"]
+    assert len(update_calls) == 1
+    assert update_calls[0][1]["monitored"] is False
+    assert all(s["monitored"] is False for s in update_calls[0][1]["seasons"])
+
+
+async def test_set_status_watching_does_not_unmonitor(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    show = await add_show(client)
+    await gql(
+        client,
+        LINK_SHOW_EXTERNAL_ID_TVDB,
+        {"id": show["id"], "externalId": "421855", "url": "https://thetvdb.com/x"},
+        headers=auth_headers(),
+    )
+    fake = _FakeSonarrClient(series={"id": 4, "monitored": True, "seasons": []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert fake.calls == []
 
 
 async def test_set_tracked_false_unmonitors_in_radarr(client, monkeypatch):

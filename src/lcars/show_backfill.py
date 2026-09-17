@@ -141,7 +141,7 @@ backfilled `watching` show starts with every episode unwatched, so
 progress by hand.
 """
 
-from lcars import anilist_client, fribb, ids, local_audit, shows, util
+from lcars import anilist_client, fribb, ids, local_audit, pending_review, season_ranges, shows, util
 from lcars.config import get_current
 
 # The reverse of resolvers.py's own _STATUS_TO_ANILIST (A.9's push-
@@ -416,14 +416,16 @@ def backfill_untracked_shows(conn) -> dict:
     created = []
     promoted = []
     failed = []
+    sequel_attached = []
     for entry in candidates:
         classification = _classify(entry, tvdb_index)
         already_existed = shows.find_existing_show(conn, classification) is not None
         try:
             show_id = shows.create_show(conn, classification)
-        except shows.SequelDetectedError:
-            # Sequel of a tracked show — the backfill shouldn't auto-attach
-            # seasons; the user handles that interactively from browse.
+        except shows.SequelDetectedError as err:
+            attached = _auto_attach_sequel(conn, err, entry)
+            if attached is not None:
+                sequel_attached.append(attached)
             continue
         except shows.ShowInputError as e:
             failed.append({"service": entry["service"], "title": entry["title"], "error": str(e)})
@@ -433,7 +435,72 @@ def backfill_untracked_shows(conn) -> dict:
         if classification["tracking_space"] == "anime":
             known_status = entry.get("status") if entry["service"] == "anilist" else None
             _seed_status_from_anilist(conn, show_id, known_status=known_status)
-    return {"created": created, "promoted": promoted, "failed": failed}
+    return {"created": created, "promoted": promoted, "failed": failed,
+            "sequel_attached": sequel_attached}
+
+
+def _auto_attach_sequel(
+    conn, err: shows.SequelDetectedError, entry: dict,
+) -> dict | None:
+    """Auto-attach a sequel as a new season on the parent show.
+
+    Creates a season row with source='auto', manual_override=0, and
+    records a pending_review so the attachment surfaces on browse.
+    Returns a result dict for the backfill summary, or None if the
+    season already exists (duplicate, not a new attachment).
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    parent_id = err.parent_show_id
+    season_number = err.next_season
+    anilist_id = err.sequel_anilist_id
+    mal_id = err.sequel_mal_id
+
+    existing = conn.execute(
+        "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?",
+        (parent_id, season_number),
+    ).fetchone()
+    if existing is not None:
+        log.debug(
+            "sequel auto-attach: season %d already exists on %s, skipping",
+            season_number, parent_id,
+        )
+        return None
+
+    now = util.now_utc_iso()
+    season_id = ids.generate_id(conn, "z")
+    status = season_ranges.inherit_season_status(conn, parent_id)
+
+    conn.execute(
+        "INSERT INTO season"
+        " (id, show_id, season_number, status, anilist_id, mal_id,"
+        "  source, matched, manual_override, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, 'auto', 0, 0, ?, ?)",
+        (season_id, parent_id, season_number, status,
+         anilist_id, mal_id, now, now),
+    )
+
+    season_ranges.upsert_season_external_id(conn, season_id, anilist_id, mal_id, now)
+
+    pending_review.open_or_extend(
+        conn, "season", season_id, "sequel_auto_attached",
+        "backfill", None,
+        f"S{season_number} on {err.parent_title} (from {entry['title']})",
+    )
+    conn.commit()
+
+    log.info(
+        "sequel auto-attach: attached S%d to %s (%s) from %s",
+        season_number, parent_id, err.parent_title, entry["title"],
+    )
+    return {
+        "parent_show_id": parent_id,
+        "parent_title": err.parent_title,
+        "season_number": season_number,
+        "service": entry["service"],
+        "title": entry["title"],
+    }
 
 
 def _seed_status_from_anilist(conn, show_id: str, known_status: str | None = None) -> None:

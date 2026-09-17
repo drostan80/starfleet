@@ -59,7 +59,9 @@ def mem_db():
     conn.execute(
         "CREATE TABLE season ("
         "  id TEXT PRIMARY KEY, show_id TEXT, season_number INTEGER,"
-        "  anilist_id INTEGER, status TEXT"
+        "  anilist_id INTEGER, status TEXT,"
+        "  source TEXT NOT NULL DEFAULT 'fribb',"
+        "  matched INTEGER NOT NULL DEFAULT 1"
         ")"
     )
     conn.execute(
@@ -144,7 +146,8 @@ def test_tracked_show_matched_via_show_external_id(mem_db):
 def test_tracked_show_matched_via_season_anilist_id(mem_db):
     mem_db.execute("INSERT INTO show VALUES ('s-def', 'PLANNED', 1)")
     mem_db.execute(
-        "INSERT INTO season VALUES ('z-s1', 's-def', 1, 67890, 'WATCHING')"
+        "INSERT INTO season (id, show_id, season_number, anilist_id, status)"
+        " VALUES ('z-s1', 's-def', 1, 67890, 'WATCHING')"
     )
     mem_db.commit()
 
@@ -301,3 +304,47 @@ def test_untracked_item_gets_fribb_tvdb(mem_db):
 def test_invalid_season_raises(mem_db):
     with pytest.raises(ValueError, match="Invalid season"):
         browse.fetch_seasonal_browse(mem_db, "AUTUMN", 2026)
+
+
+# ── _cross_reference tests ──────────────────────────────────────────
+
+
+def test_cross_reference_finds_season_via_season_external_id(mem_db):
+    """W4: a season matched only through season_external_id (not
+    season.anilist_id) still shows up in _cross_reference."""
+    mem_db.execute("INSERT INTO show (id, status, tracked) VALUES ('s-abc001', 'watching', 1)")
+    mem_db.execute(
+        "INSERT INTO season (id, show_id, season_number, anilist_id, status)"
+        " VALUES ('z-abc001', 's-abc001', 2, NULL, 'watching')"
+    )
+    mem_db.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id)"
+        " VALUES ('z-abc001', 'anilist', '999888')"
+    )
+    mem_db.commit()
+
+    result = browse._cross_reference(mem_db, [999888])
+    assert 999888 in result
+    assert result[999888]["show_id"] == "s-abc001"
+    assert result[999888]["season_id"] == "z-abc001"
+    assert result[999888]["season_status"] == "watching"
+
+
+def test_cross_reference_prefers_season_anilist_id_over_external_id(mem_db):
+    """If both season.anilist_id and season_external_id match, the result
+    is still correct (no duplicates, no KeyError)."""
+    mem_db.execute("INSERT INTO show (id, status, tracked) VALUES ('s-abc001', 'watching', 1)")
+    mem_db.execute(
+        "INSERT INTO season (id, show_id, season_number, anilist_id, status)"
+        " VALUES ('z-abc001', 's-abc001', 1, 111222, 'completed')"
+    )
+    mem_db.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id)"
+        " VALUES ('z-abc001', 'anilist', '111222')"
+    )
+    mem_db.commit()
+
+    result = browse._cross_reference(mem_db, [111222])
+    assert 111222 in result
+    assert result[111222]["show_id"] == "s-abc001"
+    assert result[111222]["season_id"] == "z-abc001"
