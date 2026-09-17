@@ -541,14 +541,12 @@ class TestDetectFranchiseCollisions:
         child = conn.execute("SELECT tracked FROM show WHERE id = 's-chi001'").fetchone()
         assert child["tracked"] == 0
 
-        # A pending_review was created with the parent_id as value (dedup key).
+        # No pending_review created (franchise_auto_merge reviews removed as non-actionable).
         review = conn.execute(
             "SELECT * FROM pending_review WHERE entity_id = 's-chi001'"
             " AND field = 'franchise_auto_merge'"
         ).fetchone()
-        assert review is not None
-        chain = json.loads(review["proposed_value_chain"])
-        assert chain[0] == "s-par001"
+        assert review is None
 
     def test_skips_already_merged(self, tmp_path):
         """If a merge already exists for this pair, don't re-merge."""
@@ -644,9 +642,9 @@ class TestDetectFranchiseCollisions:
         chain = json.loads(review["proposed_value_chain"])
         assert chain[0] == "s-par001"
 
-    def test_resolved_pair_not_remerged(self, tmp_path):
-        """After resolving a franchise merge, re-running detection does not
-        re-merge the same pair."""
+    def test_merged_pair_not_remerged(self, tmp_path):
+        """After a franchise merge, re-running detection does not
+        re-merge the same pair (guarded by existing show_merge row)."""
         conn = _make_db(tmp_path)
         _insert_parent(conn)
         _insert_child_with_episodes(conn)
@@ -657,20 +655,7 @@ class TestDetectFranchiseCollisions:
             r1 = show_merge.detect_franchise_collisions(conn)
         assert r1["merges_performed"] == 1
 
-        # Resolve the review as confirmed.
-        review = conn.execute(
-            "SELECT id FROM pending_review WHERE entity_id = 's-chi001'"
-            " AND field = 'franchise_auto_merge' AND resolved_at IS NULL"
-        ).fetchone()
-        conn.execute(
-            "UPDATE pending_review SET resolved_at = '2026-09-17',"
-            " resolved_by_client = 'test', resolution_note = 'confirmed'"
-            " WHERE id = ?",
-            (review["id"],),
-        )
-        conn.commit()
-
-        # Re-run: the already-resolved pair should be skipped.
+        # Re-run: the existing show_merge row prevents a duplicate merge.
         with mock.patch(
             "lcars.show_merge._determine_target_season", return_value=3
         ):
