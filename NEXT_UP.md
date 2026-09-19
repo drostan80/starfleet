@@ -1,7 +1,6 @@
 # Next up
 
-Current version: **v0.2.24** (deployed 2026-09-17).
-List-page fix committed on main (`14fe145`), not yet released.
+Current version: **v0.2.25** (deployed 2026-09-19).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
