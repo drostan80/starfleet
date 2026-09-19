@@ -50,6 +50,16 @@
         </provider>
     </application>
 
+    <!-- A1 step 18 — Android 11+ package visibility: without this,
+         Intent.resolveActivity()/queryIntentActivities() can't see VLC even
+         when it's genuinely installed (confirmed the hard way, real device
+         test: VlcPlugin.play() rejected with "VLC not installed" despite
+         `adb shell pm list packages` showing org.videolan.vlc present,
+         until this was added). -->
+    <queries>
+        <package android:name="org.videolan.vlc" />
+    </queries>
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />

@@ -38,6 +38,11 @@ class MainActivity : BridgeActivity() {
     private var serverConfigured = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Must run before super.onCreate() -> load() builds the Bridge
+        // (BridgeActivity.registerPlugin() just appends to bridgeBuilder,
+        // read once at Bridge construction time).
+        registerPlugin(VlcPlugin::class.java)
+
         val prefs = getSharedPreferences("starfleet", MODE_PRIVATE)
         val serverUrl = prefs.getString("server_url", null)
         if (serverUrl != null) {
