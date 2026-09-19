@@ -1,14 +1,15 @@
 # Next up
 
-Current version: **v0.2.26** (deployed 2026-09-19).
+Current version: **v0.2.27** (deployed 2026-09-19).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## Android app A0 (server + web client prep) — built, not yet deployed (2026-09-19)
+## Android app A0 (server + web client prep) — shipped in v0.2.27 (2026-09-19)
 
-Build steps 5–9 of `ui/DESIGN.md` §8 done and passing (1292 tests green;
-smoke-tested against a throwaway copy of `lcars-dev.db`, verified live):
+Build steps 5–12 of `ui/DESIGN.md` §8 done, tested, and verified live
+against the deployed stack (1292 tests green pre-deploy; every A0-specific
+behavior below re-checked against `tiny` post-deploy, not just assumed):
 
 - [x] `auth.py`: `/auth/check` also accepts `Authorization: Bearer <token>`;
       `/auth/settings` GET serves `lcars_token`/`tmdb_api_key` from LCARS
@@ -49,26 +50,33 @@ smoke-tested against a throwaway copy of `lcars-dev.db`, verified live):
       `home_server_host`/`tmdb_api_key` into `web_setting` (now inert);
       added `LCARS_TMDB_API_KEY` env var so the dev server still serves
       the TMDB key via config the way A0 requires.
-- [ ] **Check before deploying**: does the *live* LCARS config on `tiny`
-      actually have `tmdb_api_key` set (`lcars.ini` or
-      `LCARS_TMDB_API_KEY`)? Before A0 it was typed into the web client
-      and lived in `web_setting`'s DB row (confirmed present there);
-      after A0 ships, `/auth/settings` only ever serves it from LCARS
-      config — if that was never separately configured server-side,
-      TMDB poster fallback for TV/movie shows goes silently dark for
-      every browser. `bearer_token` has no equivalent risk (GraphQL
-      already depends on it). Not checked this session — reading
-      secrets/env off the live host over SSH was blocked by the
-      permission classifier; needs a human (or an explicitly-approved
-      command) to confirm.
-- [ ] **Not done yet — needs a real decision to deploy**: step 10 (curl
-      bearer test against deployed nginx), step 11 (release + deploy),
-      step 12 (WS `graphql-transport-ws` end-to-end check against the
-      live nginx, required before writing any A3 code). Ship as its own
-      release per DESIGN.md's release-sequencing note — not bundled with
-      any later Capacitor/Kotlin work.
-- Then **stop** — A1 Capacitor scaffolding waits for the test machine
-  (DESIGN.md §8 "Build ordering").
+- [x] `tmdb_api_key` confirmed present in `/opt/appdata/lcars/config/lcars.ini`
+      on `tiny` (user confirmed the value itself; presence also confirmed
+      here via a non-destructive `grep -c`) — TMDB poster fallback keeps
+      working under the new "served from config only" model.
+- [x] **Step 10** (curl bearer test against deployed nginx) — both
+      `GET /auth/check` and `POST /` with `Authorization: Bearer` and no
+      cookie return 200 through the live nginx on `tiny`.
+- [x] **Step 11** (release + deploy) — tagged/pushed `v0.2.27`, CI built
+      and published both `starfleet:0.2.27` and `-web` images, DB
+      snapshotted (`lcars.db.bak-20260919-android-a0-v0.2.27`), pins
+      bumped on `tiny`, `pull`+`up -d`, all three containers healthy on
+      the new tag, `ops`'s expected post-recreate `LcarsError` noise
+      confirmed to self-clear within 20s.
+- [x] **Step 12** (WS `graphql-transport-ws` end-to-end check) — a real
+      Python client connected to `ws://<tiny>:8888/` with a bearer
+      header, negotiated the `graphql-transport-ws` subprotocol through
+      nginx, completed `connection_init`/`connection_ack`, and had a
+      `subscribe` accepted with no error frame. Confirms the whole chain
+      (nginx upgrade headers → LCARS WS → subprotocol negotiation) works
+      live — not just that `BearerTokenMiddleware` accepts the scope.
+      Did not force an actual event through (would mean mutating
+      production state just to see a payload) — a real `episodeAvailabilityChanged`/
+      `showCreated` payload landing client-side is still worth eyeballing
+      once A3 actually subscribes to one.
+- **Stop here** — A1 Capacitor scaffolding waits for the test machine
+  (DESIGN.md §8 "Build ordering"): step 14's dynamic-`server.url` spike
+  can only be run on a device with Android Studio installed.
 
 ---
 
