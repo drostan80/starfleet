@@ -501,14 +501,34 @@ optional-chained, `window.Capacitor` is undefined on desktop.
 ### Android hurdles (known up front)
 
 - **Cleartext HTTP**: `android:usesCleartextTraffic="true"` in the manifest
-  + `server.cleartext: true` in Capacitor config. Bites on first run otherwise.
-- **Dynamic `server.url`**: Capacitor reads it from static JSON. Set it from
-  SharedPreferences by building a `CapConfig` in `MainActivity.onCreate`
-  before `super.onCreate()`. **Spike this first** — if it doesn't hold in the
-  Capacitor version chosen, fallback is a bundled launcher page that stores
-  the address and navigates, with the host in `server.allowNavigation`.
+  is the mechanism that actually matters — checked against real
+  @capacitor/android 8.5.2 source (2026-09-19): `server.cleartext` in
+  `capacitor.config.json` has no code path that reads it at all in this
+  version (only a separate, irrelevant Cordova-compat manifest generator
+  does). Set the manifest flag directly; the config key is a no-op here.
+- **Dynamic `server.url`**: Capacitor reads it from static JSON by default.
+  **Spike passed (2026-09-19)**: building a `CapConfig` in `MainActivity`
+  and setting it on the `config` field before calling `super.onCreate()`
+  works — confirmed against real source (`BridgeActivity.onCreate()` calls
+  `load()`, which reads `config`, at the very end of its own
+  `super.onCreate()` chain) and live on a real device against the real
+  deployed server. The bundled-launcher-page fallback was not needed.
+  One real gotcha found the same way: overriding `onCreate()` to redirect
+  before ever calling `super.onCreate()` crashes immediately with
+  `SuperNotCalledException` — override `load()` instead (see
+  `MainActivity.kt`) so the framework's own `onCreate()` chain still runs,
+  and the bridge/WebView still never spins up when redirecting away.
 - **URL encoding**: media paths contain spaces and Japanese; `Uri.encode()`
-  each path segment or VLC 404s.
+  each path segment (not the whole path in one call) or VLC 404s — verified
+  against a real deployed file with spaces/parens/braces/brackets: a
+  `Range:` request through the live nginx came back `206` with a correct
+  `Content-Range`, and VLC actually streamed and played it end to end.
+- **Package visibility (Android 11+)**: `Intent.resolveActivity()` can't see
+  VLC even when it's genuinely installed unless the manifest declares
+  `<queries><package android:name="org.videolan.vlc" /></queries>` —
+  found by testing `VlcPlugin.play()` for real, not by reading the code
+  back: it rejected with "VLC not installed" despite `adb shell pm list
+  packages` showing it present, until this was added.
 - **File visibility**: on Android 11+ other apps can't read
   `/Android/data/<pkg>/`. Hand files to VLC as `content://` via `FileProvider`
   with `FLAG_GRANT_READ_URI_PERMISSION`. No storage permissions needed.
@@ -616,26 +636,36 @@ A1's own step-14 spike has been run — see "Build ordering" above.
 ---
 
 **A1 — shell + VLC**
-13. `npm init` in `ui/` (or repo root), `npx cap init`, `npx cap add android`,
-    Capacitor 6
-14. **Spike**: dynamic `server.url` from SharedPreferences in
-    `MainActivity.onCreate`; cleartext flags. Stop and reassess if it fails.
-15. `ServerSetupActivity.kt`: one text field, saves address, launches
+13. ✅ `npm init` in `ui/`, `npx cap init`, `npx cap add android`,
+    Capacitor 8.5.2 (current stable at build time — this doc's original
+    "6" was stale). Kotlin wired into Gradle by hand (the template
+    defaults to Java).
+14. ✅ **Spike passed** (2026-09-19) — see "Android hurdles" above.
+15. ✅ `ServerSetupActivity.kt`: one text field, saves address, launches
     `MainActivity`; shown when no address stored
-16. Static app shortcut "Change server" → `ServerSetupActivity`
-17. **VLC Range+encoding test** — independent of A0, testable any time: curl
-    a real `/files/...` path containing a space or non-ASCII character with
-    a `Range: bytes=1000-2000` header against the live nginx; confirm `206
-    Partial Content` with a correct `Content-Range`, not a `404`. **Path
-    resolution/decoding already confirmed live 2026-09-19** (see "Facts
-    verified" above) — the specific `Range:` header check on an actual file
-    is still open; run it now if a sample file path is available, otherwise
-    proceed to `VlcPlugin.kt` on the existing evidence and treat a real-device
-    404-on-seek as the signal to come back here first (user's own call).
-18. `VlcPlugin.kt` with path encoding + `startActivityForResult`
-19. `TokenPlugin.kt`: JS calls `setToken(lcars_token)` after `syncConfig` →
-    SharedPreferences
-20. Web: platform-gated play button
+16. ✅ Static app shortcut "Change server" → `ServerSetupActivity`
+    (non-exported target activity — `LauncherApps` resolves app-declared
+    shortcuts without needing `exported=true`; user-confirmed live
+    long-press → shortcut → pre-filled screen).
+17. ✅ **VLC Range+encoding test** (2026-09-19) — found a real file via
+    GraphQL (`backlog` query), built its per-segment-encoded `/files/` URL,
+    confirmed `206 Partial Content` + correct `Content-Range` through the
+    live nginx.
+18. ✅ `VlcPlugin.kt` with per-segment path encoding + `startActivityForResult`
+    (Capacitor's `@ActivityCallback` mechanism, not the deprecated raw
+    Activity API). Needed a `<queries>` manifest entry for Android 11+
+    package visibility — see "Android hurdles" above. Verified live: called
+    from the real WebView bridge over Chrome DevTools Protocol, VLC
+    actually streamed and played a real episode from the deployed server,
+    returned position/duration matched the on-screen player exactly.
+19. ✅ `TokenPlugin.kt`: JS calls `setToken(lcars_token)` after `syncConfig` →
+    SharedPreferences. Wired centrally inside `syncConfig()` itself
+    (`config.js`), not duplicated at each of the six pages that call it.
+20. ✅ Web: platform-gated play button — `launchMpv()` (`calendar.js`, and
+    `grabs.html`'s own copy) branches on
+    `window.Capacitor?.isNativePlatform?.()`. Not yet exercised through a
+    real deployed web client (native half verified directly via CDP,
+    bypassing the UI) — needs its own release to close the loop.
 21. Test LAN: enter IP, login, stream to VLC. Test Tailscale: change server,
     login again, stream
 22. Generate the release keystore (`keytool -genkey`), wire `signingConfigs`
