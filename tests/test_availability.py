@@ -744,6 +744,135 @@ def test_radarr_webhook_skips_an_untracked_show(conn):
     assert result == {"shows_updated": 0}
 
 
+def test_sonarr_webhook_series_add_creates_a_tracked_show(conn):
+    result = availability.apply_sonarr_webhook(
+        conn,
+        {
+            "eventType": "SeriesAdd",
+            "series": {"id": 1, "title": "New Show", "tvdbId": 111222, "rootFolderPath": "/tv/"},
+        },
+    )
+    assert result == {"episodes_updated": 0}
+    row = conn.execute(
+        "SELECT s.tracked, s.status, s.media_shape, s.tracking_space, s.title_english"
+        " FROM show s JOIN show_external_id sei ON sei.show_id = s.id"
+        " WHERE sei.service = 'tvdb' AND sei.external_id = '111222'"
+    ).fetchone()
+    assert row is not None
+    assert row["tracked"] == 1
+    assert row["status"] == "planned"
+    assert row["media_shape"] == "episodic"
+    assert row["tracking_space"] == "tv"
+    assert row["title_english"] == "New Show"
+
+
+def test_sonarr_webhook_series_add_uses_anime_root_folder(conn):
+    cfg = config.get_current()
+    cfg.sonarr_anime_root_folder = "/anime/"
+    result = availability.apply_sonarr_webhook(
+        conn,
+        {
+            "eventType": "SeriesAdd",
+            "series": {
+                "id": 2, "title": "New Anime", "tvdbId": 111333,
+                "rootFolderPath": "/anime/new-anime",
+            },
+        },
+    )
+    assert result == {"episodes_updated": 0}
+    row = conn.execute(
+        "SELECT s.tracking_space FROM show s JOIN show_external_id sei ON sei.show_id = s.id"
+        " WHERE sei.service = 'tvdb' AND sei.external_id = '111333'"
+    ).fetchone()
+    assert row["tracking_space"] == "anime"
+
+
+def test_sonarr_webhook_series_add_is_a_noop_for_an_already_tracked_show(conn):
+    _add_show(conn, "s-whk008", tvdb_id=457078)
+    before = conn.execute("SELECT COUNT(*) AS n FROM show").fetchone()["n"]
+    result = availability.apply_sonarr_webhook(conn, _sonarr_webhook("SeriesAdd"))
+    assert result == {"episodes_updated": 0}
+    after = conn.execute("SELECT COUNT(*) AS n FROM show").fetchone()["n"]
+    assert after == before  # no duplicate show created
+
+
+def test_sonarr_webhook_series_delete_unlinks_and_opens_review(conn):
+    _add_show(conn, "s-whk009", tvdb_id=457078)
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES ('s-whk009', 'sonarr', '955', 'http://sonarr.test/series/x', 'x')"
+    )
+    conn.commit()
+    result = availability.apply_sonarr_webhook(conn, _sonarr_webhook("SeriesDelete"))
+    assert result == {"episodes_updated": 0}
+    sonarr_link = conn.execute(
+        "SELECT 1 FROM show_external_id WHERE show_id = 's-whk009' AND service = 'sonarr'"
+    ).fetchone()
+    assert sonarr_link is None
+    review = conn.execute(
+        "SELECT * FROM pending_review WHERE entity_id = 's-whk009' AND field = 'sonarr_deleted'"
+    ).fetchone()
+    assert review is not None
+    assert review["resolved_at"] is None
+
+
+def test_sonarr_webhook_series_delete_skips_an_untracked_show(conn):
+    result = availability.apply_sonarr_webhook(
+        conn, _sonarr_webhook("SeriesDelete", tvdb_id=999999)
+    )
+    assert result == {"episodes_updated": 0}
+    review = conn.execute("SELECT 1 FROM pending_review").fetchone()
+    assert review is None
+
+
+def test_radarr_webhook_movie_added_creates_a_tracked_show(conn):
+    result = availability.apply_radarr_webhook(
+        conn,
+        {"eventType": "MovieAdded", "movie": {"id": 1, "title": "New Movie", "tmdbId": 222333}},
+    )
+    assert result == {"shows_updated": 0}
+    row = conn.execute(
+        "SELECT s.tracked, s.status, s.media_shape, s.tracking_space, s.title_english"
+        " FROM show s JOIN show_external_id sei ON sei.show_id = s.id"
+        " WHERE sei.service = 'tmdb' AND sei.external_id = '222333'"
+    ).fetchone()
+    assert row is not None
+    assert row["tracked"] == 1
+    assert row["status"] == "planned"
+    assert row["media_shape"] == "movie"
+    assert row["tracking_space"] == "tv"
+    assert row["title_english"] == "New Movie"
+
+
+def test_radarr_webhook_movie_added_is_a_noop_for_an_already_tracked_show(conn):
+    _add_show(conn, "s-whk010", tmdb_id=687163, media_shape="movie")
+    before = conn.execute("SELECT COUNT(*) AS n FROM show").fetchone()["n"]
+    result = availability.apply_radarr_webhook(conn, _radarr_webhook("MovieAdded"))
+    assert result == {"shows_updated": 0}
+    after = conn.execute("SELECT COUNT(*) AS n FROM show").fetchone()["n"]
+    assert after == before
+
+
+def test_radarr_webhook_movie_delete_unlinks_and_opens_review(conn):
+    _add_show(conn, "s-whk011", tmdb_id=687163, media_shape="movie")
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES ('s-whk011', 'radarr', '308', 'http://radarr.test/movie/x', 'x')"
+    )
+    conn.commit()
+    result = availability.apply_radarr_webhook(conn, _radarr_webhook("MovieDelete"))
+    assert result == {"shows_updated": 0}
+    radarr_link = conn.execute(
+        "SELECT 1 FROM show_external_id WHERE show_id = 's-whk011' AND service = 'radarr'"
+    ).fetchone()
+    assert radarr_link is None
+    review = conn.execute(
+        "SELECT * FROM pending_review WHERE entity_id = 's-whk011' AND field = 'radarr_deleted'"
+    ).fetchone()
+    assert review is not None
+    assert review["resolved_at"] is None
+
+
 def test_poll_sonarr_client_error_is_caught(conn, monkeypatch):
     _configure_sonarr()
 

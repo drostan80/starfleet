@@ -92,12 +92,18 @@ module already reads:
     episode grab/import — a season-pack grab is one webhook call
     covering every episode it touches, unlike `/history`'s one-record-
     one-episode shape. Looped, never assumed singular.
-`Test` (and any event type this doesn't act on — `Rename`,
-`SeriesAdd`/`MovieAdded`, delete events, health, etc.) is a real
-requirement to handle cleanly, not just ignore: Sonarr/Radarr both
-refuse to save a webhook connection whose test request doesn't
-succeed, so the unmapped-event-type path always returns a "did
-nothing, that's fine" result rather than an error.
+`Test` (and any event type this doesn't act on — `Rename`, health,
+etc.) is a real requirement to handle cleanly, not just ignore:
+Sonarr/Radarr both refuse to save a webhook connection whose test
+request doesn't succeed, so the unmapped-event-type path always
+returns a "did nothing, that's fine" result rather than an error.
+
+**`SeriesAdd`/`MovieAdded`/`SeriesDelete`/`MovieDelete`** (added
+later) are the one exception to "ignore anything unmapped" — see
+`_handle_sonarr_series_add`/`_handle_sonarr_series_delete` and their
+Radarr counterparts below. Same never-raise contract: each is wrapped
+so a malformed payload still falls through to the same "did nothing"
+return, never an exception back to Sonarr/Radarr's webhook caller.
 
 **Deliberate design choice: the webhook handlers never touch
 `availability_poll_checkpoint`.** That column means "how far the
@@ -127,7 +133,7 @@ checked.
 
 import logging
 
-from lcars import events, radarr_client, service_health, sonarr_client, util
+from lcars import events, pending_review, radarr_client, service_health, shows, sonarr_client, util
 from lcars.config import get_current
 
 logger = logging.getLogger("lcars.availability")
@@ -573,6 +579,81 @@ _RADARR_WEBHOOK_EVENT_STATUS = {
 }
 
 
+def _handle_sonarr_series_add(conn, payload: dict) -> None:
+    """SeriesAdd webhook: a show was added directly in Sonarr (bypassing
+    LCARS's own add flow) — create the tracked LCARS show so it's not
+    silently invisible to LCARS. No-ops if a show already exists for
+    this tvdbId — the common case, since LCARS's own add flow adding to
+    Sonarr makes Sonarr echo SeriesAdd right back.
+
+    Best-effort, same "never raise on webhook content" contract as
+    apply_sonarr_webhook itself: on any failure (including a detected
+    sequel/later-season relationship shows.create_show has no human to
+    confirm here), logs and opens a pending_review instead of raising."""
+    series = payload.get("series")
+    if series is None or series.get("tvdbId") is None:
+        return
+    tvdb_id = series["tvdbId"]
+    if _show_ids_for_tvdb(conn, tvdb_id):
+        return
+    title = series.get("title")
+    if not title:
+        return
+    try:
+        cfg = get_current()
+        root = series.get("rootFolderPath") or ""
+        tracking_space = "tv"
+        if cfg.sonarr_anime_root_folder and root.startswith(cfg.sonarr_anime_root_folder):
+            tracking_space = "anime"
+        shows.create_show(conn, {
+            "media_shape": "episodic",
+            "tracking_space": tracking_space,
+            "primary_title": "english",
+            "title_english": title,
+            "tvdb_id": str(tvdb_id),
+        })
+    except Exception:
+        logger.exception(
+            "SeriesAdd webhook: failed to create LCARS show (tvdb_id=%s, title=%r)", tvdb_id, title
+        )
+        try:
+            pending_review.open_or_extend(
+                conn, "show", f"tvdb:{tvdb_id}", "webhook_series_add", "webhook",
+                None, f"Series added in Sonarr but LCARS couldn't create a show: {title}",
+            )
+            conn.commit()
+        except Exception:
+            logger.exception(
+                "SeriesAdd webhook: failed to open fallback review (tvdb_id=%s)", tvdb_id
+            )
+
+
+def _handle_sonarr_series_delete(conn, payload: dict) -> None:
+    """SeriesDelete webhook: the show is no longer present in Sonarr.
+    Unlinks LCARS's sonarr deep-link row (the tvdb crosswalk itself
+    stays — the show's identity is still real, only its Sonarr presence
+    changed) and opens a review, since LCARS can't tell whether this
+    means "drop the show" or "it'll be re-added" — same reasoning as
+    every other webhook branch never silently applying a guess."""
+    series = payload.get("series")
+    if series is None or series.get("tvdbId") is None:
+        return
+    show_ids = _show_ids_for_tvdb(conn, series["tvdbId"])
+    if not show_ids:
+        return
+    title = series.get("title") or series["tvdbId"]
+    for show_id in show_ids:
+        conn.execute(
+            "DELETE FROM show_external_id WHERE show_id = ? AND service = 'sonarr'",
+            (show_id,),
+        )
+        pending_review.open_or_extend(
+            conn, "show", show_id, "sonarr_deleted", "webhook",
+            None, f"Series deleted from Sonarr: {title}",
+        )
+    conn.commit()
+
+
 def apply_sonarr_webhook(conn, payload: dict) -> dict:
     """Real-time counterpart to `_poll_sonarr` — see the module docstring's
     B.5.1 section for the full design rationale (payload shape, why this
@@ -584,7 +665,20 @@ def apply_sonarr_webhook(conn, payload: dict) -> dict:
     silent no-op — Sonarr won't save a webhook connection whose test
     request fails, so this must never error on content it doesn't
     recognize."""
-    status = _SONARR_WEBHOOK_EVENT_STATUS.get(payload.get("eventType"))
+    event_type = payload.get("eventType")
+    if event_type == "SeriesAdd":
+        try:
+            _handle_sonarr_series_add(conn, payload)
+        except Exception:
+            logger.exception("SeriesAdd webhook handler raised unexpectedly")
+        return {"episodes_updated": 0}
+    if event_type == "SeriesDelete":
+        try:
+            _handle_sonarr_series_delete(conn, payload)
+        except Exception:
+            logger.exception("SeriesDelete webhook handler raised unexpectedly")
+        return {"episodes_updated": 0}
+    status = _SONARR_WEBHOOK_EVENT_STATUS.get(event_type)
     if status is None:
         return {"episodes_updated": 0}
     series = payload.get("series")
@@ -606,10 +700,82 @@ def apply_sonarr_webhook(conn, payload: dict) -> dict:
     return {"episodes_updated": len(touched_episode_ids)}
 
 
+def _handle_radarr_movie_added(conn, payload: dict) -> None:
+    """MovieAdded webhook — Radarr's counterpart to
+    `_handle_sonarr_series_add`. Radarr has a single configured root
+    folder (no anime/tv split like Sonarr's), so tracking_space is
+    always 'tv' here."""
+    movie = payload.get("movie")
+    if movie is None or movie.get("tmdbId") is None:
+        return
+    tmdb_id = movie["tmdbId"]
+    if _show_id_for_tmdb_movie(conn, tmdb_id) is not None:
+        return
+    title = movie.get("title")
+    if not title:
+        return
+    try:
+        shows.create_show(conn, {
+            "media_shape": "movie",
+            "tracking_space": "tv",
+            "primary_title": "english",
+            "title_english": title,
+            "tmdb_id": str(tmdb_id),
+        })
+    except Exception:
+        logger.exception(
+            "MovieAdded webhook: failed to create LCARS show (tmdb_id=%s, title=%r)", tmdb_id, title
+        )
+        try:
+            pending_review.open_or_extend(
+                conn, "show", f"tmdb:{tmdb_id}", "webhook_movie_added", "webhook",
+                None, f"Movie added in Radarr but LCARS couldn't create a show: {title}",
+            )
+            conn.commit()
+        except Exception:
+            logger.exception(
+                "MovieAdded webhook: failed to open fallback review (tmdb_id=%s)", tmdb_id
+            )
+
+
+def _handle_radarr_movie_delete(conn, payload: dict) -> None:
+    """MovieDelete webhook — Radarr's counterpart to
+    `_handle_sonarr_series_delete`."""
+    movie = payload.get("movie")
+    if movie is None or movie.get("tmdbId") is None:
+        return
+    show_id = _show_id_for_tmdb_movie(conn, movie["tmdbId"])
+    if show_id is None:
+        return
+    title = movie.get("title") or movie["tmdbId"]
+    conn.execute(
+        "DELETE FROM show_external_id WHERE show_id = ? AND service = 'radarr'",
+        (show_id,),
+    )
+    pending_review.open_or_extend(
+        conn, "show", show_id, "radarr_deleted", "webhook",
+        None, f"Movie deleted from Radarr: {title}",
+    )
+    conn.commit()
+
+
 def apply_radarr_webhook(conn, payload: dict) -> dict:
     """Radarr's counterpart to `apply_sonarr_webhook` above — see that
     function's docstring, same shape. Returns {"shows_updated": int}."""
-    status = _RADARR_WEBHOOK_EVENT_STATUS.get(payload.get("eventType"))
+    event_type = payload.get("eventType")
+    if event_type == "MovieAdded":
+        try:
+            _handle_radarr_movie_added(conn, payload)
+        except Exception:
+            logger.exception("MovieAdded webhook handler raised unexpectedly")
+        return {"shows_updated": 0}
+    if event_type == "MovieDelete":
+        try:
+            _handle_radarr_movie_delete(conn, payload)
+        except Exception:
+            logger.exception("MovieDelete webhook handler raised unexpectedly")
+        return {"shows_updated": 0}
+    status = _RADARR_WEBHOOK_EVENT_STATUS.get(event_type)
     if status is None:
         return {"shows_updated": 0}
     movie = payload.get("movie")
