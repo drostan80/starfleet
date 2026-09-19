@@ -1,6 +1,6 @@
 # Next up
 
-Current version: **v0.2.28** (deployed 2026-09-19).
+Current version: **v0.2.29** (deployed 2026-09-19).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
@@ -105,7 +105,7 @@ behavior below re-checked against `tiny` post-deploy, not just assumed):
 
 ---
 
-## Android app A1 (shell + VLC) — done, not yet deployed (2026-09-19)
+## Android app A1 (shell + VLC) — shipped in v0.2.29 (2026-09-19)
 
 Test machine (Android Studio, JDK 21 for Gradle, `android-tools` for
 `adb`) set up this session; a real device (Asus Zenfone 9, Android 14)
@@ -119,17 +119,21 @@ live production server. Tailscale half of the LAN/Tailscale test (step
 21) is blocked on the test phone's own Tailscale login, not app code —
 LAN half thoroughly proven.
 
-One open item: steps 19–20 (TokenPlugin wiring, platform-gated play
-button) are native-verified only (direct calls via Chrome DevTools
-Protocol) — the actual web client change needs deploying to exercise
-through the real app UI. Batched for the next release rather than
-shipped alone (GitHub Actions minutes were tight mid-session; repo is
-public now so this matters less, but batching continues per the user's
-own call).
+Steps 19-20 (TokenPlugin wiring, platform-gated play button) are now
+exercised through the real deployed app UI, not just CDP — found (and
+fixed) exactly the gap this note flagged: the production `ui/` bundle
+predated all of A1-A4's native-Capacitor branching, so the app's play
+button was silently falling through to the desktop-only mpv-helper
+endpoint (`localhost:19450`) and failing. Confirmed the deployed
+`calendar.js` now has `isNativePlatform`/`Vlc.play` (fetched from inside
+the live authenticated WebView session, not just curl — nginx auth-gates
+`/ui/js/*`), reloaded the page, and confirmed live: VLC launches natively
+on the phone, desktop mpv-helper path still works unaffected in a
+browser.
 
 ---
 
-## Android app A2 (download) — done, not yet deployed (2026-09-19)
+## Android app A2 (download) — shipped in v0.2.29 (2026-09-19)
 
 DESIGN.md §8 steps 23–27 built and verified live on the same device:
 
@@ -149,12 +153,112 @@ DESIGN.md §8 steps 23–27 built and verified live on the same device:
       confirmed the download survives backgrounding the app (the actual
       reason to use `DownloadManager` over Capacitor's own `Filesystem`
       API) and the index still updates correctly on foreground return.
-- [ ] Web half (platform-gated download button, `downloads.html` native
-      index) is syntax-checked but not deployed/exercised through the
-      real UI yet — same batching note as A1 above.
+- [x] Web half (platform-gated download button, `downloads.html` native
+      index) now deployed and exercised through the real UI — same fix as
+      A1's play-button gap above (stale `ui/` bundle), same v0.2.29 deploy.
 
-Next: A3 (live updates via WebSocket) and A4 (auto-download + storage
-management) remain unbuilt.
+---
+
+## Android app A3 (live updates via WebSocket) — shipped in v0.2.29 (2026-09-19)
+
+- [x] `LcarsWsPlugin.kt`: connect, `connection_init`, subscribe,
+      `notifyListeners`, bearer on the WS handshake header (OkHttp 4.12.0 —
+      5.5.0 needs compileSdk 37, one more than this project's 36).
+- [x] Reconnect on connectivity change (`ConnectivityManager
+      .registerDefaultNetworkCallback`, exponential backoff 2s→60s cap) —
+      confirmed live by disabling WiFi mid-session (`onFailure` + doubling
+      backoff observed) and re-enabling it (real second `connection_ack`).
+- [x] `calendar.js`'s 10s poll now only runs on non-Android platforms;
+      Android registers `LcarsWs` listeners instead.
+- [x] Tested live against the real deployed server: `graphql-transport-ws`
+      subprotocol negotiated, both subscribes accepted with no error frame.
+
+---
+
+## Android app A4 (auto-download + storage management) — code shipped in v0.2.29, engine unverified (2026-09-19)
+
+`AutoDownloadWorker` (WorkManager `CoroutineWorker`, unique periodic,
+30min, UNMETERED-only by default) diffs the LCARS backlog against the
+local download index and enqueues anything new, then evicts
+oldest-watched-first once `storage_limit_gb` is exceeded. See
+`ui/DESIGN.md` §8 steps 33-38 for full per-step detail. Found by live
+device testing, not designed in:
+
+- [x] **Duplicate-download bug** — an ad-hoc one-time `WorkRequest` added
+      purely to force a test run raced the periodic work's own first
+      execution and double-enqueued every episode (every file downloaded
+      twice, `-1` suffix). Root-caused to that one-time trigger, not the
+      periodic mechanism itself; removed, since `enqueueUniquePeriodicWork`
+      alone already gives WorkManager's own serialization guarantee.
+- [x] **Stale "pending" rows** — the completion broadcast only fires while
+      the app process is alive, so a process death mid-download left a
+      permanently-stale DB row; the worker now reconciles against
+      `DownloadManager` directly on every tick.
+- [x] **Evict/redownload infinite loop** — eviction must soft-delete
+      (`markEvicted`, tombstone row) rather than hard-delete: a hard
+      delete let the same tick's own backlog diff see the episode as new
+      again and immediately re-enqueue it.
+- [x] **`DownloadManager.remove()` doesn't delete the file** under
+      `setDestinationInExternalFilesDir` — confirmed live; fixed by also
+      deleting the file directly.
+- [x] Wi-Fi-only downloads toggle and storage limit (GB) field, both in
+      `ServerSetupActivity`, same immediate-save-on-toggle pattern.
+- [x] `VlcPlugin` reports watched status natively off its own
+      `onActivityResult` (SQLite write always succeeds immediately; the
+      network `addWatchEvent` call is independently retried via
+      `WatchEventRetryQueue` on failure, flushed every worker tick).
+- [ ] **Blocking bug, not yet fixed: native `lcars_token` doesn't reliably
+      persist**, which means `AutoDownloadWorker`'s GraphQL calls have
+      been silently auth-failing all evening (fast ~20-40ms "SUCCESS"
+      results are auth failures returning zero episodes, not real backlog
+      fetches — confirmed by checking the actual DB/file state after each
+      run, not just trusting the WorkManager result). Two things are
+      confirmed true and don't fully explain each other, so **the cause is
+      not yet identified** — this needs real instrumentation tomorrow, not
+      more guessing:
+      - The very first failure (at original login time) has a clean,
+        deterministic explanation: `config.js`'s `Token.setToken()` call
+        (committed in `e1c8ef6`, part of A1 steps 19-20) was sitting
+        undeployed at that moment — the live server was still on the
+        stale v0.2.28 bundle, which has no such call at all. Confirmed via
+        the server's `Date` response header predating the v0.2.29 CI run.
+      - That doesn't explain later failures, though: with v0.2.29
+        confirmed live (fetched the actual executing bundle's source,
+        not just curled it — `syncConfig()` has the real `setToken` call),
+        repeated direct calls to `Token.setToken()` from the live page —
+        the simplest possible case, no page-init timing involved — **also
+        intermittently failed to persist**, with the plugin call itself
+        reporting success (`resolved OK`, no thrown exception) both times
+        it worked and both times it silently didn't. `TokenPlugin.kt`'s
+        `setToken()` is a plain `getSharedPreferences(...).edit()
+        .putString(...).apply()` — nothing in it obviously explains an
+        intermittent silent failure; `apply()`'s async disk-flush losing a
+        write if the process died first was considered and doesn't fit,
+        since the app's main process (confirmed via `pidof`) stayed alive
+        throughout every failed attempt.
+      - **Tomorrow's first step**: this needs actual logging, not CDP
+        archaeology — `syncConfig()`'s inner `catch { /* best-effort */ }`
+        around the `setToken` call swallows everything with zero trace;
+        change it to `console.warn` (or equivalent Logcat-visible output
+        on the native `setToken()` side too) and reproduce with real
+        visibility into what's actually failing/succeeding and why.
+      - Once fixed: still need the actual end-to-end verification this
+        was blocking — a live run with a valid token producing a real
+        backlog diff with zero duplicates, and eviction firing correctly
+        under `storage_limit_gb` without redownload thrashing.
+        WorkManager did correctly refuse a second forced early run this
+        session — that much of A4's own fix (the periodic-work
+        serialization guarantee) is confirmed solid; it's only the
+        auth/token layer underneath it that's unverified.
+
+Also fixed along the way: the deployed `ui/` bundle predated all of
+A1-A4's native-Capacitor branching (`isNativePlatform()` checks added
+across earlier phases were sitting in the repo, undeployed) — the app's
+play/download buttons were silently falling through to desktop-only code
+paths. This is what v0.2.29 actually ships along with A3/A4's own code.
+This same "code committed, never deployed" class of bug is also step
+33's headline duplicate-download fix's twin — worth remembering
+`v*` tag + redeploy is a discrete step, not implied by `git commit`.
 
 ---
 
@@ -325,13 +429,6 @@ shows through one shared 220ms-spaced request chain — the real "timeout."
 ---
 
 ## Ideas / future
-
-### Android app (Capacitor wrapper)
-
-Full plan in `ui/DESIGN.md` §8. Remote WebView (loads UI from nginx, not bundled).
-Native Kotlin plugins for VLC playback, file download, WebSocket subscriptions,
-and background auto-download. Four phases: A1 (shell + VLC), A2 (download),
-A3 (live updates), A4 (auto-download + storage management).
 
 ### Unified list page
 

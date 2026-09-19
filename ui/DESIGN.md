@@ -736,16 +736,82 @@ A1's own step-14 spike has been run — see "Build ordering" above.
     live event.
 
 **A4 — auto-download + storage**
-33. `AutoDownloadWorker.kt`: periodic, unmetered, `backlog` → diff → enqueue
-34. Notification channel + per-download notification
-35. Storage limit setting (add to `ServerSetupActivity` as the second field)
-36. Eviction: watched-oldest-first, then unwatched-oldest until under limit —
-    reads the local SQLite `watched` flag only (see "Eviction source of
-    truth" above), never waits on server confirmation
-37. VLC `onActivityResult` → writes `watched` to SQLite (immediate, always
-    succeeds — what step 36 reads) and separately fires `addWatchEvent`
-    (network POST, independently retried on failure)
-38. Test: set limit low, let it fill, verify eviction order
+33. ✅ `AutoDownloadWorker.kt`: `CoroutineWorker`, `enqueueUniquePeriodicWork`
+    + `KEEP` (30min, `NetworkType.UNMETERED` by default — see A2's Wi-Fi-only
+    setting), diffs `LcarsClient.fetchBacklog()` against the local index and
+    enqueues anything new via `DownloadPlugin`'s shared `enqueue()`.
+    Found by testing, not designed in: an ad-hoc one-time
+    `OneTimeWorkRequestBuilder` trigger added alongside the periodic work
+    (purely to force a run for testing) raced the periodic work's own first
+    execution and double-enqueued every episode — confirmed live, every
+    file downloaded twice with DownloadManager auto-renaming the second
+    copy `-1`. Removed the one-time trigger entirely; the periodic work
+    alone doesn't have this problem, since WorkManager itself serializes
+    a single uniquely-named periodic work. Re-verified after the fix with
+    the app's own SQLite index (PRIMARY KEY on `episode_id`, so a real
+    duplicate row is structurally impossible) showing exactly one row per
+    episode after a forced first run; leftover `-1` files seen once more
+    after that were traced to orphaned `DownloadManager` jobs from the
+    *earlier* buggy test run, not the current code — `pm clear` on our own
+    app doesn't cancel jobs already enqueued in the separate
+    `com.android.providers.downloads` system service.
+34. Notification channel — skipped as unnecessary: `DownloadManager.Request`
+    already sets `VISIBILITY_VISIBLE_NOTIFY_COMPLETED` (A2), which covers
+    per-download notifications regardless of what enqueues the request, so
+    a second/duplicate notification channel would add nothing.
+35. ✅ Storage limit (GB) field added to `ServerSetupActivity`, same
+    immediate-save-on-edit pattern as A2's Wi-Fi-only checkbox. Blank/0 =
+    unlimited.
+36. ✅ Eviction: `compareByDescending { watched }.thenBy { downloadedAt }`
+    ordering (watched-oldest-first, then unwatched-oldest), reading only
+    the local SQLite `watched` flag. Found by testing: eviction must
+    soft-delete (`markEvicted` — sets `status='evicted'`, nulls
+    `local_uri`/`size_bytes`, keeps the row) rather than hard-delete —
+    a hard `DELETE` let the very same tick's backlog-diff step see the
+    episode as "new" again and immediately re-enqueue it, an infinite
+    evict/redownload loop confirmed live before the fix. Also found:
+    `DownloadManager.remove()` doesn't reliably delete the underlying file
+    under `setDestinationInExternalFilesDir` (confirmed — file remained on
+    disk after `remove()` on a completed download), so
+    `cancelAndDeleteFile()` now also deletes the file directly.
+37. ✅ `VlcPlugin`'s `onActivityResult` now reports watched status natively:
+    writes `watched=1` to SQLite immediately (always succeeds, what step
+    36's eviction reads), resolves it to `showId`/`season`/`episode` via
+    the download row if not already passed, then fires
+    `LcarsClient.addWatchEvent()` on a background thread — a network POST,
+    independently retried via `WatchEventRetryQueue` (SharedPreferences-
+    backed, flushed at the start of every worker tick) if it fails.
+38. Duplicate-download bug found, root-caused, and fixed (see step 33),
+    verified via the local SQLite index (structurally duplicate-proof —
+    `PRIMARY KEY` on `episode_id`) after a forced first run. WorkManager
+    correctly refused a second forced early run — the periodic-work
+    serialization guarantee itself is confirmed solid.
+
+    Blocked on a separate, still-unfixed bug before the rest of this step
+    (a real live run + eviction-under-limit) can be observed: native
+    `lcars_token` (read by `LcarsClient.kt`, distinct from the WebView's
+    own `localStorage` copy) doesn't reliably persist via
+    `TokenPlugin.setToken()`. Every real `AutoDownloadWorker` tick this
+    session auth-failed and fetched zero episodes as a result (confirmed
+    via actual DB/file state, not just the WorkManager result). Two
+    partial explanations found, neither sufficient alone:
+    - The *original* failure (at login) is fully explained: `config.js`'s
+      `setToken()` call (`e1c8ef6`, A1 steps 19-20) was undeployed at
+      that moment — confirmed via the server's response `Date` header
+      predating the v0.2.29 CI run. The live v0.2.28 bundle had no such
+      call.
+    - That doesn't explain later failures: with v0.2.29 confirmed live
+      (fetched the actual executing module's source, not just a cache-
+      busted curl), repeated *direct* calls to `Token.setToken()` — no
+      page-init timing involved — intermittently failed to persist even
+      though the call itself reported success both times. `apply()`
+      losing a write to process death doesn't fit either — the main
+      process stayed alive (confirmed via `pidof`) throughout.
+    - Root cause not yet identified. `syncConfig()`'s `catch { /*
+      best-effort */ }` around this call swallows everything with zero
+      trace — next step is un-swallowing it (`console.warn` + Logcat
+      output on the native side) and reproducing with real visibility,
+      not more blind CDP probing.
 
 ### Project structure
 
