@@ -673,13 +673,42 @@ A1's own step-14 spike has been run — see "Build ordering" above.
     → APK
 
 **A2 — download**
-23. Add `@capacitor-community/sqlite`; index schema
-24. `DownloadPlugin.kt`: DownloadManager request + completion receiver +
-    index update
-25. `FileProvider` in manifest; VlcPlugin accepts `content://` for local files
-26. Web: platform-gated download button; `downloads.html` reads native index on
-    Android
-27. Test: download on Wi-Fi, background the app, play offline, delete
+23. ✅ Index schema — plain `SQLiteOpenHelper` (`DownloadDatabase.kt`), not
+    `@capacitor-community/sqlite` as originally sketched: the actual
+    surface needed (list/check-one/mark-watched/delete-one) is small and
+    fixed, all exposed as ordinary `@PluginMethod`s, so a third-party
+    native dependency (bundling SQLCipher/requery) for one hobby app's
+    download list wasn't worth it.
+24. ✅ `DownloadPlugin.kt`: `DownloadManager` request (via `MediaUrl.build()`,
+    factored out and shared with `VlcPlugin`) + completion receiver +
+    index update, keyed by GraphQL episode id (not `DownloadManager`'s own
+    transient `dm_id`).
+    **Real bug found by testing**: the completion receiver was registered
+    `RECEIVER_NOT_EXPORTED`, which silently blocked delivery —
+    `DownloadManager` is a system service under a different UID, so this
+    broadcast is inherently cross-UID and needs `RECEIVER_EXPORTED`.
+    Confirmed both the failure and the fix live (a manually-fired
+    `adb shell am broadcast` targeted at the exact package never arrived
+    either, under `NOT_EXPORTED`); safe to widen since `onReceive`
+    re-queries `DownloadManager` by id rather than trusting the broadcast.
+25. ✅ `FileProvider` — needed a new `<external-files-path>` entry in
+    `file_paths.xml` (the Capacitor template's own `external-path` entry
+    maps to a different directory than `setDestinationInExternalFilesDir`
+    actually writes to). `VlcPlugin.play()` gained a `uri` param for local
+    (offline) playback alongside the existing `path` (remote stream).
+26. ✅ Web: platform-gated download button (`downloads.js` branches every
+    export on `isNativePlatform()`) + `downloads.html` reads the native
+    index, with a "Play" action replacing "Retry" for a completed Android
+    download. Syntax-checked; not yet exercised through a real deployed
+    web client (native half verified directly via CDP) — batched with
+    steps 19-20's same open item for the next release.
+27. ✅ Tested on a real device: downloaded a real ~190MB file over LAN
+    (byte-exact size match to the source's `Content-Length`), backgrounded
+    the app mid-download via the Home button and confirmed both that
+    `DownloadManager` kept going and that the index still updated
+    correctly on foreground return, played the result back fully offline
+    (WiFi disabled) via `VlcPlugin`'s new `uri` path, and confirmed
+    `deleteAllDownloads()` removes both the real files and the index rows.
 
 **A3 — live updates**
 28. `LcarsClient.kt` (OkHttp, bearer from SharedPreferences)

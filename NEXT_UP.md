@@ -1,6 +1,6 @@
 # Next up
 
-Current version: **v0.2.27** (deployed 2026-09-19).
+Current version: **v0.2.28** (deployed 2026-09-19).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
@@ -87,9 +87,74 @@ behavior below re-checked against `tiny` post-deploy, not just assumed):
       production state just to see a payload) — a real `episodeAvailabilityChanged`/
       `showCreated` payload landing client-side is still worth eyeballing
       once A3 actually subscribes to one.
-- **Stop here** — A1 Capacitor scaffolding waits for the test machine
-  (DESIGN.md §8 "Build ordering"): step 14's dynamic-`server.url` spike
-  can only be run on a device with Android Studio installed.
+---
+
+## login.html couldn't log in when genuinely logged out — shipped in v0.2.28 (2026-09-19)
+
+- [x] Found while testing Android against production (below): `login.html`
+      statically imported `js/config.js` (for `applyAppName()`'s dev/prod
+      tab-title swap), but nginx's `/ui/` location auth-gates everything
+      except `login.html`/`css/`/`favicon.svg` themselves. A client with
+      no session cookie at all got a 302-to-self for that import, failing
+      the whole ES module graph — including the login form's own submit
+      handler. Pre-existing (confirmed via git history, predates this
+      session's A0 work), never hit because real sessions are long-lived.
+      Fixed by inlining the few lines `login.html` needs instead of
+      widening what nginx serves unauthenticated. Verified live + via
+      screenshot on the Android WebView.
+
+---
+
+## Android app A1 (shell + VLC) — done, not yet deployed (2026-09-19)
+
+Test machine (Android Studio, JDK 21 for Gradle, `android-tools` for
+`adb`) set up this session; a real device (Asus Zenfone 9, Android 14)
+connected throughout. All of DESIGN.md §8's steps 13–22 built and
+verified live on that device — see DESIGN.md itself for the full
+per-step detail (Capacitor version actually used, the `SuperNotCalledException`
+gotcha, the `<queries>` package-visibility fix, the release keystore).
+Login/setup/VLC streaming/signed-release-build all confirmed working
+end to end, including a real episode file streamed and played from the
+live production server. Tailscale half of the LAN/Tailscale test (step
+21) is blocked on the test phone's own Tailscale login, not app code —
+LAN half thoroughly proven.
+
+One open item: steps 19–20 (TokenPlugin wiring, platform-gated play
+button) are native-verified only (direct calls via Chrome DevTools
+Protocol) — the actual web client change needs deploying to exercise
+through the real app UI. Batched for the next release rather than
+shipped alone (GitHub Actions minutes were tight mid-session; repo is
+public now so this matters less, but batching continues per the user's
+own call).
+
+---
+
+## Android app A2 (download) — done, not yet deployed (2026-09-19)
+
+DESIGN.md §8 steps 23–27 built and verified live on the same device:
+
+- [x] Local download index — plain `SQLiteOpenHelper`, not
+      `@capacitor-community/sqlite` as the plan originally named (deemed
+      unnecessary third-party native surface for what's actually a small,
+      fixed set of operations).
+- [x] `DownloadPlugin.kt` — real bug found and fixed by testing:
+      the completion broadcast receiver needed `RECEIVER_EXPORTED`, not
+      `RECEIVER_NOT_EXPORTED` (DownloadManager is a different-UID system
+      service; the "not exported" flag was blocking its own broadcast to
+      us). See DESIGN.md for the full story.
+- [x] Offline playback — `VlcPlugin` takes a local `content://` URI now,
+      confirmed by actually disabling WiFi on the device and watching a
+      downloaded episode play from local disk.
+- [x] Downloaded a real ~190MB file, confirmed byte-exact size match,
+      confirmed the download survives backgrounding the app (the actual
+      reason to use `DownloadManager` over Capacitor's own `Filesystem`
+      API) and the index still updates correctly on foreground return.
+- [ ] Web half (platform-gated download button, `downloads.html` native
+      index) is syntax-checked but not deployed/exercised through the
+      real UI yet — same batching note as A1 above.
+
+Next: A3 (live updates via WebSocket) and A4 (auto-download + storage
+management) remain unbuilt.
 
 ---
 
