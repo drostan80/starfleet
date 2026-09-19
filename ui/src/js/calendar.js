@@ -491,6 +491,25 @@ export async function launchMpv(filePath, cfg, ctx = null) {
     return;
   }
 
+  // A1 step 20 — on Android, VlcPlugin streams straight from /files/ via a
+  // native Intent; there's no mpv-helper daemon on a phone. Title is just
+  // the release-group filename — cosmetic (VLC's title bar), not worth
+  // threading a real title through every launchMpv() call site for.
+  if (window.Capacitor?.isNativePlatform?.()) {
+    try {
+      const result = await window.Capacitor.Plugins.Vlc.play({
+        path: filePath,
+        title: filePath.split('/').pop(),
+      });
+      if (ctx?.showId && result?.watched) {
+        await addWatchEvent(ctx.showId, ctx.season, ctx.episode);
+      }
+    } catch (err) {
+      showBanner(`VLC error: ${err.message || err}`, 'error');
+    }
+    return;
+  }
+
   const helperUrl = (cfg.mpv_helper_url || 'http://localhost:19450').replace(/\/$/, '');
 
   // filePathSonarr/Radarr is the path inside the server container (/data/…).

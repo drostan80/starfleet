@@ -42,6 +42,7 @@ class MainActivity : BridgeActivity() {
         // (BridgeActivity.registerPlugin() just appends to bridgeBuilder,
         // read once at Bridge construction time).
         registerPlugin(VlcPlugin::class.java)
+        registerPlugin(TokenPlugin::class.java)
 
         val prefs = getSharedPreferences("starfleet", MODE_PRIVATE)
         val serverUrl = prefs.getString("server_url", null)

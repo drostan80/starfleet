@@ -392,7 +392,7 @@
 <script type="module">
   import { bootstrapConfig, getConfig, applyAppName } from './js/config.js?v=4';
   import { initSearch } from './js/search.js?v=2';
-  import { fetchRecentGrabs } from './js/api.js?v=19';
+  import { fetchRecentGrabs, addWatchEvent } from './js/api.js?v=19';
 
   applyAppName();
   await bootstrapConfig();
@@ -450,6 +450,23 @@
   async function launchMpv(filePath, ctx = null) {
     if (!filePath) { showToast('No file path for this grab'); return; }
     const cfg = getConfig();
+
+    // A1 step 20 — same platform gate as calendar.js's own launchMpv.
+    if (window.Capacitor?.isNativePlatform?.()) {
+      try {
+        const result = await window.Capacitor.Plugins.Vlc.play({
+          path: filePath,
+          title: filePath.split('/').pop(),
+        });
+        if (ctx?.showId && result?.watched) {
+          await addWatchEvent(ctx.showId, ctx.season, ctx.episode);
+        }
+      } catch (err) {
+        showToast(`VLC error: ${err.message || err}`);
+      }
+      return;
+    }
+
     const helperUrl = (cfg.mpv_helper_url || 'http://localhost:19450').replace(/\/$/, '');
 
     // filePathSonarr/Radarr is the path inside the server container (/data/…).

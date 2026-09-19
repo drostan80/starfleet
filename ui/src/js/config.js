@@ -67,6 +67,19 @@ export async function syncConfig() {
       }
     }
     saveConfig(local);
+
+    // A1 step 19 — native code (VlcPlugin's future A3/A4 siblings) has no
+    // access to localStorage; TokenPlugin copies the token into
+    // SharedPreferences instead. Every page that calls syncConfig() gets
+    // this for free rather than needing its own wiring. Best-effort: a
+    // native call rejecting must never break the web config sync it rode
+    // in on.
+    if (local.lcars_token && window.Capacitor?.isNativePlatform?.()) {
+      try {
+        await window.Capacitor.Plugins.Token.setToken({ token: local.lcars_token });
+      } catch { /* best-effort */ }
+    }
+
     return local;
   } catch {
     return getConfig();  // offline — use cached.
