@@ -1,0 +1,8 @@
+{
+  "appId": "com.drostan.starfleet",
+  "appName": "Starfleet",
+  "webDir": "src",
+  "server": {
+    "cleartext": true
+  }
+}

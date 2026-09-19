@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Starfleet</string>
+    <string name="title_activity_main">Starfleet</string>
+    <string name="package_name">com.drostan.starfleet</string>
+    <string name="custom_url_scheme">com.drostan.starfleet</string>
+</resources>
