@@ -351,6 +351,20 @@ class LcarsClient:
         data = await self._query(query)
         return data["reconcileArrState"]
 
+    async def backfill_show_posters(self) -> dict:
+        """NEXT_UP.md, 2026-09-19 — "faster list-page cover art": runs
+        the full art fetch for every tracked show with no posterUrl.
+        Real outbound calls per show (can be a few hundred), so — same
+        reasoning as audit_local_files above — never called by
+        scheduler.py's own automatic loop, only the explicit `ops
+        backfill-posters` CLI command (cli.py), run deliberately by a
+        human."""
+        query = """
+        mutation { backfillShowPosters { showsChecked postersFilled failed } }
+        """
+        data = await self._query(query)
+        return data["backfillShowPosters"]
+
     async def preview_show_backfill(self) -> list[dict]:
         """§5.1/§5.2, B.11d — dry-run, no writes: exactly what
         backfill_untracked_shows() below would create right now. Always

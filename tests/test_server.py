@@ -374,11 +374,16 @@ class _FakeSonarrClient:
 
 
 class _FakeTmdbClient:
-    def __init__(self, tvdb_to_tmdb=None, movie_runtime=None, tv_runtime=None, error=None):
+    def __init__(
+        self, tvdb_to_tmdb=None, movie_runtime=None, tv_runtime=None, error=None,
+        movie_images=None, tv_images=None,
+    ):
         self._tvdb_to_tmdb = tvdb_to_tmdb or {}
         self._movie_runtime = movie_runtime
         self._tv_runtime = tv_runtime
         self._error = error
+        self._movie_images = movie_images or {"posters": [], "backdrops": []}
+        self._tv_images = tv_images or {"posters": [], "backdrops": []}
         self.calls = []
 
     def __enter__(self):
@@ -404,6 +409,18 @@ class _FakeTmdbClient:
         if self._error is not None:
             raise self._error
         return self._tv_runtime
+
+    def movie_images(self, tmdb_id):
+        self.calls.append(("movie_images", tmdb_id))
+        if self._error is not None:
+            raise self._error
+        return self._movie_images
+
+    def tv_images(self, tmdb_id):
+        self.calls.append(("tv_images", tmdb_id))
+        if self._error is not None:
+            raise self._error
+        return self._tv_images
 
 
 class _FakeRadarrClient:
@@ -3320,7 +3337,7 @@ async def test_add_show_tmdb_fetch_populates_movie_duration(client, monkeypatch)
 
     data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
     assert data["show"]["durationMinutes"] == 112
-    assert fake.calls == [("movie_runtime", 555)]  # already had a tmdb id — no bridge needed
+    assert fake.calls == [("movie_runtime", 555), ("movie_images", 555)]  # already had a tmdb id
 
 
 async def test_add_show_tmdb_fetch_resolves_tvdb_bridge_for_episodic_show(client, monkeypatch):
@@ -3343,7 +3360,7 @@ async def test_add_show_tmdb_fetch_resolves_tvdb_bridge_for_episodic_show(client
         headers=auth_headers(),
     )
     assert data["show"]["durationMinutes"] == 22
-    assert fake.calls == [("find_by_tvdb_id", 67890), ("tv_episode_runtime", 42)]
+    assert fake.calls == [("find_by_tvdb_id", 67890), ("tv_episode_runtime", 42), ("tv_images", 42)]
 
     external_ids = {e["node"]["service"]: e["node"] for e in data["show"]["externalIds"]["edges"]}
     assert external_ids["tmdb"]["externalId"] == "42"
@@ -3361,6 +3378,45 @@ async def test_add_show_tmdb_fetch_no_op_when_tvdb_has_no_tmdb_match(client, mon
     assert fake.calls == [("find_by_tvdb_id", 67890)]  # never got to tv_episode_runtime
 
 
+async def test_add_show_tmdb_fetch_fills_poster_when_sonarr_has_none(client, monkeypatch):
+    # 2026-09-19 — faster list-page cover art: TMDB is an eager fallback
+    # poster source for every non-anime show now, same reasoning AniList
+    # already gets for anime (mandatory link + MAL fallback).
+    config.set_current(config.Config(tmdb_api_key="key"))
+    fake = _FakeTmdbClient(
+        movie_runtime=112,
+        movie_images={"posters": [{"file_path": "/poster123.jpg"}], "backdrops": []},
+    )
+    monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
+    show = await add_show(client, mediaShape="MOVIE", trackingSpace="TV", tmdbId=555)
+
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["posterUrl"] == "https://image.tmdb.org/t/p/original/poster123.jpg"
+
+
+async def test_radarr_poster_wins_over_tmdb_fallback_when_both_have_one(client, monkeypatch):
+    # fetch_and_populate runs TMDB's fetch before Radarr's (metadata.py's
+    # own ordering) — confirms Radarr's own COALESCE write still wins
+    # when it has a poster too, matching this new fallback's own
+    # docstring claim ("Sonarr/Radarr... still wins when they do").
+    config.set_current(config.Config(
+        tmdb_api_key="key", radarr_url="http://radarr:7878", radarr_api_key="key",
+    ))
+    fake_tmdb = _FakeTmdbClient(
+        movie_runtime=112,
+        movie_images={"posters": [{"file_path": "/tmdb-poster.jpg"}], "backdrops": []},
+    )
+    monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake_tmdb)
+    fake_radarr = _FakeRadarrClient(movie={
+        "id": 1, "images": [{"coverType": "poster", "remoteUrl": "https://radarr.example/poster.jpg"}],
+    })
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake_radarr)
+    show = await add_show(client, mediaShape="MOVIE", trackingSpace="TV", tmdbId=555)
+
+    data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert data["show"]["posterUrl"] == "https://radarr.example/poster.jpg"
+
+
 async def test_add_show_tmdb_fetch_skipped_for_anime(client, monkeypatch):
     """AniList already covers duration for anime — TMDB should never be
     called at all for a tracking_space=anime show, regardless of
@@ -3372,6 +3428,90 @@ async def test_add_show_tmdb_fetch_skipped_for_anime(client, monkeypatch):
     monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
     await add_show(client, anilistId=12345)
     assert fake.calls == []
+
+
+BACKFILL_SHOW_POSTERS = """
+    mutation { backfillShowPosters { showsChecked postersFilled failed } }
+"""
+
+
+async def test_backfill_show_posters_returns_zero_with_nothing_to_fill(client):
+    data = await gql(client, BACKFILL_SHOW_POSTERS, headers=auth_headers())
+    assert data["backfillShowPosters"] == {"showsChecked": 0, "postersFilled": 0, "failed": 0}
+
+
+async def test_backfill_show_posters_fills_a_missing_poster(client, monkeypatch):
+    # Created with no tmdb_api_key configured so add-time's own eager
+    # fallback (this session's other change) never fires — isolates the
+    # backfill's own behavior from the add-time one.
+    show = await add_show(client, mediaShape="MOVIE", trackingSpace="TV", tmdbId=555)
+    conn = db.get_connection()
+    conn.execute("UPDATE show SET tracked = 1, poster_url = NULL WHERE id = ?", (show["id"],))
+    conn.commit()
+
+    config.set_current(config.Config(tmdb_api_key="key"))
+    fake = _FakeTmdbClient(
+        movie_images={"posters": [{"file_path": "/backfilled.jpg"}], "backdrops": []},
+    )
+    monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
+
+    data = await gql(client, BACKFILL_SHOW_POSTERS, headers=auth_headers())
+    assert data["backfillShowPosters"] == {"showsChecked": 1, "postersFilled": 1, "failed": 0}
+
+    check = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert check["show"]["posterUrl"] == "https://image.tmdb.org/t/p/original/backfilled.jpg"
+
+
+async def test_backfill_show_posters_skips_a_show_that_already_has_one(client):
+    show = await add_show(client, mediaShape="MOVIE", trackingSpace="TV", tmdbId=555)
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE show SET tracked = 1, poster_url = 'https://existing.example/p.jpg' WHERE id = ?",
+        (show["id"],),
+    )
+    conn.commit()
+
+    data = await gql(client, BACKFILL_SHOW_POSTERS, headers=auth_headers())
+    assert data["backfillShowPosters"] == {"showsChecked": 0, "postersFilled": 0, "failed": 0}
+
+
+async def test_backfill_show_posters_one_failure_does_not_abort_the_batch(client, monkeypatch):
+    show_a = await add_show(
+        client, mediaShape="MOVIE", trackingSpace="TV", tmdbId=111, titleRomaji="A"
+    )
+    show_b = await add_show(
+        client, mediaShape="MOVIE", trackingSpace="TV", tmdbId=222, titleRomaji="B"
+    )
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE show SET tracked = 1, poster_url = NULL WHERE id IN (?, ?)",
+        (show_a["id"], show_b["id"]),
+    )
+    conn.commit()
+
+    from lcars import metadata as metadata_module
+
+    real_fetch_show_art = metadata_module.fetch_show_art
+    calls = []
+
+    def flaky_fetch_show_art(conn, show_id):
+        calls.append(show_id)
+        if show_id == show_a["id"]:
+            raise RuntimeError("boom")
+        return real_fetch_show_art(conn, show_id)
+
+    monkeypatch.setattr(metadata_module, "fetch_show_art", flaky_fetch_show_art)
+    monkeypatch.setattr(metadata_module, "BACKFILL_POSTER_PACE_SECONDS", 0)
+
+    config.set_current(config.Config(tmdb_api_key="key"))
+    fake = _FakeTmdbClient(
+        movie_images={"posters": [{"file_path": "/b.jpg"}], "backdrops": []},
+    )
+    monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
+
+    data = await gql(client, BACKFILL_SHOW_POSTERS, headers=auth_headers())
+    assert data["backfillShowPosters"] == {"showsChecked": 2, "postersFilled": 1, "failed": 1}
+    assert calls == [show_a["id"], show_b["id"]]  # both attempted, in order
 
 
 # --- AniList airingSchedule reconciliation (§5.2/§6.7, B.4) -----------------

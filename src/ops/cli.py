@@ -161,6 +161,37 @@ def _cmd_reconcile_arr_state(args: argparse.Namespace) -> None:
     asyncio.run(_main())
 
 
+def _cmd_backfill_posters(args: argparse.Namespace) -> None:
+    """NEXT_UP.md, 2026-09-19 — "faster list-page cover art" one-time
+    catch-up pass: manual trigger for backfillShowPosters. Real outbound
+    calls (TVDB/TVmaze/TMDB/MAL) for every tracked show still missing a
+    poster, paced between shows — can run for real minutes on a large
+    library, hence the long client timeout (same reasoning
+    _cmd_audit_local_files already established for its own long-running
+    mutation). Safe to re-run: a show it can't find a poster for is
+    picked up again next run at no extra cost for the shows already
+    filled."""
+    logging.basicConfig(level=logging.INFO)
+    cfg = config.load_config()
+    _require_bearer_token(cfg)
+    print(
+        "Backfilling missing posters — this will block LCARS's other requests "
+        "for the duration. Run this at a quiet moment, not while anyone else "
+        "is using it."
+    )
+
+    async def _main() -> None:
+        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token, timeout=3600.0) as client:
+            result = await client.backfill_show_posters()
+            failed_note = f", {result['failed']} failed" if result["failed"] else ""
+            print(
+                f"Done: {result['postersFilled']}/{result['showsChecked']} "
+                f"poster(s) filled{failed_note}."
+            )
+
+    asyncio.run(_main())
+
+
 def _cmd_preview_show_backfill(args: argparse.Namespace) -> None:
     """§5.1/§5.2, B.11d — dry-run, no writes: prints exactly what
     `ops backfill-shows` would create right now. Always run this
@@ -275,6 +306,12 @@ def main() -> None:
         help="untracked-show create + monitored<->status reconcile — also runs automatically",
     )
     reconcile_arr.set_defaults(func=_cmd_reconcile_arr_state)
+
+    backfill_posters = subparsers.add_parser(
+        "backfill-posters",
+        help="fetch a poster for every tracked show that's missing one — run manually",
+    )
+    backfill_posters.set_defaults(func=_cmd_backfill_posters)
 
     preview_backfill = subparsers.add_parser(
         "preview-show-backfill",

@@ -48,6 +48,7 @@ recorded.
 
 import json
 import logging
+import time
 from collections.abc import Callable
 from datetime import datetime
 
@@ -1048,7 +1049,21 @@ def _fetch_tmdb_duration(conn, show: dict) -> None:
     persists the result as a real `show_external_id` row (same
     upsert-by-show_id+service shape `linkShowExternalId` itself uses,
     resolvers.py) — a retry/refresh afterward reads it straight back,
-    no need to re-resolve."""
+    no need to re-resolve.
+
+    2026-09-19 — also opportunistically fills `poster_url` (NEXT_UP.md,
+    "faster list-page cover art"): `_fetch_sonarr`/`_fetch_radarr` only
+    ever get a poster from their own service's *own* bundled image list,
+    which is None whenever the show isn't (yet) actually added to
+    Sonarr/Radarr, or that service's own image list happens to lack a
+    poster entry — unlike anime, which always gets one eagerly from
+    AniList (mandatory link) with a MAL fallback. This closes that gap
+    the same way, via TMDB directly, for every non-anime show — same
+    COALESCE-write shape as _fetch_sonarr/_fetch_radarr's own poster
+    write, so whichever of the three (this one, Sonarr's, Radarr's) has
+    already set a value is left alone by the ones that run after it,
+    and Sonarr/Radarr (the more source-specific fetch, running later in
+    fetch_and_populate) still wins when they do have their own poster."""
     cfg = get_current()
     if not cfg.tmdb_api_key:
         return  # not configured — same as "not linked", not a failure to report
@@ -1062,14 +1077,24 @@ def _fetch_tmdb_duration(conn, show: dict) -> None:
         tmdb_id = int(tmdb_id_str)
         if show["media_shape"] == "movie":
             runtime = client.movie_runtime(tmdb_id)
+            images = client.movie_images(tmdb_id)
         else:
             runtime = client.tv_episode_runtime(tmdb_id)
+            images = client.tv_images(tmdb_id)
 
-    if runtime:
+    poster_path = next(
+        (p.get("file_path") for p in images.get("posters") or [] if p.get("file_path")), None
+    )
+    poster_url = art.TMDB_IMAGE_BASE + poster_path if poster_path else None
+
+    if runtime or poster_url:
         conn.execute(
-            "UPDATE show SET duration_minutes = COALESCE(?, duration_minutes), updated_at = ?"
+            "UPDATE show SET"
+            "  duration_minutes = COALESCE(?, duration_minutes),"
+            "  poster_url = COALESCE(?, poster_url),"
+            "  updated_at = ?"
             " WHERE id = ?",
-            (runtime, util.now_utc_iso(), show["id"]),
+            (runtime, poster_url, util.now_utc_iso(), show["id"]),
         )
 
 
@@ -1957,6 +1982,59 @@ def fetch_show_art(conn, show_id: str) -> int:
     art.auto_select_best(conn, show_id)
     conn.commit()
     return count
+
+
+# Pacing between shows in backfill_show_posters below — each show already
+# makes up to 4 sequential external calls (TVDB/TVmaze/TMDB/MAL) inside
+# fetch_show_art itself; this is just a light extra margin against
+# hammering those services back-to-back over what could be a few hundred
+# shows in one run, same "be considerate of external rate limits" concern
+# `ops backfill-shows` already established for AniList.
+BACKFILL_POSTER_PACE_SECONDS = 0.3
+
+
+def backfill_show_posters(conn) -> dict:
+    """One-time (or safely re-runnable) catch-up pass — NEXT_UP.md
+    "faster list-page cover art", 2026-09-19. The eager TMDB fallback
+    added to `_fetch_tmdb_duration` only runs at add-time going
+    forward; this is the counterpart for shows already in the library
+    before that existed. Manual trigger only (`ops backfill-posters`),
+    same reasoning `audit_local_files`/`reconcile_arr_state` already
+    established for "makes real outbound calls per show, too much cost
+    to run on Ops's own automatic loop over a large library."
+
+    Scoped to `tracked = 1 AND poster_url IS NULL` — safe to re-run: a
+    show `fetch_show_art` couldn't find a poster for stays NULL and is
+    picked up again next run (no network call at all for a show that
+    already has one). Per-show failure never aborts the batch —
+    `fetch_show_art`'s own per-source try/excepts already make it safe
+    to call directly; this only guards against something unexpected (a
+    show deleted mid-run, a DB-level error), same shape as this
+    session's other "one bad entry doesn't abort the batch" work
+    (e.g. local_audit.py's `_create_from_untracked_entry`)."""
+    show_ids = [
+        row["id"]
+        for row in conn.execute(
+            "SELECT id FROM show WHERE tracked = 1 AND poster_url IS NULL"
+        ).fetchall()
+    ]
+    checked = 0
+    filled = 0
+    failed = 0
+    for i, show_id in enumerate(show_ids):
+        checked += 1
+        try:
+            fetch_show_art(conn, show_id)
+        except Exception:
+            log.exception("backfill_show_posters: fetch_show_art failed for %s", show_id)
+            failed += 1
+            continue
+        row = conn.execute("SELECT poster_url FROM show WHERE id = ?", (show_id,)).fetchone()
+        if row and row["poster_url"]:
+            filled += 1
+        if i < len(show_ids) - 1:
+            time.sleep(BACKFILL_POSTER_PACE_SECONDS)
+    return {"shows_checked": checked, "posters_filled": filled, "failed": failed}
 
 
 # --- Episode synopses (lazy-fetch) -------------------------------------------

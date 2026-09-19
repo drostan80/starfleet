@@ -450,6 +450,32 @@ async def test_reconcile_arr_state_sends_no_variables_and_returns_the_result():
     await client.aclose()
 
 
+async def test_backfill_show_posters_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        assert "backfillShowPosters" in payload["query"]
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "backfillShowPosters": {
+                        "showsChecked": 12,
+                        "postersFilled": 10,
+                        "failed": 2,
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    result = await client.backfill_show_posters()
+    assert result["showsChecked"] == 12
+    assert result["postersFilled"] == 10
+    assert result["failed"] == 2
+    await client.aclose()
+
+
 async def test_preview_show_backfill_sends_no_variables_and_returns_the_list():
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read())

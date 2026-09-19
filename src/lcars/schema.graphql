@@ -452,6 +452,13 @@ type TvdbBackfillResult {
   showsUpdated: Int!
 }
 
+"backfillShowPosters's own confirmation summary. showsChecked: every tracked show with no posterUrl at the start of the run. postersFilled: how many actually got one. failed: fetch_show_art raised for this show (logged server-side, not otherwise reported here) — never aborts the rest of the batch."
+type PosterBackfillResult {
+  showsChecked: Int!
+  postersFilled: Int!
+  failed: Int!
+}
+
 type ShowServicePresenceConnection {
   edges: [ShowServicePresenceEdge!]!
   pageInfo: PageInfo!
@@ -2110,6 +2117,23 @@ type Mutation {
   silently-skipped one.
   """
   backfillTvdbIds: TvdbBackfillResult!
+
+  """
+  NEXT_UP.md, 2026-09-19 — "faster list-page cover art" catch-up pass:
+  runs the full art fetch (fetch_show_art — AniList/TVDB/TVmaze/TMDB/MAL,
+  same as the show-page art picker's own fetch button) for every tracked
+  show whose posterUrl is still null, paced between shows to be
+  considerate of those services' own rate limits. Counterpart to the
+  eager TMDB-fallback poster fill new shows get automatically at add
+  time (metadata.py's `_fetch_tmdb_duration`) — this is for shows
+  already in the library before that existed. Real outbound calls per
+  show (can be a few hundred), so — same reasoning as auditLocalFiles/
+  reconcileArrState — not part of Ops's own automatic loop, run via
+  `ops backfill-posters` at a moment of the caller's own choosing. Safe
+  to re-run: a show it can't find a poster for is picked up again next
+  run; a show that already has one costs no network call at all.
+  """
+  backfillShowPosters: PosterBackfillResult!
 
   """
   §5.1/§6.7, B.8b — episode_movie_link's own automatic tmdb_match

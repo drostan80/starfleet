@@ -2824,6 +2824,22 @@ def resolve_backfill_tvdb_ids(_, info):
     return {"shows_updated": tvdb_backfill.backfill_tvdb_ids(conn)}
 
 
+@mutation.field("backfillShowPosters")
+def resolve_backfill_show_posters(_, info):
+    """NEXT_UP.md, 2026-09-19 — see schema.graphql's own docstring for
+    the full rationale. No require_client() — same passive, not-a-
+    targeted-human-decision reasoning backfillTvdbIds already has;
+    real outbound calls per show, so unlike that one this isn't on
+    Ops's automatic loop, only `ops backfill-posters`."""
+    conn = db.get_connection()
+    result = metadata.backfill_show_posters(conn)
+    return {
+        "shows_checked": result["shows_checked"],
+        "posters_filled": result["posters_filled"],
+        "failed": result["failed"],
+    }
+
+
 @mutation.field("reconcileEpisodeMovieLinks")
 def resolve_reconcile_episode_movie_links(_, info):
     """§5.1/§6.7, B.8b — episode_movie_link.py's own automatic
