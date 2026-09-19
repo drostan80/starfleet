@@ -86,56 +86,54 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## mpv → LCARS watched status (designed 2026-09-18, not built)
+## mpv → LCARS watched status — shipped 2026-09-19, not yet released
 
-Today `mpv-helper.py` is one-directional: the web client POSTs a `/files/...` URL
-to `/play`, the helper launches mpv, and that's it — no episode identity, no
-callback, no LCARS token. Marking watched still requires opening the app.
-
-**What's already in scope:** every `launchMpv()` call site (`calendar.js:562,655,
-1149,1204`, `grabs.html:675`) is a closure over the episode object — `showId`/
-`season`/`episode` are all available, just not passed today. `addWatchEvent`
-already accepts a `platform` string and has no uniqueness constraint (plain
-insert, `resolvers.py:3680`) — a duplicate fire just adds a second `watch_event`
-row, same as clicking the mark-watched button twice. No server-side dedupe needed.
-
-**Flow (mirrors the Android VLC ≥90% rule, `ui/DESIGN.md` §8 A1/A4 — same threshold
-on both playback paths):**
-
-1. `launchMpv(filePath, cfg)` → `launchMpv(episode, cfg)`; `/play` POST body gains
-   `showId`, `season`, `episode`, `token: cfg.lcars_token`, `lcarsBase: location.origin`.
-   Helper stays fully stateless — no config file, no setup step (matches A0's
-   zero-entry principle).
-2. Helper adds `--input-ipc-server=<tmp-socket-per-launch>` to the mpv launch.
-3. Background thread connects to the socket, sends
-   `{"command":["observe_property",1,"percent-pos"]}`, tracks the highest
-   `percent-pos` seen over the session.
-4. On normal process exit (existing wait logic already used for the
-   launch-failure grace period), if `max_percent_seen >= 90`: POST
-   `addWatchEvent(showId, season, episode, platform: "mpv-helper")` to
-   `{lcarsBase}/` with `Authorization: Bearer {token}`.
-5. Best-effort throughout — IPC connect failure or POST failure just logs and
-   drops; playback itself is unaffected.
-
-Single-instance policy already in the helper (a new `/play` kills the previous
-mpv) means only one IPC session is ever live — replacing an in-progress episode
-correctly never marks the killed one watched.
+- [x] Every `launchMpv()` call site (`calendar.js` x5 including the service-strip
+      player icon, `show.js` x3 — one of which, `buildAnidbEpRow`'s mpv button, had
+      a real pre-existing arg-order bug, `launchMpv(cfg, epFilePath)`, fixed in
+      passing — and `grabs.html`, the one site with no `showId` in scope until
+      `GrabEvent.showId` shipped alongside it, see below) now passes
+      `{showId, season, episode}` through.
+- [x] `launchMpv(filePath, cfg, ctx)`: `/play` POST body gains `showId`, `season`,
+      `episode`, `token: cfg.lcars_token`, `lcarsBase: cfg.lcars_url` (not
+      `location.origin` as originally sketched — `cfg.lcars_url` is what the
+      function already uses to build the media URL itself, and is correct even
+      when the web client and LCARS aren't same-origin).
+- [x] `mpv-helper.py`: `--input-ipc-server=<per-launch-socket>` on the mpv launch;
+      a background thread observes `percent-pos`, tracks the session peak, and on
+      normal exit with peak >= 90% (same threshold as the Android VLC client)
+      POSTs `addWatchEvent(showId, season, episode, platform: "mpv-helper")`
+      straight to LCARS with the bearer token. Best-effort throughout — IPC
+      connect/POST failure just logs, playback is never affected. A launch
+      superseded by a newer one (single-instance policy, already existed) is
+      matched by an incrementing launch id, not just process-exit — so a killed
+      episode never reports watched even if it had already crossed 90%.
+      Smoke-tested standalone (fake IPC socket + fake LCARS endpoint), not part
+      of the pytest suite — mpv-helper.py runs on the user's own client machine,
+      not inside LCARS.
+- [x] `GrabEvent.showId` (schema + resolver) — `_grab_file_paths_{sonarr,radarr}`
+      already resolved `show_id` internally for the filePath lookup, just never
+      returned it; needed so the Grabs page's launch site could report watched
+      status too. Backend piece already committed.
 
 ---
 
-## On-air indicator (calendar/backlog availability icon)
+## On-air indicator (calendar/backlog availability icon) — shipped 2026-09-19, not yet released
 
-Add a fourth state alongside not-yet-aired / downloading / available: **airing now**,
-computed from `episode.airDateUtc` (start) to `airDateUtc + (episode.runtimeMinutes
-override ?? show.durationMinutes)` (end). No schema change — both fields already
-exist (`schema.graphql:206,324`); `episodesInRange`/`backlog` queries just need to
-select `durationMinutes`/`runtimeMinutes` alongside `airDateUtc` (not in the query
-today, see `ui/DESIGN.md` §3). Compute the window client-side (`now` between start
-and end) rather than a server field — avoids a moving-target value in a cached
-response. Needs a design decision on the icon itself (5th `AvailabilityStatus`-like
-state, distinct from the existing `UNAVAILABLE`/`DOWNLOADING`/`AVAILABLE` enum which
-is about file presence, not broadcast timing — likely a client-only overlay, not a
-new enum value).
+- [x] Fifth `availState()` value, **airing**: broadcast window open right now
+      (`airDateUtc` through `airDateUtc + runtime`), client-only overlay — no
+      schema change, no new `AvailabilityStatus` enum value. `isEpisodeAiringNow()`
+      computes the window client-side each render (never a cached server field),
+      falling back to a conservative default runtime when neither
+      `episode.runtimeMinutes` nor `show.durationMinutes` is known, so an unknown
+      runtime doesn't silently suppress the indicator for the whole broadcast day.
+- [x] `runtimeMinutes`/`durationMinutes` added to `episodesInRange`'s query (not to
+      `backlog`'s — backlog is `available_locally = 1` by definition, so `airing`
+      can never apply there; narrower than the original sketch, deliberately).
+      `show.js`'s episode rows thread `show.durationMinutes` through too.
+- [x] Icon: filled circle (●), blue (`--av-airing`), 2s opacity pulse — distinct
+      from ready (▶ green)/downloading (⬇ amber)/missing (⬇ red)/future (◷ gray).
+      Wired into both calendar-card and planner-card icon rendering.
 
 ---
 
