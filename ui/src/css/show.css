@@ -325,6 +325,13 @@
 }
 .sp-ext-verify:hover { color: var(--fg); }
 
+/* AniDB-only extra fields (TVDB season/episode-offset mapping) */
+.sp-ext-anidb-fields {
+  display: flex; gap: 4px; align-items: center; flex-wrap: wrap;
+  width: 100%;
+}
+.sp-ext-anidb-fields .sp-ext-input { flex: 1; min-width: 90px; }
+
 /* Auto-search status */
 .sp-ext-search-status {
   font-family: 'DM Sans', sans-serif; font-size: 10px;

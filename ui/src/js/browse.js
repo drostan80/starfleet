@@ -88,6 +88,60 @@ function stripSeasonSuffix(title) {
     .trim();
 }
 
+function normalizeTitle(t) {
+  return (t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/**
+ * Sørensen–Dice bigram similarity, 0..1 — dependency-free fuzzy match
+ * used to guard against searchArrCandidates' top result being an
+ * unrelated show for odd/obscure titles (Sonarr/Radarr rank by their
+ * own relevance score, not title similarity). Mirrors the backend guard
+ * in browse.py's `_title_similarity` (same threshold, different but
+ * comparably strict algorithm — GraphQL's ArrCandidate only exposes
+ * `title`, not alternate titles, so this can't match the backend's
+ * alternate-title check).
+ */
+function titleSimilarity(a, b) {
+  const na = normalizeTitle(a);
+  const nb = normalizeTitle(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const bigrams = s => {
+    const m = new Map();
+    for (let i = 0; i < s.length - 1; i++) {
+      const bg = s.slice(i, i + 2);
+      m.set(bg, (m.get(bg) || 0) + 1);
+    }
+    return m;
+  };
+  const ba = bigrams(na);
+  const bb = bigrams(nb);
+  let overlap = 0;
+  for (const [bg, count] of ba) {
+    if (bb.has(bg)) overlap += Math.min(count, bb.get(bg));
+  }
+  let total = 0;
+  for (const c of ba.values()) total += c;
+  for (const c of bb.values()) total += c;
+  return total ? (2 * overlap) / total : 0;
+}
+
+const TITLE_SIMILARITY_THRESHOLD = 0.5;
+
+/**
+ * Guard against blindly trusting candidates[0] — returns the first
+ * candidate whose title resembles the query closely enough, scanning
+ * past results[0] if needed. Returns null (same as "no candidates")
+ * when nothing resembles the query.
+ */
+function bestMatchingCandidate(query, candidates) {
+  for (const c of candidates) {
+    if (titleSimilarity(query, c.title) >= TITLE_SIMILARITY_THRESHOLD) return c;
+  }
+  return null;
+}
+
 /**
  * Parse a "sequel_of:{json}" error from the server into structured data.
  * Returns null if the error isn't a sequel detection.
@@ -103,7 +157,7 @@ function parseSequelError(msg) {
 
 /**
  * Show a modal confirmation for attaching a sequel as a new season.
- * Returns a Promise<boolean>.
+ * Returns a Promise<'attach'|'separate'|'cancel'>.
  */
 function confirmSequelAttach(sequel) {
   return new Promise(resolve => {
@@ -118,16 +172,24 @@ function confirmSequelAttach(sequel) {
           <button class="btn-confirm">Attach as Season ${sequel.nextSeason}</button>
           <button class="btn-cancel">Cancel</button>
         </div>
+        <p class="sequel-confirm-separate">
+          It isn't — <a href="#" class="sequel-confirm-separate-link">add as new show</a>
+        </p>
       </div>
     `;
     document.body.appendChild(overlay);
     overlay.querySelector('.btn-confirm').onclick = () => {
       overlay.remove();
-      resolve(true);
+      resolve('attach');
     };
     overlay.querySelector('.btn-cancel').onclick = () => {
       overlay.remove();
-      resolve(false);
+      resolve('cancel');
+    };
+    overlay.querySelector('.sequel-confirm-separate-link').onclick = (e) => {
+      e.preventDefault();
+      overlay.remove();
+      resolve('separate');
     };
   });
 }
@@ -1021,9 +1083,10 @@ async function onAnimeChipClick(card, item, status) {
             candidates = await searchArrCandidates(mediaShape, base);
           }
         }
-        if (candidates.length) {
-          if (candidates[0].tvdbId) arrInput.tvdbId = candidates[0].tvdbId;
-          if (candidates[0].tmdbId) arrInput.tmdbId = candidates[0].tmdbId;
+        const match = bestMatchingCandidate(title, candidates);
+        if (match) {
+          if (match.tvdbId) arrInput.tvdbId = match.tvdbId;
+          if (match.tmdbId) arrInput.tmdbId = match.tmdbId;
         }
       } catch {
         // Sonarr/Radarr search failed — proceed without external IDs
@@ -1076,8 +1139,8 @@ async function handleAddError(err, card, item, input, status) {
   // Sequel detected — ask user to confirm season attach.
   const sequel = parseSequelError(err.message);
   if (sequel) {
-    const ok = await confirmSequelAttach(sequel);
-    if (ok) {
+    const choice = await confirmSequelAttach(sequel);
+    if (choice === 'attach') {
       await attachSequel(sequel);
       if (status !== 'PLANNED') {
         await setStatus(sequel.parentShowId, status);
@@ -1089,6 +1152,18 @@ async function handleAddError(err, card, item, input, status) {
       item.lcarsShowId = sequel.parentShowId;
       item.lcarsStatus = status;
       refreshCard(card, item);
+    } else if (choice === 'separate') {
+      // Genuinely a different show — input is already AniList+MAL only
+      // (no tvdbId/tmdbId in the anime add path), so no field stripping needed.
+      const show = await addShow(input);
+      if (show.status !== status && status !== 'PLANNED') {
+        await setStatus(show.id, status);
+        show.status = status;
+      }
+      item.lcarsShowId = show.id;
+      item.lcarsStatus = show.status || status;
+      refreshCard(card, item);
+      showBanner(`Added: ${show.displayTitle} as separate show [${STATUS_LABELS[status]}]`, 'ok');
     } else {
       showBanner('Cancelled', 'info');
     }
@@ -1204,9 +1279,10 @@ async function onTmdbChipClick(card, item, status) {
               candidates = await searchArrCandidates(mediaShape, base);
             }
           }
-          if (candidates.length) {
-            if (candidates[0].tvdbId) arrInput.tvdbId = candidates[0].tvdbId;
-            if (candidates[0].tmdbId) arrInput.tmdbId = candidates[0].tmdbId;
+          const match = bestMatchingCandidate(item.title, candidates);
+          if (match) {
+            if (match.tvdbId) arrInput.tvdbId = match.tvdbId;
+            if (match.tmdbId) arrInput.tmdbId = match.tmdbId;
           }
         } catch {
           // Sonarr search failed

@@ -61,7 +61,7 @@ const EPISODES_IN_RANGE_QUERY = `
       edges { node {
         id
         season episode title absoluteNumber
-        airDateUtc
+        airDateUtc runtimeMinutes
         availableViaSonarr availableViaRadarr availableLocally
         filePathSonarr filePathRadarr
         state
@@ -70,6 +70,7 @@ const EPISODES_IN_RANGE_QUERY = `
         show {
           id displayTitle status score mediaShape trackingSpace tracked
           totalEpisodes posterUrl bannerUrl watchedEpisodeCount availableEpisodeCount
+          durationMinutes
           externalIds(first: 20) {
             edges { node { service externalId url } }
           }
@@ -218,6 +219,39 @@ export async function unlinkShowExternalId(showId, service) {
 }
 
 /**
+ * Resolve a franchise_season_collision pending review.
+ * action: "confirm" (merge into correctParentId/chain parent as correctSeason)
+ * or "reject" (no merge; optionally correctedTvdbId/correctedAnilistId so
+ * the collision doesn't recur).
+ */
+export async function resolveFranchiseMerge(reviewId, action, opts = {}) {
+  const { correctParentId, correctSeason, correctedTvdbId, correctedAnilistId } = opts;
+  const data = await gql(`
+    mutation ResolveFranchiseMerge($reviewId: ID!, $action: String!, $correctParentId: ID, $correctSeason: Int, $correctedTvdbId: String, $correctedAnilistId: Int) {
+      resolveFranchiseMerge(reviewId: $reviewId, action: $action, correctParentId: $correctParentId, correctSeason: $correctSeason, correctedTvdbId: $correctedTvdbId, correctedAnilistId: $correctedAnilistId) {
+        id
+      }
+    }
+  `, { reviewId, action, correctParentId, correctSeason, correctedTvdbId, correctedAnilistId });
+  return data.resolveFranchiseMerge;
+}
+
+/**
+ * Manually link a show to an AniDB ID (Memory Alpha). Unlike
+ * linkShowExternalId, this can also seed an `anime_list_entry` TVDB
+ * season/episode-offset mapping when tvdbId is given — needed for the
+ * AniDB↔TVDB episode-numbering bridge, not just the crosswalk row.
+ */
+export async function linkAniDb(showId, anidbId, tvdbId, defaultTvdbSeason, episodeOffset) {
+  const data = await gql(`
+    mutation LinkAniDb($showId: ID!, $anidbId: Int!, $tvdbId: String, $defaultTvdbSeason: Int, $episodeOffset: Int) {
+      linkAniDb(showId: $showId, anidbId: $anidbId, tvdbId: $tvdbId, defaultTvdbSeason: $defaultTvdbSeason, episodeOffset: $episodeOffset)
+    }
+  `, { showId, anidbId, tvdbId, defaultTvdbSeason, episodeOffset });
+  return data.linkAniDb;
+}
+
+/**
  * Set (or create) a season mapping's AniList/MAL IDs.
  * Upserts by (showId, seasonNumber). Pass null to clear a field.
  */
@@ -264,7 +298,7 @@ const SHOW_DETAIL_QUERY = `
       episodes(first: 200, after: $epAfter) {
         edges { node {
           id season episode absoluteNumber kind title synopsis
-          airDateUtc state
+          airDateUtc runtimeMinutes state
           availableViaSonarr availableViaRadarr availableLocally
           filePathSonarr filePathRadarr
           seasonEntity { malId status }
@@ -433,7 +467,7 @@ export async function fetchRecentGrabs(service, page = 1, pageSize = 20) {
     query RecentGrabs($service: String!, $page: Int, $pageSize: Int) {
       recentGrabs(service: $service, page: $page, pageSize: $pageSize) {
         service title releaseTitle date quality
-        seasonNumber episodeNumber airDate filePath
+        seasonNumber episodeNumber airDate filePath showId
       }
     }
   `, { service, page, pageSize });

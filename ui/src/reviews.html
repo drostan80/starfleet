@@ -666,7 +666,8 @@
   import {
     gql, fetchPendingReviews, resolvePendingReview, setSeasonScore,
     linkShowExternalId, setSeasonMapping, unlinkShowExternalId,
-  } from './js/api.js?v=18';
+    resolveFranchiseMerge,
+  } from './js/api.js?v=19';
 
   applyAppName();
   await bootstrapConfig();
@@ -895,6 +896,15 @@
     if (r.field === 'anilist_id') return r.entityType === 'season' ? 'season AniList ID' : 'AniList ID';
     if (r.field === 'metadata_fetch') return 'metadata fetch';
     if (r.field === 'air_date_utc') return 'air date';
+    if (r.field === 'franchise_season_collision') return 'season collision';
+    if (r.field === 'cross_service_merge') return 'possible duplicate';
+    if (r.field === 'sonarr_deleted') return 'deleted from Sonarr';
+    if (r.field === 'radarr_deleted') return 'deleted from Radarr';
+    if (r.field === 'webhook_series_add') return 'Sonarr add failed';
+    if (r.field === 'webhook_movie_added') return 'Radarr add failed';
+    if (r.field === 'reconcile_create') return 'untracked show, add failed';
+    if (r.field === 'sonarr_remonitor') return 'Sonarr re-monitor failed';
+    if (r.field === 'radarr_remonitor') return 'Radarr re-monitor failed';
     if (r.field.includes('_conflict')) {
       const idType = r.field.startsWith('mal') ? 'MAL' : 'AniList';
       return `${idType} ID conflict`;
@@ -957,6 +967,11 @@
         sequel_season: 'sequel season', anilist_push: 'AniList push', mal_push: 'MAL push',
         anilist_id: 'AniList ID', metadata_fetch: 'metadata fetch', air_date_utc: 'air date',
         score: 'score', sonarr_unmonitor: 'sonarr unmonitor', radarr_unmonitor: 'radarr unmonitor',
+        franchise_season_collision: 'season collision', cross_service_merge: 'possible duplicate',
+        sonarr_deleted: 'deleted from Sonarr', radarr_deleted: 'deleted from Radarr',
+        webhook_series_add: 'Sonarr add failed', webhook_movie_added: 'Radarr add failed',
+        reconcile_create: 'untracked show, add failed',
+        sonarr_remonitor: 'Sonarr re-monitor failed', radarr_remonitor: 'Radarr re-monitor failed',
       };
       if (f.includes('_conflict')) return (f.startsWith('mal') ? 'MAL' : 'AniList') + ' conflict';
       return labels[f] || f;
@@ -1237,6 +1252,7 @@
     const isScore = r.field === 'score' && r.entityType === 'season';
     const isSequel = r.field.startsWith('sequel_season:') && r.entityType === 'show';
     const isMerge = r.field === 'cross_service_merge';
+    const isFranchiseCollision = r.field === 'franchise_season_collision' && r.entityType === 'show';
 
     // Header with poster + title
     let headerHtml = '';
@@ -1367,6 +1383,15 @@
           </div>
         </div>
       `;
+    } else if (isFranchiseCollision) {
+      diffHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">Season collision — parent already has the target season</div>
+          <div class="conflict-compare" id="franchise-compare">
+            <div class="conflict-loading"><span class="spinner"></span> Loading parent/child…</div>
+          </div>
+        </div>
+      `;
     } else if (hasVal) {
       diffHtml = `
         <div class="detail-section">
@@ -1493,6 +1518,30 @@
       } else if (isMerge) {
         buttons += `<button class="btn-primary btn-approve" id="btn-merge-${uid}">Merge</button>`;
         note = `<div class="action-note">Merges the loser into the winner — loser is demoted (untracked), its data moves to the winner. Reversible via reverseShowMerge.</div>`;
+      } else if (isFranchiseCollision) {
+        editRow = `
+          <div class="detail-section">
+            <div class="detail-section-label">Confirm merge</div>
+            <div class="inline-edit">
+              <label style="font-size:11px;color:var(--muted);margin-right:6px">Season #</label>
+              <input type="number" min="1" id="fc-season-${uid}" placeholder="correct season" style="width:90px">
+              <button class="btn-primary btn-approve" id="btn-fc-confirm-${uid}" style="font-size:11px;padding:5px 10px">✓ Confirm merge</button>
+            </div>
+            <div class="detail-section-label" style="margin-top:12px">Reject — keep as a separate show</div>
+            <div class="id-form-grid">
+              <label>TVDB</label>
+              <input type="text" id="fc-tvdb-${uid}" placeholder="corrected TVDB ID (optional)">
+              <span class="hint"></span>
+              <label>AniList</label>
+              <input type="text" id="fc-anilist-${uid}" placeholder="corrected AniList ID (optional)">
+              <span class="hint"></span>
+            </div>
+            <div style="margin-top:8px">
+              <button class="btn-primary btn-dismiss" id="btn-fc-reject-${uid}" style="font-size:12px;padding:6px 14px">✕ Reject — keep separate</button>
+            </div>
+          </div>
+        `;
+        note = `<div class="action-note">The parent show already has a season in the collision range — pick the correct season to merge this show in as, or reject and optionally correct its TVDB/AniList ID so this collision doesn't recur.</div>`;
       } else if (isAnilistId) {
         const extIds = info.externalIds || {};
         const seasons = info.seasons || [];
@@ -1946,6 +1995,62 @@
       }
     }
 
+    // Async-load franchise season-collision comparison
+    if (isFranchiseCollision && !resolved) {
+      const fcEl = document.getElementById('franchise-compare');
+      const childId = r.entityId;
+      const parentId = latest;
+      if (fcEl && parentId) {
+        (async () => {
+          try {
+            const [parentCard, childCard] = await Promise.all([
+              fetchShowCard(parentId), fetchShowCard(childId),
+            ]);
+            if (_selected !== r.id) return;
+
+            function renderFcCard(show, label, isParent) {
+              if (!show) return `<div class="conflict-card"><em>Show not found</em></div>`;
+              const statusClass = show.status === 'WATCHING' ? 'watching' : show.status === 'PLANNED' ? 'planned' : '';
+              const trackedClass = show.tracked ? 'tracked' : 'untracked';
+              const extIdLines = [];
+              for (const svc of ['anilist', 'tvdb', 'mal']) {
+                const e = show.externalIds[svc];
+                if (e) extIdLines.push(`${svc}: <a href="${esc(e.url)}" target="_blank">${esc(e.id)}</a>`);
+              }
+              const seasonLines = (show.seasons || []).map(s => `S${s.seasonNumber}`).join(', ');
+              return `
+                <div class="conflict-card${isParent ? ' this-side' : ''}">
+                  <div class="conflict-label">${esc(label)}</div>
+                  <div class="conflict-card-header">
+                    ${show.posterUrl ? `<img class="conflict-card-poster" src="${esc(show.posterUrl)}" alt="" onerror="this.style.display='none'">` : ''}
+                    <div>
+                      <div class="conflict-card-title">${esc(show.displayTitle)}</div>
+                      <div class="conflict-card-meta">
+                        <span class="conflict-tag ${statusClass}">${show.status}</span>
+                        <span class="conflict-tag ${trackedClass}">${show.tracked ? 'tracked' : 'untracked'}</span>
+                        ${show.totalEpisodes ? `<span class="conflict-tag">${show.totalEpisodes} eps</span>` : ''}
+                        ${show.hasEpisodes ? '' : '<span class="conflict-tag untracked">no episodes</span>'}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="conflict-ids">${extIdLines.join('<br>') || '<em>no external IDs</em>'}</div>
+                  ${seasonLines ? `<div class="conflict-ids">existing seasons: ${esc(seasonLines)}</div>` : ''}
+                </div>
+              `;
+            }
+
+            fcEl.innerHTML =
+              renderFcCard(parentCard, 'Parent (target)', true) +
+              renderFcCard(childCard, 'This show (to merge in)', false);
+          } catch (err) {
+            if (_selected === r.id && fcEl) {
+              fcEl.innerHTML = `<div class="conflict-loading" style="color:var(--st-dropped)">Failed to load: ${esc(err.message)}</div>`;
+            }
+          }
+        })();
+      }
+    }
+
     // Wire up action buttons
     if (!resolved) {
       const uid = r.id.replace(/[^a-z0-9]/gi, '');
@@ -2208,6 +2313,61 @@
           } catch (err) {
             setStatus(`Error: ${err.message}`, 'err');
             mergeBtn.disabled = false;
+          }
+        });
+      }
+
+      // Confirm merge (franchise_season_collision reviews)
+      const fcConfirmBtn = document.getElementById(`btn-fc-confirm-${uid}`);
+      if (fcConfirmBtn) {
+        fcConfirmBtn.addEventListener('click', async () => {
+          const seasonInput = document.getElementById(`fc-season-${uid}`);
+          const season = seasonInput ? parseInt(seasonInput.value, 10) : null;
+          if (!season || season < 1) { setStatus('Enter a valid season number', 'err'); return; }
+          fcConfirmBtn.disabled = true;
+          setStatus('Merging…');
+          try {
+            // resolveFranchiseMerge marks the review resolved itself —
+            // no separate resolvePendingReview call needed (would just
+            // redundantly overwrite the same resolution).
+            await resolveFranchiseMerge(r.id, 'confirm', { correctSeason: season });
+            r.resolvedAt = new Date().toISOString();
+            r.resolutionNote = `confirmed as S${season}`;
+            renderList(); renderPills(); renderBulkBar();
+            const visible = filteredReviews();
+            const nextOpen = visible.find(x => !x.resolvedAt && x.id !== r.id);
+            if (nextOpen) selectReview(nextOpen); else renderDetail(r);
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            fcConfirmBtn.disabled = false;
+          }
+        });
+      }
+
+      // Reject (franchise_season_collision reviews) — optionally correct IDs
+      const fcRejectBtn = document.getElementById(`btn-fc-reject-${uid}`);
+      if (fcRejectBtn) {
+        fcRejectBtn.addEventListener('click', async () => {
+          const tvdbInput = document.getElementById(`fc-tvdb-${uid}`);
+          const anilistInput = document.getElementById(`fc-anilist-${uid}`);
+          const tvdbVal = parseIdInput(tvdbInput?.value, 'thetvdb.com');
+          const anilistVal = parseIdInput(anilistInput?.value, 'anilist.co/anime');
+          fcRejectBtn.disabled = true;
+          setStatus('Rejecting…');
+          try {
+            await resolveFranchiseMerge(r.id, 'reject', {
+              correctedTvdbId: tvdbVal || null,
+              correctedAnilistId: anilistVal ? parseInt(anilistVal, 10) : null,
+            });
+            r.resolvedAt = new Date().toISOString();
+            r.resolutionNote = 'rejected — IDs corrected';
+            renderList(); renderPills(); renderBulkBar();
+            const visible = filteredReviews();
+            const nextOpen = visible.find(x => !x.resolvedAt && x.id !== r.id);
+            if (nextOpen) selectReview(nextOpen); else renderDetail(r);
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            fcRejectBtn.disabled = false;
           }
         });
       }

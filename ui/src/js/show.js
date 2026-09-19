@@ -20,12 +20,12 @@ import {
   setShowSynopsis, setEpisodeSynopsis, fetchSynopsisCandidates,
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
-  amendShowArrLink,
-} from './api.js?v=18';
+  amendShowArrLink, linkAniDb,
+} from './api.js?v=19';
 import {
-  fmtEpBadge, availState, showBanner, hideBanner, launchMpv,
+  fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange,
-} from './calendar.js?v=39';
+} from './calendar.js?v=40';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -71,7 +71,7 @@ const SVC_NAMES = {
   anidb: 'AniDB', syoboi: 'Syoboi', tvmaze: 'TVmaze',
 };
 /** Services managed by LCARS crosswalk — read-only in the UI. */
-const READONLY_SVCS = new Set(['sonarr', 'radarr', 'anidb', 'syoboi', 'tvmaze']);
+const READONLY_SVCS = new Set(['sonarr', 'radarr']);
 /** All known services in display order. */
 const ALL_SERVICES = ['anilist', 'mal', 'tmdb', 'tvdb', 'imdb', 'anidb', 'syoboi', 'tvmaze', 'sonarr', 'radarr'];
 const REWRITE_SVCS = new Set(['sonarr', 'radarr']);
@@ -104,9 +104,9 @@ function fmtDate(iso) {
  * availState() in calendar.js reads ep.show.mediaShape — episodes here
  * lack that back-reference, so we synthesize it.
  */
-function epAvailState(ep, mediaShape) {
+function epAvailState(ep, mediaShape, durationMinutes) {
   // Attach the minimal .show stub that availState expects
-  const patched = { ...ep, show: { mediaShape } };
+  const patched = { ...ep, show: { mediaShape, durationMinutes } };
   return availState(patched);
 }
 
@@ -641,6 +641,37 @@ function openExtEditor(container, show, cfg, service, extId, url) {
   searchStatus.hidden = true;
   editor.appendChild(searchStatus);
 
+  // AniDB-only extra fields: linkAniDb (unlike linkShowExternalId) can
+  // also seed an anime_list_entry TVDB season/episode-offset mapping —
+  // needed for the AniDB↔TVDB episode-numbering bridge, not just the
+  // crosswalk row. Hidden for every other service.
+  const anidbFields = el('div', 'sp-ext-anidb-fields');
+  anidbFields.hidden = true;
+  const anidbTvdbInput = document.createElement('input');
+  anidbTvdbInput.type = 'text';
+  anidbTvdbInput.className = 'sp-ext-input';
+  anidbTvdbInput.placeholder = 'TVDB ID (optional)';
+  const anidbSeasonInput = document.createElement('input');
+  anidbSeasonInput.type = 'number';
+  anidbSeasonInput.className = 'sp-ext-input';
+  anidbSeasonInput.placeholder = 'default season';
+  anidbSeasonInput.style.width = '90px';
+  const anidbOffsetInput = document.createElement('input');
+  anidbOffsetInput.type = 'number';
+  anidbOffsetInput.className = 'sp-ext-input';
+  anidbOffsetInput.placeholder = 'episode offset';
+  anidbOffsetInput.style.width = '90px';
+  anidbFields.appendChild(anidbTvdbInput);
+  anidbFields.appendChild(anidbSeasonInput);
+  anidbFields.appendChild(anidbOffsetInput);
+  editor.appendChild(anidbFields);
+
+  function updateAnidbFieldsVisibility() {
+    const svc = svcSelect.value === '__custom__' ? customSvcInput.value : svcSelect.value;
+    anidbFields.hidden = svc !== 'anidb';
+  }
+  updateAnidbFieldsVisibility();
+
   function updateVerifyLink() {
     const u = urlInput.value.trim();
     if (u && u.startsWith('http')) {
@@ -710,6 +741,7 @@ function openExtEditor(container, show, cfg, service, extId, url) {
   svcSelect.addEventListener('change', () => {
     customSvcInput.hidden = svcSelect.value !== '__custom__';
     searchStatus.hidden = true;
+    updateAnidbFieldsVisibility();
     // Auto-fill URL from template when ID is present
     autoFillUrl();
     // Auto-search for tmdb/tvdb/imdb services
@@ -734,17 +766,33 @@ function openExtEditor(container, show, cfg, service, extId, url) {
       showBanner('Service, ID, and URL are all required.', 'error');
       return;
     }
+    if (svc === 'anidb' && !/^\d+$/.test(id)) {
+      showBanner('AniDB ID must be numeric.', 'error');
+      return;
+    }
     try {
       saveBtn.disabled = true;
-      const result = await linkShowExternalId(show.id, svc, id, u);
+      let externalId, url;
+      if (svc === 'anidb') {
+        const tvdbVal = anidbTvdbInput.value.trim() || null;
+        const seasonVal = anidbSeasonInput.value.trim() ? parseInt(anidbSeasonInput.value.trim(), 10) : null;
+        const offsetVal = anidbOffsetInput.value.trim() ? parseInt(anidbOffsetInput.value.trim(), 10) : 0;
+        await linkAniDb(show.id, parseInt(id, 10), tvdbVal, seasonVal, offsetVal);
+        externalId = id;
+        url = u;
+      } else {
+        const result = await linkShowExternalId(show.id, svc, id, u);
+        externalId = result.externalId;
+        url = result.url;
+      }
       // Update local data
       const existing = (show.externalIds || []).find(e => e.service === svc);
       if (existing) {
-        existing.externalId = result.externalId;
-        existing.url = result.url;
+        existing.externalId = externalId;
+        existing.url = url;
       } else {
         show.externalIds = show.externalIds || [];
-        show.externalIds.push({ service: svc, externalId: result.externalId, url: result.url });
+        show.externalIds.push({ service: svc, externalId, url });
       }
       renderExtBadges(container, show, cfg);
       showBanner(`${SVC_NAMES[svc] || svc} ID saved.`, 'ok');
@@ -1424,7 +1472,7 @@ function buildAnidbEpRow(ep, show, cfg) {
   const m = ep.anidbMapping;
   const row = el('div', 'sp-ep-row');
 
-  const avail = epAvailState(ep, show.mediaShape);
+  const avail = epAvailState(ep, show.mediaShape, show.durationMinutes);
   if (avail === 'future') row.classList.add('future');
 
   // AniDB episode number badge
@@ -1458,7 +1506,11 @@ function buildAnidbEpRow(ep, show, cfg) {
     mpvBtn.title = 'Play in mpv';
     mpvBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      launchMpv(cfg, epFilePath);
+      // Argument order fixed 2026-09-19 (was launchMpv(cfg, epFilePath) —
+      // a real pre-existing bug: filePath.startsWith would throw on the
+      // cfg object). Also now reports watched status like every other
+      // mpv launch site.
+      launchMpv(epFilePath, cfg, { showId: show.id, season: ep.season, episode: ep.episode });
     });
     mpvCell.appendChild(mpvBtn);
   }
@@ -1764,13 +1816,13 @@ function renderSpecialCard(ep, show, container, cfg) {
   const filePath = ep.filePathRadarr || ep.filePathSonarr;
   const canPlay = ep.availableLocally && filePath;
   const effectiveShape = ep.kind === 'BONUS_MOVIE' ? 'MOVIE' : show.mediaShape;
-  const avail = epAvailState(ep, effectiveShape);
+  const avail = epAvailState(ep, effectiveShape, show.durationMinutes);
   const mpvIcon = el('span', `sp-mpv-icon ${canPlay ? 'available' : 'unavailable'}`);
   if (canPlay) {
     mpvIcon.innerHTML = _mpvSvg;
-    mpvIcon.addEventListener('click', () => launchMpv(filePath, cfg));
+    mpvIcon.addEventListener('click', () => launchMpv(filePath, cfg, { showId: show.id, season: ep.season, episode: ep.episode }));
   } else {
-    mpvIcon.textContent = avail === 'downloading' ? '⬇' : '◷';
+    mpvIcon.textContent = avail === 'downloading' ? '⬇' : avail === 'airing' ? '●' : '◷';
   }
   mpvCell.appendChild(mpvIcon);
   bottomRow.appendChild(mpvCell);
@@ -2546,11 +2598,11 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
         return !isWatched;
       });
       const aired = unwatched.filter(ep => {
-        const avail = epAvailState(ep, show.mediaShape);
+        const avail = epAvailState(ep, show.mediaShape, show.durationMinutes);
         return avail !== 'future';
       });
       const unaired = unwatched.filter(ep => {
-        const avail = epAvailState(ep, show.mediaShape);
+        const avail = epAvailState(ep, show.mediaShape, show.durationMinutes);
         return avail === 'future';
       });
 
@@ -2680,7 +2732,7 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     const isMini = minisodes.includes(ep);
     const row = el('div', `sp-ep-row${isMini ? ' minisode' : ''}`);
 
-    const avail = epAvailState(ep, show.mediaShape);
+    const avail = epAvailState(ep, show.mediaShape, show.durationMinutes);
     if (avail === 'future') row.classList.add('future');
 
     // Episode number badge (click to remap)
@@ -2736,9 +2788,9 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     const mpvIcon = el('span', `sp-mpv-icon ${canPlay ? 'available' : 'unavailable'}`);
     if (canPlay) {
       mpvIcon.innerHTML = _mpvSvg;
-      mpvIcon.addEventListener('click', () => launchMpv(epFilePath, cfg));
+      mpvIcon.addEventListener('click', () => launchMpv(epFilePath, cfg, { showId: show.id, season: ep.season, episode: ep.episode }));
     } else {
-      mpvIcon.textContent = avail === 'downloading' ? '⬇' : '◷';
+      mpvIcon.textContent = avail === 'downloading' ? '⬇' : avail === 'airing' ? '●' : '◷';
     }
     mpvCell.appendChild(mpvIcon);
     row.appendChild(mpvCell);

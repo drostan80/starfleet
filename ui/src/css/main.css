@@ -36,6 +36,7 @@
 
   --av-ready:       #22c55e;
   --av-downloading: #f59e0b;  /* amber — actively queued/downloading */
+  --av-airing:      #3b82f6;  /* blue  — broadcast window open right now */
   --av-missing:     #ef4444;  /* red   — aired but not available and not downloading */
   --av-future:      #6b7494;
 
@@ -704,6 +705,7 @@ body {
 .planner-avail-btn:hover { transform: scale(1.1); }
 .planner-avail-btn.avail-ready       { border-color: var(--av-ready); color: var(--av-ready); }
 .planner-avail-btn.avail-downloading { border-color: var(--av-downloading); color: var(--av-downloading); }
+.planner-avail-btn.avail-airing      { border-color: var(--av-airing); color: var(--av-airing); animation: avail-airing-pulse 2s ease-in-out infinite; }
 .planner-avail-btn.avail-missing     { border-color: var(--av-missing); color: var(--av-missing); }
 .planner-avail-btn.avail-future      { border-color: var(--av-future); color: var(--av-future); }
 
@@ -981,8 +983,14 @@ body {
 }
 .avail-ready       { color: var(--av-ready); }
 .avail-downloading { color: var(--av-downloading); }
+.avail-airing      { color: var(--av-airing); animation: avail-airing-pulse 2s ease-in-out infinite; }
 .avail-missing     { color: var(--av-missing); }
 .avail-future      { color: var(--av-future); }
+
+@keyframes avail-airing-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
 
 /* card body: service strip + art + status tab */
 .card-body {
@@ -1688,4 +1696,19 @@ body {
 .sequel-confirm-btns .btn-cancel {
   background: transparent;
   color: var(--muted);
+}
+.sequel-confirm-separate {
+  margin-top: 14px !important;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px !important;
+  color: var(--muted);
+}
+.sequel-confirm-separate-link {
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.sequel-confirm-separate-link:hover {
+  color: var(--text);
 }

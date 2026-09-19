@@ -9,7 +9,7 @@
  */
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=4';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=18';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=19';
 import { openArtPicker } from './art-picker.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -403,9 +403,12 @@ export function fmtEpBadge(ep) {
 /* ── Availability classification ─────────────────────────── */
 
 /**
- * Returns 'ready' | 'downloading' | 'missing' | 'future' based on availability.
+ * Returns 'ready' | 'downloading' | 'airing' | 'missing' | 'future' based
+ * on availability.
  * - ready:       file imported and available
  * - downloading: Sonarr/Radarr has it queued or actively downloading
+ * - airing:      broadcast window is open right now (client-only overlay —
+ *                not a server-side status; see episodeAiringWindow below)
  * - missing:     aired but UNAVAILABLE and not downloading (nothing in the queue)
  * - future:      has not aired yet
  */
@@ -416,9 +419,30 @@ export function availState(ep) {
   if (status === 'AVAILABLE')   return 'ready';
   if (status === 'DOWNLOADING') return 'downloading';
 
-  // UNAVAILABLE — distinguish aired (missing) vs future
+  // UNAVAILABLE — distinguish airing-now vs aired (missing) vs future
   if (!ep.airDateUtc) return 'future';
+  if (isEpisodeAiringNow(ep)) return 'airing';
   return new Date(ep.airDateUtc) <= new Date() ? 'missing' : 'future';
+}
+
+/**
+ * True when `now` falls inside the episode's broadcast window: airDateUtc
+ * through airDateUtc + runtime. Computed client-side (not a server field)
+ * so the window is evaluated against the viewer's own clock at render
+ * time, not baked into a cached response as a moving target. Runtime
+ * falls back show.durationMinutes when the episode has no override, and
+ * to a conservative default when neither is known — an unknown runtime
+ * shouldn't silently suppress the indicator for the whole broadcast day.
+ */
+const DEFAULT_RUNTIME_MINUTES = 24;
+
+export function isEpisodeAiringNow(ep) {
+  if (!ep.airDateUtc) return false;
+  const start = new Date(ep.airDateUtc);
+  const runtime = ep.runtimeMinutes ?? ep.show?.durationMinutes ?? DEFAULT_RUNTIME_MINUTES;
+  const end = new Date(start.getTime() + runtime * 60000);
+  const now = new Date();
+  return now >= start && now < end;
 }
 
 /* ── Service strip helpers ───────────────────────────────── */
@@ -440,11 +464,28 @@ const SVC_DEFS = [
 /* ── mpv launcher ────────────────────────────────────────── */
 
 /**
+ * Build the {showId, season, episode} context launchMpv needs to report
+ * watched status — null when the episode has no show id (shouldn't
+ * happen for a calendar/planner ep, but keeps this call-site-safe).
+ * Movies carry season/episode as null; addWatchEvent already treats
+ * both as optional.
+ */
+export function episodeCtx(ep) {
+  const showId = ep?.show?.id;
+  if (!showId) return null;
+  return { showId, season: ep.season ?? null, episode: ep.episode ?? null };
+}
+
+/**
  * Launch a file in mpv via the local helper daemon.
  * filePath: server-side path (/data/media/…)
  * cfg: config object
+ * ctx: optional {showId, season, episode} (episodeCtx(ep)) — when
+ * present, the helper watches playback and reports watched status
+ * (>=90% viewed, mirrors the Android VLC client's own threshold) back
+ * to LCARS on its own, no client-side polling needed.
  */
-export async function launchMpv(filePath, cfg) {
+export async function launchMpv(filePath, cfg, ctx = null) {
   if (!filePath) {
     showBanner('No file available for this episode', 'error');
     return;
@@ -457,11 +498,20 @@ export async function launchMpv(filePath, cfg) {
   const mediaPath = filePath.startsWith('/data') ? filePath.slice('/data'.length) : filePath;
   const mediaUrl  = `${cfg.lcars_url}/files${mediaPath}`;
 
+  const playBody = { url: mediaUrl };
+  if (ctx?.showId) {
+    playBody.showId   = ctx.showId;
+    playBody.season   = ctx.season;
+    playBody.episode  = ctx.episode;
+    playBody.token    = cfg.lcars_token;
+    playBody.lcarsBase = cfg.lcars_url;
+  }
+
   try {
     const res = await fetch(`${helperUrl}/play`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ url: mediaUrl }),
+      body:    JSON.stringify(playBody),
     });
     if (!res.ok) {
       // Helper returns 502 + JSON when mpv exits immediately (bad URL, auth, …)
@@ -491,8 +541,9 @@ export async function launchMpv(filePath, cfg) {
  * malId: season-level MAL id (integer) — fallback when show has no mal externalId row
  * filePath: server-side file path (filePathSonarr or filePathRadarr), or null
  * availableLocally: bool
+ * ctx: optional {showId, season, episode} (episodeCtx(ep)) for watched-status reporting
  */
-export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cfg) {
+export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cfg, ctx = null) {
   const byService = {};
   for (const ei of externalIds) {
     // prefer the real link over the :add synthetic link
@@ -559,7 +610,7 @@ export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cf
     e.preventDefault();
     if (!availableLocally) return;
     playerA.style.opacity = '0.5';
-    await launchMpv(filePath, cfg);
+    await launchMpv(filePath, cfg, ctx);
     playerA.style.opacity = '';
   });
   strip.appendChild(playerA);
@@ -617,10 +668,11 @@ export function buildCard(ep, cfg) {
   availIcon.title = {
     ready:       'Available',
     downloading: 'Downloading',
+    airing:      'Airing now',
     missing:     'Aired — not available and not downloading',
     future:      'Not yet aired',
   }[avail];
-  availIcon.textContent = avail === 'ready' ? '▶' : avail === 'future' ? '◷' : '⬇';
+  availIcon.textContent = avail === 'ready' ? '▶' : avail === 'future' ? '◷' : avail === 'airing' ? '●' : '⬇';
   meta.appendChild(availIcon);
 
   const watchBtn = document.createElement('button');
@@ -642,7 +694,7 @@ export function buildCard(ep, cfg) {
   // Service strip
   const filePath = ep.show.mediaShape === 'MOVIE' ? ep.filePathRadarr : ep.filePathSonarr;
   const malId    = ep.seasonEntity?.malId ?? null;
-  body.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg));
+  body.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg, episodeCtx(ep)));
 
   // Cover art — use posterUrl if available; otherwise use TMDB cache or trigger a fetch
   const art = document.createElement('div');
@@ -652,7 +704,7 @@ export function buildCard(ep, cfg) {
   // Click on art launches mpv for available episodes
   if (ep.availableLocally) {
     art.classList.add('art-playable');
-    art.addEventListener('click', () => launchMpv(filePath, cfg));
+    art.addEventListener('click', () => launchMpv(filePath, cfg, episodeCtx(ep)));
   }
 
   const posterUrl = ep.show.posterUrl || posterCache.get(ep.show.id) || null;
@@ -1121,7 +1173,7 @@ function buildPlannerCard(ep, cfg) {
   // Service strip — same vertical icon bar as regular calendar cards
   const externalIds = ep.show.externalIds?.edges?.map(e => e.node) || [];
   const malId = ep.seasonEntity?.malId ?? null;
-  card.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg));
+  card.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg, episodeCtx(ep)));
 
   // Cover image — full poster, scaled (not cropped)
   const cover = document.createElement('div');
@@ -1146,7 +1198,7 @@ function buildPlannerCard(ep, cfg) {
 
   if (ep.availableLocally) {
     cover.classList.add('art-playable');
-    cover.addEventListener('click', () => launchMpv(filePath, cfg));
+    cover.addEventListener('click', () => launchMpv(filePath, cfg, episodeCtx(ep)));
   }
 
   card.appendChild(cover);
@@ -1196,12 +1248,13 @@ function buildPlannerCard(ep, cfg) {
   availBtn.title = {
     ready:       'Play in mpv',
     downloading: 'Downloading',
+    airing:      'Airing now',
     missing:     'Aired — not available',
     future:      'Not yet aired',
   }[avail];
-  availBtn.textContent = avail === 'ready' ? '▶' : avail === 'future' ? '◷' : '⬇';
+  availBtn.textContent = avail === 'ready' ? '▶' : avail === 'future' ? '◷' : avail === 'airing' ? '●' : '⬇';
   if (avail === 'ready' && ep.availableLocally) {
-    availBtn.addEventListener('click', () => launchMpv(filePath, cfg));
+    availBtn.addEventListener('click', () => launchMpv(filePath, cfg, episodeCtx(ep)));
   }
   actions.appendChild(availBtn);
 

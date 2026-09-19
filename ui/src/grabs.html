@@ -392,7 +392,7 @@
 <script type="module">
   import { bootstrapConfig, getConfig, applyAppName } from './js/config.js?v=4';
   import { initSearch } from './js/search.js?v=2';
-  import { fetchRecentGrabs } from './js/api.js?v=18';
+  import { fetchRecentGrabs } from './js/api.js?v=19';
 
   applyAppName();
   await bootstrapConfig();
@@ -444,7 +444,10 @@
 
   /* ── mpv launch ─────────────────────────────────────────── */
 
-  async function launchMpv(filePath) {
+  // ctx: optional {showId, season, episode} — when present, the mpv
+  // helper watches playback and reports watched status back to LCARS
+  // on its own (same as calendar.js's own launchMpv).
+  async function launchMpv(filePath, ctx = null) {
     if (!filePath) { showToast('No file path for this grab'); return; }
     const cfg = getConfig();
     const helperUrl = (cfg.mpv_helper_url || 'http://localhost:19450').replace(/\/$/, '');
@@ -454,12 +457,21 @@
     const mediaPath = filePath.startsWith('/data') ? filePath.slice('/data'.length) : filePath;
     const mediaUrl  = `${cfg.lcars_url}/files${mediaPath}`;
 
+    const playBody = { url: mediaUrl };
+    if (ctx?.showId) {
+      playBody.showId    = ctx.showId;
+      playBody.season    = ctx.season ?? null;
+      playBody.episode   = ctx.episode ?? null;
+      playBody.token     = cfg.lcars_token;
+      playBody.lcarsBase = cfg.lcars_url;
+    }
+
     showToast(`▶ Launching…`);
     try {
       const res = await fetch(`${helperUrl}/play`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ url: mediaUrl }),
+        body:    JSON.stringify(playBody),
       });
       if (!res.ok) throw new Error(`helper returned ${res.status}`);
       showToast(`▶ ${filePath.split('/').pop()}`);
@@ -536,7 +548,7 @@
 
       // ── Step 1: look up show in LCARS to get its TMDB ID ──
       try {
-        const { gql } = await import('./js/api.js?v=18');
+        const { gql } = await import('./js/api.js?v=19');
         const data = await gql(`
           query GrabPoster($q: String!) {
             search(query: $q, first: 3) {
@@ -628,7 +640,7 @@
       const titleAttr = grab.title.replace(/"/g, '&quot;');
 
       return `
-        <div class="grab-card" data-path="${fullPath}">
+        <div class="grab-card" data-path="${fullPath}" data-show-id="${grab.showId || ''}" data-season="${grab.seasonNumber ?? ''}" data-episode="${grab.episodeNumber ?? ''}">
 
           <!-- Left mini-card: meta + service strip + art + title footer -->
           <div class="gc-mini-card">
@@ -667,12 +679,18 @@
     // Per-card cooldown (3 s) prevents accidental double-launch.
     tableEl.querySelectorAll('.grab-card').forEach(card => {
       const path = card.dataset.path;
+      const showId = card.dataset.showId || null;
+      const ctx = showId ? {
+        showId,
+        season: card.dataset.season ? parseInt(card.dataset.season, 10) : null,
+        episode: card.dataset.episode ? parseInt(card.dataset.episode, 10) : null,
+      } : null;
       let _busy = false;
 
       const fire = () => {
         if (_busy) return;
         _busy = true;
-        launchMpv(path).finally(() => {
+        launchMpv(path, ctx).finally(() => {
           setTimeout(() => { _busy = false; }, 3000);
         });
       };
