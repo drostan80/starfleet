@@ -58,6 +58,7 @@ class _FakeClient:
         tvdb_backfill_result: dict | None = None,
         season_subdivision_result: dict | None = None,
         score_sync_result: dict | None = None,
+        reconcile_arr_state_result: dict | None = None,
     ) -> None:
         self._due_shows = due_shows or []
         self._due_seasons = due_seasons or []
@@ -101,6 +102,14 @@ class _FakeClient:
             "anilistChecked": 0,
             "anilistFlagged": 0,
         }
+        self._reconcile_arr_state_result = reconcile_arr_state_result or {
+            "episodesCorrected": 0,
+            "showsCorrected": 0,
+            "showsCreated": 0,
+            "showsCreateFailed": 0,
+            "pausedShowIds": [],
+            "resumedShowIds": [],
+        }
         self.refreshed: list[str] = []
         self.reconciled: list[tuple[str, int]] = []
 
@@ -132,6 +141,9 @@ class _FakeClient:
 
     async def poll_file_availability(self) -> dict:
         return self._availability_result
+
+    async def reconcile_arr_state(self) -> dict:
+        return self._reconcile_arr_state_result
 
     async def recommended_availability_poll_interval_seconds(self) -> int:
         return self._recommended_interval
@@ -366,6 +378,32 @@ async def test_run_availability_once_sums_episodes_and_shows_updated():
 async def test_run_availability_once_is_zero_with_nothing_updated():
     client = _FakeClient()
     assert await run_availability_once(client) == 0
+
+
+async def test_run_availability_once_folds_in_reconcile_arr_state():
+    client = _FakeClient(
+        availability_result={"episodesUpdated": 3, "showsUpdated": 2},
+        reconcile_arr_state_result={
+            "episodesCorrected": 1,
+            "showsCorrected": 1,
+            "showsCreated": 2,
+            "showsCreateFailed": 0,
+            "pausedShowIds": ["s-1"],
+            "resumedShowIds": ["s-2", "s-3"],
+        },
+    )
+    # availability (3+2) + reconcile (created 2 + paused 1 + resumed 2)
+    assert await run_availability_once(client) == 10
+
+
+async def test_run_availability_once_survives_a_broken_reconcile_call():
+    class _BrokenReconcileClient(_FakeClient):
+        async def reconcile_arr_state(self):
+            raise LcarsError("boom")
+
+    client = _BrokenReconcileClient(availability_result={"episodesUpdated": 3, "showsUpdated": 2})
+    # reconcile failing must not swallow the availability count that already succeeded
+    assert await run_availability_once(client) == 5
 
 
 # --- run_animeschedule_once (B.5) --------------------------------------------

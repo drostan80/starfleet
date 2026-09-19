@@ -129,6 +129,38 @@ def _cmd_audit_local_files(args: argparse.Namespace) -> None:
     asyncio.run(_main())
 
 
+def _cmd_reconcile_arr_state(args: argparse.Namespace) -> None:
+    """NEXT_UP.md follow-up (2026-09-19) — manual trigger for
+    reconcileArrState, run before turning on the automatic loop the
+    first time: this applies pause/resume status changes (each with a
+    real AniList/MAL push) as soon as it runs, so a first look here
+    before Ops's own availability loop starts calling it unattended
+    every tick is worth the extra step. Unlike auditLocalFiles, this
+    isn't a slow whole-filesystem walk — the default client timeout is
+    fine."""
+    logging.basicConfig(level=logging.INFO)
+    cfg = config.load_config()
+    _require_bearer_token(cfg)
+
+    async def _main() -> None:
+        async with LcarsClient(cfg.lcars_url, cfg.lcars_bearer_token) as client:
+            result = await client.reconcile_arr_state()
+            print(
+                f"Done: {result['showsCreated']} show(s) created "
+                f"({result['showsCreateFailed']} failed — see Reviews), "
+                f"{result['episodesCorrected']} episode(s)/{result['showsCorrected']} "
+                "show(s) corrected."
+            )
+            if result["pausedShowIds"]:
+                ids = ", ".join(result["pausedShowIds"])
+                print(f"\nPaused ({len(result['pausedShowIds'])}): {ids}")
+            if result["resumedShowIds"]:
+                ids = ", ".join(result["resumedShowIds"])
+                print(f"\nResumed ({len(result['resumedShowIds'])}): {ids}")
+
+    asyncio.run(_main())
+
+
 def _cmd_preview_show_backfill(args: argparse.Namespace) -> None:
     """§5.1/§5.2, B.11d — dry-run, no writes: prints exactly what
     `ops backfill-shows` would create right now. Always run this
@@ -237,6 +269,12 @@ def main() -> None:
         help="reconcile + discover local files against Sonarr/Radarr — run manually",
     )
     audit.set_defaults(func=_cmd_audit_local_files)
+
+    reconcile_arr = subparsers.add_parser(
+        "reconcile-arr-state",
+        help="untracked-show create + monitored<->status reconcile — also runs automatically",
+    )
+    reconcile_arr.set_defaults(func=_cmd_reconcile_arr_state)
 
     preview_backfill = subparsers.add_parser(
         "preview-show-backfill",

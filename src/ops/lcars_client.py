@@ -331,6 +331,26 @@ class LcarsClient:
         data = await self._query(query)
         return data["auditLocalFiles"]
 
+    async def reconcile_arr_state(self) -> dict:
+        """NEXT_UP.md follow-up (2026-09-19) — the lighter-weight,
+        scheduled counterpart to audit_local_files above: no filesystem
+        orphan walk, so unlike that one, THIS is called by scheduler.py's
+        own automatic loop (riding the availability-poll loop's own
+        cadence). Untracked-show auto-create, availability correction,
+        and monitored<->status reconcile in one call — see
+        schema.graphql's own reconcileArrState docstring for the full
+        rationale."""
+        query = """
+        mutation {
+          reconcileArrState {
+            episodesCorrected showsCorrected showsCreated showsCreateFailed
+            pausedShowIds resumedShowIds
+          }
+        }
+        """
+        data = await self._query(query)
+        return data["reconcileArrState"]
+
     async def preview_show_backfill(self) -> list[dict]:
         """§5.1/§5.2, B.11d — dry-run, no writes: exactly what
         backfill_untracked_shows() below would create right now. Always

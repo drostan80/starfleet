@@ -942,6 +942,16 @@ type LocalFileAuditResult {
   untrackedShows: [UntrackedRemoteShow!]!
 }
 
+"reconcileArrState's own confirmation summary. pausedShowIds/resumedShowIds are the show ids that actually changed status this pass (monitored<->status disagreed and got reconciled); showsCreatedFailed is a count only — failures are also opened as pending_review rows, same as every other best-effort write in this schema."
+type ArrReconcileResult {
+  episodesCorrected: Int!
+  showsCorrected: Int!
+  showsCreated: Int!
+  showsCreateFailed: Int!
+  pausedShowIds: [ID!]!
+  resumedShowIds: [ID!]!
+}
+
 "previewShowBackfill's own per-item shape — B.11d. trackingSpace/mediaShape are the classification backfillUntrackedShows would actually use. Sonarr items: a successful Fribb tvdb->anilist resolution is the anime signal (corrected live, same day, from Sonarr's own seriesType flag — verified unreliable against the user's real library). Radarr items: TV by default, no anime signal exists there. AniList-sweep items: always ANIME, mediaShape from AniList's own format field."
 type BackfillPreviewItem {
   service: String!
@@ -1676,6 +1686,32 @@ type Mutation {
   part of Ops's own automatic loop, same reasoning as auditLocalFiles.
   """
   auditLocalFilesForShow(showId: ID!): LocalFileAuditResult!
+  """
+  NEXT_UP.md follow-up (2026-09-19) — the lighter-weight, scheduled
+  counterpart to auditLocalFiles above: no filesystem orphan walk (the
+  one genuinely slow part auditLocalFiles is deliberately kept out of
+  Ops's automatic loop for), so this one rides Ops's existing
+  availability-poll loop instead of needing its own manual trigger.
+  Three things per configured service, one all_series()/all_movies()
+  catalog fetch each:
+    1. Untracked-show discovery + auto-create — same outcome as a
+       SeriesAdd/MovieAdded webhook (tracked, status PLANNED), catching
+       whatever a missed or never-configured webhook didn't.
+    2. Availability correction (auditLocalFiles' own current-state
+       reconciliation half, minus the orphan walk).
+    3. monitored<->status reconcile, both directions: Sonarr/Radarr
+       `monitored=false` -> LCARS PAUSED (capturing the prior status to
+       resume to later); `monitored` flipping back to true while LCARS
+       is still PAUSED/DROPPED -> resumes to that captured status (or
+       WATCHING if none was captured) and re-monitors in Sonarr/Radarr.
+       Applied through the exact same status-change path a client's own
+       setStatus call gets (AniList/MAL push, season fanout included) —
+       this is a real status change, not a silent flag flip.
+  A service that fails to connect contributes nothing for that service
+  this tick, across all three — a transient Sonarr/Radarr outage must
+  never read as "pause the whole library."
+  """
+  reconcileArrState: ArrReconcileResult!
   """
   §5.1/§5.2, B.11d — one addShow (with its own inline A.8 metadata
   fetch: episodes, AniList link resolution via Fribb, season

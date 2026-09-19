@@ -419,6 +419,37 @@ async def test_audit_local_files_sends_no_variables_and_returns_the_result():
     await client.aclose()
 
 
+async def test_reconcile_arr_state_sends_no_variables_and_returns_the_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        assert payload["variables"] == {}
+        assert "reconcileArrState" in payload["query"]
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "reconcileArrState": {
+                        "episodesCorrected": 1,
+                        "showsCorrected": 2,
+                        "showsCreated": 3,
+                        "showsCreateFailed": 0,
+                        "pausedShowIds": ["s-1"],
+                        "resumedShowIds": ["s-2", "s-3"],
+                    }
+                }
+            },
+        )
+
+    client = _client(handler)
+    result = await client.reconcile_arr_state()
+    assert result["episodesCorrected"] == 1
+    assert result["showsCorrected"] == 2
+    assert result["showsCreated"] == 3
+    assert result["pausedShowIds"] == ["s-1"]
+    assert result["resumedShowIds"] == ["s-2", "s-3"]
+    await client.aclose()
+
+
 async def test_preview_show_backfill_sends_no_variables_and_returns_the_list():
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read())

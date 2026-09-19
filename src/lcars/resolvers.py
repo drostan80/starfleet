@@ -2402,6 +2402,57 @@ def resolve_audit_local_files_for_show(_, info, show_id):
     return local_audit.audit_local_files_for_show(conn, show_id)
 
 
+@mutation.field("reconcileArrState")
+def resolve_reconcile_arr_state(_, info):
+    """NEXT_UP.md follow-up (2026-09-19) — see schema.graphql's own
+    docstring for the full rationale. local_audit.reconcile_arr_state()
+    does the read-heavy Sonarr/Radarr work and returns pause/resume
+    *intent* as plain show_id lists (`to_pause`/`to_resume`) rather than
+    writing show.status itself — that write needs `_apply_status_change`
+    (AniList/MAL push, season fanout, arr re-monitor-on-resume), which
+    lives in this module, not local_audit.py (which resolvers.py already
+    imports — the reverse import would be circular). Applied here, one
+    call each, same "changed_by" convention availability.py's webhook
+    handlers use for a non-client-initiated write. No require_client() —
+    same passive reasoning auditLocalFiles already has; Ops's own loop
+    calls this with no client identity of its own to assert.
+
+    Each apply is its own try/except — one show_id failing (e.g.
+    deleted between local_audit's own read and this applying it) must
+    not abort the rest of the batch, same "one bad entry doesn't block
+    the others" shape this whole feature already uses throughout
+    (availability.py's webhook handlers, local_audit's own
+    _create_from_untracked_entry)."""
+    conn = db.get_connection()
+    raw = local_audit.reconcile_arr_state(conn)
+    paused_ids: list[str] = []
+    for show_id in raw["to_pause"]:
+        try:
+            _apply_status_change(conn, show_id, "paused", "reconcile")
+            paused_ids.append(show_id)
+        except GraphQLError:
+            log.exception("reconcileArrState: failed to pause %s", show_id)
+    resumed_ids: list[str] = []
+    for show_id in raw["to_resume"]:
+        row = conn.execute(
+            "SELECT status_before_pause FROM show WHERE id = ?", (show_id,)
+        ).fetchone()
+        target = (row["status_before_pause"] if row else None) or "watching"
+        try:
+            _apply_status_change(conn, show_id, target, "reconcile")
+            resumed_ids.append(show_id)
+        except GraphQLError:
+            log.exception("reconcileArrState: failed to resume %s", show_id)
+    return {
+        "episodes_corrected": raw["episodes_corrected"],
+        "shows_corrected": raw["shows_corrected"],
+        "shows_created": raw["shows_created"],
+        "shows_create_failed": len(raw["create_failures"]),
+        "paused_show_ids": paused_ids,
+        "resumed_show_ids": resumed_ids,
+    }
+
+
 @query.field("previewShowBackfill")
 def resolve_preview_show_backfill(_, info):
     """§5.1/§5.2, B.11d — dry-run, no writes. See show_backfill.py's
@@ -3075,26 +3126,63 @@ def resolve_browse_tmdb(_, info, year, month, media_type="ALL", page=1):
 
 @mutation.field("setStatus")
 def resolve_set_status(_, info, show_id, status, confirmed=False):
-    """Show-level status — fans out to ALL seasons (sets each season's
-    own status), then writes show.status directly and fires the usual
-    side effects.  This is the "bulk set" path: calendar radial, TUI
-    status picker, and any client that wants a single-gesture status
-    change for the whole show.
-
-    `confirmed` — auto-sync warning gate, todo.md 2026-08-16, user's
-    own "y/n" framing: setting COMPLETED on a show that's still airing
-    (`_show_is_airing`) refuses with a GraphQLError unless `confirmed:
-    true` is also passed."""
+    """Show-level status — thin wrapper around `_apply_status_change`
+    (extracted 2026-09-19 so the Sonarr/Radarr-reconcile mutation can
+    apply a status change with the exact same side effects — AniList/MAL
+    push, season fanout, completed-episode auto-mark — as this resolver,
+    same shape resolve_add_show's own docstring already established for
+    shows.create_show). `confirmed` — auto-sync warning gate, todo.md
+    2026-08-16, user's own "y/n" framing: setting COMPLETED on a show
+    that's still airing (`_show_is_airing`) refuses with a GraphQLError
+    unless `confirmed: true` is also passed."""
     conn = db.get_connection()
     client = require_client(info)
-    row = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
-    if row is None:
-        raise GraphQLError(f"no such show: {show_id}")
     if status == "completed" and not confirmed and _show_is_airing(conn, show_id):
         raise GraphQLError(
             f"{show_id} still has an episode with no known air date, or one that hasn't aired "
             "yet — mark it completed anyway? pass confirmed: true to proceed"
         )
+    return _apply_status_change(conn, show_id, status, client)
+
+
+def _apply_status_change(conn, show_id: str, status: str, changed_by: str):
+    """The real work behind resolve_set_status above — factored out so
+    the Sonarr/Radarr reconcile mutation (B.5.1 follow-up, NEXT_UP.md)
+    can drive a status change with `changed_by="sonarr"`/`"radarr"` and
+    get every side effect a client-driven setStatus gets: AniList/MAL
+    push, season fanout, completed-episode auto-mark, arr monitor sync.
+    No `require_client`/airing-confirmation gate here — those are
+    request-shaped concerns resolve_set_status itself already handles;
+    a caller with no GraphQL `info` (the reconcile path) has already
+    decided `status` is correct by the time it gets here.
+
+    `status_before_pause` (migration 038b4fbb1ec7): captured on entering
+    paused/dropped from an active status, so a later resume — whether
+    the user manually or the reconcile pass restoring from Sonarr's own
+    `monitored` flag flipping back to true — knows what to resume *to*
+    rather than guessing WATCHING. Cleared on any transition away from
+    paused/dropped, manual or automatic — the status actually being set
+    now always wins over whatever was remembered.
+
+    Arr monitor sync, both directions: entering paused/dropped
+    unmonitors in Sonarr/Radarr (`_unmonitor_in_arr_on_drop`, existing);
+    leaving it re-monitors (`_remonitor_in_arr_on_resume`, new here
+    2026-09-19 — deliberately NOT `shows.ensure_arr_monitored`, see that
+    function's own docstring for why: its add-if-missing branch would
+    silently re-add and full-search a show that's missing from Sonarr
+    for an unrelated reason) — closes a real gap: without this half, the
+    reconcile pass pausing a show on `monitored=false` and a user then
+    resuming it in LCARS left Sonarr/Radarr still unmonitored, so the
+    very next reconcile tick would silently flip the show right back to
+    paused."""
+    row = conn.execute(
+        "SELECT status, status_before_pause FROM show WHERE id = ?", (show_id,)
+    ).fetchone()
+    if row is None:
+        raise GraphQLError(f"no such show: {show_id}")
+    previous_status = row["status"]
+    was_paused = previous_status in ("paused", "dropped")
+    now_paused = status in ("paused", "dropped")
     now = util.now_utc_iso()
     # Fanout: only stomp the highest season's status — earlier seasons
     # keep their own deliberate per-season status (user rule: "show
@@ -3107,13 +3195,21 @@ def resolve_set_status(_, info, show_id, status, confirmed=False):
         " )",
         (status, now, show_id, show_id),
     )
+    status_before_pause = row["status_before_pause"]
+    if now_paused and not was_paused:
+        status_before_pause = previous_status
+    elif not now_paused and was_paused:
+        status_before_pause = None
     # Write show.status directly (this is the explicit-set path, not derived)
-    conn.execute("UPDATE show SET status = ?, updated_at = ? WHERE id = ?", (status, now, show_id))
+    conn.execute(
+        "UPDATE show SET status = ?, status_before_pause = ?, updated_at = ? WHERE id = ?",
+        (status, status_before_pause, now, show_id),
+    )
     conn.execute(
         "INSERT INTO status_change"
         " (id, show_id, previous_status, new_status, changed_at, changed_by)"
         " VALUES (?, ?, ?, ?, ?, ?)",
-        (ids.generate_id(conn, "c"), show_id, row["status"], status, now, client),
+        (ids.generate_id(conn, "c"), show_id, previous_status, status, now, changed_by),
     )
     _push_show_status(conn, show_id, status)  # §6.1/§6.8, A.9 — best-effort
     _push_mal_show_status(conn, show_id, status)  # §6.1/§6.9, B.10 — best-effort
@@ -3125,8 +3221,10 @@ def resolve_set_status(_, info, show_id, status, confirmed=False):
         ).fetchall():
             _try_complete_season(conn, show_id, season_row["season_number"], now)
     conn.commit()
-    if status in ("paused", "dropped"):
+    if now_paused and not was_paused:
         _unmonitor_in_arr_on_drop(conn, show_id)
+    elif not now_paused and was_paused:
+        _remonitor_in_arr_on_resume(conn, show_id)
     return _get_show(conn, show_id)
 
 
@@ -3335,6 +3433,64 @@ def _unmonitor_in_arr_on_drop(conn, show_id: str) -> None:
             )
     conn.commit()  # this function's own writes (service_health/pending_review) — called
     # after the caller's own tracked=0 commit, so it commits its own side effects itself
+
+
+def _remonitor_in_arr_on_resume(conn, show_id: str) -> None:
+    """`_apply_status_change`'s counterpart to `_unmonitor_in_arr_on_drop`
+    above, for the "leaving paused/dropped" transition — 2026-09-19,
+    part of the monitored<->status reconcile (NEXT_UP.md). Deliberately
+    NOT `shows.ensure_arr_monitored`: that function's own "not currently
+    in Sonarr/Radarr at all" branch calls add_series/add_movie with
+    searchForMissingEpisodes/searchForMovie — appropriate for its actual
+    callers (sequel-attach, season creation, both explicit "track this"
+    actions), wrong here, where a show resuming from paused was already
+    supposed to be a no-op push, not "also re-add it and kick off a
+    full back-catalog search" if it happens to be missing from Sonarr
+    for an unrelated reason. This only ever flips `monitored` on an
+    *existing* arr entry — a show with no entry stays untouched, same
+    "nothing to correct against" posture every other best-effort helper
+    here already has. Same shape as `_unmonitor_in_arr_on_drop`
+    otherwise: best-effort, opens a pending_review (field
+    `sonarr_remonitor`/`radarr_remonitor`) on a real service failure
+    rather than silently vanishing."""
+    cfg = config.get_current()
+    tvdb_row = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'tvdb'",
+        (show_id,),
+    ).fetchone()
+    if tvdb_row and cfg.sonarr_url and cfg.sonarr_api_key:
+        try:
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                series = client.series_by_tvdb_id(int(tvdb_row["external_id"]))
+                if series is not None:
+                    series["monitored"] = True
+                    for season_entry in series.get("seasons", []):
+                        season_entry["monitored"] = True
+                    client.update_series(series)
+            service_health.record_success(conn, "sonarr")
+        except sonarr_client.SonarrError as e:
+            service_health.record_failure(conn, "sonarr", str(e))
+            pending_review.open_or_extend(
+                conn, "show", show_id, "sonarr_remonitor", "sonarr", None, str(e)
+            )
+    tmdb_row = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'tmdb'",
+        (show_id,),
+    ).fetchone()
+    if tmdb_row and cfg.radarr_url and cfg.radarr_api_key:
+        try:
+            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                movie = client.movie_by_tmdb_id(int(tmdb_row["external_id"]))
+                if movie is not None:
+                    movie["monitored"] = True
+                    client.update_movie(movie)
+            service_health.record_success(conn, "radarr")
+        except radarr_client.RadarrError as e:
+            service_health.record_failure(conn, "radarr", str(e))
+            pending_review.open_or_extend(
+                conn, "show", show_id, "radarr_remonitor", "radarr", None, str(e)
+            )
+    conn.commit()
 
 
 @mutation.field("setTracked")

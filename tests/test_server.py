@@ -9677,6 +9677,96 @@ async def test_audit_local_files_for_show_raises_for_an_unknown_show(client):
     assert "no such show" in body["errors"][0]["message"]
 
 
+RECONCILE_ARR_STATE = """
+    mutation {
+      reconcileArrState {
+        episodesCorrected showsCorrected showsCreated showsCreateFailed
+        pausedShowIds resumedShowIds
+      }
+    }
+"""
+
+
+async def test_reconcile_arr_state_wiring_returns_zero_with_nothing_configured(client):
+    # Same not-configured no-op guard as auditLocalFiles above — the actual
+    # untracked-create/correction/monitored-reconcile logic is
+    # test_local_audit.py's job (reconcile_arr_state); this only locks in
+    # that the mutation is wired through with the right result shape.
+    data = await gql(client, RECONCILE_ARR_STATE, headers=auth_headers())
+    assert data["reconcileArrState"] == {
+        "episodesCorrected": 0,
+        "showsCorrected": 0,
+        "showsCreated": 0,
+        "showsCreateFailed": 0,
+        "pausedShowIds": [],
+        "resumedShowIds": [],
+    }
+
+
+async def test_reconcile_arr_state_pause_then_resume_remonitors_in_sonarr(client, monkeypatch):
+    # NEXT_UP.md follow-up (2026-09-19) — the load-bearing oscillation
+    # fix: resuming a show that reconcile (or a user) paused must
+    # re-monitor it in Sonarr, or the very next reconcile tick would
+    # silently flip it right back to paused. Exercises the real
+    # setStatus -> _apply_status_change -> ensure_arr_monitored path
+    # end to end, through the real GraphQL mutation.
+    show = await add_show(client, titleRomaji="Reconcile Test")
+    await gql(
+        client,
+        'mutation($id: ID!) { linkShowExternalId(showId: $id, service: "tvdb",'
+        ' externalId: "457078", url: "https://x") { service } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    cfg = config.get_current()
+    cfg.sonarr_url = "http://sonarr.test"
+    cfg.sonarr_api_key = "test-key"
+
+    updates = []
+
+    class _FakeSonarrClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            pass
+
+        def series_by_tvdb_id(self, tvdb_id):
+            return {"id": 1, "tvdbId": 457078, "monitored": False, "seasons": []}
+
+        def update_series(self, series):
+            updates.append(dict(series))
+
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient())
+
+    # Pause — captures status_before_pause and unmonitors in Sonarr.
+    data = await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: PAUSED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["setStatus"]["status"] == "PAUSED"
+    assert updates[-1]["monitored"] is False
+
+    # Resume — reconcile-style: back to WATCHING, must re-monitor in Sonarr.
+    data = await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: WATCHING) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["setStatus"]["status"] == "WATCHING"
+    assert updates[-1]["monitored"] is True
+
+
 PREVIEW_SHOW_BACKFILL = """
     query {
       previewShowBackfill { service title externalId trackingSpace mediaShape }

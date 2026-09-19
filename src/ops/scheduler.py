@@ -154,9 +154,35 @@ async def run_availability_once(client: LcarsClient) -> int:
     (pollFileAvailability): no per-item loop here at all, unlike the
     other tiers — the mutation itself covers every tracked show in one
     call (LCARS's own checkpoint state, not Ops, is what keeps repeat
-    calls cheap). Returns the combined episodes+shows-updated count."""
+    calls cheap). Returns the combined episodes+shows-updated count.
+
+    Also runs reconcileArrState (NEXT_UP.md follow-up, 2026-09-19) on
+    the same tick — untracked-show auto-create, availability
+    correction, and monitored<->status reconcile, all lighter-weight
+    than auditLocalFiles (no filesystem walk) so unlike that one, this
+    rides the automatic loop rather than needing a manual `ops`
+    invocation. A reconcile failure is logged and skipped, never lets
+    the poll's own already-succeeded count go unreported — same
+    "one branch failing doesn't block the rest" shape this whole
+    module already uses throughout."""
     result = await client.poll_file_availability()
-    return result["episodesUpdated"] + result["showsUpdated"]
+    count = result["episodesUpdated"] + result["showsUpdated"]
+    try:
+        reconcile = await client.reconcile_arr_state()
+        logger.info(
+            "reconcile: %d created, %d paused, %d resumed, %d episodes/%d shows corrected",
+            reconcile["showsCreated"], len(reconcile["pausedShowIds"]),
+            len(reconcile["resumedShowIds"]), reconcile["episodesCorrected"],
+            reconcile["showsCorrected"],
+        )
+        count += (
+            reconcile["showsCreated"]
+            + len(reconcile["pausedShowIds"])
+            + len(reconcile["resumedShowIds"])
+        )
+    except Exception:
+        logger.exception("reconcile: sweep failed, will retry next availability tick")
+    return count
 
 
 async def run_animeschedule_once(client: LcarsClient) -> int:

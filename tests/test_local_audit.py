@@ -885,3 +885,185 @@ def test_find_untracked_shows_readonly_is_still_just_the_flat_list(conn, monkeyp
     assert local_audit.find_untracked_shows_readonly(conn) == (
         local_audit.find_untracked_shows_readonly_by_source(conn)["entries"]
     )
+
+
+# --- reconcile_arr_state (NEXT_UP.md follow-up, 2026-09-19) ------------------
+
+
+def test_reconcile_creates_a_tracked_show_for_an_untracked_sonarr_series(conn, monkeypatch):
+    _configure_sonarr()
+    series = [{
+        "id": 1, "tvdbId": 999888, "title": "New Show", "path": "/tv/new-show",
+        "monitored": True,
+    }]
+    fake = _FakeSonarrClient(series, {1: []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.reconcile_arr_state(conn)
+    assert result["shows_created"] == 1
+    row = conn.execute(
+        "SELECT s.tracked, s.status FROM show s"
+        " JOIN show_external_id sei ON sei.show_id = s.id"
+        " WHERE sei.service = 'tvdb' AND sei.external_id = '999888'"
+    ).fetchone()
+    assert row["tracked"] == 1
+    assert row["status"] == "planned"
+
+
+def test_reconcile_flags_a_newly_unmonitored_show_for_pause(conn, monkeypatch):
+    _configure_sonarr()
+    _add_show(conn, "s-rec001", tvdb_id=457078)  # status defaults to 'watching'
+    series = [{
+        "id": 1, "tvdbId": 457078, "title": "Test", "path": "/data/show",
+        "monitored": False,
+    }]
+    fake = _FakeSonarrClient(series, {1: []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.reconcile_arr_state(conn)
+    assert result["to_pause"] == ["s-rec001"]
+    assert result["to_resume"] == []
+
+
+def test_reconcile_flags_a_remonitored_paused_show_for_resume(conn, monkeypatch):
+    _configure_sonarr()
+    _add_show(conn, "s-rec002", tvdb_id=457078)
+    conn.execute(
+        "UPDATE show SET status = 'paused', status_before_pause = 'watching' WHERE id = 's-rec002'"
+    )
+    conn.commit()
+    series = [{
+        "id": 1, "tvdbId": 457078, "title": "Test", "path": "/data/show",
+        "monitored": True,
+    }]
+    fake = _FakeSonarrClient(series, {1: []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.reconcile_arr_state(conn)
+    assert result["to_resume"] == ["s-rec002"]
+    assert result["to_pause"] == []
+
+
+def test_reconcile_never_auto_resumes_a_show_with_no_recorded_pause_reason(conn, monkeypatch):
+    # Real bug caught in review: a show dropped/paused before this feature
+    # existed (or whose pause wasn't recorded by _apply_status_change for
+    # any other reason) has status_before_pause = NULL. Without this guard,
+    # every such show where Sonarr still happens to report monitored=true
+    # (never unmonitored, a push that failed, re-added later) would get
+    # silently reactivated — including a real AniList/MAL push — on the
+    # very first reconcile tick. This must never fire for that show.
+    _configure_sonarr()
+    _add_show(conn, "s-rec006", tvdb_id=457078)
+    # status_before_pause stays NULL — never set by anything here
+    conn.execute("UPDATE show SET status = 'dropped' WHERE id = 's-rec006'")
+    conn.commit()
+    series = [{
+        "id": 1, "tvdbId": 457078, "title": "Test", "path": "/data/show",
+        "monitored": True,
+    }]
+    fake = _FakeSonarrClient(series, {1: []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.reconcile_arr_state(conn)
+    assert result["to_resume"] == []
+    assert result["to_pause"] == []
+
+
+def test_reconcile_leaves_an_already_matching_show_alone(conn, monkeypatch):
+    _configure_sonarr()
+    _add_show(conn, "s-rec003", tvdb_id=457078)  # watching, monitored=True — already in sync
+    series = [{
+        "id": 1, "tvdbId": 457078, "title": "Test", "path": "/data/show",
+        "monitored": True,
+    }]
+    fake = _FakeSonarrClient(series, {1: []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.reconcile_arr_state(conn)
+    assert result["to_pause"] == []
+    assert result["to_resume"] == []
+
+
+def test_reconcile_skips_sonarr_entirely_on_a_connection_failure(conn, monkeypatch):
+    # The single highest-consequence failure mode: a transient outage
+    # must never read as "everything is unmonitored."
+    _configure_sonarr()
+    _add_show(conn, "s-rec004", tvdb_id=457078)
+
+    class _FailingClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            pass
+
+        def all_series(self):
+            raise sonarr_client.SonarrError("boom")
+
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FailingClient())
+    result = local_audit.reconcile_arr_state(conn)
+    assert result["to_pause"] == []
+    assert result["to_resume"] == []
+    assert result["shows_created"] == 0
+
+
+def test_reconcile_opens_a_review_when_create_raises_and_continues_the_batch(conn, monkeypatch):
+    # find_sequel_parent has no stub to match against here, so this is a
+    # generic ShowInputError path — same shape a real sequel-detection
+    # failure would take (no human present to confirm), see
+    # availability.py's own SeriesAdd webhook handler for the precedent.
+    _configure_sonarr()
+    from lcars import shows as shows_mod
+
+    def _boom(conn, input):
+        raise shows_mod.ShowInputError("no title")
+
+    monkeypatch.setattr(shows_mod, "create_show", _boom)
+    series = [{
+        "id": 1, "tvdbId": 777666, "title": "Bad Entry", "path": "/tv/bad", "monitored": True,
+    }]
+    fake = _FakeSonarrClient(series, {1: []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.reconcile_arr_state(conn)
+    assert result["shows_created"] == 0
+    assert len(result["create_failures"]) == 1
+    review = conn.execute(
+        "SELECT * FROM pending_review WHERE field = 'reconcile_create'"
+    ).fetchone()
+    assert review is not None
+
+
+def test_reconcile_movie_added_creates_a_tracked_movie(conn, monkeypatch):
+    _configure_radarr()
+    movie = {
+        "id": 1, "tmdbId": 555444, "title": "New Movie", "path": "/movies/new",
+        "monitored": True,
+    }
+    fake = _FakeRadarrClient([movie])
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.reconcile_arr_state(conn)
+    assert result["shows_created"] == 1
+    row = conn.execute(
+        "SELECT s.tracked, s.status, s.media_shape FROM show s"
+        " JOIN show_external_id sei ON sei.show_id = s.id"
+        " WHERE sei.service = 'tmdb' AND sei.external_id = '555444'"
+    ).fetchone()
+    assert row["tracked"] == 1
+    assert row["status"] == "planned"
+    assert row["media_shape"] == "movie"
+
+
+def test_reconcile_flags_an_unmonitored_radarr_movie_for_pause(conn, monkeypatch):
+    _configure_radarr()
+    _add_show(conn, "s-rec005", tmdb_id=687163, media_shape="movie")
+    movie = {
+        "id": 1, "tmdbId": 687163, "title": "Test Movie", "path": "/movies/x",
+        "monitored": False,
+    }
+    fake = _FakeRadarrClient([movie])
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+
+    result = local_audit.reconcile_arr_state(conn)
+    assert result["to_pause"] == ["s-rec005"]

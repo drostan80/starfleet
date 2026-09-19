@@ -46,7 +46,7 @@ import logging
 import os
 import re
 
-from lcars import radarr_client, service_health, sonarr_client, util
+from lcars import pending_review, radarr_client, service_health, shows, sonarr_client, util
 from lcars.config import get_current
 
 logger = logging.getLogger("lcars.local_audit")
@@ -660,3 +660,188 @@ def audit_local_files_for_show(conn, show_id: str) -> dict:
         "orphan_files": [],
         "untracked_shows": [],
     }
+
+
+def _anime_tracking_space(cfg, path: str | None) -> str:
+    """Same anime/tv split availability.py's own SeriesAdd webhook
+    handler uses (rootFolderPath there vs. the computed show `path`
+    here — both are just prefix-checked against the configured anime
+    root, so either works the same way). Radarr has one configured
+    root folder only (no anime/tv split), so movies are always 'tv' —
+    callers never call this for a Radarr entry."""
+    if cfg.sonarr_anime_root_folder and path and path.startswith(cfg.sonarr_anime_root_folder):
+        return "anime"
+    return "tv"
+
+
+def _create_from_untracked_entry(
+    conn, media_shape: str, tracking_space: str, entry: dict, result: dict
+) -> None:
+    """Auto-create half of reconcile_arr_state below — same outcome as
+    availability.py's SeriesAdd/MovieAdded webhook handlers (tracked,
+    status='planned'), for the case a webhook was missed or never
+    configured. `shows.create_show` has no human to confirm a detected
+    sequel/later-season relationship, so — same shape those webhook
+    handlers already established — a ShowInputError here (including its
+    SequelDetectedError/LaterSeasonError subclasses) is caught, logged,
+    and turned into a pending_review rather than aborting the rest of
+    the batch over one bad entry."""
+    title = entry.get("title")
+    if not title:
+        return
+    key = "tvdb_id" if media_shape == "episodic" else "tmdb_id"
+    external_id = entry["external_id"]
+    try:
+        shows.create_show(conn, {
+            "media_shape": media_shape,
+            "tracking_space": tracking_space,
+            "primary_title": "english",
+            "title_english": title,
+            key: str(external_id),
+        })
+        result["shows_created"] += 1
+    except shows.ShowInputError as e:
+        logger.exception(
+            "reconcile_arr_state: failed to create show for %s external_id=%s title=%r",
+            entry["service"], external_id, title,
+        )
+        pending_review.open_or_extend(
+            conn, "show", f"{entry['service']}:{external_id}", "reconcile_create", "reconcile",
+            None, f"{entry['service']} has an untracked show LCARS couldn't create: {title} ({e})",
+        )
+        conn.commit()
+        result["create_failures"].append({"title": title, "error": str(e)})
+
+
+def reconcile_arr_state(conn) -> dict:
+    """Lighter-weight, scheduled counterpart to audit_local_files()
+    above — NEXT_UP.md follow-up, rides Ops's existing availability
+    loop (unlike audit_local_files, deliberately *not* scheduled — see
+    this module's own docstring) because it skips the one genuinely
+    slow part: no filesystem orphan walk anywhere here
+    (`walk_orphans=False` throughout, the same knob
+    audit_local_files_for_show already uses for the same reason).
+
+    Three things, per service, in one pass over the same
+    all_series()/all_movies() catalog fetch audit_local_files's own
+    correction half already makes:
+      1. Untracked-show discovery + auto-create — same outcome as a
+         SeriesAdd/MovieAdded webhook (tracked, status='planned'),
+         catching whatever a missed or never-configured webhook
+         didn't.
+      2. Availability correction (existing
+         `_audit_sonarr_series`/`_audit_radarr_movie`, walk_orphans=False).
+      3. monitored<->status reconcile intent, returned as DATA
+         (`to_pause`/`to_resume` show_id lists) rather than written
+         directly: applying it needs resolvers.py's own
+         `_apply_status_change` (AniList/MAL push, season fanout, arr
+         re-monitor-on-resume — the same side effects a client-driven
+         setStatus gets), which this module can't import without a
+         circular dependency (resolvers.py already imports
+         local_audit.py). The caller
+         (`resolve_reconcile_arr_state`) applies both lists.
+
+    A source that fails to connect this tick contributes nothing to any
+    of the three for that service — no partial "everything looks
+    unmonitored" false signal from a transient outage. This is the
+    single highest-consequence failure mode here: a Sonarr blip must
+    never read as "the whole library got paused," so a connection
+    failure skips this service's untracked-create, correction, AND
+    monitored-sync together, not just the piece that happened to fail."""
+    result: dict = {
+        "episodes_corrected": 0,
+        "shows_corrected": 0,
+        "shows_created": 0,
+        "to_pause": [],
+        "to_resume": [],
+        "create_failures": [],
+    }
+    cfg = get_current()
+    now = util.now_utc_iso()
+
+    if cfg.sonarr_url and cfg.sonarr_api_key:
+        try:
+            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+                all_series = client.all_series()
+                known_tvdb_ids = _known_tvdb_ids(conn)
+                for entry in _untracked_sonarr_entries(all_series, known_tvdb_ids):
+                    tracking_space = _anime_tracking_space(cfg, entry.get("path"))
+                    _create_from_untracked_entry(conn, "episodic", tracking_space, entry, result)
+                known_tvdb_ids = _known_tvdb_ids(conn)  # refreshed after the creates above
+
+                for series in all_series:
+                    tvdb_id = str(series["tvdbId"])
+                    if tvdb_id not in known_tvdb_ids:
+                        continue  # already handled as untracked above
+                    show_id = _show_id_for_tvdb(conn, series["tvdbId"])
+                    corrected, _orphans = _audit_sonarr_series(
+                        conn, client, show_id, series, now, walk_orphans=False
+                    )
+                    result["episodes_corrected"] += corrected
+                    _check_monitored(conn, show_id, series.get("monitored", True), result)
+            service_health.record_success(conn, "sonarr")
+            conn.commit()
+        except sonarr_client.SonarrError as e:
+            logger.exception("reconcile_arr_state: Sonarr pass failed — skipped this tick")
+            service_health.record_failure(conn, "sonarr", str(e))
+            conn.commit()
+
+    if cfg.radarr_url and cfg.radarr_api_key:
+        try:
+            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+                all_movies = client.all_movies()
+                known_tmdb_ids = _known_tmdb_movie_ids(conn)
+                for entry in _untracked_radarr_entries(all_movies, known_tmdb_ids):
+                    _create_from_untracked_entry(conn, "movie", "tv", entry, result)
+                known_tmdb_ids = _known_tmdb_movie_ids(conn)
+
+                for movie in all_movies:
+                    tmdb_id = str(movie["tmdbId"])
+                    if tmdb_id not in known_tmdb_ids:
+                        continue
+                    show_id = _show_id_for_tmdb_movie(conn, movie["tmdbId"])
+                    corrected, _orphans = _audit_radarr_movie(
+                        conn, show_id, movie, now, walk_orphans=False
+                    )
+                    result["shows_corrected"] += corrected
+                    _check_monitored(conn, show_id, movie.get("monitored", True), result)
+            service_health.record_success(conn, "radarr")
+            conn.commit()
+        except radarr_client.RadarrError as e:
+            logger.exception("reconcile_arr_state: Radarr pass failed — skipped this tick")
+            service_health.record_failure(conn, "radarr", str(e))
+            conn.commit()
+
+    return result
+
+
+def _check_monitored(conn, show_id: str, monitored: bool, result: dict) -> None:
+    """Compares Sonarr's/Radarr's own current `monitored` flag against
+    LCARS's current status, appending to `result["to_pause"]`/
+    `["to_resume"]` on a real mismatch — never writes show.status
+    itself (see reconcile_arr_state's own docstring for why).
+
+    The resume direction is deliberately narrower than "monitored=true
+    and LCARS says paused": it only fires when `status_before_pause` is
+    set, i.e. THIS mechanism (or a client-driven setStatus,
+    `_apply_status_change` sets it the same way) is what paused the
+    show. Without this guard, every show ever dropped/paused for an
+    unrelated reason before this feature existed — `status_before_pause`
+    NULL on every pre-migration row — reads as "should resume" on the
+    very first reconcile tick the moment Sonarr happens to still report
+    monitored=true (never unmonitored, a push that failed, a show
+    re-added to Sonarr later), silently reactivating shows the user
+    deliberately dropped and pushing that to AniList/MAL. A show that
+    genuinely was paused by this mechanism always has
+    status_before_pause set, so the real "someone re-monitored it in
+    Sonarr, resume" case still works."""
+    row = conn.execute(
+        "SELECT status, status_before_pause FROM show WHERE id = ?", (show_id,)
+    ).fetchone()
+    if row is None:
+        return
+    is_paused = row["status"] in ("paused", "dropped")
+    if not monitored and not is_paused:
+        result["to_pause"].append(show_id)
+    elif monitored and is_paused and row["status_before_pause"] is not None:
+        result["to_resume"].append(show_id)
