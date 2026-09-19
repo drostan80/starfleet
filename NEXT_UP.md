@@ -40,9 +40,22 @@ behavior below re-checked against `tiny` post-deploy, not just assumed):
       Node: a simulated pre-A0 config with stale `lcars_url`/
       `home_server_host` and a still-valid token has both stripped on
       the first `getConfig()` call and is accepted by `requireConfig`;
-      a token-less config redirects to `login.html`. Not a real-browser
-      /full-session check (no browser extension available this
-      session) — if that matters before shipping, run it once by hand.
+      a token-less config redirects to `login.html`.
+- [x] **Step 9** (real-browser desktop check, run by hand 2026-09-19
+      against `tiny` v0.2.27 in Firefox) — fresh-profile login →
+      calendar/Sonarr link/TMDB poster fallback/mpv/download all worked,
+      `starfleet_config` held only `lcars_token`/`tmdb_api_key`. Stale-profile
+      regression also confirmed: a `starfleet_config` seeded by hand with
+      old-style `lcars_url`/`home_server_host` (simulating a pre-A0
+      browser) had both stripped and never reappeared after a real login.
+      Found a real (if narrow) gap along the way: `bootstrapConfig()`
+      only re-syncs from `/auth/settings` when a key is *missing*, not
+      when it's present-but-wrong — a corrupted cached `lcars_token`/
+      `tmdb_api_key` (e.g. from a bad manual edit, not a normal user
+      path) stays stuck through any number of refreshes; only clearing
+      `starfleet_config` outright forces a re-pull. Not a shipped-code
+      regression since nothing writes a bad-but-present token in normal
+      use, but worth knowing if a token is ever rotated server-side.
 - [x] `settings.html` → only `mpv_helper_url` remains; `login.html` →
       "import existing settings" block removed (backend path it fed is
       gone too).
