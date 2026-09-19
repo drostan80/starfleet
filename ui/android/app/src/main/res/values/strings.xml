@@ -9,4 +9,5 @@
     <string name="server_setup_continue">Continue</string>
     <string name="server_setup_error">Enter a host and port, e.g. 192.168.1.100:8888</string>
     <string name="change_server_shortcut">Change server</string>
+    <string name="wifi_only_downloads">Downloads: Wi-Fi only</string>
 </resources>

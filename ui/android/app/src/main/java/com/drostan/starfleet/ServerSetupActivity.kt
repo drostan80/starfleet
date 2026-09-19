@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -19,6 +20,13 @@ import androidx.appcompat.app.AppCompatActivity
  * any time after. The shortcut case pre-fills the existing address instead
  * of showing a blank field, since the user is here to edit it, not start
  * fresh.
+ *
+ * A2 follow-up (user, 2026-09-19) — "Wi-Fi only" for manual downloads:
+ * DownloadPlugin defaults to allowing metered connections (most of the
+ * user's data is unlimited), but this needs a way to flip that off while
+ * travelling on a limited plan. Saved immediately on toggle, independent
+ * of the address field/Continue button — flipping it shouldn't require
+ * re-submitting an unchanged address.
  */
 class ServerSetupActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,9 +37,15 @@ class ServerSetupActivity : AppCompatActivity() {
         val addressField = findViewById<EditText>(R.id.server_address)
         val errorMessage = findViewById<TextView>(R.id.error_message)
         val continueButton = findViewById<Button>(R.id.continue_button)
+        val wifiOnlyCheckbox = findViewById<CheckBox>(R.id.wifi_only_checkbox)
 
         prefs.getString("server_url", null)?.let { existing ->
             addressField.setText(existing.removePrefix("http://").removePrefix("https://"))
+        }
+
+        wifiOnlyCheckbox.isChecked = prefs.getBoolean("downloads_wifi_only", false)
+        wifiOnlyCheckbox.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean("downloads_wifi_only", checked).apply()
         }
 
         fun trySubmit() {

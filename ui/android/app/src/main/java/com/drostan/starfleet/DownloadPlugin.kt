@@ -94,13 +94,18 @@ class DownloadPlugin : Plugin() {
 
         val mediaUrl = MediaUrl.build(serverUrl, filePath)
         val filename = filePath.substringAfterLast('/')
+        // User setting (ServerSetupActivity), default false — most of the
+        // user's data is unlimited; this is the flip-it-before-travelling
+        // escape hatch, not the default posture.
+        val wifiOnly = prefs.getBoolean("downloads_wifi_only", false)
 
         val request = DownloadManager.Request(Uri.parse(mediaUrl)).apply {
             setTitle(label.ifEmpty { filename })
             setDescription(showTitle)
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, filename)
-            setAllowedOverMetered(true)
+            setAllowedOverMetered(!wifiOnly)
+            setAllowedOverRoaming(!wifiOnly)
         }
 
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
