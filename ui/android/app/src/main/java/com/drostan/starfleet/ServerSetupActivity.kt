@@ -2,6 +2,8 @@ package com.drostan.starfleet
 
 import android.content.Intent
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CheckBox
@@ -27,6 +29,11 @@ import androidx.appcompat.app.AppCompatActivity
  * travelling on a limited plan. Saved immediately on toggle, independent
  * of the address field/Continue button — flipping it shouldn't require
  * re-submitting an unchanged address.
+ *
+ * A4 step 35 — storage limit (GB, 0/blank = unlimited), the "second and
+ * last app setting" DESIGN.md §8 named for AutoDownloadWorker's own
+ * eviction (step 36). Same immediate-save pattern as the Wi-Fi-only
+ * checkbox above.
  */
 class ServerSetupActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,6 +54,24 @@ class ServerSetupActivity : AppCompatActivity() {
         wifiOnlyCheckbox.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean("downloads_wifi_only", checked).apply()
         }
+
+        val storageLimitField = findViewById<EditText>(R.id.storage_limit_field)
+        val existingLimit = prefs.getFloat("storage_limit_gb", 0f)
+        if (existingLimit > 0f) {
+            storageLimitField.setText(if (existingLimit == existingLimit.toInt().toFloat()) {
+                existingLimit.toInt().toString()
+            } else {
+                existingLimit.toString()
+            })
+        }
+        storageLimitField.addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) {
+                val limit = s?.toString()?.toFloatOrNull() ?: 0f
+                prefs.edit().putFloat("storage_limit_gb", limit).apply()
+            }
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        })
 
         fun trySubmit() {
             val raw = addressField.text.toString().trim()

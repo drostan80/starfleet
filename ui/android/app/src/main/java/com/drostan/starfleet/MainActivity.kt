@@ -52,6 +52,19 @@ class MainActivity : BridgeActivity() {
             config = CapConfig.Builder(this)
                 .setServerUrl(serverUrl)
                 .create()
+            // A4 step 33 — enqueueUniquePeriodicWork + KEEP is idempotent,
+            // safe to call on every launch; only actually schedules once.
+            // Deliberately no separate one-time trigger alongside this:
+            // found by testing that a plain (non-unique)
+            // OneTimeWorkRequestBuilder call here could race the periodic
+            // work's own first execution and double-enqueue every episode
+            // (confirmed live — every file ended up downloaded twice,
+            // DownloadManager auto-renaming the second copy "-1"). The
+            // periodic work alone doesn't have this problem: WorkManager
+            // guarantees serialized execution for a single uniquely-named
+            // periodic work, which is exactly why enqueueUniquePeriodicWork
+            // (not a plain enqueue) is used here in the first place.
+            AutoDownloadWorker.schedule(this)
         } else {
             serverConfigured = false
         }

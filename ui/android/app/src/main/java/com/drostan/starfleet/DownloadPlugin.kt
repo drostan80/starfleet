@@ -31,6 +31,93 @@ import java.time.Instant
 @CapacitorPlugin(name = "Download")
 class DownloadPlugin : Plugin() {
 
+    companion object {
+        /**
+         * A4 — shared by this plugin's own @PluginMethod (JS-triggered) and
+         * AutoDownloadWorker (background, no Plugin/PluginCall in scope):
+         * the actual DownloadManager request + index write is identical
+         * either way, only where the params come from differs. Returns
+         * null if no server is configured (caller decides how to surface
+         * that — a rejected PluginCall vs. just skipping in the worker).
+         */
+        fun enqueue(
+            context: Context,
+            filePath: String,
+            episodeId: String,
+            showId: String?,
+            season: Int?,
+            episodeNum: Int?,
+            showTitle: String,
+            label: String,
+        ): Long? {
+            val prefs = context.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
+            val serverUrl = prefs.getString("server_url", null) ?: return null
+
+            val mediaUrl = MediaUrl.build(serverUrl, filePath)
+            val filename = filePath.substringAfterLast('/')
+            // User setting (ServerSetupActivity), default false — most of
+            // the user's data is unlimited; this is the flip-it-before-
+            // travelling escape hatch, not the default posture. Applies to
+            // auto-downloads too (A4) — same setting either path.
+            val wifiOnly = prefs.getBoolean("downloads_wifi_only", false)
+
+            val request = DownloadManager.Request(Uri.parse(mediaUrl)).apply {
+                setTitle(label.ifEmpty { filename })
+                setDescription(showTitle)
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, filename)
+                setAllowedOverMetered(!wifiOnly)
+                setAllowedOverRoaming(!wifiOnly)
+            }
+
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val dmId = dm.enqueue(request)
+            DownloadDatabase(context).insertPending(
+                episodeId, filePath, showId, season, episodeNum, showTitle, label, dmId, Instant.now().toString(),
+            )
+            return dmId
+        }
+
+        /**
+         * Shared by DownloadPlugin's own deleteDownload/deleteAllDownloads
+         * and AutoDownloadWorker's eviction — same reasoning as enqueue()
+         * above for why this lives here instead of being duplicated.
+         *
+         * Found by testing, not designed in, in two layers:
+         * 1. A hard row-delete alone left an in-progress ("pending", no
+         *    local_uri yet) download's underlying DownloadManager job
+         *    completely untouched — it kept downloading regardless,
+         *    eventually finishing as a file our index knew nothing about
+         *    (visible as DownloadManager's own auto-renamed "-1" duplicate
+         *    the next time something tried to write the same filename).
+         *    dm.remove(dmId) cancels that.
+         * 2. dm.remove() alone then turned out NOT to reliably delete the
+         *    file for a destination set via setDestinationInExternalFilesDir
+         *    (confirmed live: called it on a fully completed download,
+         *    the file was still sitting there afterward) — Android's own
+         *    "if there is a downloaded file... it is deleted" guarantee is
+         *    reliable for the public Downloads directory DownloadManager
+         *    genuinely owns, not for an app-private external dir. So this
+         *    also deletes the file itself directly: row.localUri when
+         *    known (a completed download), else the same filename
+         *    enqueue() itself derived (a pending one that may have
+         *    finished writing without us knowing it yet).
+         */
+        fun cancelAndDeleteFile(context: Context, row: DownloadRow?) {
+            if (row == null) return
+            row.dmId?.let { dmId ->
+                (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(dmId)
+            }
+            val path = row.localUri?.let { Uri.parse(it).path }
+                ?: File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), row.filePath.substringAfterLast('/')).path
+            try {
+                File(path).delete()
+            } catch (e: Exception) {
+                // Best-effort — the DB row is removed either way by the caller.
+            }
+        }
+    }
+
     private lateinit var db: DownloadDatabase
     private var receiver: BroadcastReceiver? = null
 
@@ -77,6 +164,9 @@ class DownloadPlugin : Plugin() {
     fun download(call: PluginCall) {
         val filePath = call.getString("path")
         val episodeId = call.getString("episodeId")
+        val showId = call.getString("showId")
+        val season = call.getInt("season")
+        val episodeNum = call.getInt("episode")
         val showTitle = call.getString("showTitle", "") ?: ""
         val label = call.getString("label", "") ?: ""
 
@@ -85,33 +175,11 @@ class DownloadPlugin : Plugin() {
             return
         }
 
-        val prefs = context.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
-        val serverUrl = prefs.getString("server_url", null)
-        if (serverUrl == null) {
+        val dmId = enqueue(context, filePath, episodeId, showId, season, episodeNum, showTitle, label)
+        if (dmId == null) {
             call.reject("no server configured")
             return
         }
-
-        val mediaUrl = MediaUrl.build(serverUrl, filePath)
-        val filename = filePath.substringAfterLast('/')
-        // User setting (ServerSetupActivity), default false — most of the
-        // user's data is unlimited; this is the flip-it-before-travelling
-        // escape hatch, not the default posture.
-        val wifiOnly = prefs.getBoolean("downloads_wifi_only", false)
-
-        val request = DownloadManager.Request(Uri.parse(mediaUrl)).apply {
-            setTitle(label.ifEmpty { filename })
-            setDescription(showTitle)
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, filename)
-            setAllowedOverMetered(!wifiOnly)
-            setAllowedOverRoaming(!wifiOnly)
-        }
-
-        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val dmId = dm.enqueue(request)
-        db.insertPending(episodeId, filePath, showTitle, label, dmId, Instant.now().toString())
-
         call.resolve(JSObject().apply { put("downloadId", dmId) })
     }
 
@@ -154,14 +222,14 @@ class DownloadPlugin : Plugin() {
             call.reject("episodeId is required")
             return
         }
-        deleteFileFor(db.get(episodeId)?.localUri)
+        cancelAndDeleteFile(context, db.get(episodeId))
         db.delete(episodeId)
         call.resolve()
     }
 
     @PluginMethod
     fun deleteAllDownloads(call: PluginCall) {
-        for (row in db.listAll()) deleteFileFor(row.localUri)
+        for (row in db.listAll()) cancelAndDeleteFile(context, row)
         db.deleteAll()
         call.resolve()
     }
@@ -175,14 +243,5 @@ class DownloadPlugin : Plugin() {
         }
         db.markWatched(episodeId)
         call.resolve()
-    }
-
-    private fun deleteFileFor(localUri: String?) {
-        if (localUri == null) return
-        try {
-            Uri.parse(localUri).path?.let { File(it).delete() }
-        } catch (e: Exception) {
-            // Best-effort — the DB row is removed either way by the caller.
-        }
     }
 }

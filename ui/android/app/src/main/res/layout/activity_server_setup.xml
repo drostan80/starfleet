@@ -58,6 +58,28 @@
         android:buttonTint="#5b8cff"
         android:layout_marginBottom="16dp" />
 
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/storage_limit_label"
+        android:textSize="13sp"
+        android:textColor="#9aa4b8"
+        android:layout_marginBottom="4dp" />
+
+    <EditText
+        android:id="@+id/storage_limit_field"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/storage_limit_hint"
+        android:inputType="numberDecimal"
+        android:imeOptions="actionDone"
+        android:singleLine="true"
+        android:textColor="#e6e9ef"
+        android:textColorHint="#5a6272"
+        android:backgroundTint="#5b8cff"
+        android:padding="12dp"
+        android:layout_marginBottom="16dp" />
+
     <Button
         android:id="@+id/continue_button"
         android:layout_width="match_parent"

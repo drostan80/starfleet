@@ -66,6 +66,10 @@ dependencies {
     // one more than this project's current 36 (AGP 8.13.0's own recommended
     // max) — not worth bumping just for this dependency.
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    // A4 (DESIGN.md §8) — AutoDownloadWorker's periodic background work.
+    // work-runtime-ktx brings CoroutineWorker support (kotlinx-coroutines
+    // transitively) for the suspend-based backlog fetch.
+    implementation "androidx.work:work-runtime-ktx:2.11.2"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

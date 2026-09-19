@@ -10,4 +10,6 @@
     <string name="server_setup_error">Enter a host and port, e.g. 192.168.1.100:8888</string>
     <string name="change_server_shortcut">Change server</string>
     <string name="wifi_only_downloads">Downloads: Wi-Fi only</string>
+    <string name="storage_limit_label">Auto-download storage limit (GB, 0 = unlimited)</string>
+    <string name="storage_limit_hint">0</string>
 </resources>

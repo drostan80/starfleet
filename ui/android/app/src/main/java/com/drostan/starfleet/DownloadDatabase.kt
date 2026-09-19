@@ -22,7 +22,12 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
 
     companion object {
         private const val DB_NAME = "downloads.db"
-        private const val DB_VERSION = 1
+        // v2 (A4): show_id/season/episode — needed so VlcPlugin can report
+        // addWatchEvent for offline playback without JS threading them
+        // through separately (episodeId alone is enough to look the rest
+        // up from this row). Dropping and recreating on upgrade is fine —
+        // this is a re-downloadable local cache, not data of record.
+        private const val DB_VERSION = 2
         const val TABLE = "downloads"
     }
 
@@ -32,6 +37,9 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
             CREATE TABLE $TABLE (
                 episode_id TEXT PRIMARY KEY,
                 file_path TEXT NOT NULL,
+                show_id TEXT,
+                season INTEGER,
+                episode INTEGER,
                 show_title TEXT,
                 label TEXT,
                 local_uri TEXT,
@@ -50,10 +58,23 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
         onCreate(db)
     }
 
-    fun insertPending(episodeId: String, filePath: String, showTitle: String, label: String, dmId: Long, downloadedAt: String) {
+    fun insertPending(
+        episodeId: String,
+        filePath: String,
+        showId: String?,
+        season: Int?,
+        episodeNum: Int?,
+        showTitle: String,
+        label: String,
+        dmId: Long,
+        downloadedAt: String,
+    ) {
         val values = ContentValues().apply {
             put("episode_id", episodeId)
             put("file_path", filePath)
+            put("show_id", showId)
+            put("season", season)
+            put("episode", episodeNum)
             put("show_title", showTitle)
             put("label", label)
             put("dm_id", dmId)
@@ -75,6 +96,26 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
     fun markFailed(dmId: Long) {
         val values = ContentValues().apply { put("status", "failed") }
         writableDatabase.update(TABLE, values, "dm_id = ?", arrayOf(dmId.toString()))
+    }
+
+    /**
+     * A4 step 36 — a soft delete, not `delete()`: found by testing that a
+     * hard delete let AutoDownloadWorker's own diff step (existingIds =
+     * every episode_id in this table) immediately re-download the exact
+     * episode it just evicted, on the very same tick — it's still
+     * "unwatched but available" in the LCARS backlog by definition, since
+     * eviction never touches LCARS's own watch_event state. Keeping the
+     * row with status='evicted' (and clearing local_uri/size_bytes, since
+     * the file itself really is gone) means the existing diff logic skips
+     * it without needing a separate "recently evicted" cooldown mechanism.
+     */
+    fun markEvicted(episodeId: String) {
+        val values = ContentValues().apply {
+            put("status", "evicted")
+            putNull("local_uri")
+            putNull("size_bytes")
+        }
+        writableDatabase.update(TABLE, values, "episode_id = ?", arrayOf(episodeId))
     }
 
     fun markWatched(episodeId: String) {
@@ -113,6 +154,9 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
 data class DownloadRow(
     val episodeId: String,
     val filePath: String,
+    val showId: String?,
+    val season: Int?,
+    val episode: Int?,
     val showTitle: String?,
     val label: String?,
     val localUri: String?,
@@ -126,6 +170,9 @@ data class DownloadRow(
         fun from(c: android.database.Cursor): DownloadRow = DownloadRow(
             episodeId = c.getString(c.getColumnIndexOrThrow("episode_id")),
             filePath = c.getString(c.getColumnIndexOrThrow("file_path")),
+            showId = c.getStringOrNull("show_id"),
+            season = c.getIntOrNull("season"),
+            episode = c.getIntOrNull("episode"),
             showTitle = c.getStringOrNull("show_title"),
             label = c.getStringOrNull("label"),
             localUri = c.getStringOrNull("local_uri"),
@@ -146,4 +193,9 @@ private fun android.database.Cursor.getStringOrNull(col: String): String? {
 private fun android.database.Cursor.getLongOrNull(col: String): Long? {
     val i = getColumnIndexOrThrow(col)
     return if (isNull(i)) null else getLong(i)
+}
+
+private fun android.database.Cursor.getIntOrNull(col: String): Int? {
+    val i = getColumnIndexOrThrow(col)
+    return if (isNull(i)) null else getInt(i)
 }

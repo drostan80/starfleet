@@ -94,13 +94,60 @@ class VlcPlugin : Plugin() {
         val data = result.data
         val position = data?.getLongExtra("extra_position", -1L) ?: -1L
         val duration = data?.getLongExtra("extra_duration", -1L) ?: -1L
+        // Same >=90% threshold as the desktop mpv-helper.py and the
+        // Android VLC client's own existing convention (DESIGN.md §8).
+        val watched = duration > 0 && position.toDouble() / duration.toDouble() >= 0.9
 
         val ret = JSObject()
         ret.put("position", position)
         ret.put("duration", duration)
-        // Same >=90% threshold as the desktop mpv-helper.py and the
-        // Android VLC client's own existing convention (DESIGN.md §8).
-        ret.put("watched", duration > 0 && position.toDouble() / duration.toDouble() >= 0.9)
+        ret.put("watched", watched)
+        // Resolve immediately — reportWatched's network call must never
+        // make the JS caller wait on it.
         call.resolve(ret)
+
+        if (watched) reportWatched(call)
+    }
+
+    /**
+     * A4 step 37 — native, not JS: the local SQLite write (via
+     * DownloadDatabase.markWatched) always succeeds immediately and is
+     * what eviction (A4 step 36) reads; addWatchEvent is a best-effort
+     * network call queued for retry on failure, decoupled entirely from
+     * that local write (DESIGN.md §8, "Eviction source of truth").
+     *
+     * episodeId alone is enough for offline playback — showId/season/
+     * episode come from the download row itself (stored at download time,
+     * DownloadDatabase v2) rather than needing the JS caller to pass them
+     * again just to play back something already indexed. Streaming
+     * callers (not downloaded) pass showId/season/episode directly since
+     * there's no download row to look them up from.
+     */
+    private fun reportWatched(call: PluginCall) {
+        val episodeId = call.getString("episodeId")
+        var showId = call.getString("showId")
+        var season = call.getInt("season")
+        var episodeNum = call.getInt("episode")
+
+        if (episodeId != null) {
+            val db = DownloadDatabase(context)
+            db.markWatched(episodeId)
+            if (showId == null) {
+                val row = db.get(episodeId)
+                showId = row?.showId
+                season = row?.season
+                episodeNum = row?.episode
+            }
+        }
+
+        val resolvedShowId = showId ?: return
+        val appContext = context.applicationContext
+        Thread {
+            val watchedAtIso = java.time.Instant.now().toString()
+            val ok = LcarsClient.addWatchEvent(appContext, resolvedShowId, season, episodeNum, watchedAtIso)
+            if (!ok) {
+                WatchEventRetryQueue.enqueue(appContext, resolvedShowId, season, episodeNum, watchedAtIso)
+            }
+        }.start()
     }
 }
