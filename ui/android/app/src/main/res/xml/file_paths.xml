@@ -2,4 +2,11 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-path name="my_images" path="." />
     <cache-path name="my_cache_images" path="." />
+    <!-- A2 step 25 — DownloadManager.setDestinationInExternalFilesDir(ctx,
+         DIRECTORY_DOWNLOADS, ...) writes under getExternalFilesDir()/
+         Download/, which needs external-files-path specifically — the
+         template's own external-path above maps to a different directory
+         (Environment.getExternalStorageDirectory(), the shared root) and
+         would not have covered this. -->
+    <external-files-path name="downloads" path="Download/" />
 </paths>
