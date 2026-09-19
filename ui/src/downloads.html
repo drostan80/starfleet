@@ -130,8 +130,9 @@
 
 <script type="module">
   import { applyAppName } from './js/config.js?v=4';
-  import { getDownloads, retriggerDownload, purgeDownload, purgeAll } from './js/downloads.js?v=2';
+  import { getDownloads, retriggerDownload, purgeDownload, purgeAll, playOffline } from './js/downloads.js?v=2';
   applyAppName();
+  const isNative = window.Capacitor?.isNativePlatform?.();
 
   function relativeTime(iso) {
     const diff = Date.now() - new Date(iso).getTime();
@@ -144,8 +145,8 @@
     return `${days}d ago`;
   }
 
-  function render() {
-    const entries = getDownloads();
+  async function render() {
+    const entries = await getDownloads();
     const content = document.getElementById('dl-content');
     const clearBtn = document.getElementById('dl-clear-all');
 
@@ -170,32 +171,47 @@
 
       const info = document.createElement('div');
       info.className = 'dl-info';
+      const statusLine = isNative
+        ? `<div class="dl-timestamp">${e.status}${e.sizeBytes ? ' · ' + (e.sizeBytes / 1e6).toFixed(0) + ' MB' : ''}</div>`
+        : '';
       info.innerHTML = `
         <div class="dl-show-title">${esc(e.showTitle)}</div>
         <div class="dl-ep-label">${esc(e.label)}</div>
-        <div class="dl-timestamp">${relativeTime(e.startedAt)}</div>`;
+        <div class="dl-timestamp">${relativeTime(e.startedAt)}</div>
+        ${statusLine}`;
 
       const actions = document.createElement('div');
       actions.className = 'dl-actions';
 
-      const retryBtn = document.createElement('button');
-      retryBtn.className = 'dl-action-btn retry';
-      retryBtn.textContent = '↻ Retry';
-      retryBtn.addEventListener('click', () => {
-        retriggerDownload(e.id);
-        render();
-      });
+      // Android: a completed download plays offline; retry has no
+      // native equivalent (delete + re-add instead). Desktop: retry is
+      // the only action that made sense here (browser downloads were
+      // never really re-triggerable as anything else).
+      if (isNative && e.status === 'complete') {
+        const playBtn = document.createElement('button');
+        playBtn.className = 'dl-action-btn retry';
+        playBtn.textContent = '▶ Play';
+        playBtn.addEventListener('click', () => playOffline(e.id));
+        actions.appendChild(playBtn);
+      } else if (!isNative) {
+        const retryBtn = document.createElement('button');
+        retryBtn.className = 'dl-action-btn retry';
+        retryBtn.textContent = '↻ Retry';
+        retryBtn.addEventListener('click', () => {
+          retriggerDownload(e.id);
+          render();
+        });
+        actions.appendChild(retryBtn);
+      }
 
       const removeBtn = document.createElement('button');
       removeBtn.className = 'dl-action-btn remove';
       removeBtn.textContent = '✕';
-      removeBtn.title = 'Remove from list';
-      removeBtn.addEventListener('click', () => {
-        purgeDownload(e.id);
+      removeBtn.title = isNative ? 'Delete download' : 'Remove from list';
+      removeBtn.addEventListener('click', async () => {
+        await purgeDownload(e.id);
         render();
       });
-
-      actions.appendChild(retryBtn);
       actions.appendChild(removeBtn);
 
       entry.appendChild(info);
@@ -213,9 +229,9 @@
     return d.innerHTML;
   }
 
-  document.getElementById('dl-clear-all').addEventListener('click', () => {
-    if (confirm('Clear all download history?')) {
-      purgeAll();
+  document.getElementById('dl-clear-all').addEventListener('click', async () => {
+    if (confirm(isNative ? 'Delete all downloaded files?' : 'Clear all download history?')) {
+      await purgeAll();
       render();
     }
   });

@@ -1,10 +1,21 @@
 /**
- * Download manager — tracks browser-native downloads in localStorage.
+ * Download manager.
  *
- * Downloads are triggered via the nginx /download/ location which returns
- * Content-Disposition: attachment.  The browser's own download manager
- * handles progress, resume, and errors.  This module keeps a launch log
- * so the user can see what was initiated, re-trigger, or purge entries.
+ * Desktop: downloads are triggered via the nginx /download/ location which
+ * returns Content-Disposition: attachment.  The browser's own download
+ * manager handles progress, resume, and errors.  This module keeps a
+ * launch log in localStorage so the user can see what was initiated,
+ * re-trigger, or purge entries — a log, not a real index: the desktop
+ * side has no way to know if a browser download actually succeeded, or
+ * to delete the resulting file.
+ *
+ * Android (A2, DESIGN.md §8): DownloadPlugin manages a real native index
+ * (SQLite) of actually-downloaded files, keyed by GraphQL episode id —
+ * status genuinely reflects DownloadManager's own state, and purging
+ * really deletes the file, not just a log line. Every exported function
+ * here branches on window.Capacitor?.isNativePlatform?.() so callers
+ * (downloads.html, the per-episode download buttons) don't need their own
+ * platform checks.
  */
 
 const STORAGE_KEY = 'starfleet_downloads';
@@ -36,10 +47,17 @@ export function downloadUrl(filePath) {
 }
 
 /**
- * Record a download entry and open the browser-native download.
- * Returns the entry id.
+ * Start a download. Android: enqueues a real DownloadManager request via
+ * DownloadPlugin, indexed by episodeId. Desktop: logs the entry and opens
+ * the browser-native download. Always async now (Android's plugin call is
+ * inherently a Promise) — existing call sites don't use the return value,
+ * so this is safe.
  */
-export function startDownload({ showTitle, label, filePath }) {
+export async function startDownload({ showTitle, label, filePath, episodeId }) {
+  if (window.Capacitor?.isNativePlatform?.()) {
+    return window.Capacitor.Plugins.Download.download({ path: filePath, episodeId, showTitle, label });
+  }
+
   const url = downloadUrl(filePath);
   const entry = {
     id: self.crypto?.randomUUID?.()
@@ -65,7 +83,10 @@ export function startDownload({ showTitle, label, filePath }) {
 }
 
 /**
- * Re-trigger a previous download by entry id.
+ * Re-trigger a previous download by entry id. Desktop only — a completed
+ * or failed native Android download should be deleted and re-added, not
+ * "retried" (DownloadPlugin has no such concept); downloads.html hides
+ * this action for Android entries instead of calling it.
  */
 export function retriggerDownload(id) {
   const entries = loadEntries();
@@ -81,9 +102,14 @@ export function retriggerDownload(id) {
 }
 
 /**
- * Remove one entry from the log.
+ * Remove one entry. Android: really deletes the downloaded file too, not
+ * just the index row (DownloadPlugin.deleteDownload).
  */
-export function purgeDownload(id) {
+export async function purgeDownload(id) {
+  if (window.Capacitor?.isNativePlatform?.()) {
+    await window.Capacitor.Plugins.Download.deleteDownload({ episodeId: id });
+    return true;
+  }
   const entries = loadEntries();
   const idx = entries.findIndex(e => e.id === id);
   if (idx < 0) return false;
@@ -93,16 +119,46 @@ export function purgeDownload(id) {
 }
 
 /**
- * Clear all entries.
+ * Clear all entries. Android: deletes every downloaded file too.
  */
-export function purgeAll() {
+export async function purgeAll() {
+  if (window.Capacitor?.isNativePlatform?.()) {
+    await window.Capacitor.Plugins.Download.deleteAllDownloads();
+    return;
+  }
   saveEntries([]);
 }
 
 /**
- * Get all entries (newest first).
+ * Play an Android download offline via VLC. Desktop has no equivalent —
+ * a browser download isn't tracked well enough to know it's still there.
  */
-export function getDownloads() {
+export async function playOffline(episodeId) {
+  const { localUri } = await window.Capacitor.Plugins.Download.getLocalUri({ episodeId });
+  if (!localUri) return false;
+  await window.Capacitor.Plugins.Vlc.play({ uri: localUri, title: episodeId });
+  return true;
+}
+
+/**
+ * Get all entries (newest first). Android: the real native index, mapped
+ * to the same shape desktop entries use so downloads.html doesn't need
+ * its own platform branch, plus `status`/`sizeBytes` fields desktop
+ * entries don't have (desktop has no way to know either of those).
+ */
+export async function getDownloads() {
+  if (window.Capacitor?.isNativePlatform?.()) {
+    const { downloads } = await window.Capacitor.Plugins.Download.listDownloads();
+    return downloads.map(d => ({
+      id: d.episodeId,
+      showTitle: d.showTitle,
+      label: d.label,
+      filePath: d.filePath,
+      startedAt: d.downloadedAt,
+      status: d.status,
+      sizeBytes: d.sizeBytes,
+    }));
+  }
   return loadEntries();
 }
 

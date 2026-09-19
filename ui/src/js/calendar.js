@@ -798,6 +798,7 @@ export function buildCard(ep, cfg) {
         showTitle: ep.show.displayTitle,
         label: fmtEpBadge(ep) + (ep.title ? ` — ${ep.title}` : ''),
         filePath,
+        episodeId: ep.id,
       });
       dlBtn.classList.add('triggered');
       setTimeout(() => dlBtn.classList.remove('triggered'), 1200);
