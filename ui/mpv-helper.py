@@ -89,16 +89,18 @@ def _watch_and_report(proc, ipc_path, launch_id, ctx):
                 sock = None
                 time.sleep(IPC_CONNECT_RETRY_INTERVAL)
         if sock is None:
-            print(f'[mpv-watch] could not connect to IPC socket {ipc_path} — skipping watched report')
+            print(f'[mpv-watch] could not connect to IPC socket {ipc_path} '
+                  '— skipping watched report')
             return
 
-        sock.sendall(json.dumps({'command': ['observe_property', 1, 'percent-pos']}).encode() + b'\n')
+        observe_cmd = {'command': ['observe_property', 1, 'percent-pos']}
+        sock.sendall(json.dumps(observe_cmd).encode() + b'\n')
         sock.settimeout(1.0)
         buf = b''
         while proc.poll() is None:
             try:
                 chunk = sock.recv(4096)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
