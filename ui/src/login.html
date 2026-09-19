@@ -113,8 +113,19 @@
 </main>
 
 <script type="module">
-  import { applyAppName } from './js/config.js?v=4';
-  applyAppName();
+  // Not importing applyAppName from config.js (pre-existing bug, found
+  // 2026-09-19): nginx's /ui/ location auth-gates everything except
+  // login.html/css/favicon.svg themselves — a genuinely logged-out client
+  // (no session cookie at all) gets a 302-to-self for any script this page
+  // imports, which fails the whole ES module graph silently, including the
+  // login form's own submit handler below. login.html must be fully
+  // self-contained; duplicating this handful of lines instead of widening
+  // what nginx serves unauthenticated.
+  const APP_NAME = location.hostname === 'localhost' ? 'TEST SHUTTLE' : 'STARFLEET';
+  document.title = document.title.includes('—')
+    ? `${APP_NAME} — ${document.title.split('—').slice(1).join('—').trim()}`
+    : APP_NAME;
+
   const form     = document.getElementById('login-form');
   const errorDiv = document.getElementById('error-msg');
   const title    = document.getElementById('page-title');
