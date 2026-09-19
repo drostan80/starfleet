@@ -711,11 +711,29 @@ A1's own step-14 spike has been run — see "Build ordering" above.
     `deleteAllDownloads()` removes both the real files and the index rows.
 
 **A3 — live updates**
-28. `LcarsClient.kt` (OkHttp, bearer from SharedPreferences)
-29. `LcarsWsPlugin.kt`: connect, `connection_init`, subscribe, `notifyListeners`
-30. Reconnect on connectivity change
-31. Web: listener replaces polling on Android only
-32. Test: grab an episode in Sonarr, calendar updates without refresh
+28. ✅ `LcarsClient.kt` — shared `OkHttpClient` + server address/bearer
+    reader only; `backlog()`/`addWatchEvent()` deferred to A4, whenever
+    that phase actually needs them.
+29. ✅ `LcarsWsPlugin.kt`: connect, `connection_init`, subscribe,
+    `notifyListeners`. Bearer goes on the WS handshake's Authorization
+    header, not inside `connection_init`'s payload — same mechanism A0
+    step 12 already proved from Python, now from Kotlin. OkHttp pinned to
+    4.12.0 (latest 5.5.0 needs compileSdk 37, one more than this project's
+    36).
+30. ✅ Reconnect on connectivity change — `ConnectivityManager
+    .registerDefaultNetworkCallback`, exponential backoff (2s→60s cap).
+31. ✅ Web: `calendar.js`'s 10s poll now only runs on non-Android
+    platforms; Android registers `LcarsWs` listeners instead.
+32. ✅ Tested live against the real deployed server (temporary logging,
+    added and removed for the check): `onOpen` negotiated the
+    `graphql-transport-ws` subprotocol, `connection_ack` arrived, both
+    subscribes accepted with no error frame. Reconnect genuinely
+    confirmed too — disabling WiFi produced `onFailure` + doubling
+    backoff (2s/4s/8s/16s observed), re-enabling led to a real second
+    `connection_ack`. Did not force an actual Sonarr grab through
+    production just to see a subscription payload — same call as A0 step
+    12's own WS check; the mechanism is what's being verified, not a
+    live event.
 
 **A4 — auto-download + storage**
 33. `AutoDownloadWorker.kt`: periodic, unmetered, `backlog` → diff → enqueue
