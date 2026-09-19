@@ -11,14 +11,16 @@ Personal anime/media tracker HTML client. Connects to the LCARS GraphQL server
 ### LCARS connection
 
 ```
-Browser  ──HTTP──►  LCARS GraphQL  POST /graphql
-         ──WS───►   LCARS GraphQL  ws://.../graphql  (graphql-transport-ws)
+Browser  ──HTTP──►  nginx :8888  ──►  LCARS GraphQL  POST /
+         ──WS───►   nginx :8888  ──►  LCARS GraphQL  ws://.../  (graphql-transport-ws)
 ```
 
-- **HTTP endpoint**: `POST http://<lcars_host>/graphql`
+- **HTTP endpoint**: `POST http://<nginx_host>:8888/` (Ariadne app is mounted
+  at `/`, `server.py:211` — there is no `/graphql` path)
   - Header: `Authorization: Bearer <token>`
   - Content-Type: `application/json`
-- **WS endpoint**: `ws://<lcars_host>/graphql`
+- **WS endpoint**: `ws://<nginx_host>:8888/` (same mount; needs the nginx WS
+  passthrough from §8 before it works through the proxy)
   - Same bearer token, passed as `Authorization` header during the WebSocket
     handshake — LCARS's `BearerTokenMiddleware` covers both `http` and
     `websocket` scope types (verified live, `server.py`)
@@ -26,25 +28,25 @@ Browser  ──HTTP──►  LCARS GraphQL  POST /graphql
   - Subscriptions: `episodeAvailabilityChanged` and `showCreated`
 
 ### Config (Settings page)
-The web client needs, at minimum:
-- `lcars_url` — base URL, e.g. `http://192.168.0.152:8888`
-  (same field `data`'s `Config.lcars_url` uses)
-- `lcars_token` — the bearer token (same static token LCARS validates)
-- `home_server_host` — IP/host for rewriting Sonarr/Radarr deep links to
-  reach them from the browser (`data`'s `Config.home_server_host`,
-  default `192.168.0.152`)
-- **Future**: Tailscale IP as alternative to LAN IP (user selects in Settings)
-- **Future**: player type (local mpv / web player / android)
-- **Future**: file path routing (local mirror / SMB / remote IP)
+**Target (A0, §8): zero entry.** Open the server address, log in — that is
+the whole setup on any browser or phone. `lcars_url` and `home_server_host`
+are derived from `location`; `lcars_token` and `tmdb_api_key` are served by
+`/auth/settings` from LCARS config after login and never displayed. Only
+`mpv_helper_url` remains a (defaulted, desktop-only) local setting.
 
-Store in `localStorage` under a single `starfleet_config` key (JSON).
-Phase 1: simple form in Settings, no validation theatre.
+Until A0 ships, the four values are typed once into Settings and shared via
+`web_setting`. localStorage key: `starfleet_config`.
 
 ### Video playback (Phase 1 only)
-Local mpv. Pass `filePathSonarr` / `filePathRadarr` from the episode to mpv
-via a custom URI scheme (`mpv://`) or a small local helper daemon.
-Decision deferred until building the play action — document approach here
-when settled.
+**Settled and built**: a small local helper daemon (`ui/mpv-helper.py`),
+not a custom URI scheme. The client strips the `/data` prefix from
+`filePathSonarr`/`filePathRadarr`, builds a `/files/...` URL, and POSTs it
+to the helper's `/play` endpoint; the helper launches mpv against that URL
+(streamed, no local mount needed). Since 2026-09-19 the POST also carries
+`{showId, season, episode, token, lcarsBase}` when known — the helper
+watches playback via mpv's own JSON IPC socket and reports `addWatchEvent`
+back to LCARS at ≥90% watched, the same threshold §8's Android plan uses
+for VLC. See `launchMpv()` in `calendar.js` and `ui/mpv-helper.py` itself.
 
 ---
 
@@ -326,13 +328,377 @@ Build when show pages exist (Phase 2+).
 - Lists page (own design session first; big work)
 - Global `/` search (needs show pages)
 - Web player (Phase 1 is local mpv only)
-- Android wrapping
 - Multi-player Settings UI (build settings incrementally as players are added)
 - Tailscale IP selector in Settings
 
 ---
 
-## 8. Related repos
+## 8. Android app (Capacitor)
+
+### Architecture: remote WebView
+
+The Capacitor app loads the UI remotely from the nginx host (`server.url`),
+not bundled into the APK. This preserves:
+
+- All root-relative URLs (`/download/...`, `/auth/...`, `/ui/...`) work unchanged
+- Cookie-based session auth works unchanged (WebView cookie jar)
+- No build step for UI — deploy a new LCARS version, the app picks it up
+- LAN vs Tailscale: just a different IP, everything else identical
+
+Native Kotlin plugins handle only what the WebView can't do.
+
+### Build ordering — stop after A0
+
+A0 (server + web client) is fully testable today, on desktop, without a
+phone or the Android toolchain (build steps 9–12 below, plus the WS/VLC
+checks added to "Facts verified" below). A1's own step 14 spike (dynamic
+`server.url` from SharedPreferences) can only be answered on a device with
+Android Studio installed — not available yet ("deployment will be when I
+have access to a machine for test").
+
+Everything A2–A4 builds native plugins on top of the shell A1 produces. If
+the step-14 spike fails and falls back to the bundled-launcher-page
+approach (`server.allowNavigation` — see Android hurdles below), the origin
+every later plugin assumes could shift. Writing A2–A4 Kotlin against an
+unproven A1 shell risks throwing that work away.
+
+**Rule: build A0, ship it, verify it (including the WS/VLC checks below) —
+then stop. Do not start A1's Capacitor scaffolding until the test machine
+is available and step 14 has actually run.**
+
+### Zero-config principle
+
+**The only app setting is the server address** (LAN IP or Tailscale IP, port
+8888 = nginx). Everything else is automatic:
+
+1. App opens → "Enter server address" screen
+2. Address stored in SharedPreferences
+3. WebView loads `http://<address>:8888/ui/` → login page
+4. User logs in → session cookie set → `/auth/settings` syncs `lcars_token`
+   and `tmdb_api_key` into localStorage
+5. A Capacitor bridge call copies `lcars_token` into SharedPreferences for
+   native code (A3/A4)
+
+No settings page in the app. A static app shortcut (long-press icon →
+"Change server") re-shows the address screen. **Two addresses = two origins =
+two logins** (separate cookie jars and localStorage per origin) — accepted.
+
+### Facts verified against the code (2026-09-18), re-confirmed live (2026-09-19)
+
+Confirmed against the real deployment (`192.168.0.152:8888`), not just read
+from source:
+
+- Port **8888 is nginx**, not LCARS. `lcars_url` in `web_setting` is the nginx
+  origin. LCARS direct is `localhost:8123` on tiny and is never needed.
+- `/` unauthenticated → `302` to `/ui/login.html`. `/` with a bogus
+  `Authorization: Bearer` header and no cookie → still `302` — confirms
+  bearer is genuinely not accepted yet, not just unread/stale code.
+  `/auth/check` bare → `401`. `/ui/` unauthenticated → `302`. `/files/` →
+  `403` (no index, autoindex off) but reachable with no login redirect —
+  confirms it really is ungated, matching `nginx.conf`.
+- nginx `/` proxies to LCARS but gates on `auth_request` → LCARS
+  `/auth/check`, which reads **only the session cookie** (`auth.py:151`).
+- GraphQL HTTP **and** WebSocket are both mounted at `/` (`server.py:211`),
+  not `/graphql`. §1 above is stale on this.
+- `BearerTokenMiddleware` covers the `websocket` scope, so a native WS client
+  that sets `Authorization: Bearer` on the handshake is accepted by LCARS —
+  confirmed in code; the rest of the WS path is not (see below).
+- Session cookie: `sf_session`, 30 days, sliding renewal, `httponly`,
+  `samesite=strict`, no `secure` (plain HTTP).
+- `/download/` is cookie-gated with hard 401.
+
+**Read from code, not yet run — verify before building on them:**
+
+- nginx `/` has no `Upgrade`/`Connection` headers and a 60s default read
+  timeout — WS through nginx does not work today. Once A0 adds the headers,
+  the *whole* path (nginx upgrade → LCARS WS → `graphql-transport-ws`
+  subprotocol negotiation → an actual subscription payload) still needs a
+  real end-to-end test — `BearerTokenMiddleware` accepting the scope doesn't
+  prove the rest of the chain holds. Testable today from desktop with
+  `websocat`/a Python client against the deployed nginx the moment A0
+  ships — **do this before writing `LcarsWsPlugin.kt` (A3)**, not after.
+- VLC's seek behavior over HTTP with encoded non-ASCII/space path segments
+  against `/files/` (`Accept-Ranges` is set, but the specific
+  Range-request-plus-encoding combination is the plan's own flagged 404
+  risk — see Android hurdles below). **Partially confirmed live 2026-09-19**:
+  path resolution + URL-decoding through the nginx `alias` was verified
+  against two real show directories on the live server (percent-encoded
+  spaces, apostrophe, parens, curly braces, tildes, and fullwidth
+  `＜＜`/`＞＞` all resolved correctly — each directory returned `403`
+  forbidden-listing rather than `404`, confirming nginx found the real
+  path on disk). Could not reach a specific *file* to test an actual
+  `Range:` request against — one candidate directory was empty, the other's
+  episode filename couldn't be guessed from Sonarr-convention patterns and
+  wasn't otherwise available. **Still open: an actual `Range: bytes=...`
+  request against a real file**, ungated and testable any time `/files/`
+  is live (no A0 dependency) — **do this before `VlcPlugin.kt` (A1 step
+  18)** if a sample file path turns up before then; otherwise this is now
+  the fallback plan: ship A1 on the strength of the path-resolution
+  evidence above, and revisit this specific check first if real-device VLC
+  playback fails (user's own call, 2026-09-19).
+
+### Server-side changes (all small)
+
+| Change | Where | Why |
+|--------|-------|-----|
+| `/auth/check` also accepts `Authorization: Bearer <token>` (compare_digest against the LCARS bearer) | `auth.py` | native code authenticates with bearer only, no cookie plumbing |
+| `/auth/settings` GET returns `lcars_token` and `tmdb_api_key` **from LCARS config** (`config.py`), not from `web_setting`; PUT no longer accepts them | `auth.py` | nobody types a token anywhere; LCARS already owns both |
+| `SHARED_SETTING_KEYS` emptied of `lcars_url`, `lcars_token`, `home_server_host`, `tmdb_api_key` (table stays for future shared settings) | `auth.py` | all four are derived or served now |
+| `/_auth_check` forwards `Authorization` header | `nginx.conf` | so the subrequest sees the bearer |
+| `/` location: `proxy_http_version 1.1`, `Upgrade`/`Connection "upgrade"` headers, `proxy_read_timeout 3600s` | `nginx.conf` | WebSocket passthrough |
+
+**Decision (user, 2026-09-19):** `/auth/check` is one shared `auth_request`
+target for `/`, `/download/`, and `/ui/` — accepting bearer there widens all
+three, not just the GraphQL endpoint native code actually needs. Accepted as
+one shared gate rather than splitting into a bearer-only variant scoped to
+`/` — simpler, and acceptable on the current LAN-only plain-HTTP deployment
+with no external exposure.
+
+Direction (user, 2026-09-18): every API token lives in LCARS config/env and is
+used seamlessly where needed, the way `ops` already does — never entered or
+displayed in a client. A0 does this for the four keys the web client needs;
+the rest of the web app follows in a later rework.
+
+### Web client changes
+
+**A0 — zero-entry client.** Setup on any browser or phone becomes: open the
+server address, log in. Nothing else.
+
+| Setting | Today | After A0 |
+|---------|-------|----------|
+| `lcars_url` | typed once | **derived**: `location.origin` |
+| `lcars_token` | typed once, shared via `web_setting` | **served**: `/auth/settings` from LCARS config |
+| `home_server_host` | typed once | **derived**: `location.hostname` (Sonarr/Radarr are on the nginx host, so this is right on LAN *and* Tailscale — today it's wrong on Tailscale) |
+| `tmdb_api_key` | typed once | **served**: `/auth/settings` from LCARS config |
+| `mpv_helper_url` | localStorage, defaults `localhost:19450` | unchanged — desktop-only default |
+
+Why derived and not stored: after a Tailscale login, `syncConfig()` makes the
+server-stored LAN value win, so every `/files/` URL and Sonarr link points at
+the wrong network.
+
+| File | Change |
+|------|--------|
+| `api.js:28` | `fetch('/', …)` instead of `${cfg.lcars_url}/` |
+| `calendar.js:458`, `grabs.html:455` | `${location.origin}/files${mediaPath}` (mpv helper needs an absolute URL) |
+| `calendar.js:540` (+ every `rewriteHost` caller) | `rewriteHost(url, location.hostname)` |
+| `config.js` | `SHARED_KEYS` → `['lcars_token','tmdb_api_key']`; `requireConfig` needs only `lcars_token`; `syncConfig` stays (it is how the token arrives); `getConfig` must also **actively delete** any stored `lcars_url`/`home_server_host` on load, not just stop writing them — see upgrade hazard below |
+| `settings.html` | only `mpv_helper_url` remains; token and key are never shown |
+| `login.html` | remove the "import existing settings" block |
+
+**Upgrade hazard:** an already-logged-in browser has `lcars_url`/
+`home_server_host` in localStorage from before A0 (`syncConfig()`'s own
+pre-A0 behavior). If `getConfig` still prefers a stored value over the
+derived one after A0 ships, that browser keeps pointing at the old LAN IP
+post-upgrade — reproducing the exact Tailscale bug A0 exists to fix, as an
+upgrade artifact. `getConfig` must delete both keys from localStorage on
+load, not merely stop writing them going forward.
+
+Bearer header stays on `api.js` — nginx passes it through, LCARS validates it.
+
+**Platform detection**: `window.Capacitor?.isNativePlatform?.()` — must be
+optional-chained, `window.Capacitor` is undefined on desktop.
+
+### Android hurdles (known up front)
+
+- **Cleartext HTTP**: `android:usesCleartextTraffic="true"` in the manifest
+  + `server.cleartext: true` in Capacitor config. Bites on first run otherwise.
+- **Dynamic `server.url`**: Capacitor reads it from static JSON. Set it from
+  SharedPreferences by building a `CapConfig` in `MainActivity.onCreate`
+  before `super.onCreate()`. **Spike this first** — if it doesn't hold in the
+  Capacitor version chosen, fallback is a bundled launcher page that stores
+  the address and navigates, with the host in `server.allowNavigation`.
+- **URL encoding**: media paths contain spaces and Japanese; `Uri.encode()`
+  each path segment or VLC 404s.
+- **File visibility**: on Android 11+ other apps can't read
+  `/Android/data/<pkg>/`. Hand files to VLC as `content://` via `FileProvider`
+  with `FLAG_GRANT_READ_URI_PERMISSION`. No storage permissions needed.
+- **Long downloads**: use the system `DownloadManager`, not Capacitor
+  `Filesystem.downloadFile` (dies when the WebView is backgrounded).
+  DownloadManager gives background, resume, Wi-Fi-only, and notifications for
+  free, and A4 enqueues the same requests.
+- **Watched on return**: VLC returns `extra_position`/`extra_duration` only
+  when launched with `startActivityForResult`. ≥90% → watched.
+
+### Native plugins
+
+#### A1 — VLC intent (playback)
+
+URL = `http://<server>:8888/files` + `filePath` with `/data` stripped and
+segments encoded. Intent: `org.videolan.vlc`, `ACTION_VIEW`, type `video/*`,
+extra `title`, launched with `startActivityForResult`. ~30 lines of Kotlin.
+Web side: play button calls `VlcPlugin.play({path, title})` on Android,
+`launchMpv` on desktop.
+
+#### A2 — Manual download (DownloadManager)
+
+`DownloadPlugin.download({path, title})` → `DownloadManager.Request` on the
+`/files/` URL (ungated) → `setDestinationInExternalFilesDir`. Local index in
+SQLite (`@capacitor-community/sqlite`): `(episode_id, file_path, size_bytes,
+downloaded_at, watched, dm_id)`. Broadcast receiver on `ACTION_DOWNLOAD_COMPLETE`
+updates the index. Offline playback: VlcPlugin takes a `content://` URI when
+the episode is in the index.
+
+#### A3 — WebSocket subscriptions
+
+`LcarsWsPlugin` wraps OkHttp WebSocket → `ws://<server>:8888/` with
+`Sec-WebSocket-Protocol: graphql-transport-ws` and `Authorization: Bearer`.
+Subscribes to `episodeAvailabilityChanged` + `showCreated`, forwards via
+`notifyListeners`. JS replaces the 30s poll with a listener. Reconnect on
+network change (`ConnectivityManager` callback) with backoff.
+
+#### A4 — Auto-download + storage management
+
+`AutoDownloadWorker` (WorkManager, periodic 30 min, `NetworkType.UNMETERED`):
+`backlog` query via OkHttp POST to `http://<server>:8888/` with bearer → diff
+against SQLite index → enqueue DownloadManager requests → notification per
+completion. Storage limit (second and last app setting): delete watched
+first (oldest), then oldest unwatched until under limit.
+
+**Eviction source of truth (user, 2026-09-19): local SQLite wins.** VLC's
+result (A1's `onActivityResult`) does two independent things the moment
+playback crosses ≥90%: writes `watched=true` to the local SQLite index
+(always succeeds, immediate — this is what eviction reads) and fires
+`addWatchEvent` to LCARS (a network POST, may fail). Eviction never waits on
+the POST succeeding — an offline or failed `addWatchEvent` must not cause a
+just-watched episode to re-download on the next `AutoDownloadWorker` tick. A
+retry queue re-sends failed `addWatchEvent` calls separately so the server
+eventually converges with the local state, decoupled from eviction timing.
+
+`LcarsClient.kt` (shared A3/A4): OkHttp, server address + bearer from
+SharedPreferences, raw GraphQL strings, `backlog` + `addWatchEvent` only.
+
+### Build steps
+
+**Step 0 — toolchain (nothing installed yet)**
+1. Install Android Studio (bundles SDK + JDK 17); accept SDK licences
+2. Install Node LTS (for Capacitor CLI)
+3. Phone: enable Developer options + USB debugging; install VLC
+4. Verify `adb devices` sees the phone
+
+**Release sequencing:** A0's `settings.html`/`login.html` reduction (step 8
+below) ships in its own release, not bundled with any Capacitor/Kotlin
+scaffolding — if the derived-config change misbehaves on an existing
+browser (see the upgrade hazard above), the revert needs to be one small
+commit, not entangled with unrelated native-shell work that hasn't even
+been spiked yet.
+
+**A0 — server + web client prep** (ship as a normal LCARS release)
+5. `auth.py`: `/auth/check` accepts bearer; `/auth/settings` serves
+   `lcars_token` + `tmdb_api_key` from LCARS config; `SHARED_SETTING_KEYS`
+   emptied of the four keys
+6. `nginx.conf`: forward `Authorization` in `/_auth_check`; WS headers +
+   timeout on `/`
+7. `api.js` → `fetch('/')`; `calendar.js` + `grabs.html` → `location.origin`;
+   all `rewriteHost` callers → `location.hostname`
+8. `config.js`: `SHARED_KEYS` + `requireConfig` reduced; `settings.html` →
+   mpv helper only; `login.html` → drop settings import
+9. Test on desktop:
+   - Fresh browser profile → login → calendar, Sonarr link, TMDB poster
+     fallback, mpv play, download — with nothing typed in Settings
+   - **Existing browser profile with pre-A0 stored settings** (old
+     `lcars_url`/`home_server_host` sitting in localStorage) → login →
+     confirm `getConfig` uses the derived values, not the stale stored
+     ones (see upgrade hazard above)
+10. Test curl: `-H "Authorization: Bearer …"` with no cookie against `/` returns
+    GraphQL, not a 302
+11. Release + deploy
+12. **WS end-to-end verification** — before writing any A3 code: test with
+    `websocat`/a Python `graphql-transport-ws` client against the deployed
+    nginx (bearer + subscribe to `episodeAvailabilityChanged`). Confirms the
+    whole chain (nginx upgrade headers → LCARS WS → subprotocol negotiation
+    → a real payload), not just that `BearerTokenMiddleware` accepts the
+    scope.
+
+---
+**STOP HERE until the test machine is available.** The steps below assume
+A1's own step-14 spike has been run — see "Build ordering" above.
+
+---
+
+**A1 — shell + VLC**
+13. `npm init` in `ui/` (or repo root), `npx cap init`, `npx cap add android`,
+    Capacitor 6
+14. **Spike**: dynamic `server.url` from SharedPreferences in
+    `MainActivity.onCreate`; cleartext flags. Stop and reassess if it fails.
+15. `ServerSetupActivity.kt`: one text field, saves address, launches
+    `MainActivity`; shown when no address stored
+16. Static app shortcut "Change server" → `ServerSetupActivity`
+17. **VLC Range+encoding test** — independent of A0, testable any time: curl
+    a real `/files/...` path containing a space or non-ASCII character with
+    a `Range: bytes=1000-2000` header against the live nginx; confirm `206
+    Partial Content` with a correct `Content-Range`, not a `404`. **Path
+    resolution/decoding already confirmed live 2026-09-19** (see "Facts
+    verified" above) — the specific `Range:` header check on an actual file
+    is still open; run it now if a sample file path is available, otherwise
+    proceed to `VlcPlugin.kt` on the existing evidence and treat a real-device
+    404-on-seek as the signal to come back here first (user's own call).
+18. `VlcPlugin.kt` with path encoding + `startActivityForResult`
+19. `TokenPlugin.kt`: JS calls `setToken(lcars_token)` after `syncConfig` →
+    SharedPreferences
+20. Web: platform-gated play button
+21. Test LAN: enter IP, login, stream to VLC. Test Tailscale: change server,
+    login again, stream
+22. Generate the release keystore (`keytool -genkey`), wire `signingConfigs`
+    in `build.gradle`; keystore + password in `.gitignore`; `assembleRelease`
+    → APK
+
+**A2 — download**
+23. Add `@capacitor-community/sqlite`; index schema
+24. `DownloadPlugin.kt`: DownloadManager request + completion receiver +
+    index update
+25. `FileProvider` in manifest; VlcPlugin accepts `content://` for local files
+26. Web: platform-gated download button; `downloads.html` reads native index on
+    Android
+27. Test: download on Wi-Fi, background the app, play offline, delete
+
+**A3 — live updates**
+28. `LcarsClient.kt` (OkHttp, bearer from SharedPreferences)
+29. `LcarsWsPlugin.kt`: connect, `connection_init`, subscribe, `notifyListeners`
+30. Reconnect on connectivity change
+31. Web: listener replaces polling on Android only
+32. Test: grab an episode in Sonarr, calendar updates without refresh
+
+**A4 — auto-download + storage**
+33. `AutoDownloadWorker.kt`: periodic, unmetered, `backlog` → diff → enqueue
+34. Notification channel + per-download notification
+35. Storage limit setting (add to `ServerSetupActivity` as the second field)
+36. Eviction: watched-oldest-first, then unwatched-oldest until under limit —
+    reads the local SQLite `watched` flag only (see "Eviction source of
+    truth" above), never waits on server confirmation
+37. VLC `onActivityResult` → writes `watched` to SQLite (immediate, always
+    succeeds — what step 36 reads) and separately fires `addWatchEvent`
+    (network POST, independently retried on failure)
+38. Test: set limit low, let it fill, verify eviction order
+
+### Project structure
+
+```
+ui/android/                     ← Capacitor Android project
+  app/src/main/java/.../
+    MainActivity.kt             ← A1: builds CapConfig from SharedPreferences
+    ServerSetupActivity.kt      ← A1: server address (+ A4 storage limit)
+    VlcPlugin.kt                ← A1
+    TokenPlugin.kt              ← A1: bearer → SharedPreferences
+    DownloadPlugin.kt           ← A2
+    LcarsClient.kt              ← A3/A4
+    LcarsWsPlugin.kt            ← A3
+    AutoDownloadWorker.kt       ← A4
+ui/capacitor.config.ts          ← cleartext: true; server.url overridden at runtime
+ui/android/release.keystore     ← gitignored, back it up — lost key = can't update installed apps
+```
+
+### Distribution
+
+Only the dev phone (USB, developer mode) ever touches the toolchain. Everyone
+else gets a signed release APK: serve it from nginx (e.g. `/ui/starfleet.apk`),
+open the URL on the device, allow install from browser, done. Updates install
+over the top as long as the signing key is the same. Because the UI is remote,
+a new APK is only needed when Kotlin changes — web releases reach every
+installed phone immediately.
+
+---
+
+## 9. Related repos
 
 | repo                        | what it is                              |
 |-----------------------------|-----------------------------------------|
