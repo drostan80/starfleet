@@ -136,6 +136,37 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
+## Faster list-page cover art — shipped, not yet released
+
+Root cause was an eager/no-fallback asymmetry: anime shows get `poster_url`
+reliably at add-time (AniList link mandatory, MAL fallback if AniList is
+down); TV/movie shows only got one from Sonarr/Radarr's own bundled image
+list (optional, no fallback) — the real art fetch (TVDB+TMDB+TVmaze+MAL)
+existed but was manual-only. So most TV shows arrived at the list page with
+`posterUrl = NULL`, and the client-side TMDB fallback queued hundreds of
+shows through one shared 220ms-spaced request chain — the real "timeout."
+
+- [x] **Eager fallback going forward** (`_fetch_tmdb_duration`,
+      `metadata.py`) — now also pulls `poster_path` from the same TMDB
+      response it already fetches for `duration_minutes` (no extra API
+      call), writing `poster_url` via the same COALESCE-write pattern
+      Sonarr/Radarr's own poster writes already use, so Sonarr/Radarr
+      (running after this in `fetch_and_populate`) still wins when they
+      have their own poster — TMDB only fills the gap.
+- [x] **One-time backfill for the existing library** — new
+      `backfillShowPosters` mutation (`metadata.backfill_show_posters`)
+      runs the full art fetch for every tracked show still missing a
+      poster, paced between shows, per-show failure isolated (never
+      aborts the batch). Manual trigger only (`ops backfill-posters`),
+      same reasoning as `audit-local-files`/`reconcile-arr-state` — real
+      outbound calls per show, too much cost for the automatic loop.
+      Safe to re-run.
+- Client-side queue/timeout hardening (option 3 from the original
+  diagnosis) deliberately skipped — once posters are populated
+  server-side, the client fallback path barely gets exercised.
+
+---
+
 ## Ideas / future
 
 ### Android app (Capacitor wrapper)
@@ -173,7 +204,6 @@ Wire during season table rework. Currently clicking "AL" on S2 goes to the S1 pa
 
 ### Smaller ideas
 
-- [ ] Check if list page cover art could load faster from TMDB or TVDB.
 - [ ] IMDB datasets for cross-referencing and fallback ID bridging.
 - [ ] Browse / filter by studio (`show.studio` gets an id-prefix).
 - [ ] Direct TVDB search (use TVDB API instead of through Sonarr).
