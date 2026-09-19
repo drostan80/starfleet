@@ -44,6 +44,7 @@ class MainActivity : BridgeActivity() {
         registerPlugin(VlcPlugin::class.java)
         registerPlugin(TokenPlugin::class.java)
         registerPlugin(DownloadPlugin::class.java)
+        registerPlugin(LcarsWsPlugin::class.java)
 
         val prefs = getSharedPreferences("starfleet", MODE_PRIVATE)
         val serverUrl = prefs.getString("server_url", null)

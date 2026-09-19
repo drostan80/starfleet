@@ -1607,8 +1607,15 @@ export async function init() {
   // Initial render
   render();
 
-  // Polling fallback — re-render silently in background
-  // (replaces WebSocket subscriptions, which require server-side changes for
-  //  browser auth — see api.js for the full explanation)
-  setInterval(() => render(true), POLL_INTERVAL_MS);
+  // A3 (DESIGN.md §8) — Android has a real WS subscription via LcarsWsPlugin
+  // (native, since browsers can't set the Authorization header a WS upgrade
+  // needs — see api.js for the desktop-side explanation); the poll interval
+  // exists for every OTHER platform, this app included when run in a
+  // desktop/mobile browser rather than as the packaged Android app.
+  if (window.Capacitor?.isNativePlatform?.()) {
+    window.Capacitor.Plugins.LcarsWs.addListener('episodeAvailabilityChanged', () => render(true));
+    window.Capacitor.Plugins.LcarsWs.addListener('showCreated', () => render(true));
+  } else {
+    setInterval(() => render(true), POLL_INTERVAL_MS);
+  }
 }
