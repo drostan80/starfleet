@@ -20,16 +20,22 @@ WebSocket. Companion to `~/repos/data` (TUI client).
 
 ## Config (stored in localStorage)
 
+A0 zero-entry client (DESIGN.md §8): only `lcars_token` and
+`tmdb_api_key` are cached here, served from LCARS config via
+`GET /auth/settings` — nobody types them. `lcars_url`/`home_server_host`
+are never stored; callers use `location.origin`/`location.hostname`
+directly.
+
 ```json
 {
-  "lcars_url":         "http://192.168.0.152:8888",
-  "lcars_token":       "<bearer token>",
-  "home_server_host":  "192.168.0.152"
+  "lcars_token":     "<bearer token>",
+  "tmdb_api_key":    "<tmdb key>",
+  "mpv_helper_url":  "http://localhost:19450"
 }
 ```
 
-Key under `starfleet_config`. Settings page reads/writes this. Every
-GraphQL call needs `Authorization: Bearer <token>` header.
+Key under `starfleet_config`. Every GraphQL call needs
+`Authorization: Bearer <token>` header.
 
 ## Tech stack decisions
 

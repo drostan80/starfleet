@@ -1,25 +1,46 @@
 /**
- * Config management — hybrid localStorage + server-side settings.
+ * Config management — A0 zero-entry client (DESIGN.md §8).
  *
- * Shared settings (lcars_url, lcars_token, home_server_host, tmdb_api_key)
- * are stored server-side in web_setting, so they survive across browsers.
- * Machine-specific settings (mpv_helper_url) stay in localStorage only.
+ * lcars_url and home_server_host no longer live here at all: callers use
+ * location.origin / location.hostname directly, which is correct on LAN
+ * and Tailscale alike, whichever the browser is currently pointed at.
+ * lcars_token and tmdb_api_key are SERVED from LCARS config via
+ * /auth/settings — nobody types a token anywhere. Machine-specific
+ * settings (mpv_helper_url) stay in localStorage only.
  *
  * Shape (localStorage cache):
- *   { lcars_url, lcars_token, home_server_host, tmdb_api_key, mpv_helper_url }
+ *   { lcars_token, tmdb_api_key, mpv_helper_url }
  */
 
 const CONFIG_KEY = 'starfleet_config';
 
-const SHARED_KEYS = ['lcars_url', 'lcars_token', 'home_server_host', 'tmdb_api_key'];
+const SHARED_KEYS = ['lcars_token', 'tmdb_api_key'];
+
+// A0 upgrade hazard: a browser that logged in before A0 shipped has these
+// two keys cached in localStorage from syncConfig()'s own pre-A0 behavior.
+// If a stale stored value ever won over the derived location.origin/
+// location.hostname a caller uses today, that browser would keep pointing
+// at its old LAN IP after a Tailscale login — reproducing the exact bug
+// A0 exists to fix, as an upgrade artifact. So getConfig() actively
+// deletes both keys on every load, not merely stops writing them.
+const STALE_STORED_KEYS = ['lcars_url', 'home_server_host'];
 
 /** Read config from localStorage; returns null if missing or malformed. */
 export function getConfig() {
+  let cfg;
   try {
-    return JSON.parse(localStorage.getItem(CONFIG_KEY) || 'null');
+    cfg = JSON.parse(localStorage.getItem(CONFIG_KEY) || 'null');
   } catch {
     return null;
   }
+  if (cfg) {
+    let dirty = false;
+    for (const k of STALE_STORED_KEYS) {
+      if (k in cfg) { delete cfg[k]; dirty = true; }
+    }
+    if (dirty) saveConfig(cfg);
+  }
+  return cfg;
 }
 
 /** Write config to localStorage. */
@@ -53,32 +74,18 @@ export async function syncConfig() {
 }
 
 /**
- * Save config: write to localStorage and push shared keys to the server.
- */
-export async function saveConfigWithSync(cfg) {
-  saveConfig(cfg);
-  // Push shared keys to server.
-  const shared = {};
-  for (const k of SHARED_KEYS) {
-    if (cfg[k] !== undefined) shared[k] = cfg[k];
-  }
-  try {
-    await fetch('/auth/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(shared),
-    });
-  } catch { /* best-effort */ }
-}
-
-/**
- * Read config, redirect to settings if essential config values are absent.
+ * Read config, redirect to login if essential config values are absent.
  * Returns the config object on success, null after redirect.
+ *
+ * Redirects to login.html, not settings.html: lcars_token only ever
+ * arrives via /auth/settings (A0 — settings.html has no token field to
+ * fill it in from), so a missing token means an unauthenticated session,
+ * not an unconfigured client.
  */
 export function requireConfig() {
   const cfg = getConfig();
-  if (!cfg || !cfg.lcars_url || !cfg.lcars_token) {
-    window.location.href = 'settings.html';
+  if (!cfg || !cfg.lcars_token) {
+    window.location.href = 'login.html';
     return null;
   }
   return cfg;
@@ -91,7 +98,7 @@ export function requireConfig() {
  */
 export async function bootstrapConfig() {
   const cfg = getConfig();
-  if (!cfg || !cfg.lcars_url || !cfg.lcars_token) {
+  if (!cfg || !cfg.lcars_token) {
     await syncConfig();
   }
   return requireConfig();

@@ -292,7 +292,7 @@ function renderExtBadges(container, show, cfg) {
     if (!ext) continue;
     rendered.add(svc);
     const url = REWRITE_SVCS.has(svc)
-      ? rewriteHost(ext.url, cfg.home_server_host)
+      ? rewriteHost(ext.url, location.hostname)
       : ext.url;
     const badge = buildExtBadge(svc, ext.externalId, url);
 

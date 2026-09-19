@@ -496,7 +496,9 @@ export async function launchMpv(filePath, cfg, ctx = null) {
   // filePathSonarr/Radarr is the path inside the server container (/data/…).
   // nginx serves /data/ at /files/, so strip the /data prefix to form the URL.
   const mediaPath = filePath.startsWith('/data') ? filePath.slice('/data'.length) : filePath;
-  const mediaUrl  = `${cfg.lcars_url}/files${mediaPath}`;
+  // location.origin, not cfg.lcars_url (removed A0) — the mpv helper runs on
+  // a different machine and needs an absolute URL.
+  const mediaUrl  = `${location.origin}/files${mediaPath}`;
 
   const playBody = { url: mediaUrl };
   if (ctx?.showId) {
@@ -504,7 +506,7 @@ export async function launchMpv(filePath, cfg, ctx = null) {
     playBody.season   = ctx.season;
     playBody.episode  = ctx.episode;
     playBody.token    = cfg.lcars_token;
-    playBody.lcarsBase = cfg.lcars_url;
+    playBody.lcarsBase = location.origin;
   }
 
   try {
@@ -588,7 +590,7 @@ export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cf
 
     if (linked) {
       const url = def.rewrite
-        ? rewriteHost(linked.url, cfg.home_server_host)
+        ? rewriteHost(linked.url, location.hostname)
         : linked.url;
       a.href = url;
       a.target = '_blank';

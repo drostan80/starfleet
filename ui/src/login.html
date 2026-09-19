@@ -105,17 +105,6 @@
                autocomplete="new-password">
       </div>
 
-      <!-- Setup mode only: import existing settings -->
-      <div id="import-section" style="display:none">
-        <div class="import-check">
-          <input type="checkbox" id="import-settings" checked>
-          <div>
-            <label for="import-settings">Import existing settings from this browser</label>
-            <p class="import-detail" id="import-detail"></p>
-          </div>
-        </div>
-      </div>
-
       <div class="login-actions">
         <button type="submit" class="btn-primary" id="submit-btn">Sign in</button>
       </div>
@@ -132,8 +121,6 @@
   const subtitle = document.getElementById('page-subtitle');
   const submitBtn = document.getElementById('submit-btn');
   const confirmGroup = document.getElementById('confirm-group');
-  const importSection = document.getElementById('import-section');
-  const importDetail  = document.getElementById('import-detail');
 
   let setupMode = false;
 
@@ -157,20 +144,6 @@
         submitBtn.textContent = 'Create Account';
         confirmGroup.style.display = '';
         document.getElementById('password').autocomplete = 'new-password';
-
-        // Check for existing localStorage settings to import.
-        try {
-          const raw = localStorage.getItem('starfleet_config');
-          if (raw) {
-            const cfg = JSON.parse(raw);
-            const keys = ['lcars_url', 'lcars_token', 'home_server_host', 'tmdb_api_key']
-              .filter(k => cfg[k]);
-            if (keys.length > 0) {
-              importSection.style.display = '';
-              importDetail.textContent = `Found: ${keys.join(', ')}`;
-            }
-          }
-        } catch { /* no localStorage or not parseable — skip */ }
       }
     } catch {
       // /auth/setup not available — possibly old LCARS version, just show login.
@@ -204,21 +177,6 @@
       }
 
       const body = { username, password };
-
-      // Import settings if checked.
-      const importCheck = document.getElementById('import-settings');
-      if (importCheck.checked) {
-        try {
-          const raw = localStorage.getItem('starfleet_config');
-          if (raw) {
-            const cfg = JSON.parse(raw);
-            body.settings = {};
-            for (const k of ['lcars_url', 'lcars_token', 'home_server_host', 'tmdb_api_key']) {
-              if (cfg[k]) body.settings[k] = cfg[k];
-            }
-          }
-        } catch { /* skip */ }
-      }
 
       try {
         const res = await fetch('/auth/setup', {

@@ -5,6 +5,73 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
+## Android app A0 (server + web client prep) — built, not yet deployed (2026-09-19)
+
+Build steps 5–9 of `ui/DESIGN.md` §8 done and passing (1292 tests green;
+smoke-tested against a throwaway copy of `lcars-dev.db`, verified live):
+
+- [x] `auth.py`: `/auth/check` also accepts `Authorization: Bearer <token>`;
+      `/auth/settings` GET serves `lcars_token`/`tmdb_api_key` from LCARS
+      config (never from `web_setting`); `SHARED_SETTING_KEYS` emptied
+      (table kept for any future genuinely-shared setting) — PUT and
+      `/auth/setup`'s old `settings` import are now no-ops for those two
+      keys, the dead setup-import code path was removed outright.
+- [x] `nginx.conf`: `/_auth_check` forwards `Authorization`; `/` gains
+      `proxy_http_version 1.1` + `Upgrade`/`Connection $connection_upgrade`
+      (a `map $http_upgrade $connection_upgrade` block, not the hard-coded
+      `"upgrade"` DESIGN.md sketched — that form puts `Connection: upgrade`
+      on every plain GraphQL POST too, an asymmetric header pair a plain
+      HTTP/1.1 backend can choke on; caught in review, not by any test
+      here — no local nginx/docker to run this config against) +
+      `proxy_read_timeout 3600s` for future WS passthrough (A3).
+- [x] `api.js` → `fetch('/')`; `calendar.js`/`grabs.html` mpv URLs →
+      `location.origin`; both `rewriteHost` call sites (`calendar.js`,
+      `show.js`) → `location.hostname` directly.
+- [x] `config.js`: `SHARED_KEYS` reduced to `['lcars_token','tmdb_api_key']`;
+      `requireConfig`/`bootstrapConfig` need only `lcars_token` and now
+      redirect to `login.html` (not `settings.html`, which has no token
+      field to fill it from); `getConfig` actively deletes stale
+      `lcars_url`/`home_server_host` from localStorage on every load.
+      Dead `saveConfigWithSync` (no callers left once settings.html
+      stopped writing these fields) removed.
+      **Verified** by running the real `config.js` module (unmodified,
+      dynamic import) against a shimmed `localStorage`/`location` in
+      Node: a simulated pre-A0 config with stale `lcars_url`/
+      `home_server_host` and a still-valid token has both stripped on
+      the first `getConfig()` call and is accepted by `requireConfig`;
+      a token-less config redirects to `login.html`. Not a real-browser
+      /full-session check (no browser extension available this
+      session) — if that matters before shipping, run it once by hand.
+- [x] `settings.html` → only `mpv_helper_url` remains; `login.html` →
+      "import existing settings" block removed (backend path it fed is
+      gone too).
+- [x] `dev.sh` → stopped writing `lcars_url`/`lcars_token`/
+      `home_server_host`/`tmdb_api_key` into `web_setting` (now inert);
+      added `LCARS_TMDB_API_KEY` env var so the dev server still serves
+      the TMDB key via config the way A0 requires.
+- [ ] **Check before deploying**: does the *live* LCARS config on `tiny`
+      actually have `tmdb_api_key` set (`lcars.ini` or
+      `LCARS_TMDB_API_KEY`)? Before A0 it was typed into the web client
+      and lived in `web_setting`'s DB row (confirmed present there);
+      after A0 ships, `/auth/settings` only ever serves it from LCARS
+      config — if that was never separately configured server-side,
+      TMDB poster fallback for TV/movie shows goes silently dark for
+      every browser. `bearer_token` has no equivalent risk (GraphQL
+      already depends on it). Not checked this session — reading
+      secrets/env off the live host over SSH was blocked by the
+      permission classifier; needs a human (or an explicitly-approved
+      command) to confirm.
+- [ ] **Not done yet — needs a real decision to deploy**: step 10 (curl
+      bearer test against deployed nginx), step 11 (release + deploy),
+      step 12 (WS `graphql-transport-ws` end-to-end check against the
+      live nginx, required before writing any A3 code). Ship as its own
+      release per DESIGN.md's release-sequencing note — not bundled with
+      any later Capacitor/Kotlin work.
+- Then **stop** — A1 Capacitor scaffolding waits for the test machine
+  (DESIGN.md §8 "Build ordering").
+
+---
+
 ## Ongoing (background)
 
 - [ ] **Rotate keys** at cutover: Sonarr/Radarr API keys, MAL `client_id`, LCARS's own

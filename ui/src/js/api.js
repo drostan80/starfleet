@@ -24,8 +24,10 @@ export async function gql(query, variables = {}) {
   const cfg = getConfig();
   if (!cfg) throw new Error('Not configured');
 
-  // LCARS answers at / (not /graphql — confirmed from TUI client's _query)
-  const res = await fetch(`${cfg.lcars_url}/`, {
+  // LCARS answers at / (not /graphql — confirmed from TUI client's _query).
+  // A0 — same-origin fetch, not cfg.lcars_url (removed): works unchanged on
+  // LAN vs Tailscale, no derived-vs-stale-stored-value risk.
+  const res = await fetch('/', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

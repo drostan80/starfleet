@@ -7,16 +7,22 @@ before the bearer-token-protected GraphQL catch-all in server.py.
 Session flow:
   1. POST /auth/login  → validate credentials → Set-Cookie: sf_session
   2. GET  /auth/check  → nginx auth_request target → 200 or 401
+     (also accepts `Authorization: Bearer <token>` — A0, native code
+     has no cookie jar)
   3. POST /auth/logout → delete session row + clear cookie
 
-Shared settings (LCARS URL, bearer token, home server host, TMDB API
-key) are stored in the `web_setting` table so they survive across
-browsers.  Machine-specific settings (mpv helper URL) stay in
-localStorage on the client.
+A0 (Android app plan, DESIGN.md §8) — lcars_token/tmdb_api_key are
+served by GET /auth/settings straight from LCARS config, never typed
+by a user or stored in `web_setting`; lcars_url/home_server_host are
+derived client-side (location.origin/location.hostname). The
+`web_setting` table remains for any future genuinely-shared setting
+(SHARED_SETTING_KEYS is empty, not removed). Machine-specific settings
+(mpv helper URL) stay in localStorage on the client.
 """
 
 from __future__ import annotations
 
+import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -24,18 +30,17 @@ import bcrypt
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from lcars import db, ids
+from lcars import config, db, ids
 
 # Session cookie config.
 COOKIE_NAME = "sf_session"
 SESSION_TTL_DAYS = 30
 # Allowed shared-setting keys — everything else stays in localStorage.
-SHARED_SETTING_KEYS = frozenset({
-    "lcars_url",
-    "lcars_token",
-    "home_server_host",
-    "tmdb_api_key",
-})
+# A0 (Android app plan, DESIGN.md §8): lcars_url/lcars_token/home_server_host/
+# tmdb_api_key are now derived or served from LCARS config instead of being
+# typed by a user and shared via this table — emptied, not removed, since a
+# future genuinely-shared setting could still use this mechanism.
+SHARED_SETTING_KEYS: frozenset[str] = frozenset()
 
 
 def _now_iso() -> str:
@@ -95,6 +100,18 @@ def _purge_expired_sessions(conn) -> None:
     conn.execute("DELETE FROM web_session WHERE expires_at < ?", (_now_iso(),))
 
 
+def _bearer_ok(request: Request) -> bool:
+    """A0 — native code (no cookie jar) authenticates with the same static
+    bearer GraphQL already accepts (BearerTokenMiddleware, server.py),
+    compared the same constant-time way."""
+    cfg = config.get_current()
+    if not cfg.bearer_token:
+        return False
+    presented = request.headers.get("authorization", "")
+    expected = f"Bearer {cfg.bearer_token}"
+    return hmac.compare_digest(presented, expected)
+
+
 # ── Route handlers ───────────────────────────────────────────────
 
 
@@ -149,7 +166,10 @@ async def logout(request: Request) -> Response:
 
 
 async def check(request: Request) -> Response:
-    """GET /auth/check — nginx auth_request target."""
+    """GET /auth/check — nginx auth_request target. Accepts either a valid
+    session cookie (browser) or the static bearer token (native code, A0)."""
+    if _bearer_ok(request):
+        return Response(status_code=200)
     user = _get_session_user(request)
     if user is None:
         return Response(status_code=401)
@@ -165,13 +185,21 @@ async def settings_handler(request: Request) -> Response:
     conn = db.get_connection()
 
     if request.method == "GET":
-        rows = conn.execute(
-            "SELECT key, value FROM web_setting WHERE key IN ({})".format(
-                ",".join("?" for _ in SHARED_SETTING_KEYS)
-            ),
-            tuple(SHARED_SETTING_KEYS),
-        ).fetchall()
-        result = {r["key"]: r["value"] for r in rows}
+        # A0 — lcars_token/tmdb_api_key are served from LCARS config, never
+        # typed by a user: nobody enters a token anywhere (DESIGN.md §8).
+        cfg = config.get_current()
+        result: dict[str, str | None] = {
+            "lcars_token": cfg.bearer_token,
+            "tmdb_api_key": cfg.tmdb_api_key,
+        }
+        if SHARED_SETTING_KEYS:
+            rows = conn.execute(
+                "SELECT key, value FROM web_setting WHERE key IN ({})".format(
+                    ",".join("?" for _ in SHARED_SETTING_KEYS)
+                ),
+                tuple(SHARED_SETTING_KEYS),
+            ).fetchall()
+            result.update({r["key"]: r["value"] for r in rows})
         return JSONResponse(result)
 
     # PUT
@@ -243,18 +271,6 @@ async def setup(request: Request) -> Response:
         " VALUES (?, ?, ?, ?, ?)",
         (user_id, username, hashed, now, now),
     )
-
-    # Import shared settings if provided.
-    imported_settings = body.get("settings")
-    if isinstance(imported_settings, dict):
-        for key in SHARED_SETTING_KEYS:
-            value = imported_settings.get(key)
-            if value:
-                conn.execute(
-                    "INSERT INTO web_setting (key, value) VALUES (?, ?)"
-                    " ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                    (key, str(value)),
-                )
 
     # Create session.
     token = secrets.token_hex(32)

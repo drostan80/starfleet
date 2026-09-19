@@ -88,46 +88,6 @@
 
   <form class="settings-form" id="settings-form" autocomplete="off">
     <div class="field-group">
-      <label for="lcars-url">LCARS URL</label>
-      <input type="url" id="lcars-url" name="lcars_url"
-             placeholder="http://192.168.0.152:8888"
-             spellcheck="false">
-      <span class="field-hint">Base URL of your LCARS GraphQL server.</span>
-    </div>
-
-    <div class="field-group">
-      <label for="lcars-token">Bearer Token</label>
-      <input type="password" id="lcars-token" name="lcars_token"
-             placeholder="your-token-here"
-             spellcheck="false" autocomplete="new-password">
-      <span class="field-hint">Static bearer token from your LCARS config.</span>
-    </div>
-
-    <div class="field-group">
-      <label for="home-server-host">Home Server Host</label>
-      <input type="text" id="home-server-host" name="home_server_host"
-             placeholder="192.168.0.152"
-             spellcheck="false">
-      <span class="field-hint">
-        LAN IP or hostname used to rewrite Sonarr/Radarr deep links so they
-        reach the server from your browser. Leave blank to use links verbatim.
-      </span>
-    </div>
-
-    <div class="field-group">
-      <label for="tmdb-api-key">TMDB API Key <span style="font-weight:400;text-transform:none;color:var(--faint)">(optional)</span></label>
-      <input type="password" id="tmdb-api-key" name="tmdb_api_key"
-             placeholder="your-tmdb-api-key"
-             spellcheck="false" autocomplete="new-password">
-      <span class="field-hint">
-        Enables cover art for non-anime shows (TV / movies). Accepts either
-        the v3 API Key or the Read Access Token (JWT) from
-        <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener"
-           style="color:var(--accent)">themoviedb.org/settings/api</a>.
-      </span>
-    </div>
-
-    <div class="field-group">
       <label for="mpv-helper-url">mpv Helper URL <span class="device-only">(this device only)</span></label>
       <input type="url" id="mpv-helper-url" name="mpv_helper_url"
              placeholder="http://localhost:19450"
@@ -180,7 +140,7 @@
 </main>
 
 <script type="module">
-  import { getConfig, saveConfig, saveConfigWithSync, syncConfig, applyAppName } from './js/config.js?v=4';
+  import { getConfig, saveConfig, syncConfig, applyAppName } from './js/config.js?v=4';
   import { initSearch } from './js/search.js?v=2';
   applyAppName();
   initSearch();
@@ -189,15 +149,13 @@
   const savedMsg  = document.getElementById('settings-saved');
   const backBtn   = document.getElementById('back-btn');
 
-  // Sync config from server on load.
+  // Sync config from server on load — lcars_token/tmdb_api_key arrive this
+  // way (served from LCARS config, never shown here); mpv_helper_url is
+  // this device's own localStorage-only value.
   async function init() {
     await syncConfig();
     const cfg = getConfig() || {};
-    document.getElementById('lcars-url').value         = cfg.lcars_url         || '';
-    document.getElementById('lcars-token').value       = cfg.lcars_token       || '';
-    document.getElementById('home-server-host').value  = cfg.home_server_host  || '';
-    document.getElementById('tmdb-api-key').value      = cfg.tmdb_api_key      || '';
-    document.getElementById('mpv-helper-url').value    = cfg.mpv_helper_url    || '';
+    document.getElementById('mpv-helper-url').value = cfg.mpv_helper_url || '';
 
     // Show current user.
     try {
@@ -213,15 +171,12 @@
   form.addEventListener('submit', async e => {
     e.preventDefault();
 
-    const newCfg = {
-      lcars_url:        document.getElementById('lcars-url').value.trim().replace(/\/$/, ''),
-      lcars_token:      document.getElementById('lcars-token').value.trim(),
-      home_server_host: document.getElementById('home-server-host').value.trim(),
-      tmdb_api_key:     document.getElementById('tmdb-api-key').value.trim(),
-      mpv_helper_url:   document.getElementById('mpv-helper-url').value.trim().replace(/\/$/, ''),
-    };
-
-    await saveConfigWithSync(newCfg);
+    // mpv_helper_url is the only setting left here — device-local, no
+    // server round trip needed (unlike lcars_token/tmdb_api_key, which
+    // this page never edits).
+    const cfg = getConfig() || {};
+    cfg.mpv_helper_url = document.getElementById('mpv-helper-url').value.trim().replace(/\/$/, '');
+    saveConfig(cfg);
 
     savedMsg.classList.add('visible');
     setTimeout(() => savedMsg.classList.remove('visible'), 2500);

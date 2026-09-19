@@ -29,10 +29,13 @@ def migrated_db(tmp_path) -> Path:
     return db_path
 
 
+TMDB_API_KEY = "tmdb-test-key"
+
+
 @pytest.fixture
 async def client(migrated_db, monkeypatch):
     db.connect(migrated_db)
-    config.set_current(config.Config())
+    config.set_current(config.Config(bearer_token=BEARER_TOKEN, tmdb_api_key=TMDB_API_KEY))
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: None)
     monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     monkeypatch.setattr(fribb, "load_dataset", lambda: [])
@@ -81,34 +84,24 @@ async def test_setup_needs_setup_false_after_create(client):
     assert r.json()["needs_setup"] is False
 
 
-async def test_setup_imports_settings(client):
-    """POST /auth/setup with settings imports them into web_setting."""
+async def test_setup_ignores_settings_body(client):
+    """POST /auth/setup no longer imports a client-supplied settings dict
+    (A0 — lcars_token/tmdb_api_key are served from LCARS config, never
+    stored from a client)."""
     r = await client.post(
         "/auth/setup",
         json={
             "username": "drostan",
             "password": "hunter42",
-            "settings": {
-                "lcars_url": "http://192.168.0.152:8888",
-                "lcars_token": "tok-123",
-                "home_server_host": "192.168.0.152",
-                "tmdb_api_key": "tmdb-key",
-                "mpv_helper_url": "http://localhost:19450",  # should be ignored
-            },
+            "settings": {"lcars_token": "should-be-ignored"},
         },
     )
     assert r.status_code == 200
-    # Read back settings using the session cookie.
     cookies = r.cookies
     r2 = await client.get("/auth/settings", cookies=cookies)
     assert r2.status_code == 200
-    settings = r2.json()
-    assert settings["lcars_url"] == "http://192.168.0.152:8888"
-    assert settings["lcars_token"] == "tok-123"
-    assert settings["home_server_host"] == "192.168.0.152"
-    assert settings["tmdb_api_key"] == "tmdb-key"
-    # mpv_helper_url should NOT be stored server-side.
-    assert "mpv_helper_url" not in settings
+    # Config value wins regardless of what setup's body tried to send.
+    assert r2.json()["lcars_token"] == BEARER_TOKEN
 
 
 async def test_setup_rejects_short_password(client):
@@ -171,6 +164,23 @@ async def test_check_no_session(client):
     assert r.status_code == 401
 
 
+async def test_check_valid_bearer(client):
+    """GET /auth/check returns 200 for a valid bearer token, no cookie needed
+    (A0 — native code has no cookie jar)."""
+    r = await client.get(
+        "/auth/check", headers={"Authorization": f"Bearer {BEARER_TOKEN}"}
+    )
+    assert r.status_code == 200
+
+
+async def test_check_wrong_bearer(client):
+    """GET /auth/check returns 401 for a wrong bearer token."""
+    r = await client.get(
+        "/auth/check", headers={"Authorization": "Bearer wrong-token"}
+    )
+    assert r.status_code == 401
+
+
 async def test_logout(client):
     """POST /auth/logout invalidates the session."""
     cookies = await _create_user(client)
@@ -184,18 +194,30 @@ async def test_logout(client):
 # ── Settings ──────────────────────────────────────────────
 
 
-async def test_settings_put_and_get(client):
-    """PUT /auth/settings stores values, GET reads them back."""
+async def test_settings_get_serves_from_config(client):
+    """GET /auth/settings serves lcars_token/tmdb_api_key from LCARS config
+    (A0), not from anything a client ever wrote."""
+    cookies = await _create_user(client)
+    r = await client.get("/auth/settings", cookies=cookies)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["lcars_token"] == BEARER_TOKEN
+    assert data["tmdb_api_key"] == TMDB_API_KEY
+
+
+async def test_settings_put_no_longer_persists_token(client):
+    """PUT /auth/settings no longer accepts lcars_token/tmdb_api_key —
+    GET keeps serving the config value regardless of what was PUT."""
     cookies = await _create_user(client)
     r = await client.put(
         "/auth/settings",
-        json={"lcars_url": "http://test:8888", "lcars_token": "abc"},
+        json={"lcars_token": "abc", "tmdb_api_key": "xyz"},
         cookies=cookies,
     )
     assert r.status_code == 200
     r2 = await client.get("/auth/settings", cookies=cookies)
-    assert r2.json()["lcars_url"] == "http://test:8888"
-    assert r2.json()["lcars_token"] == "abc"
+    assert r2.json()["lcars_token"] == BEARER_TOKEN
+    assert r2.json()["tmdb_api_key"] == TMDB_API_KEY
 
 
 async def test_settings_rejects_unauthenticated(client):
