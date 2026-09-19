@@ -1,6 +1,6 @@
 # Next up
 
-Current version: **v0.2.25** (deployed 2026-09-19).
+Current version: **v0.2.26** (deployed 2026-09-19).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
@@ -136,7 +136,7 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## Faster list-page cover art — shipped, not yet released
+## Faster list-page cover art — shipped in v0.2.26 (2026-09-19)
 
 Root cause was an eager/no-fallback asymmetry: anime shows get `poster_url`
 reliably at add-time (AniList link mandatory, MAL fallback if AniList is
@@ -161,6 +161,10 @@ shows through one shared 220ms-spaced request chain — the real "timeout."
       same reasoning as `audit-local-files`/`reconcile-arr-state` — real
       outbound calls per show, too much cost for the automatic loop.
       Safe to re-run.
+- [ ] **Still needs running**: 369 tracked shows had `poster_url IS NULL`
+      at deploy time (2026-09-19) — `ops backfill-posters` hasn't been
+      triggered against the live library yet. The code shipping doesn't
+      fix existing posters by itself; this manual step does.
 - Client-side queue/timeout hardening (option 3 from the original
   diagnosis) deliberately skipped — once posters are populated
   server-side, the client fallback path barely gets exercised.
