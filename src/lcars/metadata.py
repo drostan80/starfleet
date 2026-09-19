@@ -1830,10 +1830,12 @@ def fetch_show_art(conn, show_id: str) -> int:
     ).fetchall()
 
     # -- Per-season AniList art -------------------------------------------------
+    any_season_anilist = False
     for sn_row in seasons:
         al_id = sn_row["anilist_id"]
         if al_id is None:
             continue
+        any_season_anilist = True
         try:
             media = anilist_client.fetch_media(al_id)
         except Exception:
@@ -1847,6 +1849,27 @@ def fetch_show_art(conn, show_id: str) -> int:
             media.get("bannerImage"),
         )
         count += 2  # approximate
+
+    # -- Show-level AniList art fallback -----------------------------------------
+    # No season carries an anilist_id (untracked stub, or a show added without
+    # season-level mapping) but the show itself may still have a show-level
+    # AniList link — same season_id=None pattern the MAL block below already
+    # uses for show-level art.
+    if not any_season_anilist:
+        show_al_id = _external_id(conn, show_id, "anilist")
+        if show_al_id:
+            try:
+                media = anilist_client.fetch_media(int(show_al_id))
+            except Exception:
+                media = None
+            if media:
+                cover = media.get("coverImage") or {}
+                art.store_anilist_art(
+                    conn, show_id, None,
+                    cover.get("large"), cover.get("extraLarge"),
+                    media.get("bannerImage"),
+                )
+                count += 2  # approximate
 
     # -- TVDB art ---------------------------------------------------------------
     if cfg.tvdb_api_key:
