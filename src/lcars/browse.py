@@ -14,6 +14,7 @@ AniList on every request. Same justification as ``_last_anilist_call_at``
 in anilist_client.py: one shared connection, sync execution model.
 """
 
+import difflib
 import logging
 import re
 import sqlite3
@@ -412,6 +413,50 @@ def _strip_season_suffix(title: str) -> str:
 # as the browse page cache. Keyed on the cleaned title (after suffix strip).
 _sonarr_title_cache: dict[str, int | None] = {}
 
+# Below this similarity ratio, a lookup's top result is treated as
+# unrelated noise rather than a match — same outcome as "no results".
+_TITLE_SIMILARITY_THRESHOLD = 0.5
+
+
+def _normalize_title(t: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
+
+
+def _title_similarity(query: str, candidate: dict) -> float:
+    """Best-match ratio between `query` and a Sonarr/Radarr lookup
+    candidate's title + alternate titles. Not a ranking — just a gate
+    against blindly trusting results[0], which is sorted by Sonarr's/
+    Radarr's own relevance score, not title similarity, so an odd or
+    obscure query can return an unrelated top hit."""
+    q = _normalize_title(query)
+    if not q:
+        return 0.0
+    titles = [candidate.get("title") or ""]
+    for alt in candidate.get("alternateTitles") or []:
+        if isinstance(alt, dict) and alt.get("title"):
+            titles.append(alt["title"])
+    best = 0.0
+    for t in titles:
+        nt = _normalize_title(t)
+        if not nt:
+            continue
+        ratio = difflib.SequenceMatcher(None, q, nt).ratio()
+        if ratio > best:
+            best = ratio
+    return best
+
+
+def _best_matching_result(query: str, results: list[dict]) -> dict | None:
+    """Guard for `_enrich_tvdb_via_sonarr` (and the mirrored frontend
+    guard in browse.js): accepts a lookup result only if its title or
+    alternate titles actually resemble the query, scanning past
+    results[0] if needed. Returns None — same as "no results" — when
+    nothing in the list resembles the query closely enough."""
+    for candidate in results:
+        if _title_similarity(query, candidate) >= _TITLE_SIMILARITY_THRESHOLD:
+            return candidate
+    return None
+
 
 def _enrich_tvdb_via_sonarr(items: list[dict]) -> None:
     """Final enrichment pass: for browse items still missing tvdb_id,
@@ -463,8 +508,9 @@ def _enrich_tvdb_via_sonarr(items: list[dict]) -> None:
                 _sonarr_title_cache[clean] = None
                 continue
 
-            if results and results[0].get("tvdbId"):
-                tvdb_id = results[0]["tvdbId"]
+            match = _best_matching_result(clean, results)
+            if match and match.get("tvdbId"):
+                tvdb_id = match["tvdbId"]
                 _sonarr_title_cache[clean] = tvdb_id
                 item["tvdb_id"] = tvdb_id
             else:
@@ -477,8 +523,9 @@ def _enrich_tvdb_via_sonarr(items: list[dict]) -> None:
                 except Exception:
                     _sonarr_title_cache[title] = None
                     continue
-                if results and results[0].get("tvdbId"):
-                    tvdb_id = results[0]["tvdbId"]
+                match = _best_matching_result(title, results)
+                if match and match.get("tvdbId"):
+                    tvdb_id = match["tvdbId"]
                     _sonarr_title_cache[title] = tvdb_id
                     item["tvdb_id"] = tvdb_id
                 else:
