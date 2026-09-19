@@ -21,7 +21,7 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## Small fixes — shipped 2026-09-19, not yet released
+## Small fixes — shipped in v0.2.25 (2026-09-19)
 
 - [x] **Browse sequel dialog: "It isn't — add as new show"** — third button in
       `confirmSequelAttach` (`browse.js`), calls `addShow` directly (already
@@ -38,7 +38,7 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## ID correction + Sonarr/Radarr ↔ LCARS sync — shipped 2026-09-19, not yet released
+## ID correction + Sonarr/Radarr ↔ LCARS sync — shipped in v0.2.25 (2026-09-19)
 
 - [x] **Edit every external ID on the show page** — AniList/MAL/TVDB/TMDB/IMDB
       were already editable (right-click badge → `openExtEditor`, easy to miss
@@ -85,7 +85,7 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## mpv → LCARS watched status — shipped 2026-09-19, not yet released
+## mpv → LCARS watched status — shipped in v0.2.25 (2026-09-19)
 
 - [x] Every `launchMpv()` call site (`calendar.js` x5 including the service-strip
       player icon, `show.js` x3 — one of which, `buildAnidbEpRow`'s mpv button, had
@@ -117,7 +117,7 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## On-air indicator (calendar/backlog availability icon) — shipped 2026-09-19, not yet released
+## On-air indicator (calendar/backlog availability icon) — shipped in v0.2.25 (2026-09-19)
 
 - [x] Fifth `availState()` value, **airing**: broadcast window open right now
       (`airDateUtc` through `airDateUtc + runtime`), client-only overlay — no
