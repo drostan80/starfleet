@@ -2944,14 +2944,17 @@ def resolve_service_health(_, info):
     return service_health.get_all(conn)
 
 
-def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
-    """Batch-looks up file_path_sonarr for a list of Sonarr grab records.
+def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, tuple[str | None, str | None]]:
+    """Batch-looks up (file_path_sonarr, show_id) for a list of Sonarr
+    grab records.
 
-    Returns a dict of record-index → file_path_sonarr (or None when the
-    episode isn't in LCARS or hasn't been imported yet).  Two queries:
-    one to resolve tvdb_id → show_id, one to fetch all matching episode
-    rows from that set of shows.  Both run against the LCARS DB the
-    resolver already has open — no extra connections."""
+    Returns a dict of record-index → (file_path_sonarr, show_id) — path
+    is None when the episode isn't in LCARS or hasn't been imported yet;
+    show_id is returned alongside it (2026-09-19, mpv watched-status
+    reporting) since it's already resolved here for the path lookup.
+    Two queries: one to resolve tvdb_id → show_id, one to fetch all
+    matching episode rows from that set of shows.  Both run against the
+    LCARS DB the resolver already has open — no extra connections."""
     keys: list[tuple[str, int | None, int | None]] = []
     for r in grabbed:
         tvdb_id = str((r.get("series") or {}).get("tvdbId", "") or "")
@@ -2988,21 +2991,24 @@ def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
         for r_ in ep_rows
     }
 
-    result: dict[int, str | None] = {}
+    result: dict[int, tuple[str | None, str | None]] = {}
     for i, (tvdb_id, s_num, e_num) in enumerate(keys):
         show_id = tvdb_to_show.get(tvdb_id)
         if show_id and s_num is not None and e_num is not None:
-            result[i] = fp_map.get((show_id, s_num, e_num))
+            result[i] = (fp_map.get((show_id, s_num, e_num)), show_id)
     return result
 
 
-def _grab_file_paths_radarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
-    """Batch-looks up file_path_radarr for a list of Radarr grab records.
+def _grab_file_paths_radarr(conn, grabbed: list[dict]) -> dict[int, tuple[str | None, str | None]]:
+    """Batch-looks up (file_path_radarr, show_id) for a list of Radarr
+    grab records.
 
     Radarr movies live in LCARS as single-show entries whose file path is
     stored on the `show` row itself (set by local_audit / availability
     webhook), not on an episode row.  Resolves tmdb_id → show_id →
-    show.file_path_radarr."""
+    show.file_path_radarr. show_id is returned alongside the path (2026-
+    09-19, mpv watched-status reporting) — already resolved here for the
+    path lookup, just not previously surfaced."""
     tmdb_ids: list[str] = []
     for r in grabbed:
         tmdb_id = str((r.get("movie") or {}).get("tmdbId", "") or "")
@@ -3037,11 +3043,11 @@ def _grab_file_paths_radarr(conn, grabbed: list[dict]) -> dict[int, str | None]:
     ).fetchall()
     show_to_fp: dict[str, str] = {r_["id"]: r_["file_path_radarr"] for r_ in show_rows}
 
-    result: dict[int, str | None] = {}
+    result: dict[int, tuple[str | None, str | None]] = {}
     for i, tmdb_id in enumerate(tmdb_ids):
         show_id = tmdb_to_show.get(tmdb_id)
         if show_id:
-            result[i] = show_to_fp.get(show_id)
+            result[i] = (show_to_fp.get(show_id), show_id)
     return result
 
 
@@ -3059,9 +3065,11 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
 
     airDate: episode.airDateUtc from Sonarr; null for Radarr (movies don't
     have a single "air date" in the same sense, and the Radarr history record
-    doesn't reliably surface release dates).  filePath: looked up in the LCARS
-    DB via _grab_file_paths_{sonarr,radarr} — null when the file hasn't been
-    imported yet or the show isn't tracked in LCARS."""
+    doesn't reliably surface release dates).  filePath/showId: both looked up
+    in the LCARS DB via _grab_file_paths_{sonarr,radarr} (showId added
+    2026-09-19 for mpv watched-status reporting) — both null when the show
+    isn't tracked in LCARS; filePath alone can still be null on a tracked
+    show whose file hasn't been imported yet."""
     cfg = config.get_current()
     conn = db.get_connection()
     try:
@@ -3082,7 +3090,8 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
                     "season_number": (r.get("episode") or {}).get("seasonNumber"),
                     "episode_number": (r.get("episode") or {}).get("episodeNumber"),
                     "air_date": (r.get("episode") or {}).get("airDateUtc"),
-                    "file_path": fp_by_idx.get(i),
+                    "file_path": fp_by_idx.get(i, (None, None))[0],
+                    "show_id": fp_by_idx.get(i, (None, None))[1],
                 }
                 for i, r in enumerate(grabbed)
             ]
@@ -3103,7 +3112,8 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
                     "season_number": None,
                     "episode_number": None,
                     "air_date": None,
-                    "file_path": fp_by_idx.get(i),
+                    "file_path": fp_by_idx.get(i, (None, None))[0],
+                    "show_id": fp_by_idx.get(i, (None, None))[1],
                 }
                 for i, r in enumerate(grabbed)
             ]

@@ -323,14 +323,20 @@ SHOW_METADATA_QUERY = """
 
 class _FakeSonarrClient:
     def __init__(
-        self, series=None, episodes=None, error=None, lookup_results=None, add_series_result=None
+        self, series=None, episodes=None, error=None, lookup_results=None, add_series_result=None,
+        history_page_result=None,
     ):
         self._series = series
         self._episodes = episodes or []
         self._error = error
         self._lookup_results = lookup_results if lookup_results is not None else []
         self._add_series_result = add_series_result
+        self._history_page_result = history_page_result or {"records": []}
         self.calls = []
+
+    def history_page(self, page=1, page_size=20):
+        self.calls.append(("history_page", page, page_size))
+        return self._history_page_result
 
     def __enter__(self):
         return self
@@ -9765,6 +9771,69 @@ async def test_reconcile_arr_state_pause_then_resume_remonitors_in_sonarr(client
     )
     assert data["setStatus"]["status"] == "WATCHING"
     assert updates[-1]["monitored"] is True
+
+
+RECENT_GRABS = """
+    query($service: String!) {
+      recentGrabs(service: $service) {
+        service title releaseTitle date quality
+        seasonNumber episodeNumber airDate filePath showId
+      }
+    }
+"""
+
+
+async def test_recent_grabs_returns_empty_with_nothing_configured(client):
+    data = await gql(client, RECENT_GRABS, {"service": "sonarr"}, headers=auth_headers())
+    assert data["recentGrabs"] == []
+
+
+async def test_recent_grabs_resolves_show_id_and_file_path(client, monkeypatch):
+    # 2026-09-19 — showId added alongside filePath so the mpv watched-status
+    # flow can report from the Grabs page, not just the calendar/show page.
+    show = await add_show(
+        client, mediaShape="EPISODIC", trackingSpace="TV", titleRomaji="Grab Test"
+    )
+    await gql(
+        client,
+        'mutation($id: ID!) { linkShowExternalId(showId: $id, service: "tvdb",'
+        ' externalId: "457078", url: "https://x") { service } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, state,"
+        " sonarr_season, sonarr_episode, file_path_sonarr, created_at, updated_at)"
+        " VALUES ('e-grab01', ?, 1, 1, 'regular', 'unwatched', 1, 1,"
+        " '/data/show/s01e01.mkv', 'x', 'x')",
+        (show["id"],),
+    )
+    conn.commit()
+
+    cfg = config.get_current()
+    cfg.sonarr_url = "http://sonarr.test"
+    cfg.sonarr_api_key = "test-key"
+
+    fake = _FakeSonarrClient(history_page_result={
+        "records": [{
+            "eventType": "grabbed",
+            "series": {"title": "Grab Test", "tvdbId": 457078},
+            "sourceTitle": "Grab.Test.S01E01.mkv",
+            "date": "2026-09-19T00:00:00Z",
+            "quality": {"quality": {"name": "Bluray-1080p"}},
+            "episode": {
+                "seasonNumber": 1, "episodeNumber": 1, "airDateUtc": "2026-09-18T00:00:00Z",
+            },
+        }],
+    })
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(client, RECENT_GRABS, {"service": "sonarr"}, headers=auth_headers())
+    assert len(data["recentGrabs"]) == 1
+    grab = data["recentGrabs"][0]
+    assert grab["showId"] == show["id"]
+    assert grab["filePath"] == "/data/show/s01e01.mkv"
 
 
 PREVIEW_SHOW_BACKFILL = """

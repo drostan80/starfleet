@@ -1190,7 +1190,7 @@ enum ServiceHealthStatus {
   UNKNOWN
 }
 
-"One grab event from Sonarr or Radarr's /history feed (2026-08-27). title: the series or movie title as Sonarr/Radarr knows it. releaseTitle: the release name (Sonarr/Radarr's own sourceTitle — the full filename before download). date: ISO 8601 UTC timestamp of the grab. quality: quality profile name (e.g. 'Bluray-1080p'); null when the quality object is absent in the history record. seasonNumber/episodeNumber: populated for Sonarr, null for Radarr. airDate: episode air date (Sonarr: episode.airDateUtc); null for Radarr or when absent. filePath: local file path for mpv launch — looked up from the LCARS episode table by tvdb/tmdb ID + sonarr numbering; null when the file hasn't been imported yet or the show isn't in LCARS."
+"One grab event from Sonarr or Radarr's /history feed (2026-08-27). title: the series or movie title as Sonarr/Radarr knows it. releaseTitle: the release name (Sonarr/Radarr's own sourceTitle — the full filename before download). date: ISO 8601 UTC timestamp of the grab. quality: quality profile name (e.g. 'Bluray-1080p'); null when the quality object is absent in the history record. seasonNumber/episodeNumber: populated for Sonarr, null for Radarr. airDate: episode air date (Sonarr: episode.airDateUtc); null for Radarr or when absent. filePath: local file path for mpv launch — looked up from the LCARS episode table by tvdb/tmdb ID + sonarr numbering; null when the file hasn't been imported yet or the show isn't in LCARS. showId: the same lookup's own show_id (2026-09-19, mpv watched-status reporting) — null under the exact same conditions as filePath."
 type GrabEvent {
   service: String!
   title: String!
@@ -1201,6 +1201,7 @@ type GrabEvent {
   episodeNumber: Int
   airDate: String
   filePath: String
+  showId: ID
 }
 
 "A synopsis fetched from an external source, for side-by-side comparison."
