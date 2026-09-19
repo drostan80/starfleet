@@ -53,9 +53,15 @@ export function downloadUrl(filePath) {
  * inherently a Promise) — existing call sites don't use the return value,
  * so this is safe.
  */
-export async function startDownload({ showTitle, label, filePath, episodeId }) {
+export async function startDownload({ showTitle, label, filePath, episodeId, showId, season, episode }) {
   if (window.Capacitor?.isNativePlatform?.()) {
-    return window.Capacitor.Plugins.Download.download({ path: filePath, episodeId, showTitle, label });
+    // showId/season/episode: stored alongside the download (DownloadDatabase,
+    // A4) so VlcPlugin can report addWatchEvent for offline playback without
+    // JS needing to pass them again at play time — episodeId alone is
+    // enough to look the rest up from the download row.
+    return window.Capacitor.Plugins.Download.download({
+      path: filePath, episodeId, showId, season, episode, showTitle, label,
+    });
   }
 
   const url = downloadUrl(filePath);
@@ -133,10 +139,13 @@ export async function purgeAll() {
  * Play an Android download offline via VLC. Desktop has no equivalent —
  * a browser download isn't tracked well enough to know it's still there.
  */
-export async function playOffline(episodeId) {
+export async function playOffline(episodeId, title = '') {
   const { localUri } = await window.Capacitor.Plugins.Download.getLocalUri({ episodeId });
   if (!localUri) return false;
-  await window.Capacitor.Plugins.Vlc.play({ uri: localUri, title: episodeId });
+  // episodeId, not showId/season/episode: VlcPlugin looks those up from the
+  // download row itself (DownloadDatabase, A4) for its own native
+  // addWatchEvent report — see VlcPlugin.kt's reportWatched().
+  await window.Capacitor.Plugins.Vlc.play({ uri: localUri, title, episodeId });
   return true;
 }
 

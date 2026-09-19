@@ -392,7 +392,7 @@
 <script type="module">
   import { bootstrapConfig, getConfig, applyAppName } from './js/config.js?v=4';
   import { initSearch } from './js/search.js?v=2';
-  import { fetchRecentGrabs, addWatchEvent } from './js/api.js?v=19';
+  import { fetchRecentGrabs } from './js/api.js?v=19';
 
   applyAppName();
   await bootstrapConfig();
@@ -452,15 +452,20 @@
     const cfg = getConfig();
 
     // A1 step 20 — same platform gate as calendar.js's own launchMpv.
+    // A4 step 37 — addWatchEvent is reported natively (VlcPlugin's own
+    // onActivityResult); no episodeId available here (grab events don't
+    // carry one), so it reports directly off showId/season/episode with
+    // no download-row lookup — fine, this path is never a downloaded
+    // episode anyway. Do NOT also call addWatchEvent here.
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
-        const result = await window.Capacitor.Plugins.Vlc.play({
+        await window.Capacitor.Plugins.Vlc.play({
           path: filePath,
           title: filePath.split('/').pop(),
+          showId: ctx?.showId,
+          season: ctx?.season,
+          episode: ctx?.episode,
         });
-        if (ctx?.showId && result?.watched) {
-          await addWatchEvent(ctx.showId, ctx.season, ctx.episode);
-        }
       } catch (err) {
         showToast(`VLC error: ${err.message || err}`);
       }

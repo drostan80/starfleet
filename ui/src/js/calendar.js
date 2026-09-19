@@ -473,7 +473,7 @@ const SVC_DEFS = [
 export function episodeCtx(ep) {
   const showId = ep?.show?.id;
   if (!showId) return null;
-  return { showId, season: ep.season ?? null, episode: ep.episode ?? null };
+  return { showId, season: ep.season ?? null, episode: ep.episode ?? null, episodeId: ep.id };
 }
 
 /**
@@ -495,15 +495,22 @@ export async function launchMpv(filePath, cfg, ctx = null) {
   // native Intent; there's no mpv-helper daemon on a phone. Title is just
   // the release-group filename — cosmetic (VLC's title bar), not worth
   // threading a real title through every launchMpv() call site for.
+  //
+  // A4 step 37 — addWatchEvent is reported natively (VlcPlugin's own
+  // onActivityResult), not from here: passing episodeId/showId/season/
+  // episode through lets it do that without a second round trip back into
+  // JS. Do NOT also call addWatchEvent here — that would double-report
+  // the same viewing.
   if (window.Capacitor?.isNativePlatform?.()) {
     try {
-      const result = await window.Capacitor.Plugins.Vlc.play({
+      await window.Capacitor.Plugins.Vlc.play({
         path: filePath,
         title: filePath.split('/').pop(),
+        episodeId: ctx?.episodeId,
+        showId: ctx?.showId,
+        season: ctx?.season,
+        episode: ctx?.episode,
       });
-      if (ctx?.showId && result?.watched) {
-        await addWatchEvent(ctx.showId, ctx.season, ctx.episode);
-      }
     } catch (err) {
       showBanner(`VLC error: ${err.message || err}`, 'error');
     }
@@ -799,6 +806,9 @@ export function buildCard(ep, cfg) {
         label: fmtEpBadge(ep) + (ep.title ? ` — ${ep.title}` : ''),
         filePath,
         episodeId: ep.id,
+        showId: ep.show.id,
+        season: ep.season ?? null,
+        episode: ep.episode ?? null,
       });
       dlBtn.classList.add('triggered');
       setTimeout(() => dlBtn.classList.remove('triggered'), 1200);

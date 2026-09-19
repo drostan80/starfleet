@@ -191,7 +191,7 @@
         const playBtn = document.createElement('button');
         playBtn.className = 'dl-action-btn retry';
         playBtn.textContent = '▶ Play';
-        playBtn.addEventListener('click', () => playOffline(e.id));
+        playBtn.addEventListener('click', () => playOffline(e.id, `${e.showTitle} — ${e.label}`));
         actions.appendChild(playBtn);
       } else if (!isNative) {
         const retryBtn = document.createElement('button');

@@ -1839,6 +1839,9 @@ function renderSpecialCard(ep, show, container, cfg) {
         label: ep.title || `Special #${ep.absoluteNumber}`,
         filePath,
         episodeId: ep.id,
+        showId: show.id,
+        season: ep.season ?? null,
+        episode: ep.episode ?? null,
       });
       dlIcon.classList.add('triggered');
       setTimeout(() => dlIcon.classList.remove('triggered'), 1200);
@@ -2811,6 +2814,9 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
           label: epLabel,
           filePath: epFilePath,
           episodeId: ep.id,
+          showId: show.id,
+          season: ep.season ?? null,
+          episode: ep.episode ?? null,
         });
         // Brief visual feedback
         dlIcon.classList.add('triggered');
