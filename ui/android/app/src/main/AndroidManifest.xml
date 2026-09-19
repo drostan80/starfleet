@@ -23,7 +23,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Step 16 — long-press app icon -> "Change server". -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+
         </activity>
+
+        <!-- A1 step 15 — server address entry, shown on first run (no
+             address stored yet) and via the "Change server" shortcut. Not
+             exported: only ever launched from within this app. -->
+        <activity
+            android:name=".ServerSetupActivity"
+            android:label="@string/app_name"
+            android:theme="@style/AppTheme.NoActionBar"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

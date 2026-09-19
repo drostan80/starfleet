@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="32dp"
+    android:background="#0d0f14">
+
+    <TextView
+        android:id="@+id/title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/app_name"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:textColor="#5b8cff"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/server_setup_prompt"
+        android:textSize="14sp"
+        android:textColor="#9aa4b8"
+        android:layout_marginBottom="24dp" />
+
+    <EditText
+        android:id="@+id/server_address"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/server_setup_hint"
+        android:inputType="textUri"
+        android:autofillHints="postalAddress"
+        android:imeOptions="actionDone"
+        android:singleLine="true"
+        android:textColor="#e6e9ef"
+        android:textColorHint="#5a6272"
+        android:backgroundTint="#5b8cff"
+        android:padding="12dp"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:id="@+id/error_message"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#ef4444"
+        android:textSize="13sp"
+        android:visibility="gone"
+        android:layout_marginBottom="16dp" />
+
+    <Button
+        android:id="@+id/continue_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/server_setup_continue"
+        android:backgroundTint="#5b8cff"
+        android:textColor="#ffffff" />
+
+</LinearLayout>

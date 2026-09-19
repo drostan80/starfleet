@@ -4,4 +4,9 @@
     <string name="title_activity_main">Starfleet</string>
     <string name="package_name">com.drostan.starfleet</string>
     <string name="custom_url_scheme">com.drostan.starfleet</string>
+    <string name="server_setup_prompt">Enter your LCARS server address</string>
+    <string name="server_setup_hint">192.168.1.100:8888</string>
+    <string name="server_setup_continue">Continue</string>
+    <string name="server_setup_error">Enter a host and port, e.g. 192.168.1.100:8888</string>
+    <string name="change_server_shortcut">Change server</string>
 </resources>

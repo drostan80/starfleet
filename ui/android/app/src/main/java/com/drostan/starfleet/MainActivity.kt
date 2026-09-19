@@ -1,5 +1,6 @@
 package com.drostan.starfleet
 
+import android.content.Intent
 import android.os.Bundle
 import com.getcapacitor.BridgeActivity
 import com.getcapacitor.CapConfig
@@ -21,8 +22,21 @@ import com.getcapacitor.CapConfig
  * usesCleartextTraffic instead, which is the real mechanism in this
  * Capacitor version). Revisit if a later step adds e.g. allowNavigation to
  * capacitor.config.json — it would need repeating here too.
+ *
+ * Step 15 — no address stored at all (first run) means ServerSetupActivity
+ * instead. This overrides load(), not onCreate(): BridgeActivity.onCreate()
+ * must still call through to AppCompatActivity's own onCreate() (skipping
+ * it crashes immediately with SuperNotCalledException, thrown by the
+ * framework right after onCreate() returns — checked and confirmed against
+ * real BridgeActivity behavior before shipping this, not assumed), but
+ * super.onCreate() is what calls load() in the first place, and load() is
+ * the one thing that actually builds the Bridge/WebView. Redirecting from
+ * inside our load() override, before ever calling super.load(), means the
+ * unconfigured case never spins up a WebView pointed at nothing.
  */
 class MainActivity : BridgeActivity() {
+    private var serverConfigured = true
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val prefs = getSharedPreferences("starfleet", MODE_PRIVATE)
         val serverUrl = prefs.getString("server_url", null)
@@ -30,7 +44,18 @@ class MainActivity : BridgeActivity() {
             config = CapConfig.Builder(this)
                 .setServerUrl(serverUrl)
                 .create()
+        } else {
+            serverConfigured = false
         }
         super.onCreate(savedInstanceState)
+    }
+
+    override fun load() {
+        if (!serverConfigured) {
+            startActivity(Intent(this, ServerSetupActivity::class.java))
+            finish()
+            return
+        }
+        super.load()
     }
 }
