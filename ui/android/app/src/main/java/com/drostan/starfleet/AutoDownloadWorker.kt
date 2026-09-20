@@ -38,7 +38,23 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
         private const val WORK_NAME = "auto_download"
         private const val INTERVAL_MINUTES = 30L
 
+        /**
+         * On/off toggle (2026-09-20, user request) — previously there was
+         * no way to disable auto-download short of never setting a server
+         * address. Reads `auto_download_enabled` (default true, matching
+         * the previous unconditional-once-configured behavior). Called
+         * from MainActivity's onCreate() and from AppSettingsPlugin
+         * whenever the setting changes, so toggling it off actually
+         * cancels the scheduled work rather than leaving a no-op tick
+         * running every 30 minutes.
+         */
         fun schedule(context: Context) {
+            val enabled = context.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
+                .getBoolean("auto_download_enabled", true)
+            if (!enabled) {
+                cancel(context)
+                return
+            }
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.UNMETERED)
                 .build()
@@ -50,6 +66,10 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
                 ExistingPeriodicWorkPolicy.KEEP,
                 request,
             )
+        }
+
+        fun cancel(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
         }
     }
 
@@ -69,6 +89,11 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
         // pattern the server side already uses for Sonarr/Radarr
         // availability, applied here to our own local index.
         reconcilePending(applicationContext, db)
+
+        // Time-based auto-delete (2026-09-20, user request) before the
+        // size-based eviction below — independent trigger, regardless of
+        // whether storage_limit_gb has actually been exceeded.
+        evictWatchedPastHours(applicationContext, db)
 
         // Eviction before enqueueing new downloads — if the user just
         // lowered the storage limit, a fresh batch shouldn't immediately
@@ -117,6 +142,22 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
                     DownloadManager.STATUS_FAILED -> db.markFailed(row.dmId)
                 }
             }
+        }
+    }
+
+    /**
+     * Time-based auto-delete (2026-09-20, user request): "delete X hours
+     * after marked watched", regardless of the size-based limit below —
+     * a separate trigger, not a replacement. `auto_delete_watched_hours`
+     * <= 0 (including unset/default 0f) means disabled.
+     */
+    private fun evictWatchedPastHours(context: Context, db: DownloadDatabase) {
+        val hours = context.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
+            .getFloat("auto_delete_watched_hours", 0f)
+        if (hours <= 0f) return
+        for (row in db.listWatchedOlderThan(hours.toDouble())) {
+            DownloadPlugin.cancelAndDeleteFile(context, row)
+            db.markEvicted(row.episodeId)
         }
     }
 

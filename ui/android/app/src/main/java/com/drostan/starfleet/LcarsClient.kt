@@ -57,9 +57,14 @@ object LcarsClient {
         }
     }
 
+    // includePlanned: true (2026-09-20, user request) — a planning-status
+    // show whose first episode has already aired is "started" in every
+    // practical sense; auto-download shouldn't wait for a manual promotion
+    // to watching. Paused shows are unaffected (backlog never included
+    // them, still doesn't).
     private const val BACKLOG_QUERY = """
         query Backlog(${'$'}first: Int) {
-          backlog(first: ${'$'}first) {
+          backlog(first: ${'$'}first, includePlanned: true) {
             edges { node {
               id season episode title
               filePathSonarr filePathRadarr availableLocally

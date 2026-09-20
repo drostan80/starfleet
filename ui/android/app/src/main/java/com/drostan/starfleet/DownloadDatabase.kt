@@ -25,9 +25,13 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
         // v2 (A4): show_id/season/episode — needed so VlcPlugin can report
         // addWatchEvent for offline playback without JS threading them
         // through separately (episodeId alone is enough to look the rest
-        // up from this row). Dropping and recreating on upgrade is fine —
-        // this is a re-downloadable local cache, not data of record.
-        private const val DB_VERSION = 2
+        // up from this row).
+        // v3 (2026-09-20, user request): watched_at — powers a new
+        // time-based auto-delete ("delete X hours after marked watched"),
+        // independent of the existing size-based eviction in
+        // AutoDownloadWorker.evict(). Dropping and recreating on upgrade is
+        // fine — this is a re-downloadable local cache, not data of record.
+        private const val DB_VERSION = 3
         const val TABLE = "downloads"
     }
 
@@ -46,6 +50,7 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
                 size_bytes INTEGER,
                 downloaded_at TEXT NOT NULL,
                 watched INTEGER NOT NULL DEFAULT 0,
+                watched_at TEXT,
                 dm_id INTEGER,
                 status TEXT NOT NULL DEFAULT 'pending'
             )
@@ -119,8 +124,24 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
     }
 
     fun markWatched(episodeId: String) {
-        val values = ContentValues().apply { put("watched", 1) }
+        val values = ContentValues().apply {
+            put("watched", 1)
+            put("watched_at", java.time.Instant.now().toString())
+        }
         writableDatabase.update(TABLE, values, "episode_id = ?", arrayOf(episodeId))
+    }
+
+    /**
+     * Rows watched at least `hours` ago and still holding a file
+     * (status='complete') — candidates for the time-based auto-delete
+     * setting (2026-09-20, user request), independent of the size-based
+     * limit in AutoDownloadWorker.evict().
+     */
+    fun listWatchedOlderThan(hours: Double): List<DownloadRow> {
+        val cutoff = java.time.Instant.now().minusSeconds((hours * 3600).toLong()).toString()
+        return listAll().filter {
+            it.status == "complete" && it.watched && it.watchedAt != null && it.watchedAt < cutoff
+        }
     }
 
     fun get(episodeId: String): DownloadRow? {
@@ -163,6 +184,7 @@ data class DownloadRow(
     val sizeBytes: Long?,
     val downloadedAt: String,
     val watched: Boolean,
+    val watchedAt: String?,
     val dmId: Long?,
     val status: String,
 ) {
@@ -179,6 +201,7 @@ data class DownloadRow(
             sizeBytes = c.getLongOrNull("size_bytes"),
             downloadedAt = c.getString(c.getColumnIndexOrThrow("downloaded_at")),
             watched = c.getInt(c.getColumnIndexOrThrow("watched")) != 0,
+            watchedAt = c.getStringOrNull("watched_at"),
             dmId = c.getLongOrNull("dm_id"),
             status = c.getString(c.getColumnIndexOrThrow("status")),
         )
