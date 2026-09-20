@@ -1155,18 +1155,33 @@ def resolve_episodes_in_range(_, info, start, end, **page_args):
 
 
 @query.field("backlog")
-def resolve_backlog(_, info, **page_args):
+def resolve_backlog(_, info, include_planned=False, **page_args):
     """§6.3, B.9 — the backlog: unwatched, locally-available episodes on
     watching-status shows. Any watching show with available-but-unwatched
     episodes qualifies — the previous _show_is_airing gate excluded
     shows whose last episode had already aired (e.g. a weekly show where
-    you're one episode behind after the finale airs)."""
+    you're one episode behind after the finale airs).
+
+    includePlanned (Android app auto-download, 2026-09-20, user request):
+    a show sitting in planning but whose first episode has already aired
+    is "started" in every practical sense — the user wants auto-download
+    to grab it too, without waiting for a manual promotion to watching.
+    Default false: every other caller (the web Backlog page) keeps the
+    original watching-only behavior unchanged."""
     conn = db.get_connection()
+    show_filter = "status = 'watching'"
+    if include_planned:
+        show_filter = (
+            "status = 'watching' OR (status = 'planned' AND id IN ("
+            "SELECT show_id FROM episode"
+            " WHERE air_date_utc IS NOT NULL AND air_date_utc <= datetime('now')"
+            "))"
+        )
     return pagination.paginate(
         conn,
         "episode",
         "state = 'unwatched' AND available_locally = 1"
-        " AND show_id IN (SELECT id FROM show WHERE status = 'watching')",
+        f" AND show_id IN (SELECT id FROM show WHERE {show_filter})",
         (),
         **page_args,
     )

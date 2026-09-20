@@ -9536,6 +9536,46 @@ async def test_backlog_is_empty_with_no_watching_shows(client, migrated_db):
     assert data["backlog"]["pageInfo"]["hasNextPage"] is False
 
 
+BACKLOG_INCLUDE_PLANNED_QUERY = (
+    "{ backlog(includePlanned: true) { edges { node { id } } } }"
+)
+
+
+async def test_backlog_include_planned_includes_a_started_planning_show(client, migrated_db):
+    # Android app auto-download (2026-09-20, user request): a planning show
+    # whose first episode already aired should be treated like a watching
+    # show when includePlanned is set — "started" in every practical sense.
+    show = await add_show(client, titleRomaji="Started Planned Show")  # status: planned
+    _insert_backlog_episode(
+        migrated_db, "e-bl0010", show["id"], _iso(-1), episode=1, available_via_sonarr="available"
+    )
+
+    data = await gql(client, BACKLOG_INCLUDE_PLANNED_QUERY, headers=auth_headers())
+    ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
+    assert "e-bl0010" in ids
+
+    # Default (includePlanned omitted) keeps excluding it — no behavior
+    # change for the web Backlog page or any other existing caller.
+    data = await gql(client, BACKLOG_QUERY, headers=auth_headers())
+    ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
+    assert "e-bl0010" not in ids
+
+
+async def test_backlog_include_planned_excludes_a_not_yet_started_planning_show(
+    client, migrated_db
+):
+    # A planning show whose first (only) episode hasn't aired yet isn't
+    # "started" — includePlanned must not pull it in just because it exists.
+    show = await add_show(client, titleRomaji="Unstarted Planned Show")
+    _insert_backlog_episode(
+        migrated_db, "e-bl0011", show["id"], _iso(3), episode=1, available_via_sonarr="available"
+    )
+
+    data = await gql(client, BACKLOG_INCLUDE_PLANNED_QUERY, headers=auth_headers())
+    ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
+    assert "e-bl0011" not in ids
+
+
 # --- absolute_number synthesis (§5.2, A.25) ---------------------------------
 
 
