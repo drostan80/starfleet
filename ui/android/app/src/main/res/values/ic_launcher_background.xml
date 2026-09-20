@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- 2026-09-20: transparent, per the icon's own design (user request) —
+         the launcher's own mask shape (circle/squircle/etc.) still applies
+         regardless, but nothing fills the space around the artwork within
+         it; the home screen wallpaper shows through instead. -->
+    <color name="ic_launcher_background">#00000000</color>
 </resources>
