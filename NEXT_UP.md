@@ -554,6 +554,30 @@ Wire during season table rework. Currently clicking "AL" on S2 goes to the S1 pa
 - Browse prefill: use Memory Alpha IDs to prefill service links on cards before adding.
 - Add-confirmation popup: show each discovered ID for validation before committing.
 
+### Art-fetch negative cache + throttle (found 2026-09-20, deferred)
+
+Found while diagnosing the v0.2.38/v0.2.39 freeze incident: `autoFetchArt()`
+only skips its AniList/TVDB/TMDB/TVmaze/MAL fetch cascade when a show
+already has *any* stored art asset — a show whose art is genuinely
+unfindable (a real confirmed case: a Demon Slayer entry from that night's
+poster backfill) re-triggers the full cascade on *every* page view,
+forever. User's own design, deliberately deferred:
+
+- [ ] **Negative caching**: remember "tried, found nothing" so automatic
+      per-page-load fetch stops retrying; a manual re-fetch button must
+      still bypass it. Art dialog gains: (a) add art manually via a pasted
+      image URL from any source, (b) delete a stored art address (for a
+      stale/404'd URL — expected to be rediscovered on the next manual
+      re-fetch if it's still findable).
+- [ ] **Staged/throttled auto-fetch, not a hard cap**: banner + highest
+      season's art first (stands in for the show meanwhile) → after a
+      beat, main show art → only then search other seasons, and only
+      when that season has no art yet AND is actually unhidden/visible.
+- [ ] **Manual pulls take priority** over background/automatic fetches
+      (both the page's own auto-fetch queue and ops's scheduled jobs).
+
+Full detail in Claude memory: `art-fetch-negative-cache-and-throttle-plan`.
+
 ### Smaller ideas
 
 - [ ] IMDB datasets for cross-referencing and fallback ID bridging.
