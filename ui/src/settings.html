@@ -29,6 +29,20 @@
       font-size: 0.78rem;
       letter-spacing: 0;
     }
+    .field-checkbox label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.9rem;
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: 0;
+      color: var(--text);
+    }
+    .field-checkbox input[type="checkbox"] {
+      width: auto;
+      accent-color: var(--accent);
+    }
     .logout-bar {
       display: flex;
       align-items: center;
@@ -108,6 +122,39 @@
     </div>
   </form>
 
+  <!-- ── Android app downloads (native only) ───────────── -->
+  <div class="settings-section" id="app-downloads-section" style="display:none">
+    <h2>App Downloads <span class="device-only">(this device only)</span></h2>
+    <div class="field-group field-checkbox">
+      <label><input type="checkbox" id="auto-download-toggle"> Auto-download new episodes</label>
+      <span class="field-hint">
+        Downloads unwatched, available episodes of shows you're watching (and
+        planned shows that have started airing) in the background, roughly
+        every 30 minutes.
+      </span>
+    </div>
+    <div class="field-group field-checkbox">
+      <label><input type="checkbox" id="app-wifi-only-toggle"> Wi-Fi only</label>
+      <span class="field-hint">Applies to both auto-download and manual downloads.</span>
+    </div>
+    <div class="field-group">
+      <label for="app-storage-limit">Storage limit (GB)</label>
+      <input type="number" id="app-storage-limit" min="0" step="0.5" placeholder="0 = unlimited">
+      <span class="field-hint">
+        Oldest watched episodes are deleted first, then oldest unwatched,
+        once downloads exceed this.
+      </span>
+    </div>
+    <div class="field-group">
+      <label for="app-auto-delete-hours">Delete watched episodes after (hours)</label>
+      <input type="number" id="app-auto-delete-hours" min="0" step="1" placeholder="0 = never">
+      <span class="field-hint">
+        Independent of the storage limit above — deletes a watched episode
+        this many hours after it's marked watched, regardless of free space.
+      </span>
+    </div>
+  </div>
+
   <!-- ── Change Password ─────────────────────────────── -->
   <div class="settings-section">
     <h2>Change Password</h2>
@@ -167,6 +214,52 @@
     } catch { /* ignore */ }
   }
   init();
+
+  // ── App Downloads (Android native only) ─────────────────
+  // 2026-09-20 (user request): reachable from inside the app, not just
+  // the "Change server" screen — ServerSetupActivity keeps its own copies
+  // of wifiOnly/storageLimitGb too (same SharedPreferences keys, so both
+  // stay in sync), this is an additional access point.
+  if (window.Capacitor?.isNativePlatform?.()) {
+    const section        = document.getElementById('app-downloads-section');
+    const autoDlToggle   = document.getElementById('auto-download-toggle');
+    const wifiOnlyToggle = document.getElementById('app-wifi-only-toggle');
+    const storageLimit   = document.getElementById('app-storage-limit');
+    const autoDeleteHrs  = document.getElementById('app-auto-delete-hours');
+
+    async function initAppSettings() {
+      try {
+        const s = await window.Capacitor.Plugins.AppSettings.getSettings();
+        autoDlToggle.checked   = !!s.autoDownloadEnabled;
+        wifiOnlyToggle.checked = !!s.wifiOnly;
+        storageLimit.value     = s.storageLimitGb > 0 ? s.storageLimitGb : '';
+        autoDeleteHrs.value    = s.autoDeleteWatchedHours > 0 ? s.autoDeleteWatchedHours : '';
+        section.style.display = '';
+      } catch (e) {
+        console.warn('[starfleet] AppSettings.getSettings failed:', e);
+      }
+    }
+    initAppSettings();
+
+    autoDlToggle.addEventListener('change', () => {
+      window.Capacitor.Plugins.AppSettings.updateSettings({ autoDownloadEnabled: autoDlToggle.checked })
+        .catch(e => console.warn('[starfleet] AppSettings.updateSettings failed:', e));
+    });
+    wifiOnlyToggle.addEventListener('change', () => {
+      window.Capacitor.Plugins.AppSettings.updateSettings({ wifiOnly: wifiOnlyToggle.checked })
+        .catch(e => console.warn('[starfleet] AppSettings.updateSettings failed:', e));
+    });
+    storageLimit.addEventListener('change', () => {
+      const value = parseFloat(storageLimit.value) || 0;
+      window.Capacitor.Plugins.AppSettings.updateSettings({ storageLimitGb: value })
+        .catch(e => console.warn('[starfleet] AppSettings.updateSettings failed:', e));
+    });
+    autoDeleteHrs.addEventListener('change', () => {
+      const value = parseFloat(autoDeleteHrs.value) || 0;
+      window.Capacitor.Plugins.AppSettings.updateSettings({ autoDeleteWatchedHours: value })
+        .catch(e => console.warn('[starfleet] AppSettings.updateSettings failed:', e));
+    });
+  }
 
   form.addEventListener('submit', async e => {
     e.preventDefault();
