@@ -1163,20 +1163,22 @@ def resolve_backlog(_, info, include_planned=False, **page_args):
     you're one episode behind after the finale airs).
 
     includePlanned (Android app auto-download, 2026-09-20, user request):
-    a show sitting in planning but whose first episode has already aired
-    is "started" in every practical sense — the user wants auto-download
-    to grab it too, without waiting for a manual promotion to watching.
-    Default false: every other caller (the web Backlog page) keeps the
-    original watching-only behavior unchanged."""
+    a planning-status show counts as "started" the same way a watching
+    show already does above — by having a real available-but-unwatched
+    episode, not by comparing to air_date_utc. Deliberately simplified
+    from an earlier air-date-gated version: the outer WHERE below already
+    requires available_locally = 1 (an actual Sonarr/Radarr grab, not
+    just tracked metadata), and the watching-show path has never had an
+    air-date check either — a planning show whose episode is available
+    early (a leak, a wrong/missing recorded air date, whatever the cause)
+    is exactly the case the user wants included, not excluded by an extra
+    gate watching shows were never subject to. Default false: every other
+    caller (the web Backlog page) keeps the original watching-only
+    behavior unchanged."""
     conn = db.get_connection()
     show_filter = "status = 'watching'"
     if include_planned:
-        show_filter = (
-            "status = 'watching' OR (status = 'planned' AND id IN ("
-            "SELECT show_id FROM episode"
-            " WHERE air_date_utc IS NOT NULL AND air_date_utc <= datetime('now')"
-            "))"
-        )
+        show_filter = "status = 'watching' OR status = 'planned'"
     return pagination.paginate(
         conn,
         "episode",

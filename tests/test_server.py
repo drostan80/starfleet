@@ -9561,19 +9561,39 @@ async def test_backlog_include_planned_includes_a_started_planning_show(client, 
     assert "e-bl0010" not in ids
 
 
-async def test_backlog_include_planned_excludes_a_not_yet_started_planning_show(
+async def test_backlog_include_planned_includes_an_episode_available_before_its_air_date(
     client, migrated_db
 ):
-    # A planning show whose first (only) episode hasn't aired yet isn't
-    # "started" — includePlanned must not pull it in just because it exists.
-    show = await add_show(client, titleRomaji="Unstarted Planned Show")
+    # User follow-up (2026-09-20): "more frequent than I'd like" — a leak,
+    # a wrong/missing recorded air date, whatever the cause, an episode
+    # that's genuinely available (a real Sonarr/Radarr grab) shouldn't be
+    # excluded just because its air_date_utc is still in the future.
+    # "started" is defined by availability, the same way it already is for
+    # watching shows (no air-date check there either) — deliberately not
+    # air-date-gated for planning shows either, even though the air date
+    # itself looks like it hasn't happened yet.
+    show = await add_show(client, titleRomaji="Early Leak Planned Show")
     _insert_backlog_episode(
         migrated_db, "e-bl0011", show["id"], _iso(3), episode=1, available_via_sonarr="available"
     )
 
     data = await gql(client, BACKLOG_INCLUDE_PLANNED_QUERY, headers=auth_headers())
     ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
-    assert "e-bl0011" not in ids
+    assert "e-bl0011" in ids
+
+
+async def test_backlog_include_planned_excludes_a_planning_show_with_nothing_available(
+    client, migrated_db
+):
+    # The real gate is availability, not air date or status alone — a
+    # planning show with no available episode at all still doesn't
+    # qualify, regardless of includePlanned.
+    show = await add_show(client, titleRomaji="Nothing Available Planned Show")
+    _insert_backlog_episode(migrated_db, "e-bl0012", show["id"], _iso(-1), episode=1)
+
+    data = await gql(client, BACKLOG_INCLUDE_PLANNED_QUERY, headers=auth_headers())
+    ids = {e["node"]["id"] for e in data["backlog"]["edges"]}
+    assert "e-bl0012" not in ids
 
 
 # --- absolute_number synthesis (§5.2, A.25) ---------------------------------
