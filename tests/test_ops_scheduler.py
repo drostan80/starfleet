@@ -478,7 +478,7 @@ async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_it
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
 
 
-async def test_run_daily_and_weekly_once_sums_all_ten_tiers():
+async def test_run_daily_and_weekly_once_sums_all_eleven_tiers():
     client = _FakeClient(
         due_shows=[{"id": "s-a"}],
         due_seasons=[_season("z-a", "s-b")],
@@ -499,9 +499,12 @@ async def test_run_daily_and_weekly_once_sums_all_ten_tiers():
     count = await run_daily_and_weekly_once(client)
     # 1 (show refresh) + 1 (season reconcile) + 2 (animeschedule) + 1 (local
     # presence) + 1 (episode movie links) + 1 (mal refresh) + 2 (untracked) +
-    # 1 (tvdb backfill) + 4 (season subdivision checked+flagged) = 14
-    # score_sync disabled (scoring model redesign, 2026-09-12)
-    assert count == 14
+    # 1 (tvdb backfill) + 4 (season subdivision checked+flagged) +
+    # 6 (score_sync checked+flagged) = 20
+    # score_sync re-enabled 2026-09-20 (see score_sync.py's own fix note —
+    # the show-level-fallback false positive that caused the 2026-09-12
+    # pause is fixed)
+    assert count == 20
     assert client.refreshed == ["s-a"]
     assert client.reconciled == [("s-b", 1)]
 

@@ -298,9 +298,13 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     untracked_shows = await run_untracked_shows_once(client)
     tvdb_backfill = await run_tvdb_backfill_once(client)
     season_subdivision = await run_season_subdivision_once(client)
-    # score_sync disabled — scoring model needs redesign (AniList/MAL
-    # score per-entry vs LCARS show/season mismatch). Paused 2026-09-12.
-    # score_sync = await run_score_sync_once(client)
+    # score_sync re-enabled 2026-09-20 — was paused 2026-09-12 over a false-
+    # positive flood (~238 noise reviews) from comparing AniList/MAL's real
+    # per-season score against LCARS's show-level fallback for seasons that
+    # were never individually scored. score_sync.py now skips a season
+    # entirely when it has no explicit score of its own — see its module
+    # docstring / the two check_*_score_drift functions for detail.
+    score_sync = await run_score_sync_once(client)
     return (
         daily
         + weekly
@@ -311,6 +315,7 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
         + untracked_shows
         + tvdb_backfill
         + season_subdivision
+        + score_sync
     )
 
 

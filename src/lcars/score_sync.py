@@ -97,14 +97,26 @@ def check_anilist_score_drift(conn: sqlite3.Connection) -> dict[str, int]:
         if anilist_score is None:
             continue  # unscored externally or not on the list
 
-        checked += 1
+        # 2026-09-20 fix: skip only when a season has no score of its own
+        # AND a show-level score exists to falsely stand in for it — that
+        # combination was the real source of the ~238 noise reviews (any
+        # multi-season show scored once at the show level but rated
+        # differently per season on AniList flagged every season as
+        # "drift," even though LCARS never actually asserted a score for
+        # that specific season). When NEITHER exists, LCARS genuinely has
+        # no opinion on this season yet, and a remote score there is real,
+        # worth-flagging new information — that case still gets compared.
+        if r["season_score"] is None and r["show_score"] is not None:
+            continue
 
-        # Effective LCARS score: season's own, else show's.
+        checked += 1
         effective_lcars = (
             r["season_score"] if r["season_score"] is not None else r["show_score"]
         )
 
-        # What would LCARS have pushed to AniList?
+        # What would LCARS have pushed to AniList? None (neither season
+        # nor show is scored) means LCARS has no assertion at all — any
+        # real AniList score there is new inbound information.
         # round() uses banker's rounding, matching Python float behaviour.
         expected_anilist = (
             round(effective_lcars * 5) if effective_lcars is not None else None
@@ -124,9 +136,7 @@ def check_anilist_score_drift(conn: sqlite3.Connection) -> dict[str, int]:
         ):
             continue  # human already reviewed and resolved this exact value
 
-        previous_str = (
-            str(effective_lcars) if effective_lcars is not None else None
-        )
+        previous_str = str(effective_lcars) if effective_lcars is not None else None
         pending_review.open_or_extend(
             conn,
             "season",
@@ -191,18 +201,23 @@ def check_mal_score_drift(conn: sqlite3.Connection) -> dict[str, int]:
         if mal_score is None:
             continue  # not on the MAL list or unscored
 
-        checked += 1
+        # 2026-09-20 fix: skip only when a season has no score of its own
+        # AND a show-level score exists to falsely stand in for it — same
+        # reasoning as check_anilist_score_drift's own fix. When NEITHER
+        # exists, LCARS genuinely has no opinion on this season, and a
+        # real MAL score there is worth flagging, not suppressing.
+        if r["season_score"] is None and r["show_score"] is not None:
+            continue
 
-        # Effective LCARS score: season's own, else show's.
+        checked += 1
         effective_lcars = (
             r["season_score"] if r["season_score"] is not None else r["show_score"]
         )
 
         # What would LCARS have pushed to MAL?  round() is banker's rounding,
-        # matching `_push_mal_season_score` exactly.
-        expected_mal = (
-            round(effective_lcars / 2) if effective_lcars is not None else None
-        )
+        # matching `_push_mal_season_score` exactly. None (neither season
+        # nor show scored) means no assertion at all.
+        expected_mal = round(effective_lcars / 2) if effective_lcars is not None else None
 
         if expected_mal is not None and mal_score == expected_mal:
             continue  # consistent — LCARS pushed this, round-trip is clean
@@ -217,9 +232,7 @@ def check_mal_score_drift(conn: sqlite3.Connection) -> dict[str, int]:
         ):
             continue  # human already reviewed and resolved this exact value
 
-        previous_str = (
-            str(effective_lcars) if effective_lcars is not None else None
-        )
+        previous_str = str(effective_lcars) if effective_lcars is not None else None
         pending_review.open_or_extend(
             conn,
             "season",

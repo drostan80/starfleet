@@ -303,7 +303,7 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
         if current is None or season["season_number"] > current:
             highest_season_number_by_show[show_id] = season["season_number"]
 
-    status_candidate_by_show: dict[str, tuple[int, str]] = {}
+    status_candidate_by_show: dict[str, tuple[str, str]] = {}  # show_id -> (season_id, status)
     changed_progress_season_ids: set[str] = set()
 
     for season in seasons:
@@ -336,7 +336,7 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
             if lcars_status == "completed" and unaired_episodes:
                 lcars_status = "watching"
             if lcars_status is not None:
-                status_candidate_by_show[show_id] = (season_number, lcars_status)
+                status_candidate_by_show[show_id] = (season["id"], lcars_status)
 
         progress = entry["progress"] or 0
         if progress <= 0:
@@ -370,22 +370,34 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
             stats["episodes_backfilled"] += 1
             changed_progress_season_ids.add(season["id"])
 
+    # 2026-09-20 fix: write the SEASON's own status (legitimate — mirrors
+    # what setSeasonStatus already does manually), never show.status
+    # directly. show.status derivation has a single authority
+    # (_recompute_show_status/_compute_show_status, resolvers.py) used by
+    # every other status-writing path in this codebase; a second, parallel
+    # show-level writer here is exactly what caused a real, live
+    # multi-week oscillation between anilist_reconcile and mal_reconcile —
+    # each blindly copying the remote's current season status onto
+    # show.status with no "real unwatched aired episodes exist" guard.
+    # Deferred import: resolvers.py imports this module at load time.
+    from lcars import resolvers
+
     changed_status: dict[str, str] = {}
-    for show_id, (_, new_status) in status_candidate_by_show.items():
-        row = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
-        if row is None or row["status"] == new_status:
-            continue
-        conn.execute(
-            "UPDATE show SET status = ?, updated_at = ? WHERE id = ?", (new_status, now, show_id)
-        )
-        conn.execute(
-            "INSERT INTO status_change"
-            " (id, show_id, previous_status, new_status, changed_at, changed_by)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (ids.generate_id(conn, "c"), show_id, row["status"], new_status, now, source),
-        )
-        stats["shows_status_updated"] += 1
-        changed_status[show_id] = new_status
+    for show_id, (season_id, new_status) in status_candidate_by_show.items():
+        season_row = conn.execute(
+            "SELECT status FROM season WHERE id = ?", (season_id,)
+        ).fetchone()
+        if season_row is not None and season_row["status"] != new_status:
+            conn.execute(
+                "UPDATE season SET status = ?, updated_at = ? WHERE id = ?",
+                (new_status, now, season_id),
+            )
+        before = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
+        resolvers._recompute_show_status(conn, show_id, source)
+        after = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
+        if before is not None and after is not None and before["status"] != after["status"]:
+            stats["shows_status_updated"] += 1
+            changed_status[show_id] = after["status"]
 
     return stats, changed_status, changed_progress_season_ids
 

@@ -617,7 +617,20 @@ def _compute_show_status(conn, show_id: str) -> str | None:
     2. Otherwise — season-status-derived: the highest-numbered season's
        status, with one exception: if the highest season is PLANNED and
        at least one other season exists, the show is WATCHING (the user
-       is watching the show overall, just planning the next season)."""
+       is watching the show overall, just planning the next season).
+
+    **2026-09-20 fix**: Rule 2 alone had no defense against a season's own
+    `status` being wrong — found live via `anilist_reconcile`/
+    `mal_reconcile` repeatedly writing a remote-reported "completed" onto
+    a season that genuinely still had real, already-aired, unwatched
+    episodes (both platforms can flip a currently-airing entry's own
+    status as their episode-count metadata catches up). Rule 1 already
+    guards the *episode-derived* completion this way; Rule 2 needs the
+    same guard for the *season-status-derived* path, or a stale/wrong
+    season.status can claim completion Rule 1 would never have granted —
+    and worse, a resulting show.status='completed' auto-marks every aired
+    episode watched (_bulk_mark_all_aired_episodes_watched), fabricating
+    watch history for episodes the user hasn't actually seen."""
     # Gather non-special seasons (season 0 = specials, excluded from
     # status derivation — specials don't represent show progress).
     seasons = conn.execute(
@@ -646,6 +659,15 @@ def _compute_show_status(conn, show_id: str) -> str | None:
     highest_status = highest["status"] or "planned"  # null = inherits, treat as planned
     if highest_status == "planned" and len(seasons) > 1:
         return "watching"
+    if highest_status == "completed":
+        real_gap = conn.execute(
+            "SELECT 1 FROM episode WHERE show_id = ? AND season = ?"
+            " AND state = 'unwatched' AND air_date_utc IS NOT NULL AND air_date_utc <= ?"
+            " LIMIT 1",
+            (show_id, highest["season_number"], util.now_utc_iso()),
+        ).fetchone()
+        if real_gap is not None:
+            return "watching"
     return highest_status
 
 

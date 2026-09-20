@@ -121,17 +121,28 @@ class TestClean:
         ).fetchone()[0]
         assert pr_count == 0
 
-    def test_show_score_fallback_consistent(self, conn):
-        """Season has no score but show's score × 5 matches AniList → no flag."""
+    def test_show_score_fallback_never_flagged_as_drift(self, conn):
+        """2026-09-20 fix: a season with no score of its own is skipped
+        entirely when a show-level score exists — never compared, even
+        when AniList's real per-season score disagrees with the show-wide
+        fallback. This was the actual source of the ~238 noise reviews:
+        a multi-season show scored once at the show level but rated
+        genuinely differently per season on AniList used to flag every
+        season the show-level score didn't happen to match."""
         _show(conn, "s-aaaaaa", score=16.0)  # show score
         _season_with_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, score=None)  # no season score
         conn.commit()
 
-        # show score 16.0 × 5 = 80; AniList returns 80
-        with _fake_list([_al(100, 80)]):
+        # show score 16.0 × 5 = 80; AniList genuinely disagrees (this
+        # season is really scored 90 there) — must not be flagged.
+        with _fake_list([_al(100, 90)]):
             result = score_sync.check_anilist_score_drift(conn)
 
-        assert result == {"checked": 1, "flagged": 0}
+        assert result == {"checked": 0, "flagged": 0}
+        pr_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_review WHERE entity_type = 'season'"
+        ).fetchone()[0]
+        assert pr_count == 0
 
     def test_quarter_point_rounding_no_false_positive(self, conn):
         """LCARS 17.25 × 5 = 86.25 → expected 86 (rounded).
@@ -410,17 +421,24 @@ class TestMalClean:
         ).fetchone()[0]
         assert pr_count == 0
 
-    def test_show_score_fallback_consistent(self, conn):
-        """Season has no score; show's score / 2 matches MAL → no flag."""
+    def test_show_score_fallback_never_flagged_as_drift(self, conn):
+        """2026-09-20 fix: a season with no score of its own is skipped
+        entirely when a show-level score exists — same reasoning as
+        check_anilist_score_drift's own fix/test."""
         _show(conn, "s-aaaaaa", score=14.0)
         _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=None)
         conn.commit()
 
-        # show score 14.0 / 2 = 7 → expected_mal = 7; MAL returns 7
-        with _fake_mal_list([_mal(200, 7)]):
+        # show score 14.0 / 2 = 7; MAL genuinely disagrees (this season is
+        # really scored 9 there) — must not be flagged.
+        with _fake_mal_list([_mal(200, 9)]):
             result = score_sync.check_mal_score_drift(conn)
 
-        assert result == {"checked": 1, "flagged": 0}
+        assert result == {"checked": 0, "flagged": 0}
+        pr_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_review WHERE entity_type = 'season'"
+        ).fetchone()[0]
+        assert pr_count == 0
 
     def test_banker_rounding_no_false_positive(self, conn):
         """LCARS 17.0 / 2 = 8.5 → banker's rounds to 8.

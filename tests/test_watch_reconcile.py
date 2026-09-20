@@ -498,6 +498,70 @@ def test_the_true_highest_season_status_still_applies_normally_when_it_resolves(
     assert row["status"] == "watching"  # season 2's status, not season 1's
 
 
+# --- season-level write + show-status derivation guard (2026-09-20) -----------
+
+
+def test_reconcile_writes_the_seasons_own_status_not_just_shows(conn, monkeypatch):
+    """2026-09-20 fix: _apply_remote_list used to write show.status
+    directly and never touch season.status at all — the only way a
+    season's status ever changed was the manual setSeasonStatus mutation.
+    Remote reconcile should mirror the remote at the season level (exactly
+    what setSeasonStatus already does by hand) and let the existing,
+    single-authority _recompute_show_status derive the show level from
+    that, the same as every other status-writing path in the codebase."""
+    _show(conn, "s-wrt001", status="planned")
+    _season(conn, "z-wrt001", "s-wrt001", 1, anilist_id=100)
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(100, status="CURRENT", progress=0)])
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    season = conn.execute("SELECT status FROM season WHERE id = 'z-wrt001'").fetchone()
+    assert season["status"] == "watching"
+    show = conn.execute("SELECT status FROM show WHERE id = 's-wrt001'").fetchone()
+    assert show["status"] == "watching"
+
+
+def test_remote_completed_season_never_promotes_show_status_over_a_real_gap(conn, monkeypatch):
+    """The live bug, reproduced: AniList reports the highest season as
+    COMPLETED, but LCARS has a real, already-aired, unwatched episode for
+    that exact season (both platforms can flip a currently-airing entry's
+    own status as their episode-count metadata catches up — this isn't
+    hypothetical, it reproduced for two real shows in production, flipping
+    status.status back and forth for over a month). The show must not
+    follow the remote into 'completed', and must not fabricate a
+    watch_event via the resulting auto-complete bulk-mark
+    (_bulk_mark_all_aired_episodes_watched). The season's own status still
+    mirrors the remote faithfully — only the show-level derivation, which
+    every other real caller in the codebase already trusts, is protected."""
+    _show(conn, "s-gap001", status="watching")
+    _season(conn, "z-gap001", "s-gap001", 1, anilist_id=100)
+    conn.execute(
+        "INSERT INTO episode"
+        " (id, show_id, season, episode, kind, state, air_date_utc, created_at, updated_at)"
+        " VALUES ('e-gap001', 's-gap001', 1, 1, 'regular', 'unwatched',"
+        " '2020-01-01T00:00:00Z', 'x', 'x')"
+    )
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(100, status="COMPLETED", progress=0)])
+
+    result = watch_reconcile.reconcile_watch_progress(conn)
+
+    # Season status mirrors the remote — legitimate, matches setSeasonStatus.
+    season = conn.execute("SELECT status FROM season WHERE id = 'z-gap001'").fetchone()
+    assert season["status"] == "completed"
+    # Show status must NOT follow it — a real gap exists.
+    show = conn.execute("SELECT status FROM show WHERE id = 's-gap001'").fetchone()
+    assert show["status"] == "watching"
+    assert result["shows_status_updated"] == 0
+    # No fabricated watch event for the still-unwatched episode.
+    assert (
+        conn.execute("SELECT * FROM watch_event WHERE show_id = 's-gap001'").fetchone() is None
+    )
+    ep = conn.execute("SELECT state FROM episode WHERE id = 'e-gap001'").fetchone()
+    assert ep["state"] == "unwatched"
+
+
 # --- onward push to MAL (2026-08-26, bidirectional hub) -----------------------
 
 

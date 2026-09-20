@@ -6949,6 +6949,59 @@ async def test_set_season_status_completion_guard_blocks_airing_season(
     assert data["setSeasonStatus"]["status"] == "COMPLETED"
 
 
+async def test_show_status_never_derives_completed_over_a_real_unwatched_aired_episode(
+    client, migrated_db
+):
+    """2026-09-20 fix, live-caught: `setSeasonStatus`'s own completion guard
+    (`_season_still_airing`) only blocks a *future/undated* episode — it has
+    no opinion on an episode that has already aired and simply hasn't been
+    watched yet, so marking a season COMPLETED there was never blocked. That
+    season status then fed straight into `_compute_show_status`'s Rule 2
+    (highest season's status governs), deriving show.status='completed' with
+    a real programming gap still sitting there — and worse, that triggers
+    `_bulk_mark_all_aired_episodes_watched`, fabricating a watch_event for an
+    episode nobody watched. Confirmed live via anilist_reconcile/
+    mal_reconcile repeatedly writing exactly this "completed" over a real
+    gap for two shows in production."""
+    show = await add_show(client)
+    season_id = await _create_season(client, show["id"], 1)
+    # A real, already-aired, unwatched episode — not future/undated, so
+    # _season_still_airing (setSeasonStatus's own guard) does not object.
+    db.get_connection().execute(
+        "INSERT INTO episode"
+        " (id, show_id, season, episode, kind, state, air_date_utc,"
+        "  created_at, updated_at)"
+        " VALUES (?, ?, 1, 1, 'regular', 'unwatched', '2020-01-01T00:00:00Z',"
+        "  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        ("e-air001", show["id"]),
+    )
+    db.get_connection().commit()
+
+    data = await gql(
+        client,
+        "mutation($sid: ID!) {"
+        " setSeasonStatus(seasonId: $sid, status: COMPLETED) { id status } }",
+        {"sid": season_id},
+        headers=auth_headers(),
+    )
+    # The season's own status is exactly what was asked for — reconcile
+    # jobs are supposed to mirror the remote at this level.
+    assert data["setSeasonStatus"]["status"] == "COMPLETED"
+
+    # But show.status must not follow it into 'completed' while a real gap
+    # exists — Rule 2's new guard should hold it at 'watching' instead.
+    assert (await _show_status(client, show["id"])) == "WATCHING"
+    # And nothing should have fabricated a watch for the unwatched episode.
+    assert (
+        db.get_connection()
+        .execute("SELECT * FROM watch_event WHERE show_id = ?", (show["id"],))
+        .fetchone()
+        is None
+    )
+    ep = db.get_connection().execute("SELECT state FROM episode WHERE id = 'e-air001'").fetchone()
+    assert ep["state"] == "unwatched"
+
+
 async def test_reconcile_watch_progress_is_a_no_op_right_after_auto_completing(
     client, migrated_db, monkeypatch
 ):
