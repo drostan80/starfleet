@@ -32,6 +32,16 @@ Real outages, not theoretical. Three fixes shipped same-night:
 Recovered via `docker restart lcars` twice during the incident — safe
 both times, no uncommitted transaction to lose.
 
+- [ ] **Chase tomorrow, not confirmed**: tablet app hit
+      `net::ERR_CONNECTION_ABORTED` loading `index.html` (~21:11), fixed by
+      restarting the app. Correlates with the same night's 4 container
+      recreates (3 deploys + 1 manual restart) — if a live `LcarsWs`
+      connection was open at the moment of any one of them, that's a
+      plausible cause the existing reconnect logic may not cover. **Not
+      caused by any of tonight's shipped code changes** — none touched
+      native/WebView/networking. Full detail in Claude memory
+      (`webview-connection-aborted-after-restarts`).
+
 ## Data cleanup: 3 "Season 2" shows linked to the wrong Sonarr series (2026-09-20)
 
 Found while diagnosing the freeze above, then confirmed as a real pattern,
