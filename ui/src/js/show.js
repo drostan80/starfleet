@@ -1510,7 +1510,25 @@ function buildAnidbEpRow(ep, show, cfg) {
       // a real pre-existing bug: filePath.startsWith would throw on the
       // cfg object). Also now reports watched status like every other
       // mpv launch site.
-      launchMpv(epFilePath, cfg, { showId: show.id, season: ep.season, episode: ep.episode });
+      //
+      // watched (2026-09-20, user report): this ctx object bypasses
+      // episodeCtx() entirely (built manually, no episodeId available
+      // here), so its own watched: false fix there never reached this —
+      // or the other two — launchMpv call sites in this file. Real bug:
+      // the user always launches from a show's episode list (this file),
+      // never the calendar grid episodeCtx() actually covers, so
+      // fromStart was silently always false for every real re-watch
+      // attempt. ep.state doesn't exist on this file's own episode
+      // objects — ep.watchEvents is the established signal here (see
+      // isWatched a few lines below, and the same pattern repeated at
+      // every other watched-check in this file).
+      launchMpv(epFilePath, cfg, {
+        showId: show.id,
+        season: ep.season,
+        episode: ep.episode,
+        watched: (ep.watchEvents?.edges?.length > 0) ||
+                 (Array.isArray(ep.watchEvents) && ep.watchEvents.length > 0),
+      });
     });
     mpvCell.appendChild(mpvBtn);
   }
@@ -1820,7 +1838,13 @@ function renderSpecialCard(ep, show, container, cfg) {
   const mpvIcon = el('span', `sp-mpv-icon ${canPlay ? 'available' : 'unavailable'}`);
   if (canPlay) {
     mpvIcon.innerHTML = _mpvSvg;
-    mpvIcon.addEventListener('click', () => launchMpv(filePath, cfg, { showId: show.id, season: ep.season, episode: ep.episode }));
+    mpvIcon.addEventListener('click', () => launchMpv(filePath, cfg, {
+      showId: show.id,
+      season: ep.season,
+      episode: ep.episode,
+      watched: (ep.watchEvents?.edges?.length > 0) ||
+               (Array.isArray(ep.watchEvents) && ep.watchEvents.length > 0),
+    }));
   } else {
     mpvIcon.textContent = avail === 'downloading' ? '⬇' : avail === 'airing' ? '●' : '◷';
   }
@@ -2792,7 +2816,13 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     const mpvIcon = el('span', `sp-mpv-icon ${canPlay ? 'available' : 'unavailable'}`);
     if (canPlay) {
       mpvIcon.innerHTML = _mpvSvg;
-      mpvIcon.addEventListener('click', () => launchMpv(epFilePath, cfg, { showId: show.id, season: ep.season, episode: ep.episode }));
+      mpvIcon.addEventListener('click', () => launchMpv(epFilePath, cfg, {
+        showId: show.id,
+        season: ep.season,
+        episode: ep.episode,
+        watched: (ep.watchEvents?.edges?.length > 0) ||
+                 (Array.isArray(ep.watchEvents) && ep.watchEvents.length > 0),
+      }));
     } else {
       mpvIcon.textContent = avail === 'downloading' ? '⬇' : avail === 'airing' ? '●' : '◷';
     }
