@@ -445,7 +445,13 @@ const DEFAULT_RUNTIME_MINUTES = 60;
 export function isEpisodeAiringNow(ep) {
   if (!ep.airDateUtc) return false;
   const start = new Date(ep.airDateUtc);
-  const runtime = ep.runtimeMinutes ?? ep.show?.durationMinutes ?? DEFAULT_RUNTIME_MINUTES;
+  // `||`, not `??`: found live (user, 2026-09-20) that Sonarr stores a
+  // real 0 for an unknown episode runtime, not null — `0 ?? X` evaluates
+  // to 0, not X, so the nullish-coalescing chain never actually fell
+  // through to the default and the "airing" window was zero-width,
+  // closing the instant it opened. No real episode has a genuine
+  // 0-minute runtime, so treating a falsy value as "unknown" here is safe.
+  const runtime = ep.runtimeMinutes || ep.show?.durationMinutes || DEFAULT_RUNTIME_MINUTES;
   const end = new Date(start.getTime() + runtime * 60000);
   const now = new Date();
   return now >= start && now < end;
