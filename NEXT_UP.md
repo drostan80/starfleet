@@ -1,7 +1,60 @@
 # Next up
 
-Current version: **v0.2.37** (deployed 2026-09-20).
+Current version: **v0.2.40** (deployed 2026-09-20).
 Full build history archived to `~/repos/starfleet-archive`.
+
+---
+
+## Production freeze incident — fixed in v0.2.38-v0.2.40 (2026-09-20)
+
+Real outages, not theoretical. Three fixes shipped same-night:
+
+- [x] **v0.2.38**: `anilist_reconcile`/`mal_reconcile` were writing
+      `show.status` directly instead of `season.status`, with no guard
+      against real unwatched aired episodes — caused a live multi-week
+      status oscillation for two shows. Fixed to write season-level and
+      defer to the existing single-authority derivation.
+- [x] **v0.2.39**: the v0.2.38 fix itself had a bug — `_recompute_show_
+      status` did its own AniList+MAL push on top of the reconcile's
+      already-correct one-directional onward push, doubling/tripling
+      throttled AniList calls (2.1s/call, synchronous, process-wide) on
+      the first run after the fix landed, when a backlog of shows
+      corrected all at once. Froze the whole server for minutes; fixed by
+      skipping the redundant push from that one call site.
+- [x] **v0.2.40**: separately, `show.js`'s automatic art/synopsis
+      auto-fetch on every page load (no memory of "already tried, found
+      nothing") froze the server again — a messy stub show with many
+      AniList-linked seasons and missing synopses paid the full external-
+      fetch cost on every view. Disabled outright as a stopgap; the real
+      fix (negative caching, staged throttle, manual trigger) is a
+      separate, deliberately deferred item below.
+
+Recovered via `docker restart lcars` twice during the incident — safe
+both times, no uncommitted transaction to lose.
+
+## Data cleanup: 3 "Season 2" shows linked to the wrong Sonarr series (2026-09-20)
+
+Found while diagnosing the freeze above, then confirmed as a real pattern,
+not a one-off — see `season-2-linking-bug-pattern` in Claude memory for
+full detail:
+
+- [x] "Tantei wa mou, Shindeiru. Season 2" (`s-qp3t5j`) — fully traced:
+      linked to Sonarr's "Detective Opera Milky Holmes" (confirmed via
+      episode titles/air-dates, completely unrelated show). Soft-deleted;
+      hard-delete requested (elapses 2026-09-21T19:51:49Z, needs
+      `confirmHardDelete(retypedTitle: "Tantei wa mou, Shindeiru. Season 2")`
+      once the 24h delay passes).
+- [x] "Boys Over Flowers 2" (`s-vce5mc`) and "Bones Collector" (`s-vr1pcf`)
+      — user found and deleted the wrong entries in Sonarr directly; LCARS
+      side soft-deleted + hard-delete requested (both elapse
+      2026-09-20T19:57:14Z).
+- [ ] **Not yet done**: find and fix the actual matching logic that lets
+      a sequel/"Season 2" title link to an unrelated Sonarr/TVDB series in
+      the first place, and add a guard rail (low-confidence match should
+      never auto-accept, same lesson `show_merge.py`'s own auto-merge
+      retirement already learned). Worth checking other tracked shows for
+      the same "no AniList match for tvdb id" pending_review symptom this
+      bug pattern leaves behind, even without the root cause pinned yet.
 
 ---
 
