@@ -3475,23 +3475,33 @@ export async function init() {
       renderBody(updated, root, cfg, targetSeason);
     };
 
-    // Lazy-fetch episode synopses if any are missing
-    const hasMissing = show.episodes.some(ep => ep.synopsis == null);
-    const showMissing = show.synopsis == null;
-    if (hasMissing || showMissing) {
-      fetchEpisodeSynopses(show.id)
-        .then(async () => {
-          // Skip re-render if user is actively editing something
-          if (root.querySelector('textarea, input, .sp-mapping-editor, .sp-syn-editor, .sp-ep-syn-edit-area')) return;
-          // Re-fetch and check if anything actually changed
-          const updated = await fetchShow(showId);
-          const newSynCount = updated.episodes.filter(e => e.synopsis != null).length;
-          const oldSynCount = show.episodes.filter(e => e.synopsis != null).length;
-          if (newSynCount <= oldSynCount && updated.synopsis === show.synopsis) return;
-          rerender(updated);
-        })
-        .catch(err => console.warn('Synopsis fetch failed:', err));
-    }
+    // 2026-09-20 (incident, temporary): automatic lazy-fetch of episode
+    // synopses disabled. This ran unconditionally on every page load for
+    // any show missing synopses, making a real, synchronous, per-episode
+    // external HTTP call (TVDB/TMDB) chain — a show with many missing
+    // synopses (confirmed live: a messy 4-season/55-episode stub) froze
+    // the whole server for the duration of the page load, twice tonight.
+    // No manual replacement exists yet — see the art-fetch-negative-
+    // cache-and-throttle-plan memory / NEXT_UP.md for the real fix
+    // (negative caching + a deliberate manual trigger), which this
+    // shares its root cause with. Re-enable only alongside that work.
+    //
+    // const hasMissing = show.episodes.some(ep => ep.synopsis == null);
+    // const showMissing = show.synopsis == null;
+    // if (hasMissing || showMissing) {
+    //   fetchEpisodeSynopses(show.id)
+    //     .then(async () => {
+    //       // Skip re-render if user is actively editing something
+    //       if (root.querySelector('textarea, input, .sp-mapping-editor, .sp-syn-editor, .sp-ep-syn-edit-area')) return;
+    //       // Re-fetch and check if anything actually changed
+    //       const updated = await fetchShow(showId);
+    //       const newSynCount = updated.episodes.filter(e => e.synopsis != null).length;
+    //       const oldSynCount = show.episodes.filter(e => e.synopsis != null).length;
+    //       if (newSynCount <= oldSynCount && updated.synopsis === show.synopsis) return;
+    //       rerender(updated);
+    //     })
+    //     .catch(err => console.warn('Synopsis fetch failed:', err));
+    // }
 
     // A watch just launched from this page reports asynchronously (native
     // VLC or desktop mpv-helper — see launchMpv() in calendar.js) — once
@@ -3505,14 +3515,22 @@ export async function init() {
       }
     });
 
-    // Auto-fetch and auto-select art when a show has no poster or banner yet
-    const hasPosters = (show.artAssets || []).some(a => a.kind.toLowerCase() === 'poster');
-    const hasBanners = (show.artAssets || []).some(a =>
-      a.kind.toLowerCase() === 'banner' || a.kind.toLowerCase() === 'background');
-    if (!show.posterUrl || !show.bannerUrl || !hasPosters || !hasBanners) {
-      autoFetchArt(show, root, cfg, targetSeason).catch(err =>
-        console.warn('Auto art fetch failed:', err));
-    }
+    // 2026-09-20 (incident, temporary): automatic art auto-fetch disabled.
+    // fetch_show_art makes one AniList call per linked season, synchronously,
+    // throttled 2.1s/call *process-wide* (anilist_client.py) — a show with
+    // several AniList-linked seasons and no art at all pays that cost on
+    // *every* page load, with no memory of "already tried, found nothing."
+    // Confirmed live: opening a messy 4-season stub show froze the whole
+    // server for the duration, twice tonight. Same root cause and same
+    // planned fix as the synopsis fetch above — see that comment.
+    //
+    // const hasPosters = (show.artAssets || []).some(a => a.kind.toLowerCase() === 'poster');
+    // const hasBanners = (show.artAssets || []).some(a =>
+    //   a.kind.toLowerCase() === 'banner' || a.kind.toLowerCase() === 'background');
+    // if (!show.posterUrl || !show.bannerUrl || !hasPosters || !hasBanners) {
+    //   autoFetchArt(show, root, cfg, targetSeason).catch(err =>
+    //     console.warn('Auto art fetch failed:', err));
+    // }
 
   } catch (err) {
     hideBanner();
