@@ -434,7 +434,13 @@ export function availState(ep) {
  * to a conservative default when neither is known — an unknown runtime
  * shouldn't silently suppress the indicator for the whole broadcast day.
  */
-const DEFAULT_RUNTIME_MINUTES = 24;
+// Found by testing (user, 2026-09-20): 24 was too short to be useful in
+// practice — an episode with no stored runtime (common; TVDB/TMDB don't
+// always have it) would show "airing" for barely 24 minutes total, easy
+// to miss entirely by the time anyone checks the calendar. 60 covers the
+// common TV-drama case exactly and anime (usually ~24min real runtime)
+// only slightly over — better to overshoot than suppress the indicator.
+const DEFAULT_RUNTIME_MINUTES = 60;
 
 export function isEpisodeAiringNow(ep) {
   if (!ep.airDateUtc) return false;
