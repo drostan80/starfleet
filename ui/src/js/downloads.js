@@ -146,6 +146,11 @@ export async function playOffline(episodeId, title = '') {
   // download row itself (DownloadDatabase, A4) for its own native
   // addWatchEvent report — see VlcPlugin.kt's reportWatched().
   await window.Capacitor.Plugins.Vlc.play({ uri: localUri, title, episodeId });
+  // Same async watched-report lag as calendar.js's launchMpv() — give
+  // VlcPlugin.kt's reportWatched() time to land before pages refresh.
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent('starfleet:refresh-after-watch'));
+  }, 2000);
   return true;
 }
 

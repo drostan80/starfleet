@@ -537,6 +537,17 @@ export async function launchMpv(filePath, cfg, ctx = null) {
         // alone for anything not yet marked watched.
         fromStart: ctx?.watched === true,
       });
+      // 2026-09-20 (user request): native play() resolves as soon as VLC
+      // returns control — well before the background addWatchEvent
+      // network call (fired off separately and non-blocking, see
+      // VlcPlugin.kt's reportWatched) has had a chance to complete.
+      // Refreshing the page immediately would often still show the
+      // stale pre-watch state; a short delay here (owned by launchMpv,
+      // not by every caller) gives that call room to land first. Pages
+      // that care listen for this event rather than polling.
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('starfleet:refresh-after-watch'));
+      }, 2000);
     } catch (err) {
       showBanner(`VLC error: ${err.message || err}`, 'error');
     }
@@ -578,6 +589,12 @@ export async function launchMpv(filePath, cfg, ctx = null) {
     }
     showBanner('▶ Launching mpv…', 'info');
     setTimeout(hideBanner, 2500);
+    // No starfleet:refresh-after-watch dispatch here: this fetch resolves
+    // as soon as mpv-helper *launches* mpv (see the mpv_failed check
+    // above — that's the only signal this request ever carries), not
+    // when playback ends. There's no return-to-app moment to hang a
+    // refresh timer on for the desktop path the way there is for native
+    // VLC below, where Vlc.play() itself doesn't resolve until VLC exits.
   } catch (err) {
     const isNetErr = err instanceof TypeError;
     showBanner(
@@ -1654,4 +1671,10 @@ export async function init() {
   } else {
     setInterval(() => render(true), POLL_INTERVAL_MS);
   }
+
+  // Fired by launchMpv()'s native branch a couple seconds after VLC
+  // returns control to the app (i.e. after the watch), once the
+  // background addWatchEvent report has had time to reach the server —
+  // see launchMpv() for why this can't just refresh immediately on return.
+  window.addEventListener('starfleet:refresh-after-watch', () => render(true));
 }

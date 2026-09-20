@@ -250,7 +250,7 @@
     buildCard,
     showBanner, hideBanner,
     fetchTmdbPoster,
-  } from './js/calendar.js?v=43';
+  } from './js/calendar.js?v=44';
   import { buildWatchedToggle } from './js/watched-toggle.js?v=1';
 
   applyAppName();
@@ -510,17 +510,19 @@
   }
 
   /* ── Load ────────────────────────────────────────────────── */
-  async function load() {
+  async function load(silent = false) {
     const grid = document.getElementById('backlog-grid');
     const cfg = getConfig();
-    grid.innerHTML = '<div class="calendar-empty"><span class="spinner" style="width:18px;height:18px;border-width:2.5px"></span></div>';
+    if (!silent) {
+      grid.innerHTML = '<div class="calendar-empty"><span class="spinner" style="width:18px;height:18px;border-width:2.5px"></span></div>';
+      showBanner('Loading backlog…', 'loading');
+    }
 
     try {
-      showBanner('Loading backlog…', 'loading');
       const episodes = await fetchBacklog();
       _lastEpisodes = episodes;
       renderGrid(episodes, cfg);
-      hideBanner();
+      if (!silent) hideBanner();
     } catch (err) {
       grid.innerHTML = `<div class="calendar-empty" style="color:var(--st-dropped)">${err.message}</div>`;
       showBanner(`Error: ${err.message}`, 'error');
@@ -529,6 +531,10 @@
 
   load();
   initSearch();
+
+  // A just-watched episode needs to drop out of this list — see
+  // launchMpv() in calendar.js for why the refresh is delayed.
+  window.addEventListener('starfleet:refresh-after-watch', () => load(true));
 </script>
 
 </body>

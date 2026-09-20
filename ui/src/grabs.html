@@ -466,6 +466,9 @@
           season: ctx?.season,
           episode: ctx?.episode,
         });
+        // No starfleet:refresh-after-watch dispatch here on purpose:
+        // GrabEvent has no watched-state field, so this page has nothing
+        // to redraw — folded into the future unified list page instead.
       } catch (err) {
         showToast(`VLC error: ${err.message || err}`);
       }

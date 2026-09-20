@@ -130,7 +130,7 @@
 
 <script type="module">
   import { applyAppName } from './js/config.js?v=5';
-  import { getDownloads, retriggerDownload, purgeDownload, purgeAll, playOffline } from './js/downloads.js?v=2';
+  import { getDownloads, retriggerDownload, purgeDownload, purgeAll, playOffline } from './js/downloads.js?v=3';
   applyAppName();
   const isNative = window.Capacitor?.isNativePlatform?.();
 
@@ -237,6 +237,11 @@
   });
 
   render();
+
+  // playOffline() fires this after VlcPlugin's async watched-report has
+  // had time to land (see downloads.js) — refresh so purge/auto-delete
+  // state reflects the new watched status.
+  window.addEventListener('starfleet:refresh-after-watch', render);
 </script>
 
 </body>

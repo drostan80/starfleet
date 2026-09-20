@@ -3467,6 +3467,14 @@ export async function init() {
     renderHero(show, root, cfg);
     renderBody(show, root, cfg, targetSeason);
 
+    const rerender = (updated) => {
+      document.title = `Starfleet — ${updated.displayTitle}`;
+      root.innerHTML = '';
+      renderBanner(updated, root);
+      renderHero(updated, root, cfg);
+      renderBody(updated, root, cfg, targetSeason);
+    };
+
     // Lazy-fetch episode synopses if any are missing
     const hasMissing = show.episodes.some(ep => ep.synopsis == null);
     const showMissing = show.synopsis == null;
@@ -3480,14 +3488,22 @@ export async function init() {
           const newSynCount = updated.episodes.filter(e => e.synopsis != null).length;
           const oldSynCount = show.episodes.filter(e => e.synopsis != null).length;
           if (newSynCount <= oldSynCount && updated.synopsis === show.synopsis) return;
-          document.title = `Starfleet — ${updated.displayTitle}`;
-          root.innerHTML = '';
-          renderBanner(updated, root);
-          renderHero(updated, root, cfg);
-          renderBody(updated, root, cfg, targetSeason);
+          rerender(updated);
         })
         .catch(err => console.warn('Synopsis fetch failed:', err));
     }
+
+    // A watch just launched from this page reports asynchronously (native
+    // VLC or desktop mpv-helper — see launchMpv() in calendar.js) — once
+    // it's had time to land, re-fetch so watched-state badges are current.
+    window.addEventListener('starfleet:refresh-after-watch', async () => {
+      if (root.querySelector('textarea, input, .sp-mapping-editor, .sp-syn-editor, .sp-ep-syn-edit-area')) return;
+      try {
+        rerender(await fetchShow(showId));
+      } catch (err) {
+        console.warn('Refresh-after-watch fetch failed:', err);
+      }
+    });
 
     // Auto-fetch and auto-select art when a show has no poster or banner yet
     const hasPosters = (show.artAssets || []).some(a => a.kind.toLowerCase() === 'poster');
