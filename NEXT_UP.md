@@ -1,6 +1,6 @@
 # Next up
 
-Current version: **v0.2.31** (deployed 2026-09-20).
+Current version: **v0.2.37** (deployed 2026-09-20).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
@@ -309,6 +309,50 @@ not implied by `git commit`.
 All four Android app phases (A1-A4) are now shipped and verified end to
 end against the real deployed server, not just native-only or CDP-driven
 testing.
+
+---
+
+## Android app: mark-as-watched, resume, auto-refresh — shipped in v0.2.37 (2026-09-20)
+
+Found through live use after A1-A4 shipped, not part of the original build
+plan. This closes out the Android app build — the whole app (server prep,
+shell, VLC, download, live updates, auto-download, and this round of
+watch-tracking fixes) is now shipped and confirmed working live, end to end:
+
+- [x] **VLC resume-last-position blocked re-watching an already-watched
+      episode** — VLC's own resume feature opened straight to the last few
+      seconds and closed almost instantly, no time to seek back. Fixed with
+      `from_start: true` on `Vlc.play()` whenever the episode being launched
+      is already watched (forces playback from 0, overriding VLC's resume
+      memory); left alone for anything not yet watched. `episodeCtx()`
+      gained a `watched` field; `show.js`'s three `launchMpv()` call sites
+      (which bypassed `episodeCtx()` entirely) were fixed to compute it
+      inline — the actual primary usage path, found only by auditing every
+      call site rather than trusting the first one fixed.
+- [x] **Mark-as-watched never fired on natural end-of-file completion** —
+      root-caused via live device testing: VLC's own `extra_duration`
+      result extra reliably returns 0 specifically on natural completion
+      (fine on a manual back-press exit), silently breaking the
+      position/duration threshold check. Fixed with `MediaMetadataRetriever`
+      pulling a real duration up front (offline `content://` URI or
+      streaming URL), used in place of VLC's own value whenever available.
+      Verified end-to-end (logs → local DB → network call → server GraphQL
+      state) for both offline and streaming playback, on both the test
+      phone and the user's tablet.
+- [x] **No auto-refresh after a watch** — calendar/backlog/show/downloads
+      pages required a manual reload to show a new watched status or drop a
+      just-watched episode from the backlog. `launchMpv()`'s native branch
+      and `downloads.js`'s `playOffline()` now dispatch a
+      `starfleet:refresh-after-watch` event ~2s after VLC returns control to
+      the app (once the background `addWatchEvent` report has had time to
+      land); each page listens and does a silent re-fetch. The desktop
+      mpv-helper path deliberately does not dispatch this — that `fetch()`
+      resolves when mpv launches, not when it exits, so there's no
+      equivalent signal to hang a timer on. `grabs.html`'s separate
+      `launchMpv()` also doesn't wire it: `GrabEvent` has no watched-state
+      field for that page to redraw (folded into the future unified list
+      page instead).
+- [x] User-confirmed live end-to-end post-deploy: worked as expected.
 
 ---
 
