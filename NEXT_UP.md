@@ -1,6 +1,6 @@
 # Next up
 
-Current version: **v0.2.29** (deployed 2026-09-19).
+Current version: **v0.2.30** (deployed 2026-09-20).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
@@ -175,7 +175,7 @@ DESIGN.md §8 steps 23–27 built and verified live on the same device:
 
 ---
 
-## Android app A4 (auto-download + storage management) — code shipped in v0.2.29, engine unverified (2026-09-19)
+## Android app A4 (auto-download + storage management) — shipped in v0.2.30 (2026-09-20)
 
 `AutoDownloadWorker` (WorkManager `CoroutineWorker`, unique periodic,
 30min, UNMETERED-only by default) diffs the LCARS backlog against the
@@ -207,58 +207,56 @@ device testing, not designed in:
       `onActivityResult` (SQLite write always succeeds immediately; the
       network `addWatchEvent` call is independently retried via
       `WatchEventRetryQueue` on failure, flushed every worker tick).
-- [ ] **Blocking bug, not yet fixed: native `lcars_token` doesn't reliably
-      persist**, which means `AutoDownloadWorker`'s GraphQL calls have
-      been silently auth-failing all evening (fast ~20-40ms "SUCCESS"
-      results are auth failures returning zero episodes, not real backlog
-      fetches — confirmed by checking the actual DB/file state after each
-      run, not just trusting the WorkManager result). Two things are
-      confirmed true and don't fully explain each other, so **the cause is
-      not yet identified** — this needs real instrumentation tomorrow, not
-      more guessing:
-      - The very first failure (at original login time) has a clean,
-        deterministic explanation: `config.js`'s `Token.setToken()` call
-        (committed in `e1c8ef6`, part of A1 steps 19-20) was sitting
-        undeployed at that moment — the live server was still on the
-        stale v0.2.28 bundle, which has no such call at all. Confirmed via
-        the server's `Date` response header predating the v0.2.29 CI run.
-      - That doesn't explain later failures, though: with v0.2.29
-        confirmed live (fetched the actual executing bundle's source,
-        not just curled it — `syncConfig()` has the real `setToken` call),
-        repeated direct calls to `Token.setToken()` from the live page —
-        the simplest possible case, no page-init timing involved — **also
-        intermittently failed to persist**, with the plugin call itself
-        reporting success (`resolved OK`, no thrown exception) both times
-        it worked and both times it silently didn't. `TokenPlugin.kt`'s
-        `setToken()` is a plain `getSharedPreferences(...).edit()
-        .putString(...).apply()` — nothing in it obviously explains an
-        intermittent silent failure; `apply()`'s async disk-flush losing a
-        write if the process died first was considered and doesn't fit,
-        since the app's main process (confirmed via `pidof`) stayed alive
-        throughout every failed attempt.
-      - **Tomorrow's first step**: this needs actual logging, not CDP
-        archaeology — `syncConfig()`'s inner `catch { /* best-effort */ }`
-        around the `setToken` call swallows everything with zero trace;
-        change it to `console.warn` (or equivalent Logcat-visible output
-        on the native `setToken()` side too) and reproduce with real
-        visibility into what's actually failing/succeeding and why.
-      - Once fixed: still need the actual end-to-end verification this
-        was blocking — a live run with a valid token producing a real
-        backlog diff with zero duplicates, and eviction firing correctly
-        under `storage_limit_gb` without redownload thrashing.
-        WorkManager did correctly refuse a second forced early run this
-        session — that much of A4's own fix (the periodic-work
-        serialization guarantee) is confirmed solid; it's only the
-        auth/token layer underneath it that's unverified.
+- [x] **Native `lcars_token` sync bug, found and fixed** — the token
+      didn't reliably reach native `SharedPreferences` even though the
+      WebView's own `localStorage` copy was correct, silently auth-failing
+      every `AutoDownloadWorker` GraphQL call for a stretch of the previous
+      evening's testing (fast ~20-40ms "SUCCESS" results were auth
+      failures returning zero episodes, not real backlog fetches).
+      Root cause was never pinned to a single line — two contributing
+      issues were found and fixed together instead: (1) `bootstrapConfig()`
+      only pushed the native token when `localStorage` itself was missing
+      it, so a silent native failure had no retry path once the web side
+      looked fine — `pushNativeToken()` is now its own function, called
+      unconditionally on every native page load; (2) both the JS
+      (`syncConfig()`'s catch) and native (`TokenPlugin.setToken()`'s
+      `apply()`, fire-and-forget) sides could fail with zero observable
+      trace — JS now logs `console.warn`/`console.debug`, and native uses
+      `commit()` (a real success boolean) plus an immediate readback,
+      rejecting the call if the write didn't verifiably land. Verified
+      reliable over 5 consecutive fresh app launches the next morning
+      (each showing `commit()=true readbackMatches=true` in Logcat and the
+      token actually present in the prefs file afterward) — confidence
+      the *observable* bug is gone even without a single root-cause line,
+      since the fix closes every path that could produce the symptom.
+- [x] **Full end-to-end verification, real data, zero duplicates**:
+      digging through the DB/file state the next morning turned up a
+      complete real run from the previous evening (20:24:46-47, moments
+      before a forced second run got correctly refused by WorkManager) —
+      5 real backlog episodes downloaded with 5 unique `episode_id` rows
+      (no duplicates), then eviction correctly ran and evicted the 4
+      oldest-by-`downloaded_at` (all unwatched, so pure oldest-first),
+      leaving exactly the newest under `storage_limit_gb`. Cross-checked
+      against the actual files on disk: exactly one file present, matching
+      the one `complete` row; the 4 evicted rows' files were genuinely
+      deleted, not orphaned. That state held unchanged for ~10 hours
+      overnight with zero re-download thrashing of the evicted episodes —
+      the evict/redownload loop fix (above) is confirmed solid under real
+      elapsed time, not just a single forced test tick.
 
 Also fixed along the way: the deployed `ui/` bundle predated all of
 A1-A4's native-Capacitor branching (`isNativePlatform()` checks added
 across earlier phases were sitting in the repo, undeployed) — the app's
 play/download buttons were silently falling through to desktop-only code
-paths. This is what v0.2.29 actually ships along with A3/A4's own code.
-This same "code committed, never deployed" class of bug is also step
-33's headline duplicate-download fix's twin — worth remembering
-`v*` tag + redeploy is a discrete step, not implied by `git commit`.
+paths. This is what v0.2.29 actually shipped along with A3/A4's own code,
+with the token-sync fix following in v0.2.30. This same "code committed,
+never deployed" class of bug is also step 33's headline duplicate-download
+fix's twin — worth remembering `v*` tag + redeploy is a discrete step,
+not implied by `git commit`.
+
+All four Android app phases (A1-A4) are now shipped and verified end to
+end against the real deployed server, not just native-only or CDP-driven
+testing.
 
 ---
 

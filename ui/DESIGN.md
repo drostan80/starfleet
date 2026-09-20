@@ -781,37 +781,48 @@ A1's own step-14 spike has been run — see "Build ordering" above.
     `LcarsClient.addWatchEvent()` on a background thread — a network POST,
     independently retried via `WatchEventRetryQueue` (SharedPreferences-
     backed, flushed at the start of every worker tick) if it fails.
-38. Duplicate-download bug found, root-caused, and fixed (see step 33),
+38. ✅ Duplicate-download bug found, root-caused, and fixed (see step 33),
     verified via the local SQLite index (structurally duplicate-proof —
     `PRIMARY KEY` on `episode_id`) after a forced first run. WorkManager
     correctly refused a second forced early run — the periodic-work
     serialization guarantee itself is confirmed solid.
 
-    Blocked on a separate, still-unfixed bug before the rest of this step
-    (a real live run + eviction-under-limit) can be observed: native
+    A second, separate bug blocked the rest of this step overnight: native
     `lcars_token` (read by `LcarsClient.kt`, distinct from the WebView's
-    own `localStorage` copy) doesn't reliably persist via
-    `TokenPlugin.setToken()`. Every real `AutoDownloadWorker` tick this
-    session auth-failed and fetched zero episodes as a result (confirmed
-    via actual DB/file state, not just the WorkManager result). Two
-    partial explanations found, neither sufficient alone:
-    - The *original* failure (at login) is fully explained: `config.js`'s
-      `setToken()` call (`e1c8ef6`, A1 steps 19-20) was undeployed at
-      that moment — confirmed via the server's response `Date` header
-      predating the v0.2.29 CI run. The live v0.2.28 bundle had no such
-      call.
-    - That doesn't explain later failures: with v0.2.29 confirmed live
-      (fetched the actual executing module's source, not just a cache-
-      busted curl), repeated *direct* calls to `Token.setToken()` — no
-      page-init timing involved — intermittently failed to persist even
-      though the call itself reported success both times. `apply()`
-      losing a write to process death doesn't fit either — the main
-      process stayed alive (confirmed via `pidof`) throughout.
-    - Root cause not yet identified. `syncConfig()`'s `catch { /*
-      best-effort */ }` around this call swallows everything with zero
-      trace — next step is un-swallowing it (`console.warn` + Logcat
-      output on the native side) and reproducing with real visibility,
-      not more blind CDP probing.
+    own `localStorage` copy) didn't reliably persist via
+    `TokenPlugin.setToken()`, so real `AutoDownloadWorker` ticks
+    auth-failed and fetched zero episodes. No single root-cause line was
+    ever pinned down — the original failure had a clean explanation
+    (`config.js`'s `setToken()` call, `e1c8ef6`/A1 steps 19-20, was
+    undeployed at login time), but the same failure also reproduced later
+    against confirmed-current code via direct calls with no page-init
+    timing involved, success reported with no thrown exception both times
+    it worked and both times it silently didn't. Fixed defensively instead
+    of diagnostically (v0.2.30): `pushNativeToken()` extracted as its own
+    function and called unconditionally on every native page load, not
+    just when `syncConfig()` needed a server round trip (closes the
+    "silent failure + no retry" gap regardless of cause); `syncConfig()`'s
+    catch now logs (`console.warn`/`console.debug`) instead of swallowing;
+    `TokenPlugin.setToken()` uses `commit()` (a real success boolean) plus
+    an immediate readback, rejecting the call if the write didn't
+    verifiably land. Verified reliable over 5 consecutive fresh app
+    launches the next morning — every one showing `commit()=true
+    readbackMatches=true` in Logcat and the token actually present in the
+    prefs file afterward.
+
+    Full end-to-end verification followed, using real data recovered from
+    the DB rather than a fresh forced test: a genuine successful run from
+    the previous evening (20:24:46-47, moments before a forced second run
+    was correctly refused by WorkManager) had downloaded 5 real backlog
+    episodes with 5 unique `episode_id` rows — no duplicates — then
+    eviction correctly evicted the 4 oldest-by-`downloaded_at` (all
+    unwatched, so pure oldest-first order), leaving exactly the newest
+    under `storage_limit_gb`. Cross-checked against the actual files on
+    disk: exactly one file present, matching the one `complete` row; the
+    4 evicted rows' files were genuinely deleted, not orphaned. That state
+    held unchanged for ~10 hours overnight with zero re-download
+    thrashing of the evicted episodes — real elapsed-time confirmation of
+    the evict/redownload loop fix, not just a single forced tick.
 
 ### Project structure
 
