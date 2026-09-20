@@ -512,10 +512,14 @@ shows through one shared 220ms-spaced request chain — the real "timeout."
       same reasoning as `audit-local-files`/`reconcile-arr-state` — real
       outbound calls per show, too much cost for the automatic loop.
       Safe to re-run.
-- [ ] **Still needs running**: 369 tracked shows had `poster_url IS NULL`
-      at deploy time (2026-09-19) — `ops backfill-posters` hasn't been
-      triggered against the live library yet. The code shipping doesn't
-      fix existing posters by itself; this manual step does.
+- [x] **Backfill run** (2026-09-20) — by the time this was triggered, only
+      4 of the original 369 tracked shows still had `poster_url IS NULL`;
+      the eager TMDB fallback added alongside this feature had already
+      caught the rest through normal use over the following day. 0/4
+      filled: one real show (a Demon Slayer movie entry) genuinely has no
+      art available from any source (TVDB/TVmaze/TMDB/MAL); the other 3
+      are stub rows with no title at all in the DB, a data-completeness
+      gap unrelated to this feature. Safe to re-run if either gets fixed.
 - Client-side queue/timeout hardening (option 3 from the original
   diagnosis) deliberately skipped — once posters are populated
   server-side, the client fallback path barely gets exercised.
