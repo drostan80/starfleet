@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 2026-09-20: transparent, per the icon's own design (user request) —
-         the launcher's own mask shape (circle/squircle/etc.) still applies
-         regardless, but nothing fills the space around the artwork within
-         it; the home screen wallpaper shows through instead. -->
-    <color name="ic_launcher_background">#00000000</color>
+    <!-- 2026-09-20: a fully transparent background was tried first (per the
+         icon's own design) but rendered as opaque black on every device and
+         launcher tested (with or without Nova) — a real Android platform
+         behavior (many launchers flatten/cache adaptive icons against an
+         opaque canvas rather than true alpha compositing), not fixable by
+         adjusting this resource further. Settled on the app's own dark
+         palette (ui/CLAUDE.md background token) as the deliberate fill
+         instead, confirmed correct via aapt2 dump of the actual compiled
+         resource, not just the source file. -->
+    <color name="ic_launcher_background">#0d0f14</color>
 </resources>
