@@ -162,6 +162,46 @@ body {
 }
 .nav-icon-btn:hover { color: var(--text); }
 
+/* ── Phone-width nav (2026-09-20, user request) ──────────────
+ * Card grid/sizing is fine on phone as-is per the user — the actual
+ * problem is .top-nav: brand + 6 nav-links + 5 status-filter pills +
+ * utility icons all forced onto one non-wrapping flex row. Scoped to
+ * this breakpoint only — 640px sits well below tablet/desktop widths,
+ * so nothing here touches the app's main intended use.
+ *
+ * .nav-spacer forced to flex-basis:100% is the actual line-break
+ * mechanism: it already sits between .nav-links and .status-filter in
+ * source order, so this alone splits the bar into exactly two rows
+ * (nav-links above, status-filter + utility icons below) with no HTML
+ * changes needed. --nav-h is redefined here too, since .status-banner
+ * and .view-controls (both sticky, positioned via top: var(--nav-h))
+ * would otherwise sit under the new second row instead of below it.
+ */
+@media (max-width: 640px) {
+  :root { --nav-h: 96px; }
+
+  .top-nav {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--nav-h);
+    padding: 8px 14px;
+    row-gap: 6px;
+  }
+  .nav-links {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav-spacer {
+    flex-basis: 100%;
+    height: 0;
+  }
+  .status-filter {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-right: 0;
+  }
+}
+
 /* ── Status / error banner ───────────────────────────────── */
 /*
  * Fixed so it overlays content rather than pushing the page down.
