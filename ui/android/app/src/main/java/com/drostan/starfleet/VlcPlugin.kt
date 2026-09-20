@@ -2,6 +2,7 @@ package com.drostan.starfleet
 
 import android.content.Context
 import android.content.Intent
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.Log
 import androidx.activity.result.ActivityResult
@@ -43,6 +44,23 @@ import java.io.File
  */
 @CapacitorPlugin(name = "Vlc")
 class VlcPlugin : Plugin() {
+
+    // 2026-09-20 — found live, with real device data: VLC's own
+    // extra_duration is reliable for a manual back-press mid-playback
+    // (confirmed correct across every such exit today) but comes back as
+    // 0 specifically on genuine natural end-of-file completion — the
+    // exact case step 37's >=90% watched check most needs, and the exact
+    // case it was silently failing on. extra_position stays correct in
+    // that same case (confirmed: 1211140ms against a real ~1253000ms
+    // file, 96.7% through). Rather than trust VLC's own duration at all,
+    // play() looks the real duration up itself via MediaMetadataRetriever
+    // before launching and vlcResult() uses that as the source of truth,
+    // falling back to VLC's own value only if the retriever couldn't
+    // read it either. A single Plugin instance only ever has one launch
+    // pending at a time (the user can't start a second video from this
+    // app while one is already open in VLC), so a plain instance field is
+    // enough — no need to thread this through PluginCall/Intent extras.
+    private var reliableDurationMs: Long = 0L
 
     @PluginMethod
     fun play(call: PluginCall) {
@@ -107,6 +125,32 @@ class VlcPlugin : Plugin() {
             return
         }
 
+        // See reliableDurationMs's own comment: VLC's own extra_duration
+        // can't be trusted on natural end-of-file completion, so get the
+        // real duration ourselves before handing off to VLC. Best-effort:
+        // a read failure here (a slow/unreachable stream, an unsupported
+        // container for the retriever) must never block launching
+        // playback — it just means vlcResult() falls back to whatever
+        // VLC itself reports, same as before this fix existed.
+        // MediaMetadataRetriever only implements AutoCloseable since API 29
+        // (this project's minSdk is 24) — release() explicitly instead of
+        // Kotlin's use{}, which would throw NoSuchMethodError on API 24-28.
+        val retriever = MediaMetadataRetriever()
+        reliableDurationMs = try {
+            if (offline) {
+                retriever.setDataSource(context, mediaUri)
+            } else {
+                retriever.setDataSource(mediaUri.toString(), emptyMap())
+            }
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: 0L
+        } catch (e: Exception) {
+            Log.w("VlcPlugin", "MediaMetadataRetriever failed, falling back to VLC's own duration", e)
+            0L
+        } finally {
+            retriever.release()
+        }
+
         startActivityForResult(call, intent, "vlcResult")
     }
 
@@ -115,16 +159,24 @@ class VlcPlugin : Plugin() {
         if (call == null) return
         val data = result.data
         val position = data?.getLongExtra("extra_position", -1L) ?: -1L
-        val duration = data?.getLongExtra("extra_duration", -1L) ?: -1L
-        // 2026-09-20: found live that this doesn't always fire — depends
-        // entirely on VLC actually setting these extras, an undocumented
-        // convention that may behave differently for a manual back-press
-        // vs. natural end-of-video auto-return. Logged so a real miss is
-        // visible instead of silently invisible.
+        val vlcDuration = data?.getLongExtra("extra_duration", -1L) ?: -1L
+        // Root-caused live (2026-09-20), real device data: VLC's own
+        // extra_duration is reliable for a manual back-press mid-playback
+        // but comes back as 0 specifically on genuine natural
+        // end-of-file completion — confirmed via a real test (position
+        // 1211140ms, ~96.7% through a real ~1253000ms file, yet
+        // extra_duration read 0). extra_position stays correct in that
+        // same case, which is exactly why this was so easy to miss: the
+        // bug isn't "VLC returns nothing," it's "VLC returns a correct
+        // position paired with a wrong duration," and the >=90% check
+        // silently failed on the wrong number. Use the duration play()
+        // looked up itself (reliableDurationMs) as the source of truth;
+        // fall back to VLC's own value only if that lookup also failed.
+        val duration = if (reliableDurationMs > 0) reliableDurationMs else vlcDuration
         Log.d(
             "VlcPlugin",
             "vlcResult resultCode=${result.resultCode} hasData=${data != null} " +
-                "position=$position duration=$duration",
+                "position=$position vlcDuration=$vlcDuration reliableDurationMs=$reliableDurationMs",
         )
         // Same >=90% threshold as the desktop mpv-helper.py and the
         // Android VLC client's own existing convention (DESIGN.md §8).
