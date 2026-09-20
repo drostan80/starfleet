@@ -49,6 +49,7 @@ class VlcPlugin : Plugin() {
         val localUri = call.getString("uri")
         val filePath = call.getString("path")
         val title = call.getString("title", "")
+        val episodeId = call.getString("episodeId")
 
         val mediaUri: Uri
         var offline = false
@@ -74,10 +75,30 @@ class VlcPlugin : Plugin() {
             return
         }
 
+        // Found live (user, 2026-09-20): VLC's own resume-last-position
+        // feature is great for continuing an in-progress episode, but for
+        // an already-watched one it means every re-watch starts (and
+        // often instantly ends) right near the end, with no time to even
+        // seek back. Force from-start only for a deliberate re-watch;
+        // leave VLC's own resume alone otherwise. Streaming callers (no
+        // download row) must pass fromStart explicitly since there's
+        // nothing here to look it up from; offline callers can omit it
+        // and let it resolve from the download row's own watched flag,
+        // the same "episodeId alone is enough" pattern reportWatched()
+        // already uses.
+        val fromStart = if (call.data.has("fromStart")) {
+            call.getBoolean("fromStart", false) ?: false
+        } else if (offline && episodeId != null) {
+            DownloadDatabase(context).get(episodeId)?.watched ?: false
+        } else {
+            false
+        }
+
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(mediaUri, "video/*")
             setPackage("org.videolan.vlc")
             putExtra("title", title)
+            if (fromStart) putExtra("from_start", true)
             if (offline) addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
 

@@ -485,7 +485,13 @@ const SVC_DEFS = [
 export function episodeCtx(ep) {
   const showId = ep?.show?.id;
   if (!showId) return null;
-  return { showId, season: ep.season ?? null, episode: ep.episode ?? null, episodeId: ep.id };
+  return {
+    showId,
+    season: ep.season ?? null,
+    episode: ep.episode ?? null,
+    episodeId: ep.id,
+    watched: ep.state === 'WATCHED',
+  };
 }
 
 /**
@@ -522,6 +528,14 @@ export async function launchMpv(filePath, cfg, ctx = null) {
         showId: ctx?.showId,
         season: ctx?.season,
         episode: ctx?.episode,
+        // Found live (user, 2026-09-20): VLC's own resume-last-position
+        // feature is great for continuing an in-progress episode, but it
+        // means a re-watch of an already-watched episode starts (and
+        // often instantly ends) right near the end, with no time to even
+        // seek back — nowhere sensible to resume FROM once it's done.
+        // Force from-start only for a deliberate re-watch; leave resume
+        // alone for anything not yet marked watched.
+        fromStart: ctx?.watched === true,
       });
     } catch (err) {
       showBanner(`VLC error: ${err.message || err}`, 'error');
