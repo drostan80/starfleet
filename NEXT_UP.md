@@ -1,7 +1,59 @@
 # Next up
 
-Current version: **v0.2.30** (deployed 2026-09-20).
+Current version: **v0.2.31** (deployed 2026-09-20).
 Full build history archived to `~/repos/starfleet-archive`.
+
+---
+
+## Android app auto-download controls — shipped in v0.2.31 (2026-09-20)
+
+User feedback after using the app for real: wanted control over what
+auto-download grabs and how it manages storage, rather than it being an
+unconfigurable black box. Four pieces, all confirmed live on-device
+against the deployed server (not just built/unit-tested):
+
+- [x] **`backlog(includePlanned: true)`** — a planning-status show whose
+      first episode has already aired is now included, matching "started"
+      shows the user wants grabbed without a manual promotion to
+      watching. Paused shows remain excluded (already were). Default
+      `false` server-side, so the web Backlog page is unaffected.
+      Confirmed live: previously-invisible episodes of several
+      already-started planned shows appeared in the very next real
+      backlog fetch after deploying.
+- [x] **Auto-download on/off toggle** — previously no way to disable it
+      short of never configuring a server. `AutoDownloadWorker.schedule()`
+      now cancels the periodic work when disabled rather than leaving a
+      no-op tick every 30 minutes. Confirmed live via the settings UI:
+      toggling off produced a real `WM-GreedyScheduler: Cancelling work
+      ID ...` in Logcat; toggling back on re-scheduled and (since
+      periodic work runs immediately when constraints are already met)
+      triggered an actual run within seconds.
+- [x] **Time-based auto-delete** — new `watched_at` column
+      (`DownloadDatabase` v3) plus `evictWatchedPastHours()`: deletes a
+      watched episode a configurable number of hours after it was marked
+      watched, independent of (and checked before) the existing
+      size-based eviction. Disabled by default (0 = never).
+- [x] **In-app Settings page access** — new `AppSettingsPlugin` bridges
+      all four settings (the three above plus the existing Wi-Fi-only
+      toggle) to `settings.html`, so they're reachable without leaving
+      the app for the native "Change server" screen. That screen keeps
+      its own Wi-Fi-only/storage-limit fields too — same SharedPreferences
+      keys, so both stay in sync automatically; not a replacement.
+
+One side effect worth knowing about: `DownloadDatabase`'s v2→v3 upgrade
+drops and recreates the table (existing, intentional policy — a
+re-downloadable cache, not data of record), so any app update that bumps
+`DB_VERSION` will make the worker's next tick treat every already-
+downloaded file as "new" again and re-enqueue it. Confirmed this doesn't
+create `-1` duplicate files (`episode_id` `PRIMARY KEY` still holds), but
+it does mean real re-download bandwidth/storage churn on every such
+upgrade — acceptable for a hobby app, but a good reason not to bump
+`DB_VERSION` casually.
+
+Still open: the app icon is a placeholder — user is designing a real one
+(needs a square PNG, 1024×1024 ideally, safe detail within the center
+~66%, for Android Studio's Image Asset tool to generate the adaptive-icon
+set from).
 
 ---
 
