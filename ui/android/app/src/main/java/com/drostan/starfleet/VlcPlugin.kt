@@ -3,6 +3,7 @@ package com.drostan.starfleet
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.activity.result.ActivityResult
 import androidx.core.content.FileProvider
 import com.getcapacitor.JSObject
@@ -94,9 +95,20 @@ class VlcPlugin : Plugin() {
         val data = result.data
         val position = data?.getLongExtra("extra_position", -1L) ?: -1L
         val duration = data?.getLongExtra("extra_duration", -1L) ?: -1L
+        // 2026-09-20: found live that this doesn't always fire — depends
+        // entirely on VLC actually setting these extras, an undocumented
+        // convention that may behave differently for a manual back-press
+        // vs. natural end-of-video auto-return. Logged so a real miss is
+        // visible instead of silently invisible.
+        Log.d(
+            "VlcPlugin",
+            "vlcResult resultCode=${result.resultCode} hasData=${data != null} " +
+                "position=$position duration=$duration",
+        )
         // Same >=90% threshold as the desktop mpv-helper.py and the
         // Android VLC client's own existing convention (DESIGN.md §8).
         val watched = duration > 0 && position.toDouble() / duration.toDouble() >= 0.9
+        Log.d("VlcPlugin", "vlcResult watched=$watched")
 
         val ret = JSObject()
         ret.put("position", position)
@@ -128,6 +140,7 @@ class VlcPlugin : Plugin() {
         var showId = call.getString("showId")
         var season = call.getInt("season")
         var episodeNum = call.getInt("episode")
+        Log.d("VlcPlugin", "reportWatched episodeId=$episodeId showId=$showId season=$season episode=$episodeNum")
 
         if (episodeId != null) {
             val db = DownloadDatabase(context)
@@ -140,11 +153,15 @@ class VlcPlugin : Plugin() {
             }
         }
 
-        val resolvedShowId = showId ?: return
+        val resolvedShowId = showId ?: run {
+            Log.d("VlcPlugin", "reportWatched: no showId resolvable, addWatchEvent skipped")
+            return
+        }
         val appContext = context.applicationContext
         Thread {
             val watchedAtIso = java.time.Instant.now().toString()
             val ok = LcarsClient.addWatchEvent(appContext, resolvedShowId, season, episodeNum, watchedAtIso)
+            Log.d("VlcPlugin", "addWatchEvent ok=$ok showId=$resolvedShowId season=$season episode=$episodeNum")
             if (!ok) {
                 WatchEventRetryQueue.enqueue(appContext, resolvedShowId, season, episodeNum, watchedAtIso)
             }
