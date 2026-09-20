@@ -12,7 +12,7 @@
  * ordering TBD (batch 5 — specials placement decision pending).
  */
 
-import { bootstrapConfig, requireConfig, rewriteHost, applyAppName } from './config.js?v=4';
+import { bootstrapConfig, requireConfig, rewriteHost, applyAppName } from './config.js?v=5';
 import {
   fetchShow, addWatchEvent, deleteWatchEvent, setScore, setSeasonScore,
   setSeasonStatus, setSeasonMapping, reconcileSeasonMapping,

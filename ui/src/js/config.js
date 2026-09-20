@@ -53,6 +53,29 @@ export function saveConfig(cfg) {
  * Server values win for shared keys; localStorage wins for local-only keys.
  * Returns the merged config, or null if not authenticated.
  */
+// A1 step 19 — native code (VlcPlugin's future A3/A4 siblings) has no
+// access to localStorage; TokenPlugin copies the token into
+// SharedPreferences instead. A native call rejecting must never break the
+// web config sync it rode in on, so failures here are caught, not thrown —
+// but NOT swallowed silently: A4 testing (2026-09-19) found this call can
+// fail with no exception at all — `setToken()` resolves OK yet the native
+// SharedPreferences write never lands, root cause still unidentified as of
+// that session — so a bare try/catch with no log left that failure mode
+// completely invisible. Idempotent and cheap; called unconditionally on
+// every native page load (see bootstrapConfig below), not just when
+// syncConfig() itself needed a server round trip — a one-shot push with no
+// retry is exactly what let a single silent failure desync LcarsClient.kt's
+// copy indefinitely.
+async function pushNativeToken(token) {
+  if (!token || !window.Capacitor?.isNativePlatform?.()) return;
+  try {
+    await window.Capacitor.Plugins.Token.setToken({ token });
+    console.debug('[starfleet] Token.setToken resolved OK');
+  } catch (e) {
+    console.warn('[starfleet] Token.setToken failed:', e);
+  }
+}
+
 export async function syncConfig() {
   try {
     const res = await fetch('/auth/settings');
@@ -67,18 +90,7 @@ export async function syncConfig() {
       }
     }
     saveConfig(local);
-
-    // A1 step 19 — native code (VlcPlugin's future A3/A4 siblings) has no
-    // access to localStorage; TokenPlugin copies the token into
-    // SharedPreferences instead. Every page that calls syncConfig() gets
-    // this for free rather than needing its own wiring. Best-effort: a
-    // native call rejecting must never break the web config sync it rode
-    // in on.
-    if (local.lcars_token && window.Capacitor?.isNativePlatform?.()) {
-      try {
-        await window.Capacitor.Plugins.Token.setToken({ token: local.lcars_token });
-      } catch { /* best-effort */ }
-    }
+    await pushNativeToken(local.lcars_token);
 
     return local;
   } catch {
@@ -108,11 +120,17 @@ export function requireConfig() {
  * Bootstrap config for page init: if localStorage is missing shared keys,
  * pull them from the server first. Then fall through to requireConfig().
  * Call this (with await) instead of requireConfig() at page load.
+ *
+ * On native, pushNativeToken() also runs even when localStorage already
+ * had the token (skipping syncConfig() entirely) — see pushNativeToken's
+ * own comment for why a one-shot push isn't enough on its own.
  */
 export async function bootstrapConfig() {
   const cfg = getConfig();
   if (!cfg || !cfg.lcars_token) {
     await syncConfig();
+  } else {
+    await pushNativeToken(cfg.lcars_token);
   }
   return requireConfig();
 }

@@ -11,7 +11,7 @@
  * CAN set. Once that lands, implement subscriptions here.
  */
 
-import { getConfig } from './config.js?v=4';
+import { getConfig } from './config.js?v=5';
 
 /**
  * Execute a GraphQL query or mutation against LCARS.

@@ -8,7 +8,7 @@
  * - Week:  prev/next step by 7 days; range is Mon–Sun of anchor week
  */
 
-import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=4';
+import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
 import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=19';
 import { openArtPicker } from './art-picker.js?v=1';
 import {
