@@ -672,7 +672,7 @@ def _compute_show_status(conn, show_id: str) -> str | None:
 
 
 def _recompute_show_status(
-    conn, show_id: str, changed_by: str, *, _from_bulk_mark: bool = False
+    conn, show_id: str, changed_by: str, *, _from_bulk_mark: bool = False, _skip_push: bool = False
 ) -> None:
     """Derive show.status from seasons/episodes and apply side effects
     when it changes.  The single place that updates show.status after
@@ -683,7 +683,24 @@ def _recompute_show_status(
     episodes_watched's call tree, to prevent the cycle: recompute →
     COMPLETED → bulk-mark → recompute.  When True, skips the bulk-mark
     and per-season _try_complete_season calls (the caller already handled
-    episode state)."""
+    episode state).
+
+    _skip_push: True when called from watch_reconcile.py's own
+    _apply_remote_list (2026-09-20) — a real incident, not theoretical:
+    that caller already does its own one-directional "hub" push onward
+    to the *other* service (never back to the one the change came from),
+    the correct behavior for a remote-sourced change. Without this flag,
+    this function's own unconditional _push_show_status/
+    _push_mal_show_status ran *again* on top of that — a pointless
+    self-push back to the service the status was just read from, plus a
+    genuine duplicate push to the other one. On the first real run after
+    this module's status-derivation fix landed, a backlog of shows
+    corrected all at once, and each one paid for 2-3x the throttled
+    AniList calls it needed (anilist_client's rate limiter sleeps
+    synchronously, blocking LCARS's single worker) — enough to make the
+    whole server unresponsive for several minutes, not just this feature.
+    Every other caller (setSeasonStatus, addWatchEvent, etc.) still needs
+    the push here, since none of them push anywhere themselves."""
     show = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
     if show is None:
         return
@@ -705,8 +722,9 @@ def _recompute_show_status(
         " VALUES (?, ?, ?, ?, ?, ?)",
         (ids.generate_id(conn, "c"), show_id, old_status, new_status, now, changed_by),
     )
-    _push_show_status(conn, show_id, new_status)
-    _push_mal_show_status(conn, show_id, new_status)
+    if not _skip_push:
+        _push_show_status(conn, show_id, new_status)
+        _push_mal_show_status(conn, show_id, new_status)
 
     if new_status == "completed" and not _from_bulk_mark:
         _stamp_completed_at_if_highest_season(conn, show_id, new_status)

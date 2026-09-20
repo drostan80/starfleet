@@ -625,3 +625,48 @@ def test_anilist_reconcile_no_change_pushes_nothing_to_mal(conn, monkeypatch):
     watch_reconcile.reconcile_watch_progress(conn)
 
     assert mal_calls == []  # already converged -> no onward push
+
+
+def test_status_change_pushes_to_mal_exactly_once_never_back_to_anilist(conn, monkeypatch):
+    """2026-09-20 incident: _recompute_show_status's own unconditional push
+    (both AniList and MAL) used to run on top of reconcile_watch_progress's
+    own onward-to-MAL push below — a pointless self-push back to AniList
+    (the service the change came FROM) plus a genuine duplicate push to
+    MAL. Real production impact: a backlog of shows corrected in one run
+    each paid for 2-3x the throttled (synchronous, 2.1s/call) AniList
+    calls, blocking the whole server for minutes on the first run after
+    the status-derivation fix landed. Exactly one MAL call, zero AniList
+    calls, is the contract now."""
+    from lcars import mal_client
+
+    _show(conn, "s-once01", status="completed")
+    _season(conn, "z-once01", "s-once01", 1, anilist_id=100)
+    conn.execute("UPDATE season SET mal_id = 900 WHERE id = 'z-once01'")
+    conn.execute(
+        "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+        " VALUES ('z-once01', 'mal', 900, 'x')"
+    )
+    conn.commit()
+
+    config.set_current(config.Config(anilist_access_token="atok", mal_access_token="mtok"))
+    monkeypatch.setattr(
+        anilist_client, "fetch_my_anime_list", lambda token: [_entry(100, "CURRENT", progress=0)]
+    )
+    anilist_calls = []
+    monkeypatch.setattr(
+        anilist_client,
+        "save_media_list_entry",
+        lambda token, anilist_id, **kw: anilist_calls.append({"anilist_id": anilist_id, **kw}),
+    )
+    mal_calls = []
+    monkeypatch.setattr(
+        mal_client,
+        "update_my_list_status",
+        lambda token, mal_id, **kw: mal_calls.append({"mal_id": mal_id, **kw}),
+    )
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    assert anilist_calls == []  # never push back to the service the change came from
+    status_pushes = [c for c in mal_calls if "status" in c]
+    assert status_pushes == [{"mal_id": 900, "status": "watching"}]  # exactly once

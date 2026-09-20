@@ -380,6 +380,15 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     # each blindly copying the remote's current season status onto
     # show.status with no "real unwatched aired episodes exist" guard.
     # Deferred import: resolvers.py imports this module at load time.
+    #
+    # _skip_push=True: real incident, 2026-09-20 — this function's caller
+    # (reconcile_watch_progress/mal_reconcile.reconcile_mal_progress) already
+    # pushes onward to the *other* service below (the correct one-directional
+    # hub push); _recompute_show_status's own unconditional push duplicated
+    # that AND pointlessly pushed back to the service the change came from.
+    # On the first run after this fix landed, a backlog of shows corrected
+    # at once each paid for 2-3x the throttled (synchronous, 2.1s/call)
+    # AniList calls it needed, blocking the whole server for minutes.
     from lcars import resolvers
 
     changed_status: dict[str, str] = {}
@@ -393,7 +402,7 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
                 (new_status, now, season_id),
             )
         before = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
-        resolvers._recompute_show_status(conn, show_id, source)
+        resolvers._recompute_show_status(conn, show_id, source, _skip_push=True)
         after = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
         if before is not None and after is not None and before["status"] != after["status"]:
             stats["shows_status_updated"] += 1
