@@ -15,6 +15,7 @@ Format (titles dump): one line per title, tab-separated:
   Lines starting with # are comments.
 """
 
+import datetime
 import gzip
 import logging
 import time
@@ -767,15 +768,28 @@ def _air_date_arbiter(
     within the anime the community mapping already picked. See
     derive_episode_mappings' own call-site comment for the full "why."
 
-    Confident only on an exact calendar-day match against exactly one
-    AniDB *regular* (anidb_season=1) episode for that anime — no date,
-    no match, or more than one regular episode landing on the same day
-    all return None rather than guess, same "never guess" convention
-    this module uses everywhere else. Deliberately date-only (not
-    time-of-day): AniDB's own `airdate` is a bare date, and TVDB/Sonarr
-    frequently stamps a fixed same-day broadcast time that doesn't
-    correspond to anything AniDB records, so comparing times would only
-    ever produce false non-matches.
+    Confident only on a same-day-or-adjacent-day match against exactly
+    one AniDB *regular* (anidb_season=1) episode for that anime — no
+    date, no match within the window, or more than one regular episode
+    landing in it all return None rather than guess, same "never guess"
+    convention this module uses everywhere else. Deliberately date-only
+    (not time-of-day): AniDB's own `airdate` is a bare date, and
+    TVDB/Sonarr frequently stamps a fixed same-day broadcast time that
+    doesn't correspond to anything AniDB records, so comparing times
+    would only ever produce false non-matches.
+
+    **±1 day, not exact-only** (2026-09-22, found live on HUNTER×HUNTER):
+    LCARS's own stored dates ran a consistent one calendar day *earlier*
+    than AniDB's real dates across an entire show — a JST/UTC
+    date-boundary normalization difference between how Sonarr/TVDB and
+    AniDB each record the same real broadcast, not a wrong date on
+    either side. An exact-day-only match left an already-correct
+    mapping permanently unlocked. The window is still narrow enough
+    (a single day either side) that it only ever absorbs this exact
+    known class of skew — a real week-scale schedule slip still won't
+    accidentally match, and the "must be exactly one candidate" rule
+    still refuses to guess between two real episodes that happen to
+    land close together.
     """
     if not air_date_utc:
         return None
@@ -786,9 +800,16 @@ def _air_date_arbiter(
             " WHERE anidb_anime_id = ?",
             (anidb_anime_id,),
         ).fetchall()
+    try:
+        target = datetime.date.fromisoformat(date_part)
+    except ValueError:
+        return None
+    window = {
+        (target + datetime.timedelta(days=delta)).isoformat() for delta in (-1, 0, 1)
+    }
     candidates = [
         r for r in cache[anidb_anime_id]
-        if r["airdate"] == date_part and r["anidb_season"] == 1
+        if r["airdate"] in window and r["anidb_season"] == 1
     ]
     if len(candidates) != 1:
         return None

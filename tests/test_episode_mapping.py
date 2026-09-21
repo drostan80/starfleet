@@ -536,6 +536,54 @@ class TestAirDateArbiter:
         assert row["anidb_epno"] == 1
         assert row["confidence"] == "auto"
 
+    def test_one_day_off_matches_timezone_skew(self, conn):
+        """2026-09-22 — found live on HUNTER×HUNTER: LCARS's own stored
+        date ran a consistent one day earlier than AniDB's real date
+        across the whole show (a JST/UTC boundary difference, not a
+        wrong date). Must still confidently match and lock within the
+        ±1 day window."""
+        _seed_air_date_show(conn, offset=99)
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, air_date_utc)"
+            " VALUES ('e-ad006', 's-airdt1', 1, 1, '2001-02-23T15:00:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO anidb_episode (anidb_anime_id, anidb_season, anidb_epno, airdate)"
+            " VALUES (900, 1, 58, '2001-02-24')"
+        )
+        conn.commit()
+
+        anidb.derive_episode_mappings(conn)
+
+        row = conn.execute(
+            "SELECT anidb_epno, confidence FROM episode_anidb_mapping WHERE episode_id = 'e-ad006'"
+        ).fetchone()
+        assert row["anidb_epno"] == 58
+        assert row["confidence"] == "air_date_confirmed"
+
+    def test_two_days_off_does_not_match(self, conn):
+        """The window is deliberately narrow — a real two-day-or-more
+        gap (an actual schedule slip, not a timezone artifact) must not
+        be absorbed."""
+        _seed_air_date_show(conn, offset=0)
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, air_date_utc)"
+            " VALUES ('e-ad007', 's-airdt1', 1, 1, '2001-02-20T15:00:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO anidb_episode (anidb_anime_id, anidb_season, anidb_epno, airdate)"
+            " VALUES (900, 1, 58, '2001-02-24')"
+        )
+        conn.commit()
+
+        anidb.derive_episode_mappings(conn)
+
+        row = conn.execute(
+            "SELECT anidb_epno, confidence FROM episode_anidb_mapping WHERE episode_id = 'e-ad007'"
+        ).fetchone()
+        assert row["anidb_epno"] == 1  # the resolver's own default-offset result, untouched
+        assert row["confidence"] == "auto"
+
 
 class TestParseEpisodesXml:
     """Tests for _parse_episodes_xml — parsing AniDB HTTP API responses."""
