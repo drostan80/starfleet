@@ -360,6 +360,48 @@ class TestCreateShowSequelDetection:
         payload = json.loads(msg[len("sequel_of:"):])
         assert payload["parentTitle"] == "Kusuriya no Hitorigoto: Season 2"
 
+    @patch("lcars.shows.metadata.fetch_and_populate")
+    def test_skip_sequel_check_bypasses_detection(self, mock_fetch, conn):
+        """2026-09-22 — the confirmed bug: resubmitting the exact same
+        input after 'It isn't — add as new show' used to hit this exact
+        same detection again and loop back into the same error. With
+        skip_sequel_check=True, this instead takes the normal
+        already-a-stub path (s-stub already exists for this AniList id
+        in the fixture) and promotes it, rather than raising."""
+        input_data = {
+            "media_shape": "episodic",
+            "tracking_space": "anime",
+            "primary_title": "english",
+            "title_english": "Sasaki and Peeps Season 2",
+            "anilist_id": 176314,
+            "mal_id": 58518,
+            "skip_sequel_check": True,
+        }
+        show_id = shows.create_show(conn, input_data)
+        row = conn.execute(
+            "SELECT title_english, tracked FROM show WHERE id = ?", (show_id,)
+        ).fetchone()
+        assert row["title_english"] == "Sasaki and Peeps Season 2"
+        assert row["tracked"] == 1
+        # Promoted the existing stub, not folded into the parent as a season.
+        assert show_id == "s-stub"
+        mock_fetch.assert_called_once()
+
+    def test_skip_sequel_check_false_still_detects(self, conn):
+        """The flag must be opt-in — omitting it (or passing false)
+        keeps the normal detection behavior."""
+        input_data = {
+            "media_shape": "episodic",
+            "tracking_space": "anime",
+            "primary_title": "english",
+            "title_english": "Sasaki and Peeps Season 2",
+            "anilist_id": 176314,
+            "mal_id": 58518,
+            "skip_sequel_check": False,
+        }
+        with pytest.raises(shows.SequelDetectedError):
+            shows.create_show(conn, input_data)
+
 
 class TestTvdbCollision:
     """W1 — TVDB franchise collision tier: same TVDB ID = same franchise."""

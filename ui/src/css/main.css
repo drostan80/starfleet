@@ -1744,11 +1744,44 @@ body {
   font-size: 11px !important;
   color: var(--muted);
 }
-.sequel-confirm-separate-link {
+.sequel-confirm-separate-link,
+.sequel-confirm-wrong-parent-link {
   color: var(--muted);
   cursor: pointer;
   transition: color 0.15s;
 }
-.sequel-confirm-separate-link:hover {
+.sequel-confirm-separate-link:hover,
+.sequel-confirm-wrong-parent-link:hover {
   color: var(--text);
+}
+.parent-picker-dialog {
+  max-width: 480px;
+  width: 90vw;
+}
+.parent-picker-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+.parent-picker-results {
+  margin-top: 10px;
+  max-height: 260px;
+  overflow-y: auto;
+  text-align: left;
+}
+.parent-picker-row {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.parent-picker-row:hover {
+  background: var(--surface);
 }

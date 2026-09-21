@@ -157,7 +157,15 @@ export function parseSequelError(msg) {
 
 /**
  * Show a modal confirmation for attaching a sequel as a new season.
- * Returns a Promise<'attach'|'separate'|'cancel'>.
+ * Returns a Promise<'attach'|'separate'|'wrong_parent'|'cancel'>.
+ *
+ * 'wrong_parent' (2026-09-22) — the detection found A sequel relation,
+ * but not the right one (e.g. it picked a loosely-related show instead
+ * of the true parent). Distinct from 'separate' (genuinely not a
+ * sequel of anything tracked): here the caller should offer a picker
+ * (pickCorrectParent) so the human can point at the actual parent show
+ * directly, rather than being stuck choosing between "attach to the
+ * wrong show" and "lose the season relationship entirely."
  */
 export function confirmSequelAttach(sequel) {
   return new Promise(resolve => {
@@ -175,6 +183,9 @@ export function confirmSequelAttach(sequel) {
         <p class="sequel-confirm-separate">
           It isn't — <a href="#" class="sequel-confirm-separate-link">add as new show</a>
         </p>
+        <p class="sequel-confirm-separate">
+          Wrong show — <a href="#" class="sequel-confirm-wrong-parent-link">it's a sequel of a different show</a>
+        </p>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -191,7 +202,78 @@ export function confirmSequelAttach(sequel) {
       overlay.remove();
       resolve('separate');
     };
+    overlay.querySelector('.sequel-confirm-wrong-parent-link').onclick = (e) => {
+      e.preventDefault();
+      overlay.remove();
+      resolve('wrong_parent');
+    };
   });
+}
+
+/**
+ * Modal picker letting the user search tracked shows and pick the real
+ * parent, when auto-detection pointed at the wrong one. Returns
+ * Promise<{id, title} | null> (null on cancel).
+ */
+export async function pickCorrectParent() {
+  const { fetchAllShows } = await import('./api.js');
+  const allShows = await fetchAllShows();
+  const candidates = allShows.filter(s => s.tracked && s.trackingSpace === 'anime');
+
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'sequel-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="sequel-confirm-dialog parent-picker-dialog">
+        <p>Which show is this actually a sequel of?</p>
+        <input type="text" class="parent-picker-search" placeholder="Search tracked shows…" autocomplete="off">
+        <div class="parent-picker-results"></div>
+        <div class="sequel-confirm-btns">
+          <button class="btn-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('.parent-picker-search');
+    const results = overlay.querySelector('.parent-picker-results');
+
+    function renderResults(query) {
+      const q = query.trim().toLowerCase();
+      const matches = q
+        ? candidates.filter(s => (s.displayTitle || '').toLowerCase().includes(q)).slice(0, 25)
+        : [];
+      results.innerHTML = matches.map(s =>
+        `<div class="parent-picker-row" data-show-id="${s.id}">${s.displayTitle}</div>`
+      ).join('');
+      results.querySelectorAll('.parent-picker-row').forEach(row => {
+        row.onclick = () => {
+          const show = candidates.find(s => s.id === row.dataset.showId);
+          overlay.remove();
+          resolve(show ? { id: show.id, title: show.displayTitle } : null);
+        };
+      });
+    }
+    input.oninput = () => renderResults(input.value);
+    input.focus();
+    overlay.querySelector('.btn-cancel').onclick = () => {
+      overlay.remove();
+      resolve(null);
+    };
+  });
+}
+
+/**
+ * Attach a sequel to a show the user picked directly (bypassing
+ * whatever the auto-detector originally proposed). Computes the next
+ * season number from the chosen show's own current seasons, then uses
+ * the same setSeasonMapping path attachSequel already uses.
+ */
+export async function attachSequelToChosenParent(parentShowId, anilistId, malId) {
+  const { fetchShow, setSeasonMapping } = await import('./api.js');
+  const parent = await fetchShow(parentShowId);
+  const nextSeason = Math.max(0, ...parent.seasons.map(s => s.seasonNumber || 0)) + 1;
+  await setSeasonMapping(parentShowId, nextSeason, anilistId, malId);
+  return { parentShowId, parentTitle: parent.displayTitle, nextSeason };
 }
 
 /**
@@ -1154,8 +1236,12 @@ async function handleAddError(err, card, item, input, status) {
       refreshCard(card, item);
     } else if (choice === 'separate') {
       // Genuinely a different show — input is already AniList+MAL only
-      // (no tvdbId/tmdbId in the anime add path), so no field stripping needed.
-      const show = await addShow(input);
+      // (no tvdbId/tmdbId in the anime add path), so no field stripping
+      // needed. skipSequelCheck (2026-09-22): a human already said no
+      // to this exact detection once — resubmitting without it used to
+      // hit the same check again and loop back into the same dialog
+      // instead of actually adding as a separate show.
+      const show = await addShow({ ...input, skipSequelCheck: true });
       if (show.status !== status && status !== 'PLANNED') {
         await setStatus(show.id, status);
         show.status = status;
@@ -1164,6 +1250,28 @@ async function handleAddError(err, card, item, input, status) {
       item.lcarsStatus = show.status || status;
       refreshCard(card, item);
       showBanner(`Added: ${show.displayTitle} as separate show [${STATUS_LABELS[status]}]`, 'ok');
+    } else if (choice === 'wrong_parent') {
+      // Auto-detection found A relation, just not the right one — let
+      // the human point at the actual parent directly instead of
+      // forcing "attach to the wrong show" vs "lose the relationship."
+      const chosen = await pickCorrectParent();
+      if (chosen) {
+        const attached = await attachSequelToChosenParent(
+          chosen.id, sequel.sequelAnilistId, sequel.sequelMalId,
+        );
+        if (status !== 'PLANNED') {
+          await setStatus(attached.parentShowId, status);
+        }
+        showBanner(
+          `Attached as Season ${attached.nextSeason} of ${attached.parentTitle}`,
+          'ok',
+        );
+        item.lcarsShowId = attached.parentShowId;
+        item.lcarsStatus = status;
+        refreshCard(card, item);
+      } else {
+        showBanner('Cancelled', 'info');
+      }
     } else {
       showBanner('Cancelled', 'info');
     }

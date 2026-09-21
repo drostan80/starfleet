@@ -1275,6 +1275,8 @@ input AddShowInput {
   tmdbId: Int
   imdbId: String
   malId: Int
+  "2026-09-22 — when true, skips the sequel/later-season auto-detection for this one add. For the explicit \"It isn't a sequel — add as new show anyway\" choice, where a human already rejected the auto-detected match once: resubmitting the same input without this flag would re-run the exact same detection against the same static data and loop back into the same prompt. Defaults to false."
+  skipSequelCheck: Boolean
 }
 
 "B.21 — addShowWithArr's own input, mirrors AddShowInput plus the unmonitored flag for PAUSED adds."
@@ -1292,6 +1294,8 @@ input AddShowWithArrInput {
   malId: Int
   "When true, add to Sonarr/Radarr as unmonitored (no automatic search/download). Defaults to false (monitored)."
   unmonitored: Boolean
+  "2026-09-22 — see AddShowInput's own field docstring. Same bypass, same reason, this input's own sequel checks."
+  skipSequelCheck: Boolean
 }
 
 """

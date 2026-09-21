@@ -194,6 +194,54 @@ season-gap root cause are now done. Still open: the episode/AniDB
 layer (see the MUST DO SOON item above) — genuinely deferred, not
 fixed by any of this.
 
+## Identity-mismatch backlog cleared, sweep re-enabled, sequel-detection bypass built (2026-09-22)
+
+- [x] **All 31 `identity_mismatch` flags reviewed against real data,
+      applied to production.** 25 resolved same-session (11 real
+      corrections to `season.anilist_id`, 14 confirmed LCARS was
+      already right and Fribb's own dataset was wrong — resolved as
+      such so the sweep won't re-flag the same value). The remaining 6
+      needed the user's own judgment — published as a doc with real
+      AniList/TVDB links, then all 6 resolved once real answers came
+      back: a show whose `media_shape` was wrong (movie → episodic, not
+      just the wrong season id), a season split across 2 AniList parts
+      that needed 2 season rows fixed, a show's own **TVDB id was
+      wrong** (fixed via the real `amendShowArrLink` repair path —
+      Sonarr series deleted/re-added, not a raw SQL edit, since 13 real
+      episodes were misattributed to a completely unrelated show), two
+      cases needing brand-new shows created (OVA related to its real
+      parent as a special, TV spin-off tracked separately, planned),
+      and a 2008 OVA vs. 2010 TV version of the same franchise, both
+      now tracked, related as a special the same way every other
+      special tonight was.
+- [x] **`identity_mismatch` re-enabled in the automatic ops loop**
+      (`scheduler.py`, `run_daily_and_weekly_once`) — the backlog that
+      caused the original false-positive flood is fully cleared and the
+      root cause is fixed (previous section), so from here it only ever
+      flags genuinely new disagreements.
+- [x] **The sequel-detection bypass bug — confirmed real, then fixed
+      properly, not patched around.** `create_show`/`create_show_with_
+      arr_add` called `find_sequel_parent` unconditionally with no way
+      to skip it — confirmed live twice tonight (had to work around it
+      manually to create the two new shows above) on top of the
+      original code-read finding. New `skipSequelCheck` field on
+      `AddShowInput`/`AddShowWithArrInput`; the "It isn't — add as new
+      show" retry now actually succeeds instead of re-triggering the
+      identical detection and looping back into the same dialog.
+      **Also added the user's own related ask**: a third dialog option,
+      "Wrong show — it's a sequel of a different show," opening a
+      search picker (`pickCorrectParent`) over tracked shows and
+      attaching to whichever one the human actually picks
+      (`attachSequelToChosenParent`, reusing the existing
+      `setSeasonMapping` path `attachSequel` already uses — no backend
+      change needed for that half, since `setSeasonMapping` never went
+      through `find_sequel_parent` at all).
+
+Everything from the whole database-correctness thread is done except
+the one item that was always explicitly deferred: the episode/AniDB
+reconciliation pass (see the MUST DO SOON item above). That's the only
+piece left.
+
 ---
 
 ## Android app auto-download controls — shipped in v0.2.31 (2026-09-20)

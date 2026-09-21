@@ -969,7 +969,8 @@ import {
   initBrowse, teardownBrowse, setBrowseType,
   parseSequelError, confirmSequelAttach, attachSequel,
   parseLaterSeasonError, confirmAddSeason1,
-} from './js/browse.js?v=14';
+  pickCorrectParent, attachSequelToChosenParent,
+} from './js/browse.js?v=15';
 
 applyAppName();
 await bootstrapConfig();
@@ -1176,15 +1177,14 @@ function renderCandidates(cands) {
  * on the return value.
  *
  * Returns:
- *   'handled'  — fully resolved (attached, added S1, or cancelled);
- *                caller should stop, nothing more to do.
+ *   'handled'  — fully resolved (attached, wrong-parent re-attach,
+ *                added S1, or cancelled); caller should stop, nothing
+ *                more to do.
  *   'separate' — user said "it isn't a sequel"; caller should retry
- *                addShow/addShowWithArr with the same input as a
- *                genuinely separate show. NOTE: unverified whether the
- *                backend's own find_sequel_parent check would fire
- *                again on that identical retry (no bypass flag exists
- *                in the schema) — inherited as-is from browse.js's own
- *                identical "separate" retry, not newly introduced here.
+ *                addShow/addShowWithArr with the same input plus
+ *                `skipSequelCheck: true` (2026-09-22 — a human already
+ *                said no to this exact detection once, so the retry
+ *                must not hit the identical check again).
  *   false      — not a sequel/later-season error; caller should treat
  *                `err` as a real failure.
  */
@@ -1200,6 +1200,20 @@ async function handleSequelOrLaterSeason(err, card, status) {
       return 'handled';
     }
     if (choice === 'separate') return 'separate';
+    if (choice === 'wrong_parent') {
+      const chosen = await pickCorrectParent();
+      if (chosen) {
+        const attached = await attachSequelToChosenParent(
+          chosen.id, sequel.sequelAnilistId, sequel.sequelMalId,
+        );
+        if (status !== 'PLANNED') await setStatus(attached.parentShowId, status);
+        setCardTracked(card, attached.parentShowId, status);
+        showBanner(`Attached as Season ${attached.nextSeason} of ${attached.parentTitle}`, 'ok');
+      } else {
+        showBanner('Cancelled', 'info');
+      }
+      return 'handled';
+    }
     showBanner('Cancelled', 'info');
     return 'handled';
   }
@@ -1273,7 +1287,7 @@ async function onChipClick(card, cand, status) {
         const outcome = await handleSequelOrLaterSeason(err, card, status);
         if (outcome === 'handled') { card.classList.remove('loading'); return; }
         if (outcome === 'separate') {
-          show = await addShow(input);
+          show = await addShow({ ...input, skipSequelCheck: true });
         } else {
           throw err;
         }
@@ -1304,7 +1318,7 @@ async function onChipClick(card, cand, status) {
         const outcome = await handleSequelOrLaterSeason(err, card, status);
         if (outcome === 'handled') { card.classList.remove('loading'); return; }
         if (outcome === 'separate') {
-          result = await addShowWithArr(input);
+          result = await addShowWithArr({ ...input, skipSequelCheck: true });
         } else {
           throw err;
         }

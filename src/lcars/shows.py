@@ -624,13 +624,26 @@ def create_show(conn, input: dict) -> str:
             # Orphaned show_external_id row — show was deleted but the
             # external ID link survived.  Treat as no match.
             existing_show_id = None
+    skip_sequel_check = bool(input.get("skip_sequel_check"))
+
     if existing_show_id is not None:
         # Before rejecting a tracked duplicate or promoting a stub,
         # check whether it's a sequel of a tracked show — the right
         # action is "add as Season N on the parent", regardless of
         # whether this show is tracked or not.  SequelDetectedError
         # carries the parent info so the client can prompt.
-        sequel = find_sequel_parent(
+        #
+        # skip_sequel_check (2026-09-22): the client-side "It isn't —
+        # add as new show" choice used to resubmit this exact same
+        # input, which hit this exact same check again and looped back
+        # into the same dialog instead of succeeding — a real,
+        # confirmed bug (no bypass existed at all). A human already
+        # said no once; re-litigating it against the same static local-
+        # relations/Fribb data was never going to produce a different
+        # answer. Deliberately does NOT also skip the plain "duplicate,
+        # already tracked" rejection below — that's a different,
+        # unrelated safety check.
+        sequel = None if skip_sequel_check else find_sequel_parent(
             conn, input.get("anilist_id"),
             tvdb_id=input.get("tvdb_id"), tmdb_id=input.get("tmdb_id"),
             imdb_id=input.get("imdb_id"), mal_id=input.get("mal_id"),
@@ -651,7 +664,7 @@ def create_show(conn, input: dict) -> str:
         return _promote_stub(conn, existing_show_id, input)
 
     # No local show at all — still check relations for a sequel.
-    sequel = find_sequel_parent(
+    sequel = None if skip_sequel_check else find_sequel_parent(
         conn, input.get("anilist_id"),
         tvdb_id=input.get("tvdb_id"), tmdb_id=input.get("tmdb_id"),
         imdb_id=input.get("imdb_id"), mal_id=input.get("mal_id"),
@@ -665,7 +678,8 @@ def create_show(conn, input: dict) -> str:
             sequel_mal_id=input.get("mal_id"),
         )
 
-    _check_later_season_pre_add(conn, input.get("anilist_id"))
+    if not skip_sequel_check:
+        _check_later_season_pre_add(conn, input.get("anilist_id"))
 
     show_id = ids.generate_id(conn, "s")
     now = util.now_utc_iso()
@@ -1500,6 +1514,8 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
             " (as camelCase) was not provided"
         )
 
+    skip_sequel_check = bool(input.get("skip_sequel_check"))
+
     existing_show_id = find_existing_show(conn, input)
     if existing_show_id is not None:
         existing = conn.execute(
@@ -1510,8 +1526,10 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
     if existing_show_id is not None:
         if existing["tracked"]:
             # Before refusing, check if this is a sequel — offer
-            # season-attach instead of a duplicate error.
-            sequel = find_sequel_parent(
+            # season-attach instead of a duplicate error. See
+            # create_show's own skip_sequel_check comment for why this
+            # bypass exists.
+            sequel = None if skip_sequel_check else find_sequel_parent(
                 conn, input.get("anilist_id"),
                 tvdb_id=input.get("tvdb_id"), tmdb_id=input.get("tmdb_id"),
                 imdb_id=input.get("imdb_id"), mal_id=input.get("mal_id"),
@@ -1563,7 +1581,7 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
         # Same sequel gate as create_show — an untracked stub that is
         # a SEQUEL of a tracked show should be offered as a season-attach,
         # not promoted to a separate tracked show.
-        sequel = find_sequel_parent(
+        sequel = None if skip_sequel_check else find_sequel_parent(
             conn, input.get("anilist_id"),
             tvdb_id=input.get("tvdb_id"), tmdb_id=input.get("tmdb_id"),
             imdb_id=input.get("imdb_id"), mal_id=input.get("mal_id"),
