@@ -35,7 +35,24 @@ accumulates a chain on repeated disagreement, `already_resolved_with`
 suppresses re-opening the exact value a human already resolved, and a
 genuinely different disagreement (the mismatch itself changed) always
 surfaces as new — confirmed this is the wanted behavior with the user
-directly, not assumed."""
+directly, not assumed.
+
+**Real false-positive flood found same night, NOT currently scheduled
+automatically** (see ops/scheduler.py's own run_identity_mismatch_once
+docstring for the full note): a real run against production flagged 34
+seasons, the large majority false positives. Root cause: LCARS's own
+sequential `season.season_number` is not the same numbering scheme as
+Fribb's raw `season.tvdb` tag once a franchise is split into cours/parts
+— e.g. SPY×FAMILY, where Fribb tags both "Part I" and "Part II" as
+`season.tvdb: 1` (distinguished only by `episode_offset`), while LCARS
+tracks them as `season_number` 1 and 2. Passing LCARS's season_number
+straight into `fribb.resolve_season_candidate` assumes the two
+numbering schemes are interchangeable, which for a split-cour franchise
+they aren't — the same unsolved "collapse multi-show franchises via
+abs-episode-range reconciliation" gap the season-subdivision work
+(D1-D3, NEXT_UP.md) already describes as not yet built. Callable
+manually (`pollIdentityMismatch`) with that caveat in mind; do not
+re-wire into the automatic loop until that reconciliation exists."""
 
 import sqlite3
 

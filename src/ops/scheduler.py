@@ -219,7 +219,26 @@ async def run_score_sync_once(client: LcarsClient) -> int:
 async def run_identity_mismatch_once(client: LcarsClient) -> int:
     """2026-09-21 — one full identity-mismatch sweep (pollIdentityMismatch):
     same "one mutation covers everything" shape as run_score_sync_once
-    above. Returns the combined checked + flagged count."""
+    above. Returns the combined checked + flagged count.
+
+    **Not currently called from run_daily_and_weekly_once** — shipped,
+    wired in, run once against real production data, and pulled again
+    the same night: 34 flagged, the large majority false positives.
+    Root cause: LCARS's own sequential `season.season_number` isn't the
+    same numbering scheme as Fribb's raw `season.tvdb` tag once a
+    franchise is split into cours/parts — e.g. SPY×FAMILY, where Fribb
+    tags both "Part I" and "Part II" as `season.tvdb: 1` (distinguished
+    only by `episode_offset`), while LCARS tracks them as
+    `season_number` 1 and 2. `identity_mismatch.check_anilist_id_
+    mismatch` passes LCARS's season_number straight into Fribb's lookup
+    as if the two numbering schemes were interchangeable, which for a
+    split-cour franchise they aren't. This is the same unsolved
+    "collapse multi-show franchises via abs-episode-range reconciliation"
+    gap the season-subdivision work (D1-D3, NEXT_UP.md) already
+    describes as not yet built — not a quick fix here. Callable manually
+    (`pollIdentityMismatch`) with that caveat in mind; do not re-wire
+    into the automatic loop until the season-numbering reconciliation
+    this actually depends on exists."""
     result = await client.poll_identity_mismatch()
     return result["checked"] + result["flagged"]
 
@@ -294,10 +313,12 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     already-cached dataset lookup, no live outbound call — no reason at
     all not to share this tick; S5's width check is a single batched
     AniList call over all ranged seasons; the score drift sweep is one
-    full AniList list fetch; the 2026-09-21 identity-mismatch sweep is
-    the same already-cached Fribb dataset lookup the tvdb backfill
-    uses, no live outbound call either — same negligible-relative-to-
-    the-daily-tier cost) — this is the single unit that loop actually
+    full AniList list fetch — same negligible-relative-to-the-daily-tier
+    cost; the 2026-09-21 identity-mismatch sweep was also wired in here
+    same-night, then pulled again same-night — see
+    run_identity_mismatch_once's own docstring, real production data
+    showed it false-positives on any split-cour franchise) — this is
+    the single unit that loop actually
     calls each tick. Returns the combined count, for the caller to log."""
     daily = await run_once(client)
     weekly = await run_weekly_once(client)
@@ -315,11 +336,20 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     # entirely when it has no explicit score of its own — see its module
     # docstring / the two check_*_score_drift functions for detail.
     score_sync = await run_score_sync_once(client)
-    # identity_mismatch, 2026-09-21 — found via the real Tantei/Milky-
-    # Holmes incident (season linked to a completely unrelated Sonarr
-    # series). Fribb's dataset is local/cached, no live network call per
-    # season, so this rides the same hourly tick as score_sync.
-    identity_mismatch = await run_identity_mismatch_once(client)
+    # identity_mismatch DISABLED same-night, 2026-09-21 — a real run
+    # against production flagged 34 "mismatches" that were almost all
+    # false positives: LCARS's own sequential season_number does not
+    # equal Fribb's raw season.tvdb tag once a franchise is split into
+    # cours/parts (e.g. SPY×FAMILY: Fribb tags both "Part I" and
+    # "Part II" as season.tvdb=1, distinguished only by episode_offset,
+    # while LCARS tracks them as season_number 1 and 2 — the exact
+    # unsolved "collapse multi-show franchises via abs-episode-range"
+    # gap already logged in NEXT_UP.md/season-subdivision memory, not a
+    # quick fix). The module and mutation are left in place, deliberately
+    # not wired into the automatic loop until that reconciliation is
+    # built — run manually (pollIdentityMismatch) only with this caveat
+    # in mind, and expect real noise on any split-cour franchise.
+    # identity_mismatch = await run_identity_mismatch_once(client)
     return (
         daily
         + weekly
@@ -331,7 +361,6 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
         + tvdb_backfill
         + season_subdivision
         + score_sync
-        + identity_mismatch
     )
 
 

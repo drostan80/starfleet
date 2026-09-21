@@ -21,6 +21,7 @@ from ops.scheduler import (
     run_daily_and_weekly_once,
     run_episode_movie_link_reconciliation_once,
     run_forever,
+    run_identity_mismatch_once,
     run_local_presence_once,
     run_mal_token_refresh_once,
     run_monthly_once,
@@ -486,7 +487,7 @@ async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_it
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
 
 
-async def test_run_daily_and_weekly_once_sums_all_twelve_tiers():
+async def test_run_daily_and_weekly_once_sums_all_eleven_tiers():
     client = _FakeClient(
         due_shows=[{"id": "s-a"}],
         due_seasons=[_season("z-a", "s-b")],
@@ -503,18 +504,27 @@ async def test_run_daily_and_weekly_once_sums_all_twelve_tiers():
         tvdb_backfill_result={"showsUpdated": 1},
         season_subdivision_result={"checked": 3, "flagged": 1},
         score_sync_result={"anilistChecked": 5, "anilistFlagged": 1},
-        identity_mismatch_result={"checked": 4, "flagged": 1},
     )
     count = await run_daily_and_weekly_once(client)
     # 1 (show refresh) + 1 (season reconcile) + 2 (animeschedule) + 1 (local
     # presence) + 1 (episode movie links) + 1 (mal refresh) + 2 (untracked) +
     # 1 (tvdb backfill) + 4 (season subdivision checked+flagged) +
-    # 6 (score_sync checked+flagged) + 5 (identity_mismatch checked+flagged) = 25
-    # identity_mismatch added 2026-09-21 — found via the real Tantei/
-    # Milky-Holmes incident, see identity_mismatch.py's own module docstring.
-    assert count == 25
+    # 6 (score_sync checked+flagged) = 20
+    # identity_mismatch (2026-09-21) is NOT summed here — shipped, run once
+    # against real production data, and pulled the same night over a real
+    # false-positive flood on split-cour franchises. See
+    # run_identity_mismatch_once's own docstring for the full finding.
+    assert count == 20
     assert client.refreshed == ["s-a"]
     assert client.reconciled == [("s-b", 1)]
+
+
+async def test_run_identity_mismatch_once_returns_checked_plus_flagged():
+    # Not summed into run_daily_and_weekly_once (see that test's own
+    # note) — still directly callable/testable on its own.
+    client = _FakeClient(identity_mismatch_result={"checked": 4, "flagged": 1})
+    count = await run_identity_mismatch_once(client)
+    assert count == 5
 
 
 # --- run_tvdb_backfill_once (2026-08-18) --------------------------------------
