@@ -108,19 +108,23 @@ still can't disambiguate.
       the same way. Tracked count 1841 → 1778. Backed up before every
       write, verified on prod after every batch. User confirmed this is
       good enough to move on from.
-- [ ] **MUST DO SOON — episode/AniDB layer not started.** The systematic
-      pass cross-referencing AniDB's own absolute episode numbering
-      against what's actually stored (the third leg of the pipeline
-      above) has not been run at all yet — only the show/season identity
-      layer above is done. `derive_episode_mappings` (`anidb.py:887`)
-      already exists and is entirely a local DB computation (reads
-      already-synced `anime_list_entry`/`anime_list_mapping` Memory Alpha
-      tables, no live AniDB HTTP calls, no rate-limit wait) — so this
-      should be cheap/fast to actually run once picked back up; the ETA
-      question that was in progress when this was paused was still
-      confirming exact scope (how many tracked shows have an `anidb`
-      external id) before promising a number. Deliberately deferred by
-      the user to another session — not forgotten, not skipped.
+- [x] **Episode/AniDB layer — done, 2026-09-22.** `derive_episode_mappings`
+      (`anidb.py:887`) is entirely local (reads already-synced `anime_
+      list_entry`/`anime_list_mapping`, no live AniDB HTTP calls) and
+      already runs the full tracked-anime backlog every tick — not
+      "not started," already continuously running. The real remaining
+      gap was a valid signal for "is a derived value actually wrong":
+      the raw-number comparison tried earlier was invalid (see below);
+      the real check built instead uses the **air-date arbiter** (see
+      next section) — real broadcast date as the tie-breaker, per the
+      user's own standing rule since Memory Alpha's inception. Full-
+      library dry run: only 23 episode mappings actually needed
+      correcting out of 3944 total, all 23 verified against real air
+      dates before shipping (Sousou no Frieren's 4-episode premiere
+      block, Log Horizon's skipped broadcast week, Bakemonogatari's
+      broken community episode_map — three different real root causes,
+      not one bug). ~1963 already-correct mappings got locked as
+      confirmed in the same pass.
 
 ## Phase 2 mechanism — season-number-gap bug fixed at the root (2026-09-21)
 
@@ -237,10 +241,66 @@ fixed by any of this.
       change needed for that half, since `setSeasonMapping` never went
       through `find_sequel_parent` at all).
 
-Everything from the whole database-correctness thread is done except
-the one item that was always explicitly deferred: the episode/AniDB
-reconciliation pass (see the MUST DO SOON item above). That's the only
-piece left.
+## Episode/AniDB layer closed: the air-date arbiter (2026-09-22)
+
+The last open piece of the whole database-correctness thread. The
+user's own standing rule, stated since Memory Alpha's inception: when
+episode ordering is genuinely in conflict, the real broadcast/release
+date is the source of truth and wins, full stop — not the community
+mapping's own offset/episode_map guess.
+
+- [x] **`_air_date_arbiter`** (`anidb.py`) — for each episode
+      `derive_episode_mappings` resolves, cross-checks the community-
+      mapping result against real AniDB per-episode air dates
+      (`anidb_episode.airdate`). Confident only on an exact calendar-day
+      match against exactly one real AniDB *regular* episode for that
+      anime — no air date on the LCARS side, no matching AniDB date, or
+      more than one regular episode landing on the same real date all
+      return "no opinion" and keep the community-mapping result, same
+      "never guess" convention this codebase uses everywhere else.
+      Deliberately date-only, not time-of-day — AniDB's own `airdate` is
+      a bare date and TVDB/Sonarr's stamped time on the LCARS side
+      doesn't correspond to anything AniDB records.
+- [x] **Confirmed matches lock (`confidence = 'air_date_confirmed'`),
+      never revisited.** `derive_episode_mappings` now checks for this
+      before doing any resolution work at all, so a locked row costs
+      nothing extra on repeat ticks and — critically — can never be
+      silently changed again later, even if the underlying community
+      mapping data itself changes. This is the literal "lock those as
+      confirmed, no further changes" the user asked for.
+- [x] **Full-library dry run before shipping** (same discipline as
+      every other check tonight): 3944 total mappings, only **23**
+      actually changed value, **~1963** already-correct ones got locked
+      in the same pass. Manually verified 3 of the corrected cases
+      against real air-date data before trusting the number:
+      - **Bakemonogatari S5** (8 episodes) — the case that started this:
+        community `episode_map` derived nonsense AniDB episode numbers
+        (402-409) for a 2017 compilation release AniDB itself only has
+        2 real regular episodes for. TVDB had split the same 2-day
+        release into more, finer-grained episodes than AniDB tracks —
+        air-date matching correctly collapses LCARS's several same-day
+        episodes onto AniDB's one real episode per day instead of
+        trusting an offset that was never built for this split.
+      - **Sousou no Frieren S1** (off by 4) — AniDB's real data shows a
+        4-episode premiere block all airing the same day, then weekly
+        from episode 5; LCARS's own episode 1 airs on the weekly-episode-
+        5 date, so the community mapping's naive 1:1 offset was wrong
+        from the very first episode.
+      - **Log Horizon S2** (off by 1, episodes 15-22) — AniDB's real
+        broadcast skipped a week (a recap/clip episode LCARS still
+        tracks but AniDB doesn't count as a regular numbered episode);
+        every subsequent weekly episode was off by one as a result.
+      - Three different real root causes, not one bug repeated — exactly
+        why a general, principled arbiter was the right thing to build
+        instead of three one-off patches.
+      - **HUNTER×HUNTER**, flagged by an earlier, cruder implausibility
+        check as a possible 4th case, was verified a false positive
+        (genuinely 62 real episodes, confirmed against real 2001 air
+        dates) — now locked as confirmed-correct by the same arbiter
+        rather than left periodically re-checked.
+
+Everything from the whole database-correctness thread is now done, with
+no further deferred pieces.
 
 ---
 

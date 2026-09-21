@@ -390,6 +390,150 @@ class TestDeriveEpisodeMappings:
         assert stats["mapped"] == 0
 
 
+def _seed_air_date_show(conn, anidb_id=900, tvdb_id="900001", offset=0):
+    """A minimal show whose default-offset resolution is deliberately
+    wrong (real case: a community episode_map/offset built for a
+    different episode split than what TVDB/Sonarr actually tracks), so
+    the air-date arbiter's correction is the interesting part being
+    tested, not the baseline resolver."""
+    conn.execute(
+        "INSERT INTO show (id, title_romaji, tracked) VALUES ('s-airdt1', 'Air Date Show', 1)"
+    )
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id) VALUES ('s-airdt1', 'anidb', ?)",
+        (str(anidb_id),),
+    )
+    conn.execute(
+        "INSERT INTO anime_list_entry (anidb_id, tvdb_id, default_tvdb_season, episode_offset, name)"
+        " VALUES (?, ?, 1, ?, 'Air Date Show')",
+        (anidb_id, tvdb_id, offset),
+    )
+
+
+class TestAirDateArbiter:
+    """2026-09-22 — the user's own standing rule since Memory Alpha's
+    inception: when episode ordering is in conflict, real broadcast
+    date wins. Found live on Sousou no Frieren, Log Horizon, and
+    Bakemonogatari — all three confirmed correct against real airdate
+    data before this was written."""
+
+    def test_air_date_overrides_wrong_offset_and_locks(self, conn):
+        _seed_air_date_show(conn, offset=99)  # deliberately wrong
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, air_date_utc)"
+            " VALUES ('e-ad001', 's-airdt1', 1, 1, '2023-10-06T13:30:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO anidb_episode (anidb_anime_id, anidb_season, anidb_epno, airdate)"
+            " VALUES (900, 1, 5, '2023-10-06')"
+        )
+        conn.commit()
+
+        stats = anidb.derive_episode_mappings(conn)
+        assert stats["mapped"] == 1
+
+        row = conn.execute(
+            "SELECT anidb_epno, confidence FROM episode_anidb_mapping WHERE episode_id = 'e-ad001'"
+        ).fetchone()
+        assert row["anidb_epno"] == 5
+        assert row["confidence"] == "air_date_confirmed"
+
+    def test_locked_row_never_revisited(self, conn):
+        """Once locked, a later tick must not touch it even if the
+        underlying anidb_episode data changes."""
+        _seed_air_date_show(conn, offset=99)
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, air_date_utc)"
+            " VALUES ('e-ad002', 's-airdt1', 1, 1, '2023-10-06T13:30:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO anidb_episode (anidb_anime_id, anidb_season, anidb_epno, airdate)"
+            " VALUES (900, 1, 5, '2023-10-06')"
+        )
+        conn.commit()
+        anidb.derive_episode_mappings(conn)
+
+        # Real airdate data "corrects itself" to a different value —
+        # must not matter, the row is locked.
+        conn.execute("UPDATE anidb_episode SET anidb_epno = 99 WHERE anidb_anime_id = 900")
+        conn.commit()
+        anidb.derive_episode_mappings(conn)
+
+        row = conn.execute(
+            "SELECT anidb_epno, confidence FROM episode_anidb_mapping WHERE episode_id = 'e-ad002'"
+        ).fetchone()
+        assert row["anidb_epno"] == 5
+        assert row["confidence"] == "air_date_confirmed"
+
+    def test_no_air_date_falls_back_to_resolver(self, conn):
+        """No air_date_utc on the LCARS episode at all — arbiter has
+        nothing to work with, keeps the resolver's own (here, correct)
+        result at 'auto' confidence."""
+        _seed_air_date_show(conn, offset=0)
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode) VALUES ('e-ad003', 's-airdt1', 1, 1)"
+        )
+        conn.commit()
+
+        anidb.derive_episode_mappings(conn)
+
+        row = conn.execute(
+            "SELECT anidb_epno, confidence FROM episode_anidb_mapping WHERE episode_id = 'e-ad003'"
+        ).fetchone()
+        assert row["anidb_epno"] == 1
+        assert row["confidence"] == "auto"
+
+    def test_ambiguous_same_day_does_not_guess(self, conn):
+        """Two real regular episodes on the same real airdate — the
+        arbiter must not guess which one, same 'never guess' convention
+        as everywhere else. Keeps the resolver's own result at 'auto'."""
+        _seed_air_date_show(conn, offset=0)
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, air_date_utc)"
+            " VALUES ('e-ad004', 's-airdt1', 1, 1, '2023-10-06T13:30:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO anidb_episode (anidb_anime_id, anidb_season, anidb_epno, airdate)"
+            " VALUES (900, 1, 5, '2023-10-06')"
+        )
+        conn.execute(
+            "INSERT INTO anidb_episode (anidb_anime_id, anidb_season, anidb_epno, airdate)"
+            " VALUES (900, 1, 6, '2023-10-06')"
+        )
+        conn.commit()
+
+        anidb.derive_episode_mappings(conn)
+
+        row = conn.execute(
+            "SELECT anidb_epno, confidence FROM episode_anidb_mapping WHERE episode_id = 'e-ad004'"
+        ).fetchone()
+        assert row["anidb_epno"] == 1  # the resolver's own default-offset result, untouched
+        assert row["confidence"] == "auto"
+
+    def test_no_matching_airdate_falls_back(self, conn):
+        """LCARS episode has an air date, but no real AniDB regular
+        episode shares it — no confident match, stays on the resolver's
+        own result at 'auto'."""
+        _seed_air_date_show(conn, offset=0)
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, air_date_utc)"
+            " VALUES ('e-ad005', 's-airdt1', 1, 1, '2023-11-01T13:30:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO anidb_episode (anidb_anime_id, anidb_season, anidb_epno, airdate)"
+            " VALUES (900, 1, 5, '2023-10-06')"
+        )
+        conn.commit()
+
+        anidb.derive_episode_mappings(conn)
+
+        row = conn.execute(
+            "SELECT anidb_epno, confidence FROM episode_anidb_mapping WHERE episode_id = 'e-ad005'"
+        ).fetchone()
+        assert row["anidb_epno"] == 1
+        assert row["confidence"] == "auto"
+
+
 class TestParseEpisodesXml:
     """Tests for _parse_episodes_xml — parsing AniDB HTTP API responses."""
 

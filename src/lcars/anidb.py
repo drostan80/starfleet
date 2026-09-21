@@ -760,6 +760,41 @@ def _parse_episode_map(text: str) -> list[tuple[int, int]]:
     return pairs
 
 
+def _air_date_arbiter(
+    conn, anidb_anime_id: int, air_date_utc: str | None, cache: dict[int, list]
+) -> tuple[int, int] | None:
+    """Match an LCARS episode to a real AniDB episode by broadcast date,
+    within the anime the community mapping already picked. See
+    derive_episode_mappings' own call-site comment for the full "why."
+
+    Confident only on an exact calendar-day match against exactly one
+    AniDB *regular* (anidb_season=1) episode for that anime — no date,
+    no match, or more than one regular episode landing on the same day
+    all return None rather than guess, same "never guess" convention
+    this module uses everywhere else. Deliberately date-only (not
+    time-of-day): AniDB's own `airdate` is a bare date, and TVDB/Sonarr
+    frequently stamps a fixed same-day broadcast time that doesn't
+    correspond to anything AniDB records, so comparing times would only
+    ever produce false non-matches.
+    """
+    if not air_date_utc:
+        return None
+    date_part = air_date_utc[:10]
+    if anidb_anime_id not in cache:
+        cache[anidb_anime_id] = conn.execute(
+            "SELECT anidb_season, anidb_epno, airdate FROM anidb_episode"
+            " WHERE anidb_anime_id = ?",
+            (anidb_anime_id,),
+        ).fetchall()
+    candidates = [
+        r for r in cache[anidb_anime_id]
+        if r["airdate"] == date_part and r["anidb_season"] == 1
+    ]
+    if len(candidates) != 1:
+        return None
+    return (candidates[0]["anidb_season"], candidates[0]["anidb_epno"])
+
+
 class _SeasonResolver:
     """Resolves TVDB episodes → AniDB episode numbers for one TVDB show.
 
@@ -933,6 +968,9 @@ def derive_episode_mappings(conn) -> dict:
 
     # Cache: tvdb_id → list of anime_list_entry dicts (with mappings)
     _tvdb_cache: dict[str, list[dict]] = {}
+    # Cache: anidb_anime_id → its own real anidb_episode rows (for the
+    # air-date arbiter below).
+    _anidb_ep_cache: dict[int, list] = {}
 
     for show_id, anidb_id_str in shows:
         anidb_id = int(anidb_id_str)
@@ -961,22 +999,60 @@ def derive_episode_mappings(conn) -> dict:
 
         # Get all regular episodes for this show
         episodes = conn.execute(
-            """SELECT id, season, episode, absolute_number
+            """SELECT id, season, episode, absolute_number, air_date_utc
                FROM episode
                WHERE show_id = ? AND kind = 'regular'""",
             (show_id,),
         ).fetchall()
 
-        for ep_id, season, ep_num, existing_abs in episodes:
+        for ep_id, season, ep_num, existing_abs, air_date_utc in episodes:
+            # A row already locked by a previous air-date arbitration is
+            # never revisited -- "lock those as confirmed, no further
+            # changes" (2026-09-22). Checked before doing any resolution
+            # work, not just before the write, so a locked row costs
+            # nothing extra on repeat ticks.
+            already_locked = conn.execute(
+                "SELECT 1 FROM episode_anidb_mapping"
+                " WHERE episode_id = ? AND confidence = 'air_date_confirmed'",
+                (ep_id,),
+            ).fetchone()
+            if already_locked is not None:
+                stats["mapped"] += 1
+                continue
+
             result = resolver.resolve(season, ep_num)
             if result is None:
                 stats["skipped"] += 1
                 continue
 
             anidb_anime_id, anidb_season, anidb_epno = result
-            confidence = "auto"
 
-            # Write to mapping table
+            # Air-date arbiter (2026-09-22, per the user's own standing
+            # rule since Memory Alpha's inception: when there's a real
+            # conflict in episode ordering, the true broadcast/release
+            # date wins). Found live: Bakemonogatari's own community
+            # episode_map derived nonsense values (402-409) for a
+            # release AniDB itself only has 2 real episodes for — TVDB
+            # had split the same 2-day compilation release into more,
+            # finer-grained episodes than AniDB tracks. Matching by
+            # real air date instead correctly collapses LCARS's several
+            # same-day episodes onto AniDB's one real episode for that
+            # day, rather than trusting an offset/episode_map that
+            # wasn't built for this split. Confident only on an exact,
+            # unambiguous same-day match against a REGULAR AniDB
+            # episode — anything else (no data, multiple candidates on
+            # the same day) makes no claim and falls back to the
+            # community-mapping result, never guesses.
+            confidence = "auto"
+            air_date_result = _air_date_arbiter(
+                conn, anidb_anime_id, air_date_utc, _anidb_ep_cache
+            )
+            if air_date_result is not None:
+                anidb_season, anidb_epno = air_date_result
+                confidence = "air_date_confirmed"
+
+            # Write to mapping table. A locked row is excluded above, so
+            # this ON CONFLICT only ever touches still-'auto' rows.
             conn.execute(
                 """INSERT INTO episode_anidb_mapping
                    (episode_id, anidb_anime_id, anidb_season, anidb_epno,
