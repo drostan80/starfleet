@@ -891,6 +891,24 @@ def derive_episode_mappings(conn) -> dict:
     matching Anime-Lists entry, resolves each regular episode to its AniDB
     absolute episode number, and writes the result to episode_anidb_mapping.
 
+    **2026-09-21**: `stats["mismatches"]`/`["mismatch_details"]` compare
+    against the existing (Sonarr-derived) `absolute_number` and go
+    nowhere downstream — tried wiring this to `pending_review`
+    (`field='absolute_number_anidb'`) the same way `identity_mismatch.py`
+    does, dry-ran it against the real production snapshot first, and it
+    would have flagged 1147 episodes on the first run. Investigated why:
+    `existing_abs` (Sonarr's own absolute count) and `anidb_epno`
+    (AniDB's own, independent absolute count) are two different
+    numbering schemes that are *supposed* to differ whenever a show has
+    any split-cour offset or special-episode interleaving — confirmed by
+    this module's own Chobits unit-test fixture, hand-verified *correct*
+    data whose own episodes still "mismatch" 16 of 24 times. This was
+    never a valid "is this wrong" signal, not just a noisy one, so the
+    wiring was reverted rather than shipped with a bad threshold — see
+    NEXT_UP.md for the full note. A real version of this check would
+    need to flag an implausible *derived* value (negative/zero/out-of-
+    range), not a difference from Sonarr's own number.
+
     Returns stats: {mapped, skipped, mismatches, shows_processed,
                     shows_skipped_no_entry}.
     """
@@ -1481,6 +1499,14 @@ def poll_memory_alpha(conn) -> dict:
     try:
         from lcars import season_ranges
         result["season_rows_created"] = season_ranges.ensure_all_season_rows(conn)
+        # Proactive counterpart (2026-09-21): the reactive creation above
+        # only makes a row once Sonarr episodes already exist for that
+        # season — a real Fribb-known season with no synced episodes yet
+        # never gets one, which is exactly how the SPY×FAMILY season-gap
+        # bug happened. Must also run before identity_mismatch's own
+        # sweep so a season it just created is there to verify.
+        fribb_result = season_ranges.ensure_fribb_season_rows(conn)
+        result["season_rows_created"] += fribb_result["season_rows_created"]
         result["episode_season_ids_linked"] = season_ranges.backfill_episode_season_id(conn)
     except Exception:
         log.exception("Season row / episode.season_id backfill failed")

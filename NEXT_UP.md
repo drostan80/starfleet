@@ -89,53 +89,110 @@ full detail:
         title strings) remains a genuinely open idea if this is picked
         up again.
 
-## Reconciliation pipeline gaps — queued next, after the current database-correctness pass (2026-09-21)
+## Database-correctness pass — show/season layer done, episode/AniDB layer deferred (2026-09-21)
 
-Full hybrid-model pipeline confirmed correct and confirmed with the user:
-AniList id (season-level, never show-level) → matched to a show-level TVDB
-id → cross-referenced with Fribb for season position → cross-referenced
-with AniDB at episode level for absolute-episode-range placement → human
-review only when that chain still can't disambiguate. Two real gaps in
-that chain, found tonight while building the passive identity-mismatch
-check, both fully diagnosed but not yet fixed:
+Full hybrid-model pipeline: AniList id (season-level, never show-level) →
+matched to a show-level TVDB id → cross-referenced with Fribb for season
+position → cross-referenced with AniDB at episode level for
+absolute-episode-range placement → human review only when that chain
+still can't disambiguate.
 
-- [ ] **AniDB-vs-Sonarr episode mismatch is computed but never surfaces.**
-      `derive_episode_mappings` (`anidb.py:887`) already compares AniDB's
-      own derived absolute episode numbers against Sonarr's
-      `absolute_number` and returns real `stats["mismatches"]`/
-      `stats["mismatch_details"]` — confirmed via
-      `grep -n "mismatch" src/lcars/anidb.py src/lcars/resolvers.py
-      src/lcars/schema.graphql` that this output has zero downstream
-      consumers: not written to `pending_review`, not exposed over
-      GraphQL, not logged anywhere durable. Fix: wire it into
-      `pending_review` the same way `identity_mismatch.py` does —
-      `open_or_extend`/`already_resolved_with` for idempotency,
-      `source='anidb_sonarr_mismatch'`, one row per disagreeing
-      episode/season so it lands in the same review queue as everything
-      else and gets a human decision when AniDB and Sonarr disagree on
-      an episode's absolute position.
-- [ ] **`_resolve_by_position` (`identity_mismatch.py`) breaks on a
-      season-number gap.** It resolves Fribb candidates by counting
-      position `(season.tvdb, episode_offset)` and taking LCARS's
-      `season_number`'th one — correct only if LCARS's tracked seasons
-      have no gaps relative to Fribb's real season count. Confirmed false
-      on real production data: SPY×FAMILY's Fribb data has a real
-      "Season 2" (anilist 158927) that LCARS never tracked at all —
-      LCARS's `season_number` 1-4 actually map to Part I / Part II / real
-      Season 3 / nothing, so pure positional counting silently
-      misaligns once that gap exists (34→31 flagged, not 34→0, when this
-      was dry-run against prod). Fix needs to stop trusting sequential
-      position and instead match each LCARS season to its real Fribb/
-      AniDB counterpart by absolute-episode-range overlap
-      (`season.abs_start`/`abs_end`, D1-D3) rather than counting order —
-      which is also why this gap and the one above should likely be
-      fixed together: reliable `abs_start`/`abs_end` on every season is
-      the input both fixes need.
+- [x] **Show/season identity layer — done.** Full 1171-show screen against
+      AniList's own real public `relations` data → 85 confirmed franchise
+      pairs, every one individually classified against real media_shape/
+      episode-count/tracked-state data and resolved (not just the ones
+      that were easy): 36 SIDE_STORY relation-typed+demoted, 27 SEQUEL (8
+      real season merges, movies relation-fixed, OVAs/specials demoted,
+      one — Koori no Jouheki — traced to a stale dead Sonarr link and the
+      duplicate demoted, not a merge), 6 PREQUEL, 16 PARENT all resolved
+      the same way. Tracked count 1841 → 1778. Backed up before every
+      write, verified on prod after every batch. User confirmed this is
+      good enough to move on from.
+- [ ] **MUST DO SOON — episode/AniDB layer not started.** The systematic
+      pass cross-referencing AniDB's own absolute episode numbering
+      against what's actually stored (the third leg of the pipeline
+      above) has not been run at all yet — only the show/season identity
+      layer above is done. `derive_episode_mappings` (`anidb.py:887`)
+      already exists and is entirely a local DB computation (reads
+      already-synced `anime_list_entry`/`anime_list_mapping` Memory Alpha
+      tables, no live AniDB HTTP calls, no rate-limit wait) — so this
+      should be cheap/fast to actually run once picked back up; the ETA
+      question that was in progress when this was paused was still
+      confirming exact scope (how many tracked shows have an `anidb`
+      external id) before promising a number. Deliberately deferred by
+      the user to another session — not forgotten, not skipped.
 
-Both are next, in this order, once the current full-library screen
-(AniList-relations-based show/season audit) is reviewed and actioned —
-this is the explicit continuation of "make the database correct" before
-"build the mechanism that prevents new mistakes" resumes.
+## Phase 2 mechanism — season-number-gap bug fixed at the root (2026-09-21)
+
+Two things originally logged here as "two separate gaps to fix" turned
+out to be one root cause, per the user's own correction: Memory Alpha
+was specifically designed to keep the database straight, so a bug that
+looked like it needed a smarter matching algorithm should have first
+been checked against whether Memory Alpha was actually doing its whole
+job. It wasn't — confirmed by reading the actual code, not assumed:
+
+- [x] **Root cause found**: `season_ranges.ensure_all_season_rows`
+      (Memory Alpha's season-row creator) only ever creates a row
+      *reactively*, from `episode.season` values Sonarr has already
+      synced. A real Fribb-known season with no synced episodes yet
+      (the SPY×FAMILY case — its real "Season 2", anilist 158927, had
+      no Sonarr episodes yet) never got a row at all. No amount of
+      smarter position-matching in `identity_mismatch.py`'s resolver
+      could have fixed that — there was no row to match against. This
+      was the actual cause of both items originally listed here (the
+      "AniDB mismatch never surfaces" item turned out to be a false
+      lead too — see below).
+- [x] **`fribb.enumerate_real_seasons`** — the real-season ordering
+      (non-special/non-movie candidates for a tvdb_id, sorted by
+      `(season.tvdb, episode_offset)`, `None` on a genuine tie) factored
+      out of `identity_mismatch._resolve_by_position` into `fribb.py` so
+      it's the single shared source of truth both season-row *creation*
+      and season-identity *verification* use — no way for them to
+      disagree anymore.
+- [x] **`season_ranges.ensure_fribb_season_rows`** (new, wired into
+      `poll_memory_alpha`, runs every tick) — proactively creates a
+      season row for every real Fribb-known position with no row at
+      all yet, writing the exact matched candidate's `anilist_id`/
+      `mal_id` directly rather than delegating to `season_mapping.
+      reconcile_season`'s own resolver (a real regression caught by
+      this function's own test: that resolver matches by raw
+      `season.tvdb == season_number`, a different, incompatible
+      ordering from `enumerate_real_seasons` once a gap exists — it
+      would've silently written a NULL `anilist_id` for a backfilled
+      position). Also refuses to create a row whose content is already
+      sitting on some *other* season_number of the same show (a second
+      real case this function's own test caught: a missing position can
+      still have its real content already misassigned elsewhere from an
+      old bug — creating a fresh row there would duplicate it, not fix
+      it; that misassignment stays `identity_mismatch.py`'s job to flag
+      for a human). Dry-run against the real production snapshot before
+      shipping: 173 new season rows across 1003 checked shows, all
+      brand-new rows, zero existing data touched, zero pending_review
+      noise (these are new rows, not disagreements with something
+      already stored).
+- [x] **The "AniDB-vs-Sonarr episode mismatch" idea was wrong, caught
+      before shipping.** Wired `derive_episode_mappings`'s existing
+      mismatch stats to `pending_review`, dry-ran it against the real
+      production snapshot first (same caution as the v0.2.42 flood) —
+      it would have flagged **1147** episodes on the very first run.
+      Investigated why: `existing_abs` (Sonarr's own absolute episode
+      count) and `anidb_epno` (AniDB's own, independent absolute count)
+      are two different numbering schemes that are *supposed* to differ
+      whenever a show has any split-cour offset or special-episode
+      interleaving — which the Chobits unit-test fixture itself proved,
+      16 of its 24 episodes "mismatch" even though that fixture is
+      hand-verified *correct* data. The comparison was never a valid
+      "is this wrong" signal to begin with, not just a noisy one — the
+      `pending_review` wiring for it was reverted rather than shipped
+      with a bad threshold. If this is revisited, the real signal would
+      need to be "does the AniDB cross-reference resolve to something
+      implausible" (negative/zero/out-of-range), not "does it differ
+      from Sonarr's number."
+
+Both the show/season identity layer (previous section) and this
+season-gap root cause are now done. Still open: the episode/AniDB
+layer (see the MUST DO SOON item above) — genuinely deferred, not
+fixed by any of this.
 
 ---
 

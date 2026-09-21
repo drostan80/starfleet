@@ -340,8 +340,19 @@ def _fetch_anilist(conn, show: dict) -> None:
     # fetch_and_populate, so it's still NULL on the very first call
     # (addShow's own inline fetch) and set on every subsequent refresh.
     if show.get("metadata_last_refreshed_at") is None:
+        # Prefer an already-recorded show-level mal_id (addShow's own
+        # explicit `malId` input, written directly to show_external_id
+        # by create_show before this fetch ever runs) over AniList's own
+        # fetched idMal. Found live, 2026-09-22: these two could silently
+        # disagree — a human's explicit malId at add time never actually
+        # reached season 1, which took whatever AniList's fetch reported
+        # instead, a real desync invisible until season_ranges.
+        # upsert_season_external_id started mirroring season 1's own id
+        # back onto show_external_id and it overwrote the human's choice.
+        s1_mal_id = _external_id(conn, show["id"], "mal")
+        s1_mal_id = int(s1_mal_id) if s1_mal_id is not None else media.get("idMal")
         _upsert_season(
-            conn, show["id"], 1, int(anilist_id_str), media.get("idMal"),
+            conn, show["id"], 1, int(anilist_id_str), s1_mal_id,
         )
 
     for studio in (media.get("studios") or {}).get("nodes") or []:

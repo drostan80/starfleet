@@ -112,6 +112,29 @@ def upsert_season_external_id(
     every write, not just first-time. Deletes a mapping row if the
     caller sets the id to NULL (the season was unlinked).
 
+    **Also mirrors into `show_external_id` when this is season 1**
+    (2026-09-22) — `show_external_id[service='anilist']` has been
+    treated as "the show's" AniList entry since the very first version
+    of this codebase (`addShow`'s own `anilistId` input, `_ensure_
+    anilist_link`), by the established convention that it's literally
+    season 1's own AniList id, nothing show-specific existing on
+    AniList's side at all. Found live: every known writer of
+    `season.anilist_id` already funnels through this one function (this
+    docstring's own earlier note), but none of them ever kept
+    `show_external_id` in sync after the first write — a human
+    correcting season 1's `anilist_id` later (e.g. resolving an
+    `identity_mismatch` review via `setSeasonMapping`) silently left
+    `show_external_id[anilist]` pointing at the old, now-wrong value.
+    That stale show-level field is still read as ground truth elsewhere
+    (`local_audit.known_anilist_ids()`'s dedup sweep, `metadata.
+    _existing_related_show`'s relation-stub matching) — exactly the
+    "wrong show-level identity" bug class from the season-2-linking
+    incident, reintroduced through staleness instead of a bad initial
+    link. Only syncs on a real (non-None) value — never clears
+    `show_external_id` when a season's id is unlinked, same
+    conservative "add/correct, never delete" convention every other
+    external-id write in this codebase already follows.
+
     Optional name parameters carry the source database's own title for
     this season/entry (e.g. AniList's media title). Name is only written
     if provided and non-None — existing names are preserved on a plain
@@ -147,6 +170,26 @@ def upsert_season_external_id(
                 " WHERE season_id = ? AND service = ?",
                 (season_id, service),
             )
+
+    if anilist_id is not None or mal_id is not None:
+        season_row = conn.execute(
+            "SELECT show_id, season_number FROM season WHERE id = ?", (season_id,)
+        ).fetchone()
+        if season_row is not None and season_row["season_number"] == 1:
+            show_id = season_row["show_id"]
+            for service, ext_id, url in (
+                ("anilist", anilist_id, f"https://anilist.co/anime/{anilist_id}" if anilist_id else None),
+                ("mal", mal_id, f"https://myanimelist.net/anime/{mal_id}" if mal_id else None),
+            ):
+                if ext_id is None:
+                    continue
+                conn.execute(
+                    "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+                    " VALUES (?, ?, ?, ?, ?)"
+                    " ON CONFLICT (show_id, service) DO UPDATE SET"
+                    " external_id = excluded.external_id, url = excluded.url",
+                    (show_id, service, str(ext_id), url, now),
+                )
 
 
 def fill_season_ranges(conn: sqlite3.Connection, show_id: str) -> None:
@@ -351,6 +394,124 @@ def ensure_all_season_rows(conn: sqlite3.Connection) -> int:
     if created:
         log.info("ensure_all_season_rows: created %d season rows", created)
     return created
+
+
+def ensure_fribb_season_rows(conn: sqlite3.Connection) -> dict:
+    """Proactively create season rows for every real season Fribb knows
+    about for a tracked anime show — the reactive counterpart above
+    (`ensure_all_season_rows`) only ever creates a season row from
+    `episode.season` values Sonarr has already synced, so a real season
+    with no synced episodes yet never gets a row at all. Found live:
+    SPY×FAMILY's real "Season 2" (anilist 158927) was never tracked in
+    LCARS because Sonarr hadn't produced episodes for it yet, and no
+    amount of smarter position-matching in `identity_mismatch.py` could
+    fix that — there was no row to match against. `fribb.
+    enumerate_real_seasons` is the single shared ordering both this
+    function and `identity_mismatch._resolve_by_position` use, so a
+    season this function creates at position N is guaranteed to be the
+    same season identity-mismatch's resolver would verify at position N
+    — no gap possible between the two anymore.
+
+    Anime-only (Fribb's own domain). Deliberately does **not** delegate
+    to `season_mapping.reconcile_season` for the `anilist_id`/`mal_id`
+    lookup the way `ensure_all_season_rows` does — `reconcile_season`
+    resolves through `fribb.resolve_season_candidate`, which matches by
+    raw `season.tvdb == season_number` (LCARS's own season_number taken
+    as literal TVDB truth). That's a different, incompatible ordering
+    from `enumerate_real_seasons`'s release-position ordering, and a
+    real regression was caught by this module's own test while building
+    this: once a gap gets backfilled, a *later* LCARS season_number
+    (e.g. 3) no longer lines up with the same raw TVDB season tag its
+    row was originally created under — `resolve_season_candidate` then
+    fails to match at all and silently writes a NULL `anilist_id`.
+    Since `enumerate_real_seasons` has already found the exact right
+    candidate for this position, this writes it directly instead of
+    re-deriving it through a resolver that isn't guaranteed to agree.
+    No pending_review noise either way — these are brand new rows, not
+    a disagreement with something already stored.
+
+    Idempotent, safe every tick — only ever creates a row for a
+    position that doesn't already exist; never touches an existing row
+    (manual_override or otherwise). Also skips creating a row whose
+    candidate `anilist_id` is already sitting on some *other* season of
+    the same show — a second regression this module's own test caught:
+    a position with no row can still have its real content already
+    misassigned to the wrong season_number from an older bug, and
+    creating a fresh row there would just duplicate it rather than fix
+    anything. That misassignment is exactly what `identity_mismatch.py`
+    already flags for a human to resolve — this function's job stays
+    narrowly "fill a position nothing claims at all," never "repair a
+    position something already (wrongly) claims"."""
+    from lcars import fribb
+
+    dataset = fribb.load_dataset()
+    index = fribb.build_tvdb_index(dataset)
+
+    shows = conn.execute(
+        """
+        SELECT sh.id AS show_id, sei_tvdb.external_id AS tvdb_id
+        FROM show sh
+        JOIN show_external_id sei_tvdb
+          ON sei_tvdb.show_id = sh.id AND sei_tvdb.service = 'tvdb'
+        WHERE sh.tracked = 1 AND sh.tracking_space = 'anime'
+        """
+    ).fetchall()
+
+    created = 0
+    now = util.now_utc_iso()
+    for row in shows:
+        try:
+            tvdb_id = int(row["tvdb_id"])
+        except (TypeError, ValueError):
+            continue
+        candidates = index.get(tvdb_id, [])
+        real_seasons = fribb.enumerate_real_seasons(candidates)
+        if not real_seasons:
+            continue  # no opinion, or genuinely ambiguous — don't guess how many seasons exist
+        existing_rows = conn.execute(
+            "SELECT season_number, anilist_id FROM season WHERE show_id = ?",
+            (row["show_id"],),
+        ).fetchall()
+        existing = {r["season_number"] for r in existing_rows}
+        existing_anilist_ids = {r["anilist_id"] for r in existing_rows if r["anilist_id"] is not None}
+        for position in range(1, len(real_seasons) + 1):
+            if position in existing:
+                continue
+            try:
+                anilist_id, mal_id = fribb.extract_ids(real_seasons[position - 1])
+                if anilist_id is not None and anilist_id in existing_anilist_ids:
+                    # This position's real content is already sitting on
+                    # SOME season row for this show — almost certainly
+                    # misassigned to the wrong season_number by an older
+                    # bug (the exact SPY×FAMILY shape), not genuinely
+                    # missing. Creating a second row here would just
+                    # duplicate it. That misassignment is
+                    # identity_mismatch.py's job to flag for a human, not
+                    # this function's job to silently paper over.
+                    continue
+                season_id = ids.generate_id(conn, "z")
+                status = inherit_season_status(conn, row["show_id"])
+                conn.execute(
+                    "INSERT INTO season"
+                    " (id, show_id, season_number, status, anilist_id, mal_id,"
+                    "  source, matched, manual_override, last_reconciled_at,"
+                    "  created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, 'fribb', 1, 0, ?, ?, ?)",
+                    (season_id, row["show_id"], position, status, anilist_id, mal_id,
+                     now, now, now),
+                )
+                conn.commit()
+                created += 1
+            except Exception:
+                log.exception(
+                    "ensure_fribb_season_rows: failed to create season %d for show=%s",
+                    position, row["show_id"],
+                )
+                conn.rollback()
+
+    if created:
+        log.info("ensure_fribb_season_rows: created %d season rows", created)
+    return {"shows_checked": len(shows), "season_rows_created": created}
 
 
 def backfill_episode_season_id(conn: sqlite3.Connection) -> int:

@@ -342,6 +342,49 @@ def resolve_season_candidate(
     return None
 
 
+def enumerate_real_seasons(candidates: list[dict]) -> list[dict] | None:
+    """The real, ordered list of a show's seasons per Fribb — every
+    non-special, non-movie candidate for a tvdb_id, sorted by
+    `(season.tvdb, episode_offset.tvdb)` (release order within a
+    split-cour franchise, e.g. SPY×FAMILY's "Part I"/"Part II" both
+    tagged `season.tvdb: 1`, distinguished only by `episode_offset`).
+
+    2026-09-21 — factored out of `identity_mismatch._resolve_by_position`
+    (which only *verified* an existing LCARS season's `anilist_id`
+    against this ordering) so `season_ranges.ensure_fribb_season_rows`
+    can use the exact same ordering to *create* the LCARS season rows
+    in the first place. Necessary because `season_ranges.
+    ensure_all_season_rows` only ever creates a season row reactively,
+    from `episode.season` values Sonarr already synced — a real Fribb
+    season with no synced episodes yet (found live: SPY×FAMILY's real
+    "Season 2", anilist 158927, never got an LCARS row at all) never
+    gets created, and no amount of smarter *matching* logic fixes a
+    season that was never created. This is the shared, single source
+    of truth for "how many real seasons does this show have, in what
+    order" that both season-row creation and season-identity
+    verification must agree on.
+
+    Returns `None` on an ambiguous tie (two candidates landing on the
+    same sort key) — same "never guess" convention as
+    `resolve_season_candidate`."""
+    numbered = [
+        c
+        for c in candidates
+        if c.get("type") not in ("SPECIAL", "MOVIE") and (c.get("season") or {}).get("tvdb", 0) > 0
+    ]
+
+    def sort_key(c: dict) -> tuple[int, int]:
+        season_tvdb = c["season"]["tvdb"]
+        offset = (c.get("episode_offset") or {}).get("tvdb") or 0
+        return (season_tvdb, offset)
+
+    numbered.sort(key=sort_key)
+    keys = [sort_key(c) for c in numbered]
+    if len(keys) != len(set(keys)):
+        return None  # two candidates share a sort position — genuinely ambiguous, don't guess
+    return numbered
+
+
 def extract_ids(candidate: dict | None) -> tuple[int | None, int | None]:
     """(anilist_id, mal_id) from a resolved candidate, or (None, None)
     if there wasn't one — both nullable on `season` (§5.5)."""

@@ -72,22 +72,16 @@ from lcars import fribb, pending_review
 
 def _resolve_by_position(candidates: list[dict], lcars_season_number: int) -> dict | None:
     """Strict, position-based season resolver — see module docstring for
-    why this is separate from fribb.resolve_season_candidate."""
-    numbered = [
-        c
-        for c in candidates
-        if c.get("type") not in ("SPECIAL", "MOVIE") and (c.get("season") or {}).get("tvdb", 0) > 0
-    ]
+    why this is separate from fribb.resolve_season_candidate.
 
-    def sort_key(c: dict) -> tuple[int, int]:
-        season_tvdb = c["season"]["tvdb"]
-        offset = (c.get("episode_offset") or {}).get("tvdb") or 0
-        return (season_tvdb, offset)
-
-    numbered.sort(key=sort_key)
-    keys = [sort_key(c) for c in numbered]
-    if len(keys) != len(set(keys)):
-        return None  # two candidates share a sort position — genuinely ambiguous, don't guess
+    2026-09-21: the ordering itself now lives in
+    `fribb.enumerate_real_seasons` (shared with `season_ranges.
+    ensure_fribb_season_rows`, which creates the LCARS season rows this
+    function verifies) — this function only does the position lookup
+    once no season-number gap can exist between the two anymore."""
+    numbered = fribb.enumerate_real_seasons(candidates)
+    if numbered is None:
+        return None
     if lcars_season_number < 1 or lcars_season_number > len(numbered):
         return None
     return numbered[lcars_season_number - 1]
