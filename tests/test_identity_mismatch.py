@@ -61,13 +61,19 @@ def _season(conn, season_id, show_id, season_number, anilist_id, manual_override
     )
 
 
-def _fribb_entry(tvdb_id, anilist_id, mal_id=None, tvdb_season=1):
-    return {
+def _fribb_entry(
+    tvdb_id, anilist_id, mal_id=None, tvdb_season=1, entry_type="TV", episode_offset=None
+):
+    entry = {
         "tvdb_id": tvdb_id,
+        "type": entry_type,
         "anilist_id": anilist_id,
         "mal_id": mal_id,
         "season": {"tvdb": tvdb_season},
     }
+    if episode_offset is not None:
+        entry["episode_offset"] = {"tvdb": episode_offset}
+    return entry
 
 
 def test_flags_a_real_mismatch(conn, monkeypatch):
@@ -205,3 +211,55 @@ def test_no_op_when_show_has_no_tvdb_id(conn, monkeypatch):
     result = identity_mismatch.check_anilist_id_mismatch(conn)
 
     assert result == {"checked": 0, "flagged": 0}
+
+
+def test_split_cour_franchise_is_not_a_false_positive(conn, monkeypatch):
+    # The actual v0.2.42 incident, real data: SPY x FAMILY. Fribb tags
+    # both "Part I" and "Part II" as season.tvdb=1 (distinguished only by
+    # episode_offset), while LCARS tracks them as season_number 1 and 2.
+    # LCARS season 2 == "Part II" positionally, correctly stored as
+    # 142838 — must NOT be flagged just because it doesn't equal Fribb's
+    # season.tvdb=2 entry (that's LCARS season 3's real match, 158927).
+    _show(conn, "s-spyfa1", tvdb_id=405920)
+    _season(conn, "z-spyfa1", "s-spyfa1", 1, anilist_id=140960)  # Part I
+    _season(conn, "z-spyfa2", "s-spyfa1", 2, anilist_id=142838)  # Part II
+    _season(conn, "z-spyfa3", "s-spyfa1", 3, anilist_id=158927)  # true season 2
+    conn.commit()
+    _patch_fribb(
+        monkeypatch,
+        [
+            _fribb_entry(405920, 140960, tvdb_season=1),  # Part I, no offset
+            _fribb_entry(405920, 142838, tvdb_season=1, episode_offset=12),  # Part II
+            _fribb_entry(405920, 158927, tvdb_season=2),  # true season 2
+            _fribb_entry(405920, 999999, tvdb_season=0, entry_type="MOVIE"),  # movie, excluded
+        ],
+    )
+
+    result = identity_mismatch.check_anilist_id_mismatch(conn)
+
+    assert result == {"checked": 3, "flagged": 0}
+    assert conn.execute("SELECT * FROM pending_review").fetchone() is None
+
+
+def test_split_cour_still_catches_a_genuine_mismatch(conn, monkeypatch):
+    # Same split-cour shape as above, but LCARS season 2 (Part II) is
+    # genuinely wrong this time — must still flag.
+    _show(conn, "s-spyfa4", tvdb_id=405921)
+    _season(conn, "z-spyfa4", "s-spyfa4", 1, anilist_id=140960)
+    _season(conn, "z-spyfa5", "s-spyfa4", 2, anilist_id=999111)  # wrong
+    conn.commit()
+    _patch_fribb(
+        monkeypatch,
+        [
+            _fribb_entry(405921, 140960, tvdb_season=1),
+            _fribb_entry(405921, 142838, tvdb_season=1, episode_offset=12),
+        ],
+    )
+
+    result = identity_mismatch.check_anilist_id_mismatch(conn)
+
+    assert result == {"checked": 2, "flagged": 1}
+    review = conn.execute(
+        "SELECT proposed_value_chain FROM pending_review WHERE entity_id = 'z-spyfa5'"
+    ).fetchone()
+    assert json.loads(review["proposed_value_chain"]) == ["142838"]

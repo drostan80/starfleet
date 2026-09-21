@@ -89,6 +89,54 @@ full detail:
         title strings) remains a genuinely open idea if this is picked
         up again.
 
+## Reconciliation pipeline gaps — queued next, after the current database-correctness pass (2026-09-21)
+
+Full hybrid-model pipeline confirmed correct and confirmed with the user:
+AniList id (season-level, never show-level) → matched to a show-level TVDB
+id → cross-referenced with Fribb for season position → cross-referenced
+with AniDB at episode level for absolute-episode-range placement → human
+review only when that chain still can't disambiguate. Two real gaps in
+that chain, found tonight while building the passive identity-mismatch
+check, both fully diagnosed but not yet fixed:
+
+- [ ] **AniDB-vs-Sonarr episode mismatch is computed but never surfaces.**
+      `derive_episode_mappings` (`anidb.py:887`) already compares AniDB's
+      own derived absolute episode numbers against Sonarr's
+      `absolute_number` and returns real `stats["mismatches"]`/
+      `stats["mismatch_details"]` — confirmed via
+      `grep -n "mismatch" src/lcars/anidb.py src/lcars/resolvers.py
+      src/lcars/schema.graphql` that this output has zero downstream
+      consumers: not written to `pending_review`, not exposed over
+      GraphQL, not logged anywhere durable. Fix: wire it into
+      `pending_review` the same way `identity_mismatch.py` does —
+      `open_or_extend`/`already_resolved_with` for idempotency,
+      `source='anidb_sonarr_mismatch'`, one row per disagreeing
+      episode/season so it lands in the same review queue as everything
+      else and gets a human decision when AniDB and Sonarr disagree on
+      an episode's absolute position.
+- [ ] **`_resolve_by_position` (`identity_mismatch.py`) breaks on a
+      season-number gap.** It resolves Fribb candidates by counting
+      position `(season.tvdb, episode_offset)` and taking LCARS's
+      `season_number`'th one — correct only if LCARS's tracked seasons
+      have no gaps relative to Fribb's real season count. Confirmed false
+      on real production data: SPY×FAMILY's Fribb data has a real
+      "Season 2" (anilist 158927) that LCARS never tracked at all —
+      LCARS's `season_number` 1-4 actually map to Part I / Part II / real
+      Season 3 / nothing, so pure positional counting silently
+      misaligns once that gap exists (34→31 flagged, not 34→0, when this
+      was dry-run against prod). Fix needs to stop trusting sequential
+      position and instead match each LCARS season to its real Fribb/
+      AniDB counterpart by absolute-episode-range overlap
+      (`season.abs_start`/`abs_end`, D1-D3) rather than counting order —
+      which is also why this gap and the one above should likely be
+      fixed together: reliable `abs_start`/`abs_end` on every season is
+      the input both fixes need.
+
+Both are next, in this order, once the current full-library screen
+(AniList-relations-based show/season audit) is reviewed and actioned —
+this is the explicit continuation of "make the database correct" before
+"build the mechanism that prevents new mistakes" resumes.
+
 ---
 
 ## Android app auto-download controls — shipped in v0.2.31 (2026-09-20)
@@ -544,9 +592,11 @@ watch-tracking fixes) is now shipped and confirmed working live, end to end:
       superseded by a newer one (single-instance policy, already existed) is
       matched by an incrementing launch id, not just process-exit — so a killed
       episode never reports watched even if it had already crossed 90%.
-      Smoke-tested standalone (fake IPC socket + fake LCARS endpoint), not part
-      of the pytest suite — mpv-helper.py runs on the user's own client machine,
-      not inside LCARS.
+      Smoke-tested standalone (fake IPC socket + fake LCARS endpoint) at ship
+      time; **confirmed working live 2026-09-21** — real mpv playback through
+      mpv-helper correctly auto-marked watched against production. Not part
+      of the pytest suite — mpv-helper.py runs on the user's own client
+      machine, not inside LCARS.
 - [x] `GrabEvent.showId` (schema + resolver) — `_grab_file_paths_{sonarr,radarr}`
       already resolved `show_id` internally for the filePath lookup, just never
       returned it; needed so the Grabs page's launch site could report watched
