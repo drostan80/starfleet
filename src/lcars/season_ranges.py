@@ -177,9 +177,11 @@ def upsert_season_external_id(
         ).fetchone()
         if season_row is not None and season_row["season_number"] == 1:
             show_id = season_row["show_id"]
+            anilist_url = f"https://anilist.co/anime/{anilist_id}" if anilist_id else None
+            mal_url = f"https://myanimelist.net/anime/{mal_id}" if mal_id else None
             for service, ext_id, url in (
-                ("anilist", anilist_id, f"https://anilist.co/anime/{anilist_id}" if anilist_id else None),
-                ("mal", mal_id, f"https://myanimelist.net/anime/{mal_id}" if mal_id else None),
+                ("anilist", anilist_id, anilist_url),
+                ("mal", mal_id, mal_url),
             ):
                 if ext_id is None:
                     continue
@@ -473,7 +475,9 @@ def ensure_fribb_season_rows(conn: sqlite3.Connection) -> dict:
             (row["show_id"],),
         ).fetchall()
         existing = {r["season_number"] for r in existing_rows}
-        existing_anilist_ids = {r["anilist_id"] for r in existing_rows if r["anilist_id"] is not None}
+        existing_anilist_ids = {
+            r["anilist_id"] for r in existing_rows if r["anilist_id"] is not None
+        }
         for position in range(1, len(real_seasons) + 1):
             if position in existing:
                 continue
