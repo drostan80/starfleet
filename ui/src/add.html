@@ -965,7 +965,11 @@ import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDelet
 import { bootstrapConfig, applyAppName } from './js/config.js?v=5';
 import { showBanner, hideBanner } from './js/calendar.js?v=44';
 import { initSearch } from './js/search.js?v=4';
-import { initBrowse, teardownBrowse, setBrowseType } from './js/browse.js?v=13';
+import {
+  initBrowse, teardownBrowse, setBrowseType,
+  parseSequelError, confirmSequelAttach, attachSequel,
+  parseLaterSeasonError, confirmAddSeason1,
+} from './js/browse.js?v=14';
 
 applyAppName();
 await bootstrapConfig();
@@ -1158,6 +1162,78 @@ function renderCandidates(cands) {
 
 /* ── Chip click handler ───────────────────────────────── */
 
+/**
+ * Shared sequel/later-season handling for this page's own direct
+ * addShow/addShowWithArr call sites (2026-09-21) — closes a real gap
+ * found live: this safety net (confirmSequelAttach's "Attach as Season
+ * N?" dialog, confirmAddSeason1's "Add Season 1 instead?") previously
+ * only fired from the Browse tab (browse.js's own handleAddError); a
+ * show added through this page's own chip-click flow hit the raw
+ * "sequel_of:{...}"/"later_season:{...}" error string unhandled.
+ *
+ * Fully handles success itself (setCardTracked + banner), the same way
+ * onChipClick's own success path does, so the caller only needs to act
+ * on the return value.
+ *
+ * Returns:
+ *   'handled'  — fully resolved (attached, added S1, or cancelled);
+ *                caller should stop, nothing more to do.
+ *   'separate' — user said "it isn't a sequel"; caller should retry
+ *                addShow/addShowWithArr with the same input as a
+ *                genuinely separate show. NOTE: unverified whether the
+ *                backend's own find_sequel_parent check would fire
+ *                again on that identical retry (no bypass flag exists
+ *                in the schema) — inherited as-is from browse.js's own
+ *                identical "separate" retry, not newly introduced here.
+ *   false      — not a sequel/later-season error; caller should treat
+ *                `err` as a real failure.
+ */
+async function handleSequelOrLaterSeason(err, card, status) {
+  const sequel = parseSequelError(err.message);
+  if (sequel) {
+    const choice = await confirmSequelAttach(sequel);
+    if (choice === 'attach') {
+      await attachSequel(sequel);
+      if (status !== 'PLANNED') await setStatus(sequel.parentShowId, status);
+      setCardTracked(card, sequel.parentShowId, status);
+      showBanner(`Attached as Season ${sequel.nextSeason} of ${sequel.parentTitle}`, 'ok');
+      return 'handled';
+    }
+    if (choice === 'separate') return 'separate';
+    showBanner('Cancelled', 'info');
+    return 'handled';
+  }
+
+  const laterSeason = parseLaterSeasonError(err.message);
+  if (laterSeason) {
+    const ok = await confirmAddSeason1(laterSeason);
+    if (!ok) {
+      showBanner('Cancelled', 'info');
+      return 'handled';
+    }
+    const s1Input = {
+      mediaShape,
+      trackingSpace,
+      primaryTitle: laterSeason.s1TitleEnglish ? 'ENGLISH' : 'ROMAJI',
+      titleEnglish: laterSeason.s1TitleEnglish || undefined,
+      titleRomaji: laterSeason.s1TitleRomaji || undefined,
+      anilistId: laterSeason.s1AnilistId,
+      malId: laterSeason.s1MalId || undefined,
+    };
+    const show = await addShow(s1Input);
+    if (status !== 'PLANNED' && show.status !== status) {
+      await setStatus(show.id, status);
+      show.status = status;
+    }
+    setCardTracked(card, show.id, show.status || status);
+    const title = laterSeason.s1TitleEnglish || laterSeason.s1TitleRomaji;
+    showBanner(`Added: ${title} [${STATUS_LABELS[status]}]`, 'ok');
+    return 'handled';
+  }
+
+  return false;
+}
+
 async function onChipClick(card, cand, status) {
   const trackedShowId = card.dataset.showId;
   const currentStatus = card.dataset.currentStatus;
@@ -1191,7 +1267,17 @@ async function onChipClick(card, cand, status) {
     if (status === 'COMPLETED' || status === 'DROPPED') {
       // No arr — addShow directly
       const input = buildAddInput(cand);
-      show = await addShow(input);
+      try {
+        show = await addShow(input);
+      } catch (err) {
+        const outcome = await handleSequelOrLaterSeason(err, card, status);
+        if (outcome === 'handled') { card.classList.remove('loading'); return; }
+        if (outcome === 'separate') {
+          show = await addShow(input);
+        } else {
+          throw err;
+        }
+      }
       // addShow creates as PLANNED — need setStatus follow-up
       if (show.status !== status) {
         await setStatus(show.id, status);
@@ -1215,7 +1301,13 @@ async function onChipClick(card, cand, status) {
           await openSeasonResolution(card, match[1], cand, { allowSeparateAdd: true, status });
           return;
         }
-        throw err;
+        const outcome = await handleSequelOrLaterSeason(err, card, status);
+        if (outcome === 'handled') { card.classList.remove('loading'); return; }
+        if (outcome === 'separate') {
+          result = await addShowWithArr(input);
+        } else {
+          throw err;
+        }
       }
       show = result.show;
       // Flatten externalIds if nested

@@ -146,7 +146,7 @@ function bestMatchingCandidate(query, candidates) {
  * Parse a "sequel_of:{json}" error from the server into structured data.
  * Returns null if the error isn't a sequel detection.
  */
-function parseSequelError(msg) {
+export function parseSequelError(msg) {
   if (!msg.startsWith('sequel_of:')) return null;
   try {
     return JSON.parse(msg.slice('sequel_of:'.length));
@@ -159,7 +159,7 @@ function parseSequelError(msg) {
  * Show a modal confirmation for attaching a sequel as a new season.
  * Returns a Promise<'attach'|'separate'|'cancel'>.
  */
-function confirmSequelAttach(sequel) {
+export function confirmSequelAttach(sequel) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'sequel-confirm-overlay';
@@ -198,7 +198,7 @@ function confirmSequelAttach(sequel) {
  * Parse a "later_season:{json}" error — S2+ of an untracked franchise.
  * Returns null if not a later-season error.
  */
-function parseLaterSeasonError(msg) {
+export function parseLaterSeasonError(msg) {
   if (!msg.startsWith('later_season:')) return null;
   try {
     return JSON.parse(msg.slice('later_season:'.length));
@@ -211,7 +211,7 @@ function parseLaterSeasonError(msg) {
  * Show a modal asking the user whether to add S1 instead.
  * Returns a Promise<boolean>.
  */
-function confirmAddSeason1(info) {
+export function confirmAddSeason1(info) {
   const title = info.s1TitleEnglish || info.s1TitleRomaji || 'this franchise';
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -242,7 +242,7 @@ function confirmAddSeason1(info) {
 /**
  * Handle a confirmed sequel attach: call setSeasonMapping, then refresh.
  */
-async function attachSequel(sequel) {
+export async function attachSequel(sequel) {
   await setSeasonMapping(
     sequel.parentShowId,
     sequel.nextSeason,

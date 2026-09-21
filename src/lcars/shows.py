@@ -1463,6 +1463,15 @@ def amend_show_arr_link(
 
     conn.commit()
 
+    # 2026-09-21 (user request): re-fetch metadata against the now-correct
+    # link right away, rather than leaving the documented "episode rows
+    # still carry sonarr_season/sonarr_episode from the wrong series until
+    # a manual refresh" gap for the caller to remember. Same function
+    # refreshShowMetadata calls, best-effort/never-raises (metadata.py's
+    # own docstring) — a failure here shouldn't make an otherwise-successful
+    # amend look like it failed.
+    metadata.fetch_and_populate(conn, show_id)
+
     result["success"] = True
     parts = []
     if result["resolved_title"]:
@@ -1472,6 +1481,7 @@ def amend_show_arr_link(
     if result["arr_added"]:
         parts.append("added correct one")
     parts.append(f"{service} ID updated to {new_external_id}")
+    parts.append("metadata refreshed")
     result["message"] = "; ".join(parts) + "."
     return result
 
