@@ -452,6 +452,18 @@ class LcarsClient:
         data = await self._query(query)
         return data["pollScoreSync"]
 
+    async def poll_identity_mismatch(self) -> dict:
+        """2026-09-21 — the AniList-ID-vs-Fribb identity mismatch sweep
+        (pollIdentityMismatch), found via the real Tantei/Milky-Holmes
+        incident. Fribb's dataset is local/cached, no live network call
+        per season — cheap enough to ride the same hourly tick as
+        pollScoreSync. Returns {checked, flagged}."""
+        query = """
+        mutation { pollIdentityMismatch { checked flagged } }
+        """
+        data = await self._query(query)
+        return data["pollIdentityMismatch"]
+
     async def poll_local_service_presence(self) -> dict:
         """§5.4/§6.7, B.7 — the `local` pseudo-service rollup
         (pollLocalServicePresence): pure SQL aggregate, no external

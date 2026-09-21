@@ -1091,6 +1091,12 @@ type ScoreSyncPollResult {
   malFlagged: Int!
 }
 
+"pollIdentityMismatch's own confirmation summary (2026-09-21) — identity_mismatch.py's AniList-ID-vs-Fribb signal, found via the real Tantei/Milky-Holmes incident. checked: seasons with both a stored anilist_id and a show-level tvdb id where Fribb had an independent opinion for that season number. flagged: seasons where Fribb's own tvdb->anilist resolution disagreed with what's actually stored — a pending_review (season, field \"anilist_id\", source \"fribb_identity_mismatch\") was opened or extended for human confirmation via the same season-AniList-ID editor the unrelated \"no match found\" review already uses; zero on a quiet tick. Never auto-applies a correction — repair is amendShowArrLink, same as every other pending_review in this codebase."
+type IdentityMismatchPollResult {
+  checked: Int!
+  flagged: Int!
+}
+
 # ---------------------------------------------------------------------------
 # §5.1's movie <-> bonus_movie addendum, automatic tmdb_match derivation (B.8b)
 # ---------------------------------------------------------------------------
@@ -1852,6 +1858,18 @@ type Mutation {
   pollAnimeSchedule/pollSeasonSubdivision.
   """
   pollScoreSync: ScoreSyncPollResult!
+  """
+  Identity-mismatch detection (2026-09-21): for every tracked season with
+  its own anilist_id and a show-level tvdb id, compares against Fribb's
+  own independent tvdb->anilist resolution for that season number.
+  Disagreement opens/extends a pending_review (season, field "anilist_id")
+  for human confirmation — never auto-applied. Checks every season
+  regardless of manual_override: the real incident this exists for had
+  that flag set on the wrong value already, so trusting it would have
+  missed the bug. No require_client() — same passive/Ops-internal
+  reasoning as pollScoreSync.
+  """
+  pollIdentityMismatch: IdentityMismatchPollResult!
   """
   §6.1/§6.8, A.9 — clamps/rounds silently to the 0-20 quarter-point
   scale rather than rejecting out-of-range input. Also pushes to

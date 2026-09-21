@@ -216,6 +216,14 @@ async def run_score_sync_once(client: LcarsClient) -> int:
     return result["anilistChecked"] + result["anilistFlagged"]
 
 
+async def run_identity_mismatch_once(client: LcarsClient) -> int:
+    """2026-09-21 — one full identity-mismatch sweep (pollIdentityMismatch):
+    same "one mutation covers everything" shape as run_score_sync_once
+    above. Returns the combined checked + flagged count."""
+    result = await client.poll_identity_mismatch()
+    return result["checked"] + result["flagged"]
+
+
 async def run_local_presence_once(client: LcarsClient) -> int:
     """§5.4/§6.7, B.7 — the `local` pseudo-service rollup
     (pollLocalServicePresence): pure SQL aggregate, no external
@@ -286,9 +294,11 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     already-cached dataset lookup, no live outbound call — no reason at
     all not to share this tick; S5's width check is a single batched
     AniList call over all ranged seasons; the score drift sweep is one
-    full AniList list fetch — same negligible-relative-to-the-daily-tier
-    cost) — this is the single unit that loop actually calls each tick.
-    Returns the combined count, for the caller to log."""
+    full AniList list fetch; the 2026-09-21 identity-mismatch sweep is
+    the same already-cached Fribb dataset lookup the tvdb backfill
+    uses, no live outbound call either — same negligible-relative-to-
+    the-daily-tier cost) — this is the single unit that loop actually
+    calls each tick. Returns the combined count, for the caller to log."""
     daily = await run_once(client)
     weekly = await run_weekly_once(client)
     animeschedule = await run_animeschedule_once(client)
@@ -305,6 +315,11 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
     # entirely when it has no explicit score of its own — see its module
     # docstring / the two check_*_score_drift functions for detail.
     score_sync = await run_score_sync_once(client)
+    # identity_mismatch, 2026-09-21 — found via the real Tantei/Milky-
+    # Holmes incident (season linked to a completely unrelated Sonarr
+    # series). Fribb's dataset is local/cached, no live network call per
+    # season, so this rides the same hourly tick as score_sync.
+    identity_mismatch = await run_identity_mismatch_once(client)
     return (
         daily
         + weekly
@@ -316,6 +331,7 @@ async def run_daily_and_weekly_once(client: LcarsClient) -> int:
         + tvdb_backfill
         + season_subdivision
         + score_sync
+        + identity_mismatch
     )
 
 

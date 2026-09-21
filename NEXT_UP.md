@@ -58,13 +58,36 @@ full detail:
       — user found and deleted the wrong entries in Sonarr directly; LCARS
       side soft-deleted + hard-delete requested (both elapse
       2026-09-20T19:57:14Z).
-- [ ] **Not yet done**: find and fix the actual matching logic that lets
-      a sequel/"Season 2" title link to an unrelated Sonarr/TVDB series in
-      the first place, and add a guard rail (low-confidence match should
-      never auto-accept, same lesson `show_merge.py`'s own auto-merge
-      retirement already learned). Worth checking other tracked shows for
-      the same "no AniList match for tvdb id" pending_review symptom this
-      bug pattern leaves behind, even without the root cause pinned yet.
+- [x] **Guard rail shipped, v0.2.41+v0.2.42 (2026-09-21)**:
+      - **Prevention**: the interactive-add sequel-confirmation dialog
+        (`browse.js`'s "Attach as Season N?" / "It isn't — add as new
+        show") was only wired into the Browse tab — `add.html`'s own
+        direct addShow/addShowWithArr call sites silently rethrew the
+        raw `sequel_of:`/`later_season:` errors unhandled. Now global.
+        Known open question, inherited not fixed: the "it isn't a
+        sequel" retry uses the same input, and there's no backend
+        bypass flag for `find_sequel_parent` — unverified whether that
+        retry actually works even in browse.js's own original version.
+      - **Passive detection for an already-wrong link**: new
+        `identity_mismatch.check_anilist_id_mismatch` (ops-scheduled,
+        hourly tier) compares each season's stored `anilist_id` against
+        Fribb's own independent tvdb->anilist resolution, flagging a
+        `pending_review` on disagreement — checks every season
+        regardless of `manual_override` (the real Tantei row had that
+        flag wrongly set already). Never auto-corrects; repair is the
+        existing `amendShowArrLink`, which now also auto-refreshes
+        metadata afterward instead of leaving that as a manual step.
+      - **A second signal was designed, calibrated, and rejected same
+        night** — title fuzzy-match (LCARS title vs Sonarr's own series
+        title) isn't discriminative: calibrated against all 336
+        currently-tracked Sonarr-linked shows, the worst *known-correct*
+        match (a legitimate romaji->English translation) scored 0.159
+        (`SequenceMatcher` ratio); the real Tantei/Milky-Holmes bug
+        scored 0.300 — *higher* than a genuinely correct match. No
+        threshold separates them. Not shipped. A real, different signal
+        (e.g. episode-count/air-date-pattern consistency instead of
+        title strings) remains a genuinely open idea if this is picked
+        up again.
 
 ---
 

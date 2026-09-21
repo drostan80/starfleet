@@ -39,6 +39,7 @@ from lcars import (
     events,
     export_import,
     fuzzy,
+    identity_mismatch,
     ids,
     local_audit,
     mal_client,
@@ -2849,6 +2850,18 @@ def resolve_poll_score_sync(_, info):
         "malChecked": mal["checked"],
         "malFlagged": mal["flagged"],
     }
+
+
+@mutation.field("pollIdentityMismatch")
+def resolve_poll_identity_mismatch(_, info):
+    """2026-09-21 — the AniList-ID-vs-Fribb identity mismatch sweep
+    (identity_mismatch.py), found via the real Tantei/Milky-Holmes
+    incident. No require_client() — same passive/Ops-internal reasoning
+    as pollScoreSync: opens pending_review for human confirmation rather
+    than applying anything automatically."""
+    conn = db.get_connection()
+    result = identity_mismatch.check_anilist_id_mismatch(conn)
+    return {"checked": result["checked"], "flagged": result["flagged"]}
 
 
 @mutation.field("pollLocalServicePresence")
