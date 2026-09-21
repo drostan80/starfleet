@@ -400,11 +400,13 @@ def _seed_air_date_show(conn, anidb_id=900, tvdb_id="900001", offset=0):
         "INSERT INTO show (id, title_romaji, tracked) VALUES ('s-airdt1', 'Air Date Show', 1)"
     )
     conn.execute(
-        "INSERT INTO show_external_id (show_id, service, external_id) VALUES ('s-airdt1', 'anidb', ?)",
+        "INSERT INTO show_external_id (show_id, service, external_id)"
+        " VALUES ('s-airdt1', 'anidb', ?)",
         (str(anidb_id),),
     )
     conn.execute(
-        "INSERT INTO anime_list_entry (anidb_id, tvdb_id, default_tvdb_season, episode_offset, name)"
+        "INSERT INTO anime_list_entry"
+        " (anidb_id, tvdb_id, default_tvdb_season, episode_offset, name)"
         " VALUES (?, ?, 1, ?, 'Air Date Show')",
         (anidb_id, tvdb_id, offset),
     )
@@ -471,7 +473,8 @@ class TestAirDateArbiter:
         result at 'auto' confidence."""
         _seed_air_date_show(conn, offset=0)
         conn.execute(
-            "INSERT INTO episode (id, show_id, season, episode) VALUES ('e-ad003', 's-airdt1', 1, 1)"
+            "INSERT INTO episode (id, show_id, season, episode)"
+            " VALUES ('e-ad003', 's-airdt1', 1, 1)"
         )
         conn.commit()
 
