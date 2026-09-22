@@ -5,6 +5,60 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
+## Air-date priority redesign — built, not yet deployed (2026-09-22)
+
+Found live: "The World Is Dancing" episode 13 showed a future Thursday
+date (`air_date_source='syoboi'`) despite already being downloaded and
+watched — real broadcast was a Monday release AniDB tracked but
+Syoboi's TV-channel feed never covered at all.
+
+- [x] **Root cause**: the old fixed hierarchy (`manual > syoboi >
+      animeschedule > anilist > sonarr > anidb > tvmaze`,
+      `airdate_priority.py`) meant a higher-ranked source's date always
+      won, even tracking a genuinely different, later broadcast than a
+      lower-ranked source's already-correct one — and `syoboi.py`'s own
+      `rewire_airdates` had a bug (`or src == "syoboi"`) permanently
+      excluding already-syoboi-sourced episodes from ever being
+      re-evaluated at all, even when Syoboi's own underlying calendar
+      data changed. `metadata.py`'s AniList reconciliation also
+      hard-coded its own independent copy of the priority tuple,
+      written a day *before* `airdate_priority.py` even existed and
+      never migrated to use it.
+- [x] **New rule** (`airdate_priority.should_apply()`, replacing the
+      whole rank system): `manual` absolute; same source re-asserting a
+      changed value always applies (a genuine reschedule can move
+      either direction); a *different* source only wins by proposing an
+      *earlier* real date — this is what makes a later cross-source
+      date impossible to mistake for an "update." One exception:
+      `sonarr`'s own raw date is a placeholder, not a real competing
+      broadcast, so any curated source may correct it either direction
+      (preserves the existing, valuable "AniList corrects an obviously
+      wrong Sonarr seed date" behavior).
+- [x] **All three writers migrated**: `metadata.py`'s AniList
+      reconciliation, `animeschedule.py`'s RSS sweep, and
+      `syoboi.py`'s `rewire_airdates` (whose bulk-SQL WHERE clause now
+      shares one `_rewire_condition()` fragment across its preview/
+      audit/update queries instead of three independently-maintained
+      copies — the exact kind of drift that caused the original bug).
+      The narrow "already-downloaded + a later cross-source date"
+      `pending_review` flag (from the "Draw This, Then Die!" incident)
+      is kept as a visibility case on top of the general silent rule,
+      generalized from Sonarr-specific to any source.
+- [x] **The live episode itself fixed manually** (`setEpisodeAirDate`,
+      now `source='manual'`) using AniDB's real date, confirmed against
+      the actual watch timestamp.
+- [x] **New tests**: `test_airdate_priority.py` (unit tests for every
+      branch of `should_apply()`, plus a parametrized parity test
+      between `should_apply()` and `rewire_airdates()`'s SQL condition
+      across every case — guards against the two ever silently
+      disagreeing again, the same failure mode that caused the original
+      bug). Two `test_server.py` tests rewritten to reflect the new
+      earlier-wins-cross-source behavior (the old ones asserted the
+      obsolete fixed-hierarchy behavior the redesign replaces). Full
+      suite green. Not yet tagged/deployed.
+
+---
+
 ## Art-fetch negative cache + staged throttle — shipped v0.2.49 (2026-09-22)
 
 Closes the deferred item found 2026-09-20 while diagnosing the v0.2.38/
