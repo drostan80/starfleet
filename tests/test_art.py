@@ -162,3 +162,43 @@ class TestAutoSelectBestWritesBack:
         ).fetchone()
         assert row["banner_url"] == "https://cdn/auto-banner.jpg"
         assert row["poster_url"] == "https://cdn/auto-poster.jpg"
+
+
+class TestDeleteAsset:
+    def test_delete_removes_row(self, conn):
+        aid = art.upsert_asset(conn, "s-test01", None, "poster", "tvdb",
+                               "https://cdn/stale-poster.jpg")
+        conn.commit()
+
+        art.delete_asset(conn, aid)
+
+        row = conn.execute("SELECT 1 FROM art_asset WHERE id = ?", (aid,)).fetchone()
+        assert row is None
+
+    def test_delete_of_selected_asset_clears_show_column(self, conn):
+        aid = art.upsert_asset(conn, "s-test01", None, "poster", "tvdb",
+                               "https://cdn/stale-poster.jpg")
+        conn.commit()
+        art.select_asset(conn, aid)
+
+        art.delete_asset(conn, aid)
+
+        row = conn.execute("SELECT poster_url FROM show WHERE id = 's-test01'").fetchone()
+        assert row["poster_url"] is None
+
+    def test_delete_of_unselected_asset_leaves_show_column_untouched(self, conn):
+        selected_id = art.upsert_asset(conn, "s-test01", None, "poster", "anilist",
+                                       "https://cdn/good-poster.jpg")
+        stale_id = art.upsert_asset(conn, "s-test01", None, "poster", "tvdb",
+                                    "https://cdn/stale-poster.jpg")
+        conn.commit()
+        art.select_asset(conn, selected_id)
+
+        art.delete_asset(conn, stale_id)
+
+        row = conn.execute("SELECT poster_url FROM show WHERE id = 's-test01'").fetchone()
+        assert row["poster_url"] == "https://cdn/good-poster.jpg"
+
+    def test_delete_unknown_asset_raises(self, conn):
+        with pytest.raises(ValueError):
+            art.delete_asset(conn, "h-nonexi")

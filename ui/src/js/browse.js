@@ -13,8 +13,8 @@ import {
   browseSeasonalAnime, browseTmdb,
   searchArrCandidates, addShowWithArr, addShow, skipShow,
   setStatus, setSeasonStatus, setSeasonMapping,
-} from './api.js?v=20';
-import { showBanner } from './calendar.js?v=23';
+} from './api.js?v=21';
+import { showBanner } from './calendar.js?v=45';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS,

@@ -123,6 +123,27 @@ def select_asset(conn, asset_id: str) -> dict:
     return asset
 
 
+def delete_asset(conn, asset_id: str) -> None:
+    """Permanently remove a stored art asset — for a stale/404'd URL a
+    source no longer serves. If it's currently selected, deselect first
+    (reverts to fallback, same as ``deselect_asset``) so the denormalised
+    ``show`` column doesn't keep pointing at a row that no longer exists.
+
+    Deliberately does not touch any negative-cache marker (see
+    ``metadata.py``'s ``update_art_negative_cache``) — deleting one
+    stale candidate says nothing about whether the source it came from
+    still has *other*, good art; a manual re-fetch afterward is expected
+    to just find it again if it's still findable.
+    """
+    asset = conn.execute("SELECT * FROM art_asset WHERE id = ?", (asset_id,)).fetchone()
+    if not asset:
+        raise ValueError(f"Art asset {asset_id} not found")
+    if asset["selected"]:
+        deselect_asset(conn, asset_id)
+    conn.execute("DELETE FROM art_asset WHERE id = ?", (asset_id,))
+    conn.commit()
+
+
 def deselect_asset(conn, asset_id: str) -> dict:
     """Clear the selected flag on an asset.
 

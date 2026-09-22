@@ -11496,3 +11496,163 @@ async def test_split_season_watch_events_follow_episodes(client, monkeypatch):
     ).fetchone()
     assert we["season"] == 2
     assert we["episode"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Art-fetch negative cache + staged fetch — GraphQL wiring
+# (NEXT_UP.md "Art-fetch negative cache + throttle")
+# ---------------------------------------------------------------------------
+
+
+async def _add_anime_show_with_season_anilist(client, anilist_id=900001):
+    show = await add_show(client, titleRomaji="Staged Art Show")
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $al: Int!) {
+          setSeasonMapping(showId: $id, seasonNumber: 1, anilistId: $al, malId: null) { id }
+        }
+        """,
+        {"id": show["id"], "al": anilist_id},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { seasons(first: 10) { edges { node { id anilistId } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    season_id = data["show"]["seasons"]["edges"][0]["node"]["id"]
+    return show, season_id
+
+
+async def test_fetch_show_art_for_seasons_wired_end_to_end(client, monkeypatch):
+    show, season_id = await _add_anime_show_with_season_anilist(client)
+    monkeypatch.setattr(
+        anilist_client, "fetch_media",
+        lambda *a, **kw: {
+            "coverImage": {"large": "https://cdn/p.jpg", "extraLarge": None},
+            "bannerImage": "https://cdn/b.jpg",
+        },
+    )
+
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!, $seasonIds: [ID!]!) {
+          fetchShowArtForSeasons(showId: $id, seasonIds: $seasonIds) {
+            id artAssets { kind source url seasonId selected }
+          }
+        }
+        """,
+        {"id": show["id"], "seasonIds": [season_id]},
+        headers=auth_headers(),
+    )
+    assets = data["fetchShowArtForSeasons"]["artAssets"]
+    assert any(a["url"] == "https://cdn/p.jpg" and a["seasonId"] == season_id for a in assets)
+
+
+async def test_fetch_show_art_for_seasons_skips_when_manual_priority_pending(client, monkeypatch):
+    show, season_id = await _add_anime_show_with_season_anilist(client)
+    called = []
+    monkeypatch.setattr(
+        anilist_client, "fetch_media",
+        lambda *a, **kw: called.append(1) or {
+            "coverImage": {"large": "https://cdn/p.jpg", "extraLarge": None},
+            "bannerImage": None,
+        },
+    )
+
+    with anilist_client.manual_priority():
+        data = await gql(
+            client,
+            """
+            mutation($id: ID!, $seasonIds: [ID!]!) {
+              fetchShowArtForSeasons(showId: $id, seasonIds: $seasonIds) {
+                id artAssets { url }
+              }
+            }
+            """,
+            {"id": show["id"], "seasonIds": [season_id]},
+            headers=auth_headers(),
+        )
+    assert called == []
+    assert data["fetchShowArtForSeasons"]["artAssets"] == []
+
+
+async def test_fetch_show_art_show_level_skips_when_manual_priority_pending(client, monkeypatch):
+    show = await add_show(client, titleRomaji="Staged Art Show 2", anilistId=None)
+    called = []
+    monkeypatch.setattr(
+        anilist_client, "fetch_media",
+        lambda *a, **kw: called.append(1) or None,
+    )
+
+    with anilist_client.manual_priority():
+        await gql(
+            client,
+            "mutation($id: ID!) { fetchShowArtShowLevel(showId: $id) { id } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    assert called == []
+
+
+async def test_add_manual_art_url_selects_immediately(client):
+    show = await add_show(client, titleRomaji="Manual Art Show")
+
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!, $url: String!) {
+          addManualArtUrl(showId: $id, kind: POSTER, url: $url) {
+            id kind source url selected seasonId
+          }
+        }
+        """,
+        {"id": show["id"], "url": "https://cdn/manual-poster.jpg"},
+        headers=auth_headers(),
+    )
+    asset = data["addManualArtUrl"]
+    assert asset["source"] == "manual"
+    assert asset["selected"] is True
+    assert asset["seasonId"] is None
+
+    refreshed = await gql(
+        client, "query($id: ID!) { show(id: $id) { posterUrl posterArtNotFoundAt } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    assert refreshed["show"]["posterUrl"] == "https://cdn/manual-poster.jpg"
+    assert refreshed["show"]["posterArtNotFoundAt"] is None
+
+
+async def test_delete_art_asset_removes_it(client):
+    show = await add_show(client, titleRomaji="Delete Art Show")
+    added = await gql(
+        client,
+        """
+        mutation($id: ID!, $url: String!) {
+          addManualArtUrl(showId: $id, kind: POSTER, url: $url) { id }
+        }
+        """,
+        {"id": show["id"], "url": "https://cdn/to-delete.jpg"},
+        headers=auth_headers(),
+    )
+    asset_id = added["addManualArtUrl"]["id"]
+
+    data = await gql(
+        client, "mutation($id: ID!) { deleteArtAsset(id: $id) }",
+        {"id": asset_id}, headers=auth_headers(),
+    )
+    assert data["deleteArtAsset"] is True
+
+    refreshed = await gql(
+        client, "query($id: ID!) { show(id: $id) { artAssets { id } posterUrl } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    assert refreshed["show"]["artAssets"] == []
+    assert refreshed["show"]["posterUrl"] is None

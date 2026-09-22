@@ -239,6 +239,11 @@ type Show {
   "§6.7/B.1 — last time metadata.fetch_and_populate() ran for this show, from any trigger (addShow's own inline fetch, refreshShowMetadata, or Ops's own daily pass). Null if never fetched. The once-per-day ceiling dueForMetadataRefresh reads against."
   metadataLastRefreshedAt: DateTime
 
+  "Art-fetch negative cache: last time a fetch completed with no selected show-level poster found from any source. Cleared automatically the moment one is found/selected. The web client's automatic per-page-load art auto-fetch checks this before firing — a manual re-fetch always runs regardless."
+  posterArtNotFoundAt: DateTime
+  "Same as posterArtNotFoundAt, for the banner/background slot."
+  bannerArtNotFoundAt: DateTime
+
   "Count of episodes with at least one watch event."
   watchedEpisodeCount: Int!
   "Count of episodes available locally or via Sonarr/Radarr."
@@ -2264,6 +2269,14 @@ type Mutation {
   selectArtAsset(id: ID!): ArtAsset!
   "Clear the selected art asset for a slot, reverting to the source-data fallback (show.poster_url column)."
   deselectArtAsset(id: ID!): ArtAsset!
+  "Staged auto-fetch, stage 1/3: per-season AniList art only, scoped to the given season ids — avoids paying every AniList-linked season's throttled call in one request. Background-only: a no-op (returns the show unchanged) while a manual fetchShowArt is in flight elsewhere."
+  fetchShowArtForSeasons(showId: ID!, seasonIds: [ID!]!): Show!
+  "Staged auto-fetch, stage 2: the non-per-season half of the cascade (TVDB/TVmaze/TMDB/MAL, plus the AniList show-level fallback when no season has its own link). Background-only, same manual-priority skip as fetchShowArtForSeasons."
+  fetchShowArtShowLevel(showId: ID!): Show!
+  "Add a manually-pasted art URL as a new candidate for a (show, season, kind) slot and select it immediately — doesn't have to come from any known source. Clears that slot's negative-cache marker."
+  addManualArtUrl(showId: ID!, seasonId: ID, kind: ArtKind!, url: String!): ArtAsset!
+  "Permanently remove a stored art asset (e.g. a stale/404'd URL). Deselects first if it was the active selection. Does not affect the negative cache — a manual re-fetch afterward will just find it again if it's still findable."
+  deleteArtAsset(id: ID!): Boolean!
 
   # -- Synopsis editing --------------------------------------------------------
   "Set (overwrite) the show-level synopsis text. Returns the updated show."

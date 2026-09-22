@@ -4951,8 +4951,41 @@ def resolve_fetch_show_art(_, info, show_id):
     show = _get_show(conn, show_id)
     if not show:
         raise GraphQLError(f"Show {show_id} not found")
-    metadata.fetch_show_art(conn, show_id)
+    # Manual/full re-fetch — always runs the whole cascade regardless of
+    # any negative-cache stamp, and takes priority over the background
+    # staged auto-fetch's own AniList calls for the shared process-wide
+    # throttle (anilist_client.py) — see resolve_fetch_show_art_for_
+    # seasons/resolve_fetch_show_art_show_level below, the two entry
+    # points that check this flag.
+    with anilist_client.manual_priority():
+        metadata.fetch_show_art(conn, show_id)
     # Return refreshed show
+    return _get_show(conn, show_id)
+
+
+@mutation.field("fetchShowArtForSeasons")
+def resolve_fetch_show_art_for_seasons(_, info, show_id, season_ids):
+    conn = db.get_connection()
+    show = _get_show(conn, show_id)
+    if not show:
+        raise GraphQLError(f"Show {show_id} not found")
+    # Background/staged only — a manual fetch elsewhere in the process
+    # takes priority over the shared AniList throttle; skip this turn
+    # rather than contend for it (the client-side staged sequence
+    # retries a few seconds later on its next stage).
+    if not anilist_client.manual_request_pending():
+        metadata.fetch_show_art_for_seasons(conn, show_id, season_ids)
+    return _get_show(conn, show_id)
+
+
+@mutation.field("fetchShowArtShowLevel")
+def resolve_fetch_show_art_show_level(_, info, show_id):
+    conn = db.get_connection()
+    show = _get_show(conn, show_id)
+    if not show:
+        raise GraphQLError(f"Show {show_id} not found")
+    if not anilist_client.manual_request_pending():
+        metadata.fetch_show_art_show_level(conn, show_id)
     return _get_show(conn, show_id)
 
 
@@ -5017,6 +5050,35 @@ def resolve_deselect_art_asset(_, info, id):
         return art.deselect_asset(conn, id)
     except ValueError as e:
         raise GraphQLError(str(e)) from e
+
+
+@mutation.field("addManualArtUrl")
+def resolve_add_manual_art_url(_, info, show_id, kind, url, season_id=None):
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    # source_score=100 — outranks every real source (TVDB's own scores
+    # top out well below this, TVmaze/MAL/AniList carry none at all), so
+    # a manually-pasted URL is what auto_select_best actually picks.
+    asset_id = art.upsert_asset(
+        conn, show_id, season_id, kind, "manual", url, source_score=100,
+    )
+    asset = art.select_asset(conn, asset_id)
+    metadata.update_art_negative_cache(conn, show_id)
+    conn.commit()
+    return asset
+
+
+@mutation.field("deleteArtAsset")
+def resolve_delete_art_asset(_, info, id):
+    conn = db.get_connection()
+    asset = conn.execute("SELECT show_id FROM art_asset WHERE id = ?", (id,)).fetchone()
+    if not asset:
+        raise GraphQLError(f"Art asset {id} not found")
+    try:
+        art.delete_asset(conn, id)
+    except ValueError as e:
+        raise GraphQLError(str(e)) from e
+    return True
 
 
 # -- ArtAsset field resolvers -----------------------------------------------

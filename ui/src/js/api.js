@@ -279,6 +279,7 @@ const SHOW_DETAIL_QUERY = `
       status score totalEpisodes mediaShape trackingSpace tracked
       watchedEpisodeCount availableEpisodeCount
       posterUrl bannerUrl synopsis genresRaw durationMinutes
+      posterArtNotFoundAt bannerArtNotFoundAt
       availableViaRadarr filePathRadarr
       studioCredits(first: 5) {
         edges { node { roleType studio { name } } }
@@ -616,6 +617,68 @@ export async function deselectArtAsset(id) {
     }
   `, { id });
   return data.deselectArtAsset;
+}
+
+/**
+ * Staged auto-fetch stage 1/3 — per-season AniList art only, scoped to
+ * seasonIds. Background-only: a no-op while a manual fetchShowArt call
+ * is in flight elsewhere.
+ */
+export async function fetchShowArtForSeasons(showId, seasonIds) {
+  const data = await gql(`
+    mutation FetchArtForSeasons($showId: ID!, $seasonIds: [ID!]!) {
+      fetchShowArtForSeasons(showId: $showId, seasonIds: $seasonIds) {
+        id posterUrl bannerUrl
+        artAssets { id seasonId kind source url width height selected }
+        posterArtNotFoundAt bannerArtNotFoundAt
+      }
+    }
+  `, { showId, seasonIds });
+  return data.fetchShowArtForSeasons;
+}
+
+/**
+ * Staged auto-fetch stage 2 — TVDB/TVmaze/TMDB/MAL + AniList show-level
+ * fallback. Background-only, same manual-priority skip as above.
+ */
+export async function fetchShowArtShowLevel(showId) {
+  const data = await gql(`
+    mutation FetchArtShowLevel($showId: ID!) {
+      fetchShowArtShowLevel(showId: $showId) {
+        id posterUrl bannerUrl
+        artAssets { id seasonId kind source url width height selected }
+        posterArtNotFoundAt bannerArtNotFoundAt
+      }
+    }
+  `, { showId });
+  return data.fetchShowArtShowLevel;
+}
+
+/**
+ * Add a manually-pasted art URL as a new candidate and select it
+ * immediately.
+ */
+export async function addManualArtUrl(showId, seasonId, kind, url) {
+  const data = await gql(`
+    mutation AddManualArtUrl($showId: ID!, $seasonId: ID, $kind: ArtKind!, $url: String!) {
+      addManualArtUrl(showId: $showId, seasonId: $seasonId, kind: $kind, url: $url) {
+        id seasonId kind source url width height selected
+      }
+    }
+  `, { showId, seasonId, kind, url });
+  return data.addManualArtUrl;
+}
+
+/**
+ * Permanently delete a stored art asset.
+ */
+export async function deleteArtAsset(id) {
+  const data = await gql(`
+    mutation DeleteArtAsset($id: ID!) {
+      deleteArtAsset(id: $id)
+    }
+  `, { id });
+  return data.deleteArtAsset;
 }
 
 /**

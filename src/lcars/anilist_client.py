@@ -16,6 +16,7 @@ execution model (§11.2) — a sync `httpx.Client` throughout, not
 Data's `httpx.AsyncClient`.
 """
 
+import contextlib
 import time
 
 import httpx
@@ -72,6 +73,36 @@ def _throttle_anilist_call() -> None:
         if wait > 0:
             time.sleep(wait)
     _last_anilist_call_at = time.monotonic()
+
+
+# 2026-09-22 — art-fetch staged auto-fetch (NEXT_UP.md "Art-fetch negative
+# cache + throttle"). This throttle is the one shared, process-wide,
+# blocking resource a background per-page-load art auto-fetch and a
+# user-waited manual "Fetch Art from Sources" click both contend for —
+# true mid-flight preemption of an in-progress `time.sleep` isn't
+# practical without a real priority queue, not worth building here. The
+# practical version instead: a manual, user-initiated AniList-touching
+# mutation (`resolve_fetch_show_art`) wraps its own call in
+# `manual_priority()`; the staged/background-only entry points
+# (`metadata.fetch_show_art_for_seasons`, and the AniList fallback branch
+# of `fetch_show_art_show_level`) check `manual_request_pending()` first
+# and skip their turn entirely rather than contend for the same slot —
+# retried on the next staged timer client-side a few seconds later.
+_manual_priority_depth = 0
+
+
+@contextlib.contextmanager
+def manual_priority():
+    global _manual_priority_depth
+    _manual_priority_depth += 1
+    try:
+        yield
+    finally:
+        _manual_priority_depth -= 1
+
+
+def manual_request_pending() -> bool:
+    return _manual_priority_depth > 0
 
 
 _MEDIA_QUERY = """

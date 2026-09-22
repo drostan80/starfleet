@@ -392,7 +392,7 @@
 <script type="module">
   import { bootstrapConfig, getConfig, applyAppName } from './js/config.js?v=5';
   import { initSearch } from './js/search.js?v=2';
-  import { fetchRecentGrabs } from './js/api.js?v=19';
+  import { fetchRecentGrabs } from './js/api.js?v=21';
 
   applyAppName();
   await bootstrapConfig();
@@ -575,7 +575,7 @@
 
       // ── Step 1: look up show in LCARS to get its TMDB ID ──
       try {
-        const { gql } = await import('./js/api.js?v=19');
+        const { gql } = await import('./js/api.js?v=21');
         const data = await gql(`
           query GrabPoster($q: String!) {
             search(query: $q, first: 3) {

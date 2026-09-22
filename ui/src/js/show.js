@@ -16,16 +16,17 @@ import { bootstrapConfig, requireConfig, rewriteHost, applyAppName } from './con
 import {
   fetchShow, addWatchEvent, deleteWatchEvent, setScore, setSeasonScore,
   setSeasonStatus, setSeasonMapping, reconcileSeasonMapping,
-  fetchShowArt, selectArtAsset, deselectArtAsset, fetchEpisodeSynopses,
+  fetchEpisodeSynopses,
+  fetchShowArtForSeasons, fetchShowArtShowLevel,
   setShowSynopsis, setEpisodeSynopsis, fetchSynopsisCandidates,
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=19';
+} from './api.js?v=21';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange,
-} from './calendar.js?v=40';
+} from './calendar.js?v=45';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -33,7 +34,7 @@ import {
 } from './status-picker.js?v=1';
 import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=16';
 import { startDownload } from './downloads.js?v=2';
-import { openArtPicker } from './art-picker.js?v=1';
+import { openArtPicker } from './art-picker.js?v=2';
 
 /* ── Constants ───────────────────────────────────────────── */
 
@@ -3353,69 +3354,100 @@ function openAddSeasonForm(section, show, cfg, targetSeason) {
 
 /* ── Auto-fetch art ──────────────────────────────────────── */
 
+// Deliberate gap between stages — the whole point of staging is to
+// avoid paying every AniList-linked season's 2.1s-throttled call in one
+// request (the confirmed production-freeze cause, NEXT_UP.md "Art-fetch
+// negative cache + throttle"); a few seconds of slack also gives a
+// manual "Fetch Art from Sources" click room to land between stages
+// rather than contend for the same shared AniList throttle.
+const ART_STAGE_DELAY_MS = 1500;
+
+function _hasSelectedShowLevel(assets, kindSet) {
+  return (assets || []).some(a => kindSet.has(a.kind.toLowerCase()) && a.selected && !a.seasonId);
+}
+
 /**
- * Auto-fetch art assets from external sources, auto-select the best
- * poster and banner, then re-render the hero if anything changed.
+ * Staged, negative-cache-aware auto-fetch of art from external sources.
+ * Stage 1 (current/highest AniList season, immediate) and stage 2 (main
+ * show-level cascade, after a beat) always run unless already exhausted
+ * or already satisfied; stage 3 (other seasons, after another beat)
+ * only fetches seasons that don't already have their own art. Each
+ * stage re-renders only if it actually changed something.
  */
 async function autoFetchArt(show, root, cfg, targetSeason) {
-  // Only fetch if we don't already have art assets for this show
-  const existingPosters = (show.artAssets || []).filter(a => a.kind.toLowerCase() === 'poster');
-  const existingBanners = (show.artAssets || []).filter(a =>
-    a.kind.toLowerCase() === 'banner' || a.kind.toLowerCase() === 'background');
+  const posterKinds = new Set(['poster']);
+  const bannerKinds = new Set(['banner', 'background']);
 
-  // If we already have fetched assets with selections, skip
-  if (existingPosters.some(a => a.selected) && existingBanners.some(a => a.selected)) return;
+  const posterExhausted = () =>
+    _hasSelectedShowLevel(show.artAssets, posterKinds) || show.posterArtNotFoundAt != null;
+  const bannerExhausted = () =>
+    _hasSelectedShowLevel(show.artAssets, bannerKinds) || show.bannerArtNotFoundAt != null;
 
-  // Fetch from external sources if no art assets exist at all
-  let assets = show.artAssets || [];
-  if (!assets.length) {
-    try {
-      const result = await fetchShowArt(show.id);
-      assets = result.artAssets || [];
-      show.artAssets = assets;
-    } catch (err) {
-      console.warn('Auto art fetch mutation failed:', err);
-      return;
-    }
-  }
-  if (!assets.length) return;
+  if (posterExhausted() && bannerExhausted()) return;
 
-  let changed = false;
+  const applyResult = (result) => {
+    const prevPoster = show.posterUrl;
+    const prevBanner = show.bannerUrl;
+    show.artAssets = result.artAssets || [];
+    show.posterUrl = result.posterUrl;
+    show.bannerUrl = result.bannerUrl;
+    show.posterArtNotFoundAt = result.posterArtNotFoundAt;
+    show.bannerArtNotFoundAt = result.bannerArtNotFoundAt;
+    return prevPoster !== show.posterUrl || prevBanner !== show.bannerUrl;
+  };
 
-  // Auto-select best poster if none selected
-  const posters = assets.filter(a => a.kind.toLowerCase() === 'poster' && !a.seasonId);
-  if (posters.length && !posters.some(a => a.selected)) {
-    const best = posters[0]; // first is typically the best
-    try {
-      await selectArtAsset(best.id);
-      best.selected = true;
-      show.posterUrl = best.url;
-      changed = true;
-    } catch (err) { console.warn('Auto poster select failed:', err); }
-  }
-
-  // Auto-select best banner if none selected
-  const banners = assets.filter(a =>
-    (a.kind.toLowerCase() === 'banner' || a.kind.toLowerCase() === 'background') && !a.seasonId);
-  if (banners.length && !banners.some(a => a.selected)) {
-    const best = banners[0];
-    try {
-      await selectArtAsset(best.id);
-      best.selected = true;
-      show.bannerUrl = best.url;
-      changed = true;
-    } catch (err) { console.warn('Auto banner select failed:', err); }
-  }
-
-  // Re-render hero + banner if art was selected
-  if (changed) {
-    // Skip if user is actively editing
+  const rerender = () => {
+    // Skip if the user is actively editing something — same guard the
+    // rest of this page's re-render paths already use.
     if (root.querySelector('textarea, input, .sp-mapping-editor, .sp-syn-editor')) return;
     root.innerHTML = '';
     renderBanner(show, root);
     renderHero(show, root, cfg);
     renderBody(show, root, cfg, targetSeason);
+  };
+
+  // Stage 1: the current/highest AniList-linked season, immediately —
+  // stands in for the whole show in the season list while the show-
+  // level slots (stage 2) are still being resolved.
+  const seasons = show.seasons || [];
+  const currentSeason = seasons
+    .filter(s => s.anilistId != null)
+    .sort((a, b) => b.seasonNumber - a.seasonNumber)[0];
+  if (currentSeason) {
+    try {
+      const result = await fetchShowArtForSeasons(show.id, [currentSeason.id]);
+      if (applyResult(result)) rerender();
+    } catch (err) {
+      console.warn('Staged art fetch (current season) failed:', err);
+    }
   }
+
+  setTimeout(async () => {
+    // Stage 2: main show-level art (TVDB/TVmaze/TMDB/MAL).
+    if (!(posterExhausted() && bannerExhausted())) {
+      try {
+        const result = await fetchShowArtShowLevel(show.id);
+        if (applyResult(result)) rerender();
+      } catch (err) {
+        console.warn('Staged art fetch (show-level) failed:', err);
+      }
+    }
+
+    setTimeout(async () => {
+      // Stage 3: other seasons, only ones still missing their own art.
+      const otherSeasonIds = seasons
+        .filter(s => s.id !== currentSeason?.id && s.anilistId != null)
+        .filter(s => !(show.artAssets || []).some(a => a.seasonId === s.id))
+        .map(s => s.id);
+      if (!otherSeasonIds.length) return;
+      try {
+        const result = await fetchShowArtForSeasons(show.id, otherSeasonIds);
+        if (applyResult(result)) rerender();
+      } catch (err) {
+        console.warn('Staged art fetch (other seasons) failed:', err);
+      }
+    }, ART_STAGE_DELAY_MS);
+  }, ART_STAGE_DELAY_MS);
 }
 
 /* ── Init ────────────────────────────────────────────────── */
@@ -3515,22 +3547,15 @@ export async function init() {
       }
     });
 
-    // 2026-09-20 (incident, temporary): automatic art auto-fetch disabled.
-    // fetch_show_art makes one AniList call per linked season, synchronously,
-    // throttled 2.1s/call *process-wide* (anilist_client.py) — a show with
-    // several AniList-linked seasons and no art at all pays that cost on
-    // *every* page load, with no memory of "already tried, found nothing."
-    // Confirmed live: opening a messy 4-season stub show froze the whole
-    // server for the duration, twice tonight. Same root cause and same
-    // planned fix as the synopsis fetch above — see that comment.
-    //
-    // const hasPosters = (show.artAssets || []).some(a => a.kind.toLowerCase() === 'poster');
-    // const hasBanners = (show.artAssets || []).some(a =>
-    //   a.kind.toLowerCase() === 'banner' || a.kind.toLowerCase() === 'background');
-    // if (!show.posterUrl || !show.bannerUrl || !hasPosters || !hasBanners) {
-    //   autoFetchArt(show, root, cfg, targetSeason).catch(err =>
-    //     console.warn('Auto art fetch failed:', err));
-    // }
+    // Re-enabled 2026-09-22 (was disabled 2026-09-20 after freezing the
+    // server twice — see git history) now that autoFetchArt is staged
+    // (spread over several seconds, never every season in one request)
+    // and negative-cache-aware (posterArtNotFoundAt/bannerArtNotFoundAt
+    // stop it from re-triggering forever on a show whose art genuinely
+    // can't be found anywhere). See art.py/metadata.py's
+    // fetch_show_art_for_seasons/fetch_show_art_show_level.
+    autoFetchArt(show, root, cfg, targetSeason).catch(err =>
+      console.warn('Auto art fetch failed:', err));
 
   } catch (err) {
     hideBanner();

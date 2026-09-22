@@ -5,7 +5,7 @@
  * Extracted to avoid circular dependency between show.js and calendar.js.
  */
 
-import { fetchShowArt, selectArtAsset, deselectArtAsset } from './api.js?v=19';
+import { fetchShowArt, selectArtAsset, deselectArtAsset, addManualArtUrl, deleteArtAsset } from './api.js?v=21';
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -66,6 +66,45 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
   });
   modal.appendChild(fetchBtn);
 
+  // Add art manually via a pasted URL — doesn't have to come from any
+  // known source (e.g. filling in art the fetch cascade can't find).
+  const addForm = el('form', 'sp-art-add-form');
+  const addInput = document.createElement('input');
+  addInput.type = 'url';
+  addInput.placeholder = 'Paste an image URL…';
+  addInput.className = 'sp-art-add-input';
+  addInput.required = true;
+  const addBtn = el('button', 'sp-art-add-btn', '+ Add');
+  addBtn.type = 'submit';
+  addForm.appendChild(addInput);
+  addForm.appendChild(addBtn);
+  addForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const url = addInput.value.trim();
+    if (!url) return;
+    addBtn.disabled = true;
+    try {
+      const newAsset = await addManualArtUrl(show.id, seasonId, kind.toUpperCase(), url);
+      // Server selects the new asset immediately, deselecting whatever
+      // held this slot before — mirror that locally rather than re-fetch.
+      for (const a of (show.artAssets || [])) {
+        if (a.kind.toLowerCase() === newAsset.kind.toLowerCase() &&
+            a.seasonId === newAsset.seasonId) {
+          a.selected = false;
+        }
+      }
+      show.artAssets = [...(show.artAssets || []), { ...newAsset, selected: true }];
+      if (targetImg) targetImg.src = newAsset.url;
+      if (onSelect) onSelect(newAsset.url);
+      overlay.remove();
+      openArtPicker(show, seasonId, kind, targetImg, onSelect, onError);
+    } catch (err) {
+      if (onError) onError(`Add art failed: ${err.message}`);
+      addBtn.disabled = false;
+    }
+  });
+  modal.appendChild(addForm);
+
   if (!assets.length) {
     modal.appendChild(el('p', 'sp-art-empty',
       'No art assets yet. Click "Fetch Art" to retrieve from AniList & TVDB.'));
@@ -96,6 +135,29 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
       info.appendChild(el('span', 'sp-art-selected-badge', '✓ Active'));
     }
     card.appendChild(info);
+
+    const deleteBtn = el('button', 'sp-art-delete-btn', '🗑');
+    deleteBtn.type = 'button';
+    deleteBtn.title = 'Delete this art candidate';
+    deleteBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('Delete this art candidate? A manual re-fetch will find it again if it\'s still available from its source.')) return;
+      try {
+        await deleteArtAsset(asset.id);
+        show.artAssets = (show.artAssets || []).filter(a => a.id !== asset.id);
+        if (asset.selected) {
+          // Deleting the active selection reverts to the fallback
+          // (server already cleared the denormalised show column).
+          if (targetImg) targetImg.removeAttribute('src');
+          if (onSelect) onSelect(null);
+        }
+        overlay.remove();
+        openArtPicker(show, seasonId, kind, targetImg, onSelect, onError);
+      } catch (err) {
+        if (onError) onError(`Delete art failed: ${err.message}`);
+      }
+    });
+    card.appendChild(deleteBtn);
 
     card.addEventListener('click', async () => {
       const prevSelected = assets.find(a => a.selected);

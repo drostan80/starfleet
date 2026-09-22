@@ -1842,36 +1842,66 @@ def _fetch_radarr(conn, show: dict) -> None:
 # Art asset fetch — TVDB artwork
 # ---------------------------------------------------------------------------
 
-def fetch_show_art(conn, show_id: str) -> int:
-    """Fetch artwork from all available sources for a show, storing
-    results in the art_asset table.  Returns total assets stored.
-
-    Sources queried:
-      - AniList: per-season poster + banner (anime shows with anilist_id)
-      - TVDB: poster + banner + background (shows with tvdb external id)
-      - TVmaze: poster + banner + background via /shows/{id}/images
-      - TMDB: poster + backdrop (shows with tmdb external id)
-      - MAL: poster (anime shows with mal external id)
-    """
-    from lcars import tvdb_client as tvdb_mod
-    from lcars import tvmaze
-
-    cfg = get_current()
-    show = dict(conn.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone())
-    count = 0
-
-    seasons = conn.execute(
-        "SELECT id, season_number, anilist_id FROM season WHERE show_id = ?",
+def update_art_negative_cache(conn, show_id: str) -> None:
+    """Stamp/clear ``show.poster_art_not_found_at``/``banner_art_not_
+    found_at`` based on whether a *selected show-level* (season_id IS
+    NULL) asset of that kind currently exists — the same slot
+    ``art.select_asset`` denormalises onto ``show.poster_url``/
+    ``banner_url``, and the same one ``renderHero``/``renderBanner``
+    (show.js) actually display. Self-healing: called after every art
+    fetch (full or staged), so a later source fix, a manual add, or a
+    fetch that finally succeeds clears the flag on its own — no separate
+    "unmark" step. Migration 45c08e4d9cff, NEXT_UP.md "Art-fetch
+    negative cache + throttle"."""
+    now = util.now_utc_iso()
+    has_poster = conn.execute(
+        "SELECT 1 FROM art_asset WHERE show_id = ? AND season_id IS NULL"
+        "  AND kind = 'poster' AND selected = 1",
         (show_id,),
-    ).fetchall()
+    ).fetchone() is not None
+    has_banner = conn.execute(
+        "SELECT 1 FROM art_asset WHERE show_id = ? AND season_id IS NULL"
+        "  AND kind IN ('banner', 'background') AND selected = 1",
+        (show_id,),
+    ).fetchone() is not None
+    conn.execute(
+        "UPDATE show SET poster_art_not_found_at = ? WHERE id = ?",
+        (None if has_poster else now, show_id),
+    )
+    conn.execute(
+        "UPDATE show SET banner_art_not_found_at = ? WHERE id = ?",
+        (None if has_banner else now, show_id),
+    )
 
-    # -- Per-season AniList art -------------------------------------------------
-    any_season_anilist = False
+
+def fetch_show_art_for_seasons(conn, show_id: str, season_ids: list[str]) -> int:
+    """Per-season AniList art only, scoped to ``season_ids`` — the
+    staged auto-fetch's stage 1 (current/highest season) and stage 3
+    (other seasons still missing art), split out of the full cascade so
+    a show with many AniList-linked seasons doesn't pay every season's
+    2.1s-throttled call in one request (the confirmed production-freeze
+    cause this whole feature exists to fix).
+
+    Deliberately does not check ``anilist_client.manual_request_pending``
+    itself — this same function is also how the manual/full
+    ``fetch_show_art`` fetches every season, and that path *sets* the
+    pending flag around its own call, so a self-check here would skip
+    its own work. The staged auto-fetch's resolver (not this function)
+    checks the flag before calling in for the background case; this
+    stays a plain, always-does-the-work function either way."""
+    if not season_ids:
+        return 0
+    count = 0
+    placeholders = ",".join("?" for _ in season_ids)
+    seasons = conn.execute(
+        f"SELECT id, anilist_id FROM season"
+        f" WHERE show_id = ? AND id IN ({placeholders})",
+        (show_id, *season_ids),
+    ).fetchall()
     for sn_row in seasons:
         al_id = sn_row["anilist_id"]
         if al_id is None:
             continue
-        any_season_anilist = True
         try:
             media = anilist_client.fetch_media(al_id)
         except Exception:
@@ -1886,11 +1916,40 @@ def fetch_show_art(conn, show_id: str) -> int:
         )
         count += 2  # approximate
 
+    art.auto_select_best(conn, show_id)
+    update_art_negative_cache(conn, show_id)
+    conn.commit()
+    return count
+
+
+def fetch_show_art_show_level(conn, show_id: str) -> int:
+    """The non-per-season half of the art cascade — show-level AniList
+    fallback (only when no season carries an anilist_id at all), TVDB,
+    TVmaze, TMDB, MAL. None of these are the throttled-per-season cost
+    ``fetch_show_art_for_seasons`` exists to stage around: TVDB/TVmaze/
+    TMDB/MAL are each a single call for the whole show regardless of
+    season count, and the AniList fallback branch is at most one call.
+    Staged auto-fetch's stage 2 ("main show-level art, after a beat")."""
+    from lcars import tvdb_client as tvdb_mod
+    from lcars import tvmaze
+
+    cfg = get_current()
+    show = dict(conn.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone())
+    count = 0
+
+    seasons = conn.execute(
+        "SELECT id, season_number, anilist_id FROM season WHERE show_id = ?",
+        (show_id,),
+    ).fetchall()
+    any_season_anilist = any(sn["anilist_id"] is not None for sn in seasons)
+
     # -- Show-level AniList art fallback -----------------------------------------
     # No season carries an anilist_id (untracked stub, or a show added without
     # season-level mapping) but the show itself may still have a show-level
     # AniList link — same season_id=None pattern the MAL block below already
-    # uses for show-level art.
+    # uses for show-level art. Same "no self-check" reasoning as
+    # fetch_show_art_for_seasons's own docstring — the manual-priority gate
+    # lives in the staged resolver, not in this always-does-the-work function.
     if not any_season_anilist:
         show_al_id = _external_id(conn, show_id, "anilist")
         if show_al_id:
@@ -1991,7 +2050,29 @@ def fetch_show_art(conn, show_id: str) -> int:
 
     # Auto-select best candidates for slots that don't have one yet
     art.auto_select_best(conn, show_id)
+    update_art_negative_cache(conn, show_id)
     conn.commit()
+    return count
+
+
+def fetch_show_art(conn, show_id: str) -> int:
+    """Fetch artwork from *all* available sources for a show in one go
+    — per-season AniList, then the show-level cascade (see
+    ``fetch_show_art_for_seasons``/``fetch_show_art_show_level``, which
+    this just calls in sequence). Unstaged and unaffected by the
+    negative cache: this is the manual, user-waited "Fetch Art from
+    Sources" path (`resolve_fetch_show_art`, wrapped in
+    ``anilist_client.manual_priority()``) and the batch
+    ``backfill_show_posters`` below — a deliberate action should always
+    run the full cascade regardless of any prior "not found" stamp; the
+    negative cache only ever suppresses the *automatic* per-page-load
+    trigger (show.js), never a caller that reached this function
+    directly. Returns total assets stored (approximate)."""
+    seasons = conn.execute(
+        "SELECT id FROM season WHERE show_id = ?", (show_id,),
+    ).fetchall()
+    count = fetch_show_art_for_seasons(conn, show_id, [sn["id"] for sn in seasons])
+    count += fetch_show_art_show_level(conn, show_id)
     return count
 
 
