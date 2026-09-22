@@ -5,6 +5,106 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
+## Art-fetch negative cache + staged throttle — built, not yet deployed (2026-09-22)
+
+Closes the deferred item found 2026-09-20 while diagnosing the v0.2.38/
+v0.2.39 freeze incident (`art-fetch-negative-cache-and-throttle-plan` in
+Claude memory) — `autoFetchArt`'s trigger had been commented out ever
+since, disabled rather than fixed. All three of the user's own deferred
+design points, built together:
+
+- [x] **Negative caching.** New `show.poster_art_not_found_at`/
+      `banner_art_not_found_at` columns (migration `45c08e4d9cff`),
+      stamped/cleared by `metadata.update_art_negative_cache` — self-
+      healing, checked after every art fetch (full or staged) against
+      whether a selected show-level (season_id IS NULL) asset of that
+      kind currently exists (the same slot `renderHero`/`renderBanner`
+      actually display). The web client's automatic per-page-load
+      trigger checks these before firing; a manual re-fetch always runs
+      regardless — the cache only suppresses the automatic path.
+      - **Add art manually via URL** — new `addManualArtUrl` mutation
+        (source='manual', outranking every real source so it's what
+        gets auto-selected), a small form in the art-picker dialog.
+      - **Delete a stored art candidate** — new `deleteArtAsset`
+        mutation + `art.delete_asset`, a 🗑 per card in the dialog.
+        Deliberately doesn't touch the negative cache — a manual
+        re-fetch afterward just finds it again if it's still there.
+- [x] **Staged/throttled auto-fetch.** `fetch_show_art` split into
+      `fetch_show_art_for_seasons` (per-season AniList only, the actual
+      2.1s/call-throttled cost) and `fetch_show_art_show_level`
+      (TVDB/TVmaze/TMDB/MAL + AniList show-level fallback, each a single
+      call regardless of season count). `show.js`'s `autoFetchArt` now
+      stages these: current/highest AniList season immediately → after
+      a ~1.5s beat, show-level cascade → after another beat, other
+      seasons still missing their own art. No per-season "hidden/
+      collapsed" UI concept exists in this codebase to gate stage 3 on
+      (checked, not invented for this) — it gates on "missing art"
+      alone.
+- [x] **Manual-pull priority.** True mid-flight preemption of the
+      shared process-wide AniList throttle isn't practical without a
+      real priority queue — not built. Practical version instead:
+      `anilist_client.manual_priority()`/`manual_request_pending()` —
+      the manual "Fetch Art from Sources" resolver wraps itself in the
+      former; the two staged/background mutations check the latter
+      first and skip their turn entirely (retried a few seconds later
+      on the next stage timer) rather than contend for the same slot.
+- [x] **30 new tests** (`test_art.py`'s `TestDeleteAsset`,
+      `test_art_fetch_staging.py`, 5 new GraphQL-level cases in
+      `test_server.py`) plus the full existing suite green. Not yet
+      tagged/deployed.
+
+---
+
+## Sequel detection gap for id-blind auto-created shows — fixed, not yet deployed (2026-09-22)
+
+Prompted by the user's Jellyseerr use (adds film and occasionally TV/anime
+directly to Sonarr/Radarr, bypassing LCARS's own Add flow entirely) —
+raised the question of whether anything added that way could slip past
+sequel detection when LCARS picks it up.
+
+- [x] **Confirmed a real gap, then closed it.** The three id-blind
+      auto-create paths (Sonarr `SeriesAdd` webhook, Radarr `MovieAdded`
+      webhook, `reconcileArrState`'s untracked-show discovery) all call
+      `shows.create_show` with only a `tvdb_id`/`tmdb_id` — no
+      `anilist_id`, since nothing in a webhook payload or an arr catalog
+      entry carries one. `create_show`'s own pre-insert
+      `find_sequel_parent` call was therefore structurally blind on
+      tiers 1/3 (the ones that actually catch an anime sequel) for these
+      paths — only tier 2 (TVDB/Wikidata franchise collision) could ever
+      fire. Not a `skipSequelCheck`-style bypass — a data-starvation
+      problem.
+- [x] **New `shows.flag_possible_sequel(conn, show_id)`** — called right
+      after `create_show` returns from all three auto-create sites
+      (`availability.py`'s `_handle_sonarr_series_add`, `local_audit.py`'s
+      `_create_from_untracked_entry`; not wired into the Radarr movie
+      path, which never resolves an `anilist_id` at all per its own
+      docstring, so the check can only ever be a no-op there). By the
+      time `create_show` returns, its own inline
+      `metadata.fetch_and_populate` has already resolved the show's
+      `anilist_id` (for an anime show) and written its AniList relations
+      to `show_relation` — this re-runs `find_sequel_parent` now that
+      that data exists and opens a `pending_review`
+      (`possible_sequel_of:<parent_show_id>`) instead of raising, since
+      there's no human in this loop to answer `SequelDetectedError`.
+      Deduped the same way `_propose_sequel_seasons` already dedupes
+      (skip if an unresolved review for this exact field exists; don't
+      reopen after a human resolved it with the same value).
+- [x] **Deliberately never touches the interactive Add/Browse path** —
+      that path already catches this pre-insert via tier 3 (a live
+      AniList query, since no local `anilist_id` exists yet to make it
+      self-match), or the user explicitly chose "it isn't a sequel" via
+      `skipSequelCheck`. Re-running this check unconditionally from
+      inside the shared `_fetch_anilist` pipeline (the first design
+      considered) would have re-flagged that exact decision through the
+      review queue — the same "loops back to the same dialog" bug
+      `skipSequelCheck` itself was built to fix, just via a side door.
+      Hooking into the three auto-create call sites directly instead of
+      the shared fetch pipeline avoids that collision entirely.
+- [x] **5 new tests** (`test_flag_possible_sequel.py`) plus full existing
+      suite (`test_availability.py`, `test_local_audit.py`,
+      `test_sequel_detection.py`, `test_propose_sequel_seasons.py`,
+      `test_show_backfill.py`) green. Not yet tagged/deployed.
+
 ## Production freeze incident — fixed in v0.2.38-v0.2.40 (2026-09-20)
 
 Real outages, not theoretical. Three fixes shipped same-night:
@@ -32,15 +132,15 @@ Real outages, not theoretical. Three fixes shipped same-night:
 Recovered via `docker restart lcars` twice during the incident — safe
 both times, no uncommitted transaction to lose.
 
-- [ ] **Chase tomorrow, not confirmed**: tablet app hit
-      `net::ERR_CONNECTION_ABORTED` loading `index.html` (~21:11), fixed by
-      restarting the app. Correlates with the same night's 4 container
-      recreates (3 deploys + 1 manual restart) — if a live `LcarsWs`
-      connection was open at the moment of any one of them, that's a
-      plausible cause the existing reconnect logic may not cover. **Not
-      caused by any of tonight's shipped code changes** — none touched
-      native/WebView/networking. Full detail in Claude memory
-      (`webview-connection-aborted-after-restarts`).
+- [ ] **Reopened 2026-09-22**: app slowdown/stall recurred — this time
+      triggered by switching pages too often/fast, not by a container
+      restart. Different trigger than the original `net::ERR_CONNECTION_
+      ABORTED` report (~21:11 on 2026-09-20, fixed by restarting the
+      app, correlated with that night's 4 container recreates), so this
+      may be a distinct symptom of the same underlying WebView/networking
+      fragility rather than a repeat of the same root cause. **Not
+      critical for now** — user flagged but not blocking. Full detail in
+      Claude memory (`webview-connection-aborted-after-restarts`).
 
 ## Data cleanup: 3 "Season 2" shows linked to the wrong Sonarr series (2026-09-20)
 
@@ -64,10 +164,8 @@ full detail:
         show") was only wired into the Browse tab — `add.html`'s own
         direct addShow/addShowWithArr call sites silently rethrew the
         raw `sequel_of:`/`later_season:` errors unhandled. Now global.
-        Known open question, inherited not fixed: the "it isn't a
-        sequel" retry uses the same input, and there's no backend
-        bypass flag for `find_sequel_parent` — unverified whether that
-        retry actually works even in browse.js's own original version.
+        The "it isn't a sequel" retry bypass gap flagged here was real —
+        confirmed and fixed 2026-09-22, see that section below.
       - **Passive detection for an already-wrong link**: new
         `identity_mismatch.check_anilist_id_mismatch` (ops-scheduled,
         hourly tier) compares each season's stored `anilist_id` against
@@ -661,13 +759,20 @@ watch-tracking fixes) is now shipped and confirmed working live, end to end:
       AniList `client_secret`. All intentionally live until Data is 100% to the user's
       liking — no fixed date.
 - [ ] **Move secrets** out of plaintext `config.ini`. Deferred, reminder only.
-- [ ] **Score sync paused**: AniList/MAL per-entry vs LCARS show-level scoring mismatch
-      needs redesign before re-enabling. Code intact in `score_sync.py`.
 - [ ] **AniList metadata fallback is still scalar-only**: `_fetch_mal_fallback` fills
       poster/synopsis/duration but skips relations, studios, characters, genres. Sequel
       detection (W1) now works without AniList, but other metadata paths still degrade.
 - [ ] **Franchise function deferred**: SEQUEL/PREQUEL edges are show-level season chains,
       not true cross-media franchises. Needs broader definition covering TV+movies+anime.
+- [x] **Score sync — re-enabled 2026-09-20, not actually still paused.** The
+      AniList/MAL per-entry vs LCARS show-level scoring mismatch that paused
+      it (2026-09-12, ~238 false-positive reviews) was fixed the same night
+      as the production-freeze incident: `score_sync.py` now skips a season
+      entirely when it never had an explicit score of its own, instead of
+      falling back to comparing against the show-level score. Live in the
+      automatic loop since. (This had gone stale in Claude's own memory —
+      corrected 2026-09-22 after being told directly rather than caught by
+      re-reading the code first.)
 
 ---
 
