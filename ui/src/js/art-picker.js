@@ -27,20 +27,28 @@ function el(tag, cls, text) {
  * @param {function}            onError   - Callback(message) on error (e.g. showBanner)
  * @param {string}              episodeKind - 'REGULAR' (default), 'SPECIAL', 'OVA', or
  *   'BONUS_MOVIE' — a shared cover for every episode of that kind (df50e70a1faa,
- *   2026-09-22), scoped independently from the regular season/show slot. Manual-only:
- *   no automated source targets these, so the "Fetch Art from Sources" button is
- *   hidden whenever this isn't 'REGULAR'.
+ *   2026-09-22), scoped independently from the regular season/show slot. No automated
+ *   source targets these directly, but "Fetch Art from Sources" still runs the normal
+ *   cascade (populating the regular slot) and this picker offers those results as
+ *   candidates to borrow into the special/OVA/bonus-movie slot too.
  */
 export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError, episodeKind = 'REGULAR') {
-  // Filter assets for this slot; banner slot also shows backgrounds
   const kindSet = kind === 'banner' ? new Set(['banner', 'background']) : new Set([kind]);
-  const assets = (show.artAssets || []).filter(a => {
-    const kindMatch = kindSet.has(a.kind.toLowerCase());
-    const epKindMatch = (a.episodeKind || 'REGULAR') === episodeKind;
-    if (seasonId) return kindMatch && epKindMatch && a.seasonId === seasonId;
-    return kindMatch && epKindMatch && !a.seasonId;
-  });
   const isRegular = episodeKind === 'REGULAR';
+  const slotMatch = a => {
+    const kindMatch = kindSet.has(a.kind.toLowerCase());
+    if (seasonId) return kindMatch && a.seasonId === seasonId;
+    return kindMatch && !a.seasonId;
+  };
+  const assets = (show.artAssets || [])
+    .filter(a => slotMatch(a) && (a.episodeKind || 'REGULAR') === episodeKind);
+  // Regular-slot candidates offered as "borrow" options for a special/OVA/
+  // bonus-movie picker — none of AniList/TVDB/TMDB/TVmaze/MAL know about a
+  // per-episode-kind cover, so this is the only way "Fetch Art from
+  // Sources" is actually useful here: it populates the regular pool, and
+  // this list lets the user adopt one of those into this kind's own slot.
+  const borrowable = isRegular ? [] : (show.artAssets || [])
+    .filter(a => slotMatch(a) && (a.episodeKind || 'REGULAR') === 'REGULAR');
 
   // Build overlay
   const overlay = el('div', 'sp-art-overlay');
@@ -55,28 +63,26 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
   const title = el('h3', 'sp-art-modal-title', titleText);
   modal.appendChild(title);
 
-  // Fetch Art button — regular slot only; nothing automated knows about
-  // a per-episode-kind cover, so offering this here would just fail.
-  if (isRegular) {
-    const fetchBtn = el('button', 'sp-art-fetch-btn', '⟳ Fetch Art from Sources');
-    fetchBtn.addEventListener('click', async () => {
-      fetchBtn.disabled = true;
-      fetchBtn.textContent = 'Fetching…';
-      try {
-        const result = await fetchShowArt(show.id);
-        show.artAssets = result.artAssets;
-        overlay.remove();
-        openArtPicker(show, seasonId, kind, targetImg, onSelect, onError, episodeKind);
-      } catch (err) {
-        fetchBtn.textContent = '✗ ' + err.message;
-        setTimeout(() => {
-          fetchBtn.disabled = false;
-          fetchBtn.textContent = '⟳ Fetch Art from Sources';
-        }, 3000);
-      }
-    });
-    modal.appendChild(fetchBtn);
-  }
+  // Fetch Art button — always available. For a non-regular slot this
+  // populates the regular pool (below), not this slot directly.
+  const fetchBtn = el('button', 'sp-art-fetch-btn', '⟳ Fetch Art from Sources');
+  fetchBtn.addEventListener('click', async () => {
+    fetchBtn.disabled = true;
+    fetchBtn.textContent = 'Fetching…';
+    try {
+      const result = await fetchShowArt(show.id);
+      show.artAssets = result.artAssets;
+      overlay.remove();
+      openArtPicker(show, seasonId, kind, targetImg, onSelect, onError, episodeKind);
+    } catch (err) {
+      fetchBtn.textContent = '✗ ' + err.message;
+      setTimeout(() => {
+        fetchBtn.disabled = false;
+        fetchBtn.textContent = '⟳ Fetch Art from Sources';
+      }, 3000);
+    }
+  });
+  modal.appendChild(fetchBtn);
 
   // Add art manually via a pasted URL — doesn't have to come from any
   // known source (e.g. filling in art the fetch cascade can't find).
@@ -90,29 +96,36 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
   addBtn.type = 'submit';
   addForm.appendChild(addInput);
   addForm.appendChild(addBtn);
+
+  /** Adopt a URL (freshly pasted, or borrowed from the regular pool)
+   * into this picker's own (kind, episodeKind) slot and select it. */
+  async function adoptUrl(url) {
+    const newAsset = await addManualArtUrl(
+      show.id, seasonId, kind.toUpperCase(), url, isRegular ? null : episodeKind,
+    );
+    // Server selects the new asset immediately, deselecting whatever
+    // held this slot before — mirror that locally rather than re-fetch.
+    for (const a of (show.artAssets || [])) {
+      if (a.kind.toLowerCase() === newAsset.kind.toLowerCase() &&
+          (a.episodeKind || 'REGULAR') === (newAsset.episodeKind || 'REGULAR') &&
+          a.seasonId === newAsset.seasonId) {
+        a.selected = false;
+      }
+    }
+    show.artAssets = [...(show.artAssets || []), { ...newAsset, selected: true }];
+    if (targetImg) targetImg.src = newAsset.url;
+    if (onSelect) onSelect(newAsset.url);
+    overlay.remove();
+    openArtPicker(show, seasonId, kind, targetImg, onSelect, onError, episodeKind);
+  }
+
   addForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const url = addInput.value.trim();
     if (!url) return;
     addBtn.disabled = true;
     try {
-      const newAsset = await addManualArtUrl(
-        show.id, seasonId, kind.toUpperCase(), url, isRegular ? null : episodeKind,
-      );
-      // Server selects the new asset immediately, deselecting whatever
-      // held this slot before — mirror that locally rather than re-fetch.
-      for (const a of (show.artAssets || [])) {
-        if (a.kind.toLowerCase() === newAsset.kind.toLowerCase() &&
-            (a.episodeKind || 'REGULAR') === (newAsset.episodeKind || 'REGULAR') &&
-            a.seasonId === newAsset.seasonId) {
-          a.selected = false;
-        }
-      }
-      show.artAssets = [...(show.artAssets || []), { ...newAsset, selected: true }];
-      if (targetImg) targetImg.src = newAsset.url;
-      if (onSelect) onSelect(newAsset.url);
-      overlay.remove();
-      openArtPicker(show, seasonId, kind, targetImg, onSelect, onError, episodeKind);
+      await adoptUrl(url);
     } catch (err) {
       if (onError) onError(`Add art failed: ${err.message}`);
       addBtn.disabled = false;
@@ -120,10 +133,10 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
   });
   modal.appendChild(addForm);
 
-  if (!assets.length) {
+  if (!assets.length && !borrowable.length) {
     modal.appendChild(el('p', 'sp-art-empty', isRegular
       ? 'No art assets yet. Click "Fetch Art" to retrieve from AniList & TVDB.'
-      : 'No cover set for these episodes yet. Paste a URL above to add one.'));
+      : 'No cover set for these episodes yet. Paste a URL, fetch the show\'s own art below to borrow from, or click "Fetch Art" first.'));
   }
 
   // Art grid — use wider columns for banner/background art
@@ -196,6 +209,38 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
     grid.appendChild(card);
   }
   modal.appendChild(grid);
+
+  // Borrow-from-regular section — only for a special/OVA/bonus-movie
+  // picker, and only once there's actually something to borrow.
+  if (borrowable.length) {
+    modal.appendChild(el('p', 'sp-art-borrow-label',
+      `Or use one of the show's own ${kind} candidates:`));
+    const borrowGrid = el('div', `sp-art-grid sp-art-grid-borrow${isBannerKind ? ' sp-art-grid-wide' : ''}`);
+    for (const asset of borrowable) {
+      const card = el('div', 'sp-art-card sp-art-card-borrow');
+      const img = el('img');
+      img.src = asset.url;
+      img.alt = `${asset.source} ${kind}`;
+      img.loading = 'lazy';
+      img.onerror = () => { img.style.opacity = '0.3'; };
+      card.appendChild(img);
+
+      const info = el('div', 'sp-art-card-info');
+      info.appendChild(el('span', 'sp-art-source', asset.source));
+      card.appendChild(info);
+
+      card.title = 'Use this for this episode kind too';
+      card.addEventListener('click', async () => {
+        try {
+          await adoptUrl(asset.url);
+        } catch (err) {
+          if (onError) onError(`Add art failed: ${err.message}`);
+        }
+      });
+      borrowGrid.appendChild(card);
+    }
+    modal.appendChild(borrowGrid);
+  }
 
   // Close button
   const closeBtn = el('button', 'sp-art-close-btn', '✕');

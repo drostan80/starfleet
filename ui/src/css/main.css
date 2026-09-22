@@ -1686,6 +1686,18 @@ body {
 .sp-art-grid.sp-art-grid-wide {
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
+.sp-art-borrow-label {
+  color: var(--muted); font-size: 12px; margin: 16px 0 8px;
+}
+.sp-art-grid-borrow {
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  opacity: 0.75;
+}
+.sp-art-grid-borrow.sp-art-grid-wide {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+.sp-art-card-borrow { cursor: pointer; }
+.sp-art-card-borrow:hover { opacity: 1; border-color: var(--accent); }
 .sp-art-card {
   border: 2px solid var(--border); border-radius: 8px;
   overflow: hidden; cursor: pointer; transition: border-color 0.2s;

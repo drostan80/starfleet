@@ -34,7 +34,7 @@ import {
 } from './status-picker.js?v=1';
 import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=16';
 import { startDownload } from './downloads.js?v=2';
-import { openArtPicker } from './art-picker.js?v=3';
+import { openArtPicker } from './art-picker.js?v=4';
 
 /* ── Constants ───────────────────────────────────────────── */
 
