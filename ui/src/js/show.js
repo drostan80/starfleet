@@ -22,7 +22,7 @@ import {
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=21';
+} from './api.js?v=22';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange,
@@ -34,7 +34,7 @@ import {
 } from './status-picker.js?v=1';
 import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=16';
 import { startDownload } from './downloads.js?v=2';
-import { openArtPicker } from './art-picker.js?v=2';
+import { openArtPicker } from './art-picker.js?v=3';
 
 /* ── Constants ───────────────────────────────────────────── */
 
@@ -247,6 +247,13 @@ function renderBanner(show, root) {
 /** Services whose logos are wide wordmarks (need a wider icon box). */
 const WIDE_ICON_SVCS = new Set(['imdb']);
 const EXTRA_WIDE_ICON_SVCS = new Set(['tmdb']);
+/** TVmaze's logo has white shapes meant to sit on a white backing —
+ * same treatment main.css's .svc-tvmaze gives it on calendar/browse/
+ * planner (`background: #fff`). Found 2026-09-22: this show-page badge
+ * uses its own inline-styled icon element instead of that CSS class, so
+ * it never got the same override and rendered the logo on a
+ * transparent background instead. */
+const WHITE_BG_ICON_SVCS = new Set(['tvmaze']);
 
 function buildExtBadge(svc, extId, url) {
   const isLink = !!url;
@@ -262,7 +269,7 @@ function buildExtBadge(svc, extId, url) {
   else if (WIDE_ICON_SVCS.has(svc)) icon.classList.add('wide');
   if (SVC_ICONS[svc]) {
     icon.innerHTML = SVC_ICONS[svc];
-    icon.style.background = 'none';
+    icon.style.background = WHITE_BG_ICON_SVCS.has(svc) ? '#fff' : 'none';
   } else {
     icon.style.background = SVC_COLORS[svc] || 'var(--muted)';
     icon.textContent = SVC_ABBREVS[svc] || svc.slice(0, 2).toUpperCase();
@@ -1789,18 +1796,47 @@ function renderBroadcastOrder(show, section, cfg, targetSeason) {
 
 /* ── Special / film interleave card ────────────────────── */
 
+/** The shared, manual-only cover for all of this show's episodes of a
+ * given kind (df50e70a1faa, 2026-09-22) — null if none has been set,
+ * in which case the caller falls back to show.posterUrl. */
+function episodeKindPosterUrl(show, kind) {
+  if (kind === 'SPECIAL') return show.specialPosterUrl;
+  if (kind === 'OVA') return show.ovaPosterUrl;
+  if (kind === 'BONUS_MOVIE') return show.bonusMoviePosterUrl;
+  return null;
+}
+
 function renderSpecialCard(ep, show, container, cfg) {
   const card = el('div', 'sp-special-card');
 
-  // Poster
+  // Poster — a linked movie show's own poster (most specific) wins,
+  // then this kind's shared cover if one's set, then the regular poster.
   const posterCol = el('div', 'sp-special-poster');
-  const posterSrc = ep.linkedMovieShow?.posterUrl || show.posterUrl;
+  const posterSrc = ep.linkedMovieShow?.posterUrl
+    || episodeKindPosterUrl(show, ep.kind)
+    || show.posterUrl;
+  let posterImg = null;
   if (posterSrc) {
-    const img = el('img');
-    img.src = posterSrc;
-    img.alt = ep.title || 'Special';
-    img.onerror = () => { img.remove(); posterCol.style.background = 'var(--surface-3)'; };
-    posterCol.appendChild(img);
+    posterImg = el('img');
+    posterImg.src = posterSrc;
+    posterImg.alt = ep.title || 'Special';
+    posterImg.onerror = () => { posterImg.remove(); posterCol.style.background = 'var(--surface-3)'; };
+    posterCol.appendChild(posterImg);
+  }
+  // Editing here sets the shared cover for every episode of this kind —
+  // doesn't apply to a bonus-movie already linked to its own tracked
+  // show (edit that show's own poster instead).
+  if (!ep.linkedMovieShow) {
+    posterCol.classList.add('sp-poster-clickable');
+    posterCol.title = `Set cover for all ${ep.kind.replace('_', ' ').toLowerCase()} episodes`;
+    posterCol.appendChild(el('span', 'sp-poster-edit-hint sp-poster-edit-hint-sm', '🖼'));
+    posterCol.addEventListener('click', () => {
+      openArtPicker(show, null, 'poster', posterImg, (url) => {
+        if (ep.kind === 'SPECIAL') show.specialPosterUrl = url;
+        else if (ep.kind === 'OVA') show.ovaPosterUrl = url;
+        else if (ep.kind === 'BONUS_MOVIE') show.bonusMoviePosterUrl = url;
+      }, (msg) => showBanner(msg, 'error'), ep.kind);
+    });
   }
   card.appendChild(posterCol);
 

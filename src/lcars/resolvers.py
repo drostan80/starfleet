@@ -2026,6 +2026,37 @@ def resolve_show_banner_url(obj, info):
         return obj.get("banner_url")
 
 
+def _resolve_episode_kind_poster_url(obj, episode_kind: str) -> str | None:
+    """Shared body for specialPosterUrl/ovaPosterUrl/bonusMoviePosterUrl
+    below. No fast-path/slow-path split like posterUrl/bannerUrl above —
+    these are manual-only (df50e70a1faa), never touched by the
+    automated fetch cascade, so there's no denormalised show column and
+    no staleness concern the dual-path complexity exists to solve; the
+    live art_asset lookup is always authoritative and is only paid for
+    when a client actually asks for this rarely-used field."""
+    try:
+        return art.get_selected_url(
+            db.get_connection(), obj["id"], None, "poster", episode_kind=episode_kind,
+        )
+    except Exception:
+        return None
+
+
+@show_type.field("specialPosterUrl")
+def resolve_show_special_poster_url(obj, info):
+    return _resolve_episode_kind_poster_url(obj, "special")
+
+
+@show_type.field("ovaPosterUrl")
+def resolve_show_ova_poster_url(obj, info):
+    return _resolve_episode_kind_poster_url(obj, "ova")
+
+
+@show_type.field("bonusMoviePosterUrl")
+def resolve_show_bonus_movie_poster_url(obj, info):
+    return _resolve_episode_kind_poster_url(obj, "bonus_movie")
+
+
 # --- Episode fields ------------------------------------------------------
 
 
@@ -5053,17 +5084,23 @@ def resolve_deselect_art_asset(_, info, id):
 
 
 @mutation.field("addManualArtUrl")
-def resolve_add_manual_art_url(_, info, show_id, kind, url, season_id=None):
+def resolve_add_manual_art_url(_, info, show_id, kind, url, season_id=None, episode_kind=None):
     conn = db.get_connection()
     _require_show(conn, show_id)
+    episode_kind = episode_kind or "regular"
     # source_score=100 — outranks every real source (TVDB's own scores
     # top out well below this, TVmaze/MAL/AniList carry none at all), so
     # a manually-pasted URL is what auto_select_best actually picks.
     asset_id = art.upsert_asset(
         conn, show_id, season_id, kind, "manual", url, source_score=100,
+        episode_kind=episode_kind,
     )
     asset = art.select_asset(conn, asset_id)
-    metadata.update_art_negative_cache(conn, show_id)
+    # The negative cache only ever tracks the REGULAR slot (see
+    # update_art_negative_cache's own docstring) — a special/OVA/bonus-
+    # movie cover has no cache entry to clear.
+    if episode_kind == "regular":
+        metadata.update_art_negative_cache(conn, show_id)
     conn.commit()
     return asset
 

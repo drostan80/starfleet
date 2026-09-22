@@ -11702,6 +11702,89 @@ async def test_add_manual_art_url_selects_immediately(client):
     assert refreshed["show"]["posterArtNotFoundAt"] is None
 
 
+async def test_add_manual_art_url_with_episode_kind_does_not_touch_regular_poster(client):
+    """episode_kind (2026-09-22) — a distinct cover for all of a show's
+    SPECIAL/OVA/BONUS_MOVIE episodes, shared rather than per-episode.
+    Setting one must never affect the show's own regular posterUrl."""
+    show = await add_show(client, titleRomaji="Special Cover Show")
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $url: String!) {
+          addManualArtUrl(showId: $id, kind: POSTER, url: $url) { id }
+        }
+        """,
+        {"id": show["id"], "url": "https://cdn/regular-poster.jpg"},
+        headers=auth_headers(),
+    )
+
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!, $url: String!) {
+          addManualArtUrl(showId: $id, kind: POSTER, url: $url, episodeKind: SPECIAL) {
+            id source url selected episodeKind
+          }
+        }
+        """,
+        {"id": show["id"], "url": "https://cdn/special-poster.jpg"},
+        headers=auth_headers(),
+    )
+    asset = data["addManualArtUrl"]
+    assert asset["selected"] is True
+    assert asset["episodeKind"] == "SPECIAL"
+
+    refreshed = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { posterUrl specialPosterUrl ovaPosterUrl bonusMoviePosterUrl }
+        }
+        """,
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    assert refreshed["show"]["posterUrl"] == "https://cdn/regular-poster.jpg"
+    assert refreshed["show"]["specialPosterUrl"] == "https://cdn/special-poster.jpg"
+    assert refreshed["show"]["ovaPosterUrl"] is None
+    assert refreshed["show"]["bonusMoviePosterUrl"] is None
+
+
+async def test_delete_special_art_asset_does_not_clear_regular_poster(client):
+    show = await add_show(client, titleRomaji="Delete Special Art Show")
+    await gql(
+        client,
+        """
+        mutation($id: ID!, $url: String!) {
+          addManualArtUrl(showId: $id, kind: POSTER, url: $url) { id }
+        }
+        """,
+        {"id": show["id"], "url": "https://cdn/regular-poster.jpg"},
+        headers=auth_headers(),
+    )
+    special = await gql(
+        client,
+        """
+        mutation($id: ID!, $url: String!) {
+          addManualArtUrl(showId: $id, kind: POSTER, url: $url, episodeKind: SPECIAL) { id }
+        }
+        """,
+        {"id": show["id"], "url": "https://cdn/special-poster.jpg"},
+        headers=auth_headers(),
+    )
+
+    await gql(
+        client, "mutation($id: ID!) { deleteArtAsset(id: $id) }",
+        {"id": special["addManualArtUrl"]["id"]}, headers=auth_headers(),
+    )
+
+    refreshed = await gql(
+        client, "query($id: ID!) { show(id: $id) { posterUrl specialPosterUrl } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    assert refreshed["show"]["posterUrl"] == "https://cdn/regular-poster.jpg"
+    assert refreshed["show"]["specialPosterUrl"] is None
+
+
 async def test_delete_art_asset_removes_it(client):
     show = await add_show(client, titleRomaji="Delete Art Show")
     added = await gql(

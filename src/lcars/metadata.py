@@ -1871,14 +1871,19 @@ def update_art_negative_cache(conn, show_id: str) -> None:
     "unmark" step. Migration 45c08e4d9cff, NEXT_UP.md "Art-fetch
     negative cache + throttle"."""
     now = util.now_utc_iso()
+    # episode_kind='regular' explicitly (2026-09-22, added alongside the
+    # column) — a selected special/OVA/bonus-movie cover must never
+    # satisfy the *regular* poster/banner check, or a show missing its
+    # real poster would wrongly look "found" here.
     has_poster = conn.execute(
         "SELECT 1 FROM art_asset WHERE show_id = ? AND season_id IS NULL"
-        "  AND kind = 'poster' AND selected = 1",
+        "  AND kind = 'poster' AND episode_kind = 'regular' AND selected = 1",
         (show_id,),
     ).fetchone() is not None
     has_banner = conn.execute(
         "SELECT 1 FROM art_asset WHERE show_id = ? AND season_id IS NULL"
-        "  AND kind IN ('banner', 'background') AND selected = 1",
+        "  AND kind IN ('banner', 'background') AND episode_kind = 'regular'"
+        "  AND selected = 1",
         (show_id,),
     ).fetchone() is not None
     conn.execute(

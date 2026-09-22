@@ -62,7 +62,7 @@ const EPISODES_IN_RANGE_QUERY = `
     episodesInRange(start: $start, end: $end, first: 200, after: $after) {
       edges { node {
         id
-        season episode title absoluteNumber
+        season episode title absoluteNumber kind
         airDateUtc runtimeMinutes
         availableViaSonarr availableViaRadarr availableLocally
         filePathSonarr filePathRadarr
@@ -73,6 +73,7 @@ const EPISODES_IN_RANGE_QUERY = `
           id displayTitle status score mediaShape trackingSpace tracked
           totalEpisodes posterUrl bannerUrl watchedEpisodeCount availableEpisodeCount
           durationMinutes
+          specialPosterUrl ovaPosterUrl bonusMoviePosterUrl
           externalIds(first: 20) {
             edges { node { service externalId url } }
           }
@@ -280,11 +281,12 @@ const SHOW_DETAIL_QUERY = `
       watchedEpisodeCount availableEpisodeCount
       posterUrl bannerUrl synopsis genresRaw durationMinutes
       posterArtNotFoundAt bannerArtNotFoundAt
+      specialPosterUrl ovaPosterUrl bonusMoviePosterUrl
       availableViaRadarr filePathRadarr
       studioCredits(first: 5) {
         edges { node { roleType studio { name } } }
       }
-      artAssets { id seasonId kind source url width height selected }
+      artAssets { id seasonId kind source url width height selected episodeKind }
       seasons(first: 100) {
         edges { node {
           id seasonNumber anilistId malId status score posterUrl
@@ -574,7 +576,7 @@ export async function getShowArtAssets(showId) {
   const data = await gql(`
     query ShowArt($id: ID!) {
       show(id: $id) {
-        id artAssets { id seasonId kind source url width height selected }
+        id artAssets { id seasonId kind source url width height selected episodeKind }
       }
     }
   `, { id: showId });
@@ -588,7 +590,7 @@ export async function fetchShowArt(showId) {
   const data = await gql(`
     mutation FetchArt($showId: ID!) {
       fetchShowArt(showId: $showId) {
-        id artAssets { id seasonId kind source url width height selected }
+        id artAssets { id seasonId kind source url width height selected episodeKind }
       }
     }
   `, { showId });
@@ -629,7 +631,7 @@ export async function fetchShowArtForSeasons(showId, seasonIds) {
     mutation FetchArtForSeasons($showId: ID!, $seasonIds: [ID!]!) {
       fetchShowArtForSeasons(showId: $showId, seasonIds: $seasonIds) {
         id posterUrl bannerUrl
-        artAssets { id seasonId kind source url width height selected }
+        artAssets { id seasonId kind source url width height selected episodeKind }
         posterArtNotFoundAt bannerArtNotFoundAt
       }
     }
@@ -646,7 +648,7 @@ export async function fetchShowArtShowLevel(showId) {
     mutation FetchArtShowLevel($showId: ID!) {
       fetchShowArtShowLevel(showId: $showId) {
         id posterUrl bannerUrl
-        artAssets { id seasonId kind source url width height selected }
+        artAssets { id seasonId kind source url width height selected episodeKind }
         posterArtNotFoundAt bannerArtNotFoundAt
       }
     }
@@ -658,14 +660,18 @@ export async function fetchShowArtShowLevel(showId) {
  * Add a manually-pasted art URL as a new candidate and select it
  * immediately.
  */
-export async function addManualArtUrl(showId, seasonId, kind, url) {
+export async function addManualArtUrl(showId, seasonId, kind, url, episodeKind = null) {
   const data = await gql(`
-    mutation AddManualArtUrl($showId: ID!, $seasonId: ID, $kind: ArtKind!, $url: String!) {
-      addManualArtUrl(showId: $showId, seasonId: $seasonId, kind: $kind, url: $url) {
-        id seasonId kind source url width height selected
+    mutation AddManualArtUrl(
+      $showId: ID!, $seasonId: ID, $kind: ArtKind!, $url: String!, $episodeKind: EpisodeKind
+    ) {
+      addManualArtUrl(
+        showId: $showId, seasonId: $seasonId, kind: $kind, url: $url, episodeKind: $episodeKind
+      ) {
+        id seasonId kind source url width height selected episodeKind
       }
     }
-  `, { showId, seasonId, kind, url });
+  `, { showId, seasonId, kind, url, episodeKind });
   return data.addManualArtUrl;
 }
 

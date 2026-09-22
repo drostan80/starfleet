@@ -206,6 +206,12 @@ type Show {
   durationMinutes: Int
   posterUrl: String
   bannerUrl: String
+  "Distinct cover shared by every SPECIAL episode of this show (manual-only, migration df50e70a1faa) — null if none set, in which case clients fall back to posterUrl."
+  specialPosterUrl: String
+  "Same as specialPosterUrl, for OVA episodes."
+  ovaPosterUrl: String
+  "Same as specialPosterUrl, for BONUS_MOVIE episodes."
+  bonusMoviePosterUrl: String
   "Source-provided, unnormalized display strings (§5.1) — distinct from the tags field below."
   genresRaw: [String!]!
   synopsis: String
@@ -559,6 +565,8 @@ type ArtAsset {
   language: String
   sourceScore: Int
   selected: Boolean!
+  "Which episode category this art applies to. REGULAR is the normal season/show art; SPECIAL/OVA/BONUS_MOVIE are a distinct, shared cover for all of that show's episodes of that kind (manual-only, migration df50e70a1faa)."
+  episodeKind: EpisodeKind!
   createdAt: DateTime!
 }
 
@@ -2273,8 +2281,8 @@ type Mutation {
   fetchShowArtForSeasons(showId: ID!, seasonIds: [ID!]!): Show!
   "Staged auto-fetch, stage 2: the non-per-season half of the cascade (TVDB/TVmaze/TMDB/MAL, plus the AniList show-level fallback when no season has its own link). Background-only, same manual-priority skip as fetchShowArtForSeasons."
   fetchShowArtShowLevel(showId: ID!): Show!
-  "Add a manually-pasted art URL as a new candidate for a (show, season, kind) slot and select it immediately — doesn't have to come from any known source. Clears that slot's negative-cache marker."
-  addManualArtUrl(showId: ID!, seasonId: ID, kind: ArtKind!, url: String!): ArtAsset!
+  "Add a manually-pasted art URL as a new candidate for a (show, season, kind, episodeKind) slot and select it immediately — doesn't have to come from any known source. episodeKind defaults to REGULAR (the normal season/show art); pass SPECIAL/OVA/BONUS_MOVIE to set the shared cover for that episode category instead (df50e70a1faa). Clears the REGULAR slot's negative-cache marker when episodeKind is REGULAR."
+  addManualArtUrl(showId: ID!, seasonId: ID, kind: ArtKind!, url: String!, episodeKind: EpisodeKind): ArtAsset!
   "Permanently remove a stored art asset (e.g. a stale/404'd URL). Deselects first if it was the active selection. Does not affect the negative cache — a manual re-fetch afterward will just find it again if it's still findable."
   deleteArtAsset(id: ID!): Boolean!
 

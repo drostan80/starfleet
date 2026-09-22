@@ -36,18 +36,26 @@ def upsert_asset(
     height: int | None = None,
     language: str | None = None,
     source_score: int | None = None,
+    episode_kind: str = "regular",
 ) -> str:
     """Insert or update an art asset row.  Returns the asset id.
 
-    Uniqueness is on (show_id, season_id, kind, source, url) — a
-    second call with the same key updates width/height/language/score
-    but never touches the ``selected`` flag.
+    Uniqueness is on (show_id, season_id, kind, source, url,
+    episode_kind) — a second call with the same key updates width/
+    height/language/score but never touches the ``selected`` flag.
+
+    ``episode_kind`` (migration df50e70a1faa, 2026-09-22) — a distinct
+    cover shared by every special/OVA/bonus-movie episode of a show,
+    same "kind" values as ``episode.kind``. Manual-only feature: no
+    automated fetch source has a concept of "the cover for specials",
+    every non-'regular' row here comes from ``addManualArtUrl``.
     """
     now = util.now_utc_iso()
     existing = conn.execute(
         "SELECT id FROM art_asset"
-        " WHERE show_id = ? AND season_id IS ? AND kind = ? AND source = ? AND url = ?",
-        (show_id, season_id, kind, source, url),
+        " WHERE show_id = ? AND season_id IS ? AND kind = ? AND source = ? AND url = ?"
+        "   AND episode_kind = ?",
+        (show_id, season_id, kind, source, url, episode_kind),
     ).fetchone()
     if existing:
         conn.execute(
@@ -61,10 +69,10 @@ def upsert_asset(
     conn.execute(
         "INSERT INTO art_asset"
         " (id, show_id, season_id, kind, source, url,"
-        "  width, height, language, source_score, selected, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+        "  width, height, language, source_score, selected, episode_kind, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
         (asset_id, show_id, season_id, kind, source, url,
-         width, height, language, source_score, now),
+         width, height, language, source_score, episode_kind, now),
     )
     return asset_id
 
@@ -77,13 +85,17 @@ _KIND_TO_SHOW_COLUMN: dict[str, str] = {
 
 
 def select_asset(conn, asset_id: str) -> dict:
-    """Mark an asset as the selected art for its (show, season, kind)
-    slot, deselecting whatever was previously selected in that slot.
+    """Mark an asset as the selected art for its (show, season, kind,
+    episode_kind) slot, deselecting whatever was previously selected in
+    that slot.
 
-    For show-level assets (season_id IS NULL), also writes the URL back
-    to the corresponding ``show`` column (``banner_url`` / ``poster_url``)
-    so that fast-path resolvers (calendar, lists) return the correct
-    value without an ``art_asset`` lookup.
+    For show-level assets (season_id IS NULL) with episode_kind='regular'
+    only, also writes the URL back to the corresponding ``show`` column
+    (``banner_url`` / ``poster_url``) so that fast-path resolvers
+    (calendar, lists) return the correct value without an ``art_asset``
+    lookup. A non-'regular' episode_kind has no denormalised column —
+    it's a manual-only, rarer feature; resolvers query art_asset
+    directly for it (see ``resolve_show_special_poster_url`` etc.).
 
     Returns the updated asset row.
     """
@@ -96,21 +108,23 @@ def select_asset(conn, asset_id: str) -> dict:
     if asset["season_id"] is None:
         conn.execute(
             "UPDATE art_asset SET selected = 0"
-            " WHERE show_id = ? AND season_id IS NULL AND kind = ? AND selected = 1",
-            (asset["show_id"], asset["kind"]),
+            " WHERE show_id = ? AND season_id IS NULL AND kind = ? AND episode_kind = ?"
+            "   AND selected = 1",
+            (asset["show_id"], asset["kind"], asset["episode_kind"]),
         )
     else:
         conn.execute(
             "UPDATE art_asset SET selected = 0"
-            " WHERE show_id = ? AND season_id = ? AND kind = ? AND selected = 1",
-            (asset["show_id"], asset["season_id"], asset["kind"]),
+            " WHERE show_id = ? AND season_id = ? AND kind = ? AND episode_kind = ?"
+            "   AND selected = 1",
+            (asset["show_id"], asset["season_id"], asset["kind"], asset["episode_kind"]),
         )
 
     conn.execute("UPDATE art_asset SET selected = 1 WHERE id = ?", (asset_id,))
 
     # Denormalise: write URL back to the show row so calendar/list
     # resolvers (which skip the art_asset table) return the right art.
-    if asset["season_id"] is None:
+    if asset["season_id"] is None and asset["episode_kind"] == "regular":
         col = _KIND_TO_SHOW_COLUMN.get(asset["kind"])
         if col:
             conn.execute(
@@ -147,9 +161,13 @@ def delete_asset(conn, asset_id: str) -> None:
 def deselect_asset(conn, asset_id: str) -> dict:
     """Clear the selected flag on an asset.
 
-    For show-level assets, also clears the corresponding ``show``
-    column (``banner_url`` / ``poster_url``) so the fast-path resolvers
-    don't keep serving the old art.
+    For show-level assets with episode_kind='regular', also clears the
+    corresponding ``show`` column (``banner_url`` / ``poster_url``) so
+    the fast-path resolvers don't keep serving the old art. A non-
+    'regular' episode_kind has no denormalised column to clear (see
+    ``select_asset``'s own docstring) — deselecting one must NOT touch
+    the show's regular poster/banner column, which is a real bug this
+    guard fixes (2026-09-22, added alongside episode_kind itself).
 
     Returns the updated row.
     """
@@ -161,7 +179,7 @@ def deselect_asset(conn, asset_id: str) -> dict:
     # Clear the denormalised show column so fast-path resolvers return
     # NULL (which lets the client fall through to its own fallback).
     asset = dict(asset)
-    if asset["season_id"] is None:
+    if asset["season_id"] is None and asset["episode_kind"] == "regular":
         col = _KIND_TO_SHOW_COLUMN.get(asset["kind"])
         if col:
             conn.execute(
@@ -196,19 +214,23 @@ def get_art_assets_for_season(conn, season_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_selected_url(conn, show_id: str, season_id: str | None, kind: str) -> str | None:
+def get_selected_url(
+    conn, show_id: str, season_id: str | None, kind: str, episode_kind: str = "regular",
+) -> str | None:
     """Return the URL of the selected art asset for a slot, or None."""
     if season_id is None:
         row = conn.execute(
             "SELECT url FROM art_asset"
-            " WHERE show_id = ? AND season_id IS NULL AND kind = ? AND selected = 1",
-            (show_id, kind),
+            " WHERE show_id = ? AND season_id IS NULL AND kind = ? AND episode_kind = ?"
+            "   AND selected = 1",
+            (show_id, kind, episode_kind),
         ).fetchone()
     else:
         row = conn.execute(
             "SELECT url FROM art_asset"
-            " WHERE show_id = ? AND season_id = ? AND kind = ? AND selected = 1",
-            (show_id, season_id, kind),
+            " WHERE show_id = ? AND season_id = ? AND kind = ? AND episode_kind = ?"
+            "   AND selected = 1",
+            (show_id, season_id, kind, episode_kind),
         ).fetchone()
     return row["url"] if row else None
 
@@ -403,22 +425,31 @@ def store_tmdb_art(
 
 
 def auto_select_best(conn, show_id: str) -> None:
-    """For each (show, season, kind) slot that has no selection yet,
-    auto-select the highest-scored candidate.  Called after a bulk
-    art fetch to seed initial selections without overriding user
-    choices.
+    """For each (show, season, kind, episode_kind) slot that has no
+    selection yet, auto-select the highest-scored candidate.  Called
+    after a bulk art fetch to seed initial selections without
+    overriding user choices.
 
     Prefers anilist posters (they match what the user already sees),
     then tvdb/tvmaze by source_score descending (tvmaze has no
     source_score, so it ranks below scored TVDB art).
+
+    episode_kind included in both queries (2026-09-22, added alongside
+    the column itself) so a manually-added special/OVA/bonus-movie
+    cover can never get silently lumped into the same "unselected" group
+    as the regular slot, or picked as its "best candidate" — in
+    practice this never fires for a non-'regular' row anyway
+    (addManualArtUrl selects immediately on insert), but the query
+    would otherwise be structurally wrong the moment that stops being
+    true.
     """
     # Find slots with no selection
     unselected = conn.execute(
         """
-        SELECT show_id, season_id, kind
+        SELECT show_id, season_id, kind, episode_kind
         FROM art_asset
         WHERE show_id = ?
-        GROUP BY show_id, season_id, kind
+        GROUP BY show_id, season_id, kind, episode_kind
         HAVING SUM(selected) = 0
         """,
         (show_id,),
@@ -429,19 +460,20 @@ def auto_select_best(conn, show_id: str) -> None:
         best = conn.execute(
             """
             SELECT id, url FROM art_asset
-            WHERE show_id = ? AND season_id IS ? AND kind = ?
+            WHERE show_id = ? AND season_id IS ? AND kind = ? AND episode_kind = ?
             ORDER BY
                 CASE source WHEN 'anilist' THEN 0 ELSE 1 END,
                 COALESCE(source_score, 0) DESC,
                 created_at ASC
             LIMIT 1
             """,
-            (slot["show_id"], slot["season_id"], slot["kind"]),
+            (slot["show_id"], slot["season_id"], slot["kind"], slot["episode_kind"]),
         ).fetchone()
         if best:
             conn.execute("UPDATE art_asset SET selected = 1 WHERE id = ?", (best["id"],))
-            # Denormalise show-level selections
-            if slot["season_id"] is None:
+            # Denormalise show-level selections (regular slot only —
+            # see select_asset's own docstring on why).
+            if slot["season_id"] is None and slot["episode_kind"] == "regular":
                 col = _KIND_TO_SHOW_COLUMN.get(slot["kind"])
                 if col:
                     conn.execute(

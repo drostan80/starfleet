@@ -53,8 +53,9 @@ def conn(tmp_path):
             language TEXT,
             source_score INTEGER,
             selected INTEGER NOT NULL DEFAULT 0,
+            episode_kind TEXT NOT NULL DEFAULT 'regular',
             created_at TEXT NOT NULL DEFAULT '2026-01-01',
-            UNIQUE (show_id, season_id, kind, source, url)
+            UNIQUE (show_id, season_id, kind, source, url, episode_kind)
         );
 
         INSERT INTO show (id, poster_url, banner_url)
@@ -202,3 +203,113 @@ class TestDeleteAsset:
     def test_delete_unknown_asset_raises(self, conn):
         with pytest.raises(ValueError):
             art.delete_asset(conn, "h-nonexi")
+
+
+def _is_selected(conn, asset_id):
+    return conn.execute(
+        "SELECT selected FROM art_asset WHERE id = ?", (asset_id,)
+    ).fetchone()["selected"] == 1
+
+
+class TestEpisodeKindArtIsolatedFromRegular:
+    """episode_kind (migration df50e70a1faa, 2026-09-22) — a distinct,
+    manual-only cover shared by all SPECIAL/OVA/BONUS_MOVIE episodes of
+    a show. Must never interfere with the regular show.poster_url/
+    banner_url slot's own selection, deselection, or auto-selection."""
+
+    def test_special_selection_does_not_touch_show_poster_url(self, conn):
+        aid = art.upsert_asset(conn, "s-test01", None, "poster", "manual",
+                               "https://cdn/special-cover.jpg", episode_kind="special")
+        conn.commit()
+        art.select_asset(conn, aid)
+
+        row = conn.execute("SELECT poster_url FROM show WHERE id = 's-test01'").fetchone()
+        assert row["poster_url"] == "old-poster.jpg"  # unchanged
+
+    def test_special_and_regular_can_both_be_selected_in_same_slot(self, conn):
+        regular_id = art.upsert_asset(conn, "s-test01", None, "poster", "anilist",
+                                      "https://cdn/regular.jpg")
+        special_id = art.upsert_asset(conn, "s-test01", None, "poster", "manual",
+                                      "https://cdn/special.jpg", episode_kind="special")
+        conn.commit()
+        art.select_asset(conn, regular_id)
+        art.select_asset(conn, special_id)
+
+        assert _is_selected(conn, regular_id)
+        assert _is_selected(conn, special_id)
+
+    def test_selecting_a_new_special_only_deselects_the_previous_special(self, conn):
+        regular_id = art.upsert_asset(conn, "s-test01", None, "poster", "anilist",
+                                      "https://cdn/regular.jpg")
+        art.select_asset(conn, regular_id)
+        special_a = art.upsert_asset(conn, "s-test01", None, "poster", "manual",
+                                     "https://cdn/special-a.jpg", episode_kind="special")
+        art.select_asset(conn, special_a)
+        special_b = art.upsert_asset(conn, "s-test01", None, "poster", "manual",
+                                     "https://cdn/special-b.jpg", episode_kind="special")
+        conn.commit()
+
+        art.select_asset(conn, special_b)
+
+        assert _is_selected(conn, regular_id)  # untouched by the special-slot reselection
+        assert not _is_selected(conn, special_a)
+        assert _is_selected(conn, special_b)
+
+    def test_deselecting_a_special_does_not_clear_show_poster_url(self, conn):
+        regular_id = art.upsert_asset(conn, "s-test01", None, "poster", "anilist",
+                                      "https://cdn/regular.jpg")
+        art.select_asset(conn, regular_id)
+        special_id = art.upsert_asset(conn, "s-test01", None, "poster", "manual",
+                                      "https://cdn/special.jpg", episode_kind="special")
+        conn.commit()
+        art.select_asset(conn, special_id)
+
+        art.deselect_asset(conn, special_id)
+
+        row = conn.execute("SELECT poster_url FROM show WHERE id = 's-test01'").fetchone()
+        assert row["poster_url"] == "https://cdn/regular.jpg"
+
+    def test_get_selected_url_defaults_to_regular(self, conn):
+        aid = art.upsert_asset(
+            conn, "s-test01", None, "poster", "anilist", "https://cdn/regular.jpg",
+        )
+        conn.commit()
+        art.select_asset(conn, aid)
+
+        assert art.get_selected_url(conn, "s-test01", None, "poster") == "https://cdn/regular.jpg"
+        assert art.get_selected_url(
+            conn, "s-test01", None, "poster", episode_kind="special"
+        ) is None
+
+    def test_get_selected_url_returns_the_special_cover(self, conn):
+        aid = art.upsert_asset(conn, "s-test01", None, "poster", "manual",
+                               "https://cdn/special.jpg", episode_kind="special")
+        conn.commit()
+        art.select_asset(conn, aid)
+
+        assert art.get_selected_url(conn, "s-test01", None, "poster", episode_kind="special") \
+            == "https://cdn/special.jpg"
+
+    def test_auto_select_best_does_not_pick_a_special_for_the_regular_slot(self, conn):
+        art.upsert_asset(conn, "s-test01", None, "poster", "manual",
+                         "https://cdn/special.jpg", episode_kind="special", source_score=999)
+        art.upsert_asset(conn, "s-test01", None, "poster", "anilist",
+                         "https://cdn/regular.jpg")
+        conn.commit()
+
+        art.auto_select_best(conn, "s-test01")
+
+        row = conn.execute("SELECT poster_url FROM show WHERE id = 's-test01'").fetchone()
+        assert row["poster_url"] == "https://cdn/regular.jpg"
+
+    def test_auto_select_best_selects_the_special_within_its_own_slot(self, conn):
+        art.upsert_asset(conn, "s-test01", None, "poster", "manual",
+                         "https://cdn/special.jpg", episode_kind="special")
+        conn.commit()
+
+        art.auto_select_best(conn, "s-test01")
+
+        selected = conn.execute(
+            "SELECT selected FROM art_asset WHERE show_id = 's-test01' AND episode_kind = 'special'"
+        ).fetchone()
+        assert selected["selected"] == 1

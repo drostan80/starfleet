@@ -5,7 +5,7 @@
  * Extracted to avoid circular dependency between show.js and calendar.js.
  */
 
-import { fetchShowArt, selectArtAsset, deselectArtAsset, addManualArtUrl, deleteArtAsset } from './api.js?v=21';
+import { fetchShowArt, selectArtAsset, deselectArtAsset, addManualArtUrl, deleteArtAsset } from './api.js?v=22';
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -25,15 +25,22 @@ function el(tag, cls, text) {
  * @param {HTMLImageElement|null} targetImg - Optional image element to update on selection
  * @param {function}            onSelect  - Callback(assetUrl) after selection
  * @param {function}            onError   - Callback(message) on error (e.g. showBanner)
+ * @param {string}              episodeKind - 'REGULAR' (default), 'SPECIAL', 'OVA', or
+ *   'BONUS_MOVIE' — a shared cover for every episode of that kind (df50e70a1faa,
+ *   2026-09-22), scoped independently from the regular season/show slot. Manual-only:
+ *   no automated source targets these, so the "Fetch Art from Sources" button is
+ *   hidden whenever this isn't 'REGULAR'.
  */
-export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError) {
+export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError, episodeKind = 'REGULAR') {
   // Filter assets for this slot; banner slot also shows backgrounds
   const kindSet = kind === 'banner' ? new Set(['banner', 'background']) : new Set([kind]);
   const assets = (show.artAssets || []).filter(a => {
     const kindMatch = kindSet.has(a.kind.toLowerCase());
-    if (seasonId) return kindMatch && a.seasonId === seasonId;
-    return kindMatch && !a.seasonId;
+    const epKindMatch = (a.episodeKind || 'REGULAR') === episodeKind;
+    if (seasonId) return kindMatch && epKindMatch && a.seasonId === seasonId;
+    return kindMatch && epKindMatch && !a.seasonId;
   });
+  const isRegular = episodeKind === 'REGULAR';
 
   // Build overlay
   const overlay = el('div', 'sp-art-overlay');
@@ -42,29 +49,34 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
   });
 
   const modal = el('div', 'sp-art-modal');
-  const title = el('h3', 'sp-art-modal-title',
-    `Choose ${kind} art${seasonId ? '' : ' (show-level)'}`);
+  const titleText = isRegular
+    ? `Choose ${kind} art${seasonId ? '' : ' (show-level)'}`
+    : `Choose ${kind} art for ${episodeKind.replace('_', ' ').toLowerCase()} episodes`;
+  const title = el('h3', 'sp-art-modal-title', titleText);
   modal.appendChild(title);
 
-  // Fetch Art button
-  const fetchBtn = el('button', 'sp-art-fetch-btn', '⟳ Fetch Art from Sources');
-  fetchBtn.addEventListener('click', async () => {
-    fetchBtn.disabled = true;
-    fetchBtn.textContent = 'Fetching…';
-    try {
-      const result = await fetchShowArt(show.id);
-      show.artAssets = result.artAssets;
-      overlay.remove();
-      openArtPicker(show, seasonId, kind, targetImg, onSelect, onError);
-    } catch (err) {
-      fetchBtn.textContent = '✗ ' + err.message;
-      setTimeout(() => {
-        fetchBtn.disabled = false;
-        fetchBtn.textContent = '⟳ Fetch Art from Sources';
-      }, 3000);
-    }
-  });
-  modal.appendChild(fetchBtn);
+  // Fetch Art button — regular slot only; nothing automated knows about
+  // a per-episode-kind cover, so offering this here would just fail.
+  if (isRegular) {
+    const fetchBtn = el('button', 'sp-art-fetch-btn', '⟳ Fetch Art from Sources');
+    fetchBtn.addEventListener('click', async () => {
+      fetchBtn.disabled = true;
+      fetchBtn.textContent = 'Fetching…';
+      try {
+        const result = await fetchShowArt(show.id);
+        show.artAssets = result.artAssets;
+        overlay.remove();
+        openArtPicker(show, seasonId, kind, targetImg, onSelect, onError, episodeKind);
+      } catch (err) {
+        fetchBtn.textContent = '✗ ' + err.message;
+        setTimeout(() => {
+          fetchBtn.disabled = false;
+          fetchBtn.textContent = '⟳ Fetch Art from Sources';
+        }, 3000);
+      }
+    });
+    modal.appendChild(fetchBtn);
+  }
 
   // Add art manually via a pasted URL — doesn't have to come from any
   // known source (e.g. filling in art the fetch cascade can't find).
@@ -84,11 +96,14 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
     if (!url) return;
     addBtn.disabled = true;
     try {
-      const newAsset = await addManualArtUrl(show.id, seasonId, kind.toUpperCase(), url);
+      const newAsset = await addManualArtUrl(
+        show.id, seasonId, kind.toUpperCase(), url, isRegular ? null : episodeKind,
+      );
       // Server selects the new asset immediately, deselecting whatever
       // held this slot before — mirror that locally rather than re-fetch.
       for (const a of (show.artAssets || [])) {
         if (a.kind.toLowerCase() === newAsset.kind.toLowerCase() &&
+            (a.episodeKind || 'REGULAR') === (newAsset.episodeKind || 'REGULAR') &&
             a.seasonId === newAsset.seasonId) {
           a.selected = false;
         }
@@ -97,7 +112,7 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
       if (targetImg) targetImg.src = newAsset.url;
       if (onSelect) onSelect(newAsset.url);
       overlay.remove();
-      openArtPicker(show, seasonId, kind, targetImg, onSelect, onError);
+      openArtPicker(show, seasonId, kind, targetImg, onSelect, onError, episodeKind);
     } catch (err) {
       if (onError) onError(`Add art failed: ${err.message}`);
       addBtn.disabled = false;
@@ -106,8 +121,9 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
   modal.appendChild(addForm);
 
   if (!assets.length) {
-    modal.appendChild(el('p', 'sp-art-empty',
-      'No art assets yet. Click "Fetch Art" to retrieve from AniList & TVDB.'));
+    modal.appendChild(el('p', 'sp-art-empty', isRegular
+      ? 'No art assets yet. Click "Fetch Art" to retrieve from AniList & TVDB.'
+      : 'No cover set for these episodes yet. Paste a URL above to add one.'));
   }
 
   // Art grid — use wider columns for banner/background art
@@ -152,7 +168,7 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
           if (onSelect) onSelect(null);
         }
         overlay.remove();
-        openArtPicker(show, seasonId, kind, targetImg, onSelect, onError);
+        openArtPicker(show, seasonId, kind, targetImg, onSelect, onError, episodeKind);
       } catch (err) {
         if (onError) onError(`Delete art failed: ${err.message}`);
       }
