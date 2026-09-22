@@ -1,11 +1,57 @@
 # Next up
 
-Current version: **v0.2.49** (deployed 2026-09-22).
+Current version: **v0.2.52** (deployed 2026-09-22).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## Air-date priority redesign — built, not yet deployed (2026-09-22)
+## Service badge icons blank until hard refresh + special/OVA/bonus-movie cover art — built, not yet deployed (2026-09-22)
+
+User-reported, recurring: AniDB/Syoboi/TVmaze icons render blank/white
+on first load, fixed by a hard refresh. Root cause and fix already
+shipped as v0.2.52 (nginx's `/ui/css/` location was excluded from
+`Cache-Control: no-cache` — see that section below). Two more pieces
+found/added on top of that same investigation:
+
+- [x] **A second, genuinely separate bug on the show page specifically**:
+      `show.js`'s `buildExtBadge` set every SVG-icon service's badge
+      background to `none`, but TVmaze's logo (like on calendar/browse/
+      planner, where `.svc-tvmaze { background: #fff }` already handles
+      it) needs a white backing to render correctly — the show page's
+      badge renderer is a separate code path that never got the same
+      treatment. Fixed with a `WHITE_BG_ICON_SVCS` set.
+- [x] **New feature, user's own scope choice**: a distinct cover art
+      shared across all of a show's SPECIAL/OVA/BONUS_MOVIE episodes
+      (not per-individual-episode) — `art_asset.episode_kind` column
+      (migration `df50e70a1faa`), reusing the existing `EpisodeKind`
+      enum. Manual-only (no automated fetch source has a concept of
+      "the cover for specials"): `addManualArtUrl` gains an optional
+      `episodeKind` arg; new `Show.specialPosterUrl`/`ovaPosterUrl`/
+      `bonusMoviePosterUrl` fields (live art_asset lookup, no
+      denormalised column needed since nothing automated ever writes
+      these). UI entry point: clicking a special/OVA/bonus-movie
+      episode's own poster on the show page (`renderSpecialCard`) opens
+      the art picker scoped to that kind; calendar/planner/backlog
+      cards for those episodes also prefer the override over the
+      regular show poster when one's set.
+      **Found and fixed 3 real bugs in the existing episode_kind-blind
+      code while adding the column**: `select_asset`/`deselect_asset`
+      would have wrongly written/cleared the *regular* show.poster_url
+      column when selecting/deselecting a special-kind asset;
+      `auto_select_best`'s GROUP BY didn't include episode_kind, so it
+      could have picked a manually-added special-kind candidate as the
+      "best" for the regular slot; `update_art_negative_cache` would
+      have treated a selected special-kind poster as satisfying the
+      *regular* poster check. All three fixed and covered by new tests
+      before they could ever fire in practice (specials are always
+      selected immediately on insert today, but the queries were
+      structurally wrong regardless).
+- [x] New tests: `test_art.py`'s `TestEpisodeKindArtIsolatedFromRegular`
+      (8 cases covering all three bugs above), 2 new GraphQL-level
+      tests in `test_server.py`. Full suite green. Not yet tagged/
+      deployed.
+
+## Air-date priority redesign — shipped v0.2.51 (2026-09-22)
 
 Found live: "The World Is Dancing" episode 13 showed a future Thursday
 date (`air_date_source='syoboi'`) despite already being downloaded and
@@ -55,7 +101,49 @@ Syoboi's TV-channel feed never covered at all.
       bug). Two `test_server.py` tests rewritten to reflect the new
       earlier-wins-cross-source behavior (the old ones asserted the
       obsolete fixed-hierarchy behavior the redesign replaces). Full
-      suite green. Not yet tagged/deployed.
+      suite green. Tagged/deployed as v0.2.51.
+
+---
+
+## amendShowArrLink resolver never worked — shipped v0.2.51 (2026-09-22)
+
+User-caught live: correcting a wrong TVDB ID always failed with
+"unexpected keyword argument 'show_id'". `resolve_amend_show_arr_link`'s
+parameters were camelCase (`showId`/`newExternalId`/`deleteFiles`), but
+the server converts GraphQL's camelCase args to snake_case before
+calling every resolver (every sibling resolver in the file uses
+snake_case params) — this one didn't, so it crashed on every real call.
+No test existed at any level to catch it. Renamed the parameters and
+added a GraphQL-level test exercising the full correct-a-wrong-tvdb-id
+flow (validate → delete old Sonarr entry → add correct one → update
+LCARS link). Confirmed live post-deploy: a dry no-op call now returns a
+clean error response instead of the old crash.
+
+---
+
+## CSS never revalidated — nginx location precedence excluded it from no-cache — shipped v0.2.52 (2026-09-22)
+
+Real, repeatedly-reported bug (first symptom seen: AniDB/Syoboi/TVmaze
+service badge icons rendering blank/white until a hard refresh — root
+cause of the OTHER two icon findings above too). `ui/nginx.conf`'s
+`/ui/css/` location (added only so the unauthenticated login page could
+load its own stylesheet) is a more specific prefix than the protected
+`/ui/` block, so nginx matched it for every CSS request site-wide — and
+it never set `Cache-Control`, so browsers applied their own long-lived
+heuristic caching to `main.css` instead of revalidating on every load
+like JS/HTML under `/ui/` already do. Combined with a real prior gap (a
+2026-09-12 commit added the `--svc-anidb`/`--svc-syoboi`/`--svc-tvmaze`
+variables without bumping `main.css`'s cache-bust version), any browser
+that cached the stylesheet before that fix landed could stay stuck on
+broken icon styling indefinitely.
+
+- [x] `/ui/css/` now sets `Cache-Control: no-cache`, matching the rest
+      of the app — structural fix, prevents this class of bug even if a
+      future CSS-only change forgets to bump the version again.
+- [x] `main.css`'s version bumped (v20→v21) everywhere, forcing an
+      immediate fresh fetch for everyone currently affected.
+- [x] Confirmed live post-deploy: `curl -I` against `main.css` on
+      `tiny` shows `Cache-Control: no-cache`.
 
 ---
 
