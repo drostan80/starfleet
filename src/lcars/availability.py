@@ -605,7 +605,7 @@ def _handle_sonarr_series_add(conn, payload: dict) -> None:
         tracking_space = "tv"
         if cfg.sonarr_anime_root_folder and root.startswith(cfg.sonarr_anime_root_folder):
             tracking_space = "anime"
-        shows.create_show(conn, {
+        new_show_id = shows.create_show(conn, {
             "media_shape": "episodic",
             "tracking_space": tracking_space,
             "primary_title": "english",
@@ -626,6 +626,14 @@ def _handle_sonarr_series_add(conn, payload: dict) -> None:
             logger.exception(
                 "SeriesAdd webhook: failed to open fallback review (tvdb_id=%s)", tvdb_id
             )
+        return
+    try:
+        shows.flag_possible_sequel(conn, new_show_id)
+    except Exception:
+        logger.exception(
+            "SeriesAdd webhook: sequel check failed for new show %s (tvdb_id=%s)",
+            new_show_id, tvdb_id,
+        )
 
 
 def _handle_sonarr_series_delete(conn, payload: dict) -> None:

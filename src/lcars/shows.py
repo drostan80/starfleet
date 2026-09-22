@@ -30,6 +30,7 @@ from lcars import (
     events,
     ids,
     metadata,
+    pending_review,
     radarr_client,
     service_health,
     sonarr_client,
@@ -740,6 +741,62 @@ def create_show(conn, input: dict) -> str:
     conn.commit()
 
     return show_id
+
+
+def flag_possible_sequel(conn, show_id: str) -> None:
+    """Post-create sequel check for the id-blind auto-create paths
+    (Sonarr/Radarr webhooks' SeriesAdd/MovieAdded, reconcileArrState's
+    untracked-show discovery) — these call `create_show` with only a
+    tvdb_id/tmdb_id, no anilist_id (nothing in a webhook payload or an
+    Sonarr/Radarr catalog entry carries one), so `create_show`'s own
+    pre-insert `find_sequel_parent` call there can only ever use tier 2
+    (TVDB/Wikidata franchise collision) — tiers 1 and 3, the ones that
+    actually catch an anime sequel, need an anilist_id neither path
+    supplies. By the time `create_show` returns, its own inline
+    `metadata.fetch_and_populate` has already resolved the anilist_id
+    (for an anime show) and written its AniList relations to
+    `show_relation` — so this re-runs `find_sequel_parent` now that data
+    exists, and flags a `pending_review` instead of raising (there's no
+    human in this loop to answer `SequelDetectedError`). A no-op for a
+    non-anime show (no anilist_id ever gets resolved) or when no sequel
+    relationship is found.
+
+    Deliberately never called from the interactive `create_show`/
+    `skip_sequel_check` path: that path either already caught this
+    pre-insert (tier 3, a live AniList query — no local anilist_id
+    existed yet to make it self-match) or the user explicitly said "not
+    a sequel," and re-litigating that decision here via the review
+    queue would recreate the exact "loops back to the same dialog" bug
+    `skip_sequel_check` itself was built to fix."""
+    row = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'anilist'",
+        (show_id,),
+    ).fetchone()
+    if row is None:
+        return
+    sequel = find_sequel_parent(conn, int(row["external_id"]))
+    if sequel is None:
+        return
+
+    import json
+    field = f"possible_sequel_of:{sequel['parent_show_id']}"
+    value = json.dumps({
+        "parentShowId": sequel["parent_show_id"],
+        "parentTitle": sequel["parent_title"],
+        "nextSeason": sequel["next_season"],
+    }, ensure_ascii=False)
+    existing_unresolved = conn.execute(
+        "SELECT 1 FROM pending_review"
+        " WHERE entity_type = 'show' AND entity_id = ? AND field = ?"
+        "   AND resolved_at IS NULL",
+        (show_id, field),
+    ).fetchone()
+    if existing_unresolved is not None:
+        return
+    if pending_review.already_resolved_with(conn, "show", show_id, field, value):
+        return
+    pending_review.open_or_extend(conn, "show", show_id, field, "anilist", None, value)
+    conn.commit()
 
 
 def skip_show(conn, input: dict) -> str:

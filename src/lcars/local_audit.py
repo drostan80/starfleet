@@ -692,7 +692,7 @@ def _create_from_untracked_entry(
     key = "tvdb_id" if media_shape == "episodic" else "tmdb_id"
     external_id = entry["external_id"]
     try:
-        shows.create_show(conn, {
+        new_show_id = shows.create_show(conn, {
             "media_shape": media_shape,
             "tracking_space": tracking_space,
             "primary_title": "english",
@@ -711,6 +711,14 @@ def _create_from_untracked_entry(
         )
         conn.commit()
         result["create_failures"].append({"title": title, "error": str(e)})
+        return
+    try:
+        shows.flag_possible_sequel(conn, new_show_id)
+    except Exception:
+        logger.exception(
+            "reconcile_arr_state: sequel check failed for new show %s (%s external_id=%s)",
+            new_show_id, entry["service"], external_id,
+        )
 
 
 def reconcile_arr_state(conn) -> dict:
