@@ -522,6 +522,24 @@ body {
   gap: 10px;
 }
 
+/* A day with nothing airing — still shown, just shrunk (no card art to
+   size the row/column against). */
+.day-group.day-empty {
+  opacity: 0.5;
+}
+
+.day-group.day-empty .day-label .day-date,
+.day-group.day-empty .day-label .day-month {
+  font-size: 0.8em;
+}
+
+.day-empty-note {
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
+  align-self: center;
+}
+
 /* ── Planner layout ─────────────────────────────────────── */
 .calendar.planner {
   flex-direction: row;
@@ -550,6 +568,18 @@ body {
   flex: 1.3;
   background: var(--surface-2);
   border-radius: 8px;
+}
+
+.day-col.day-empty {
+  flex: 0 0 70px;
+  min-width: 70px;
+  opacity: 0.5;
+  align-items: center;
+}
+
+.day-col.day-empty .day-col-header {
+  white-space: normal;
+  text-align: center;
 }
 
 .day-col-header {

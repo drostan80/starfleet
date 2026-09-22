@@ -9,8 +9,8 @@
  */
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=19';
-import { openArtPicker } from './art-picker.js?v=1';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=21';
+import { openArtPicker } from './art-picker.js?v=2';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,
@@ -953,12 +953,28 @@ export function hideBanner() {
 
 /* ── Calendar rendering ──────────────────────────────────── */
 
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
 /**
  * Group episodes by local air date, applying tracked and status filters.
+ * When `range` ({ startLocal, endLocal }) is given, every calendar day in
+ * that half-open interval gets an entry (episodes: []) even if nothing
+ * airs that day — so a day with nothing airing still renders as an empty
+ * column/row instead of vanishing from the view.
  * Returns an array of { dateStr, localDate, episodes[] } sorted by date.
  */
-function groupByDay(episodes) {
+function groupByDay(episodes, range) {
   const groups = {};
+
+  if (range) {
+    for (let d = new Date(range.startLocal); d < range.endLocal; d = addDays(d, 1)) {
+      const dateStr = localDateStr(d);
+      groups[dateStr] = { dateStr, localDate: new Date(d), episodes: [] };
+    }
+  }
+
   for (const ep of episodes) {
     if (!ep.show.tracked) continue;                      // skip merged-away duplicates
     const epStatus = ep.seasonEntity?.status || ep.show.status;
@@ -966,9 +982,7 @@ function groupByDay(episodes) {
     if (!_showWatched && ep.state === 'WATCHED') continue;
 
     const localDate = ep.airDateUtc ? new Date(ep.airDateUtc) : null;
-    const dateStr   = localDate
-      ? `${localDate.getFullYear()}-${String(localDate.getMonth()+1).padStart(2,'0')}-${String(localDate.getDate()).padStart(2,'0')}`
-      : 'unknown';
+    const dateStr   = localDate ? localDateStr(localDate) : 'unknown';
 
     if (!groups[dateStr]) groups[dateStr] = { dateStr, localDate, episodes: [] };
     groups[dateStr].episodes.push(ep);
@@ -991,14 +1005,20 @@ function renderEpisodes(episodes, cfg) {
   calendar.innerHTML = '';
   calendar.classList.toggle('planner', state.layout === 'planner');
 
-  const dayGroups = groupByDay(episodes);
+  if (activeStatuses.size === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'calendar-empty';
+    empty.textContent = 'All statuses hidden — enable some in the Show filter.';
+    calendar.appendChild(empty);
+    return;
+  }
+
+  const dayGroups = groupByDay(episodes, computeRange());
 
   if (dayGroups.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'calendar-empty';
-    empty.textContent = activeStatuses.size === 0
-      ? 'All statuses hidden — enable some in the Show filter.'
-      : 'No episodes in this range.';
+    empty.textContent = 'No episodes in this range.';
     calendar.appendChild(empty);
     return;
   }
@@ -1155,8 +1175,9 @@ let _lastEpisodes = [];
 function renderRows(dayGroups, todayStr, cfg) {
   const calendar = document.getElementById('calendar');
   for (const group of dayGroups) {
+    const isEmpty = group.episodes.length === 0;
     const section = document.createElement('section');
-    section.className = `day-group${group.dateStr === todayStr ? ' day-today' : ''}`;
+    section.className = `day-group${group.dateStr === todayStr ? ' day-today' : ''}${isEmpty ? ' day-empty' : ''}`;
 
     const header = document.createElement('div');
     header.className = 'day-label';
@@ -1170,13 +1191,16 @@ function renderRows(dayGroups, todayStr, cfg) {
     const row = document.createElement('div');
     row.className = 'card-row';
 
-    group.episodes.sort((a, b) => {
-      if (!a.airDateUtc) return 1;
-      if (!b.airDateUtc) return -1;
-      return new Date(a.airDateUtc) - new Date(b.airDateUtc);
-    });
-
-    appendGroupedEpisodes(row, group.episodes, cfg, buildCard);
+    if (isEmpty) {
+      row.innerHTML = `<span class="day-empty-note">Nothing airing</span>`;
+    } else {
+      group.episodes.sort((a, b) => {
+        if (!a.airDateUtc) return 1;
+        if (!b.airDateUtc) return -1;
+        return new Date(a.airDateUtc) - new Date(b.airDateUtc);
+      });
+      appendGroupedEpisodes(row, group.episodes, cfg, buildCard);
+    }
 
     section.appendChild(row);
     calendar.appendChild(section);
@@ -1192,8 +1216,9 @@ function renderPlanner(dayGroups, todayStr, cfg) {
   container.dataset.mode = state.mode;
 
   for (const group of dayGroups) {
+    const isEmpty = group.episodes.length === 0;
     const col = document.createElement('div');
-    col.className = `day-col${group.dateStr === todayStr ? ' day-today' : ''}`;
+    col.className = `day-col${group.dateStr === todayStr ? ' day-today' : ''}${isEmpty ? ' day-empty' : ''}`;
 
     const header = document.createElement('div');
     header.className = 'day-col-header';
@@ -1202,14 +1227,20 @@ function renderPlanner(dayGroups, todayStr, cfg) {
       : `?`;
     col.appendChild(header);
 
-    group.episodes.sort((a, b) => {
-      if (!a.airDateUtc) return 1;
-      if (!b.airDateUtc) return -1;
-      return new Date(a.airDateUtc) - new Date(b.airDateUtc);
-    });
-
-    const cardFn = wideMode ? buildPlannerCard : buildCard;
-    appendGroupedEpisodes(col, group.episodes, cfg, cardFn);
+    if (isEmpty) {
+      const note = document.createElement('div');
+      note.className = 'day-empty-note';
+      note.textContent = 'Nothing airing';
+      col.appendChild(note);
+    } else {
+      group.episodes.sort((a, b) => {
+        if (!a.airDateUtc) return 1;
+        if (!b.airDateUtc) return -1;
+        return new Date(a.airDateUtc) - new Date(b.airDateUtc);
+      });
+      const cardFn = wideMode ? buildPlannerCard : buildCard;
+      appendGroupedEpisodes(col, group.episodes, cfg, cardFn);
+    }
 
     container.appendChild(col);
   }
