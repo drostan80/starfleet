@@ -62,17 +62,14 @@ changed its mind again," not "the same feed item was re-read on an
 hourly tick" — a real bug caught in review, before this shipped, not a
 hypothetical.
 
-**Source priority gate, revised 2026-09-08** — animeschedule is now
-demoted to backup behind Syoboi Calendar (see `airdate_priority.py`
-for the full chain: manual > syoboi > animeschedule > …). The earlier
-B.5 reasoning that animeschedule overrides manual has been superseded:
-Syoboi provides minute-accurate JST broadcast times from actual
-Japanese TV schedules, making it the primary source; animeschedule
-fills gaps and provides a cross-check. This function now skips any
-episode whose `air_date_source` outranks or equals `'animeschedule'`
-in the priority chain (i.e. `'manual'` and `'syoboi'`). Every other
-write still opens/extends a `pending_review` — visible and auditable,
-never silent.
+**Source priority gate, redesigned 2026-09-22** — see
+`airdate_priority.should_apply()` for the current rule (`manual`
+absolute; same source re-asserting always applies; a different source
+only wins with an earlier date). This function skips whenever that
+returns False — either `manual`/an unchanged value, or a different
+source's date that isn't earlier than what's already stored. Every
+applied write still opens/extends a `pending_review` — visible and
+auditable, never silent.
 """
 
 import json
@@ -199,12 +196,13 @@ def _apply_or_flag(conn, show_id: str, item: dict) -> str:
         )
 
     episode_row = matches[0]
-    if airdate_priority.source_is_protected_from(
-        episode_row["air_date_source"], "animeschedule"
+    if not airdate_priority.should_apply(
+        "animeschedule",
+        item["air_date_utc"],
+        episode_row["air_date_source"],
+        episode_row["air_date_utc"],
     ):
-        return "unchanged"  # higher-priority source — don't overwrite
-    if episode_row["air_date_utc"] == item["air_date_utc"]:
-        return "unchanged"
+        return "unchanged"  # same-source unchanged, or a different source's earlier date wins
 
     pending_review.open_or_extend(
         conn,

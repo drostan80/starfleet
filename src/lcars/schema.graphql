@@ -1828,10 +1828,10 @@ type Mutation {
   release) RSS feed, matched by fuzzy title against LCARS's own
   watching+actively-airing anime shows, restricted to those shows'
   currently-airing season(s). A confident single-episode match writes
-  air_date_utc/air_date_source = ANIMESCHEDULE — but respects the
-  airdate priority chain (airdate_priority.py): skips episodes whose
-  existing source outranks animeschedule (manual, syoboi). Revised
-  2026-09-08: animeschedule is now backup to Syoboi Calendar.
+  air_date_utc/air_date_source = ANIMESCHEDULE — but gated by
+  airdate_priority.should_apply() (redesigned 2026-09-22): skips
+  `manual`, skips a same-value no-op, and skips a different source's
+  date unless it's earlier than what's already stored.
   Every overwrite still opens/extends a pending_review, per §5.6,
   never silent. An RSS item that title-matches a tracked show but
   resolves to zero or more than one candidate episode row is flagged

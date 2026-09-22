@@ -370,29 +370,51 @@ def fill_airdate_gaps(conn) -> int:
     return filled
 
 
+def _rewire_condition() -> str:
+    """The single shared WHERE fragment for 'is this candidate Syoboi
+    date allowed to overwrite what's stored', reused by the preview
+    count, the audit-trail insert, and the actual UPDATE below so the
+    three queries can never drift apart (they used to be three
+    independent copies of the same `NOT IN (...)` list — this is the
+    2026-09-22 fix for exactly that kind of drift).
+
+    Mirrors `airdate_priority.should_apply()`'s rule exactly: `manual`
+    is absolute; a row already sourced `syoboi` always takes the new
+    value (this is Syoboi re-asserting/correcting its own tracked slot
+    — the `!=` check below already excludes a no-op); a row sourced
+    `sonarr` (a raw TVDB placeholder, not a real competing broadcast —
+    see `should_apply()`'s own exception) may be corrected in either
+    direction too; any other source only loses if Syoboi's date is
+    strictly earlier (never later — a later Syoboi slot for the same
+    episode is generally a *different*, not-yet-happened broadcast, not
+    a correction, per `airdate_priority.py`'s own docstring on this
+    exact failure mode). `tests/test_airdate_priority.py`'s parity test
+    checks this SQL fragment's behavior against `should_apply()`
+    directly so the two can't silently disagree again."""
+    return (
+        "episode.air_date_source != 'manual'"
+        " AND episode.air_date_utc != sp_min.earliest_utc"
+        " AND (episode.air_date_source IN ('syoboi', 'sonarr')"
+        "      OR sp_min.earliest_utc < episode.air_date_utc)"
+    )
+
+
 def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
     """Overwrite existing airdates with Syoboi's minute-accurate JST times.
 
-    Unlike fill_airdate_gaps (NULL-only), this replaces lower-priority
-    source dates with Syoboi earliest-broadcast times where we have a
-    confident join.  Respects airdate_priority: skips any source that
-    outranks or equals 'syoboi' (i.e. 'manual' — syoboi itself is
-    already correct and filtered by the != check).
+    Unlike fill_airdate_gaps (NULL-only), this replaces a lower-priority
+    source's date with Syoboi's own earliest-broadcast time where we
+    have a confident join — see `_rewire_condition()` for the exact
+    rule (`airdate_priority.should_apply()`'s "same source always
+    updates, different source only wins earlier" logic, expressed as
+    SQL since this is a bulk UPDATE, not a per-row Python loop).
 
     Same multi-entry collision guard as fill_airdate_gaps.
 
     Returns {updated: int, by_source: {old_source: count}}.
     If dry_run=True, returns counts without writing.
     """
-    from lcars import airdate_priority
-
-    # Sources that syoboi must not overwrite (rank <= syoboi's rank)
-    protected = [
-        src for src in ("manual", "syoboi")
-        if airdate_priority.source_is_protected_from(src, "syoboi")
-        or src == "syoboi"  # already correct
-    ]
-    placeholders = ",".join(f"'{s}'" for s in protected)
+    condition = _rewire_condition()
 
     # Count what would change, broken down by old source
     preview = conn.execute(
@@ -416,8 +438,7 @@ def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
              AND m.anidb_anime_id = CAST(sei_anidb.external_id AS INTEGER)
              AND episode.kind = 'regular'
              AND episode.air_date_utc IS NOT NULL
-             AND episode.air_date_source NOT IN ({placeholders})
-             AND episode.air_date_utc != sp_min.earliest_utc
+             AND {condition}
            GROUP BY episode.air_date_source"""
     ).fetchall()
 
@@ -429,7 +450,7 @@ def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
 
     # Record air_date_change rows before the bulk UPDATE (preserves the
     # schedule-change signal for future calendar annotations).
-    _record_rewire_changes(conn, protected, placeholders)
+    _record_rewire_changes(conn, condition)
 
     cursor = conn.execute(
         f"""UPDATE episode SET
@@ -455,8 +476,7 @@ def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
              AND m.anidb_season = 1
              AND episode.kind = 'regular'
              AND episode.air_date_utc IS NOT NULL
-             AND episode.air_date_source NOT IN ({placeholders})
-             AND episode.air_date_utc != sp_min.earliest_utc"""
+             AND {condition}"""
     )
     updated = cursor.rowcount
     conn.commit()
@@ -464,7 +484,7 @@ def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
     return {"updated": updated, "by_source": by_source}
 
 
-def _record_rewire_changes(conn, protected: list[str], placeholders: str) -> None:
+def _record_rewire_changes(conn, condition: str) -> None:
     """Insert air_date_change rows for episodes about to be rewired.
 
     Best-effort — a failure here doesn't block the rewire itself.
@@ -495,8 +515,7 @@ def _record_rewire_changes(conn, protected: list[str], placeholders: str) -> Non
                  AND m.anidb_anime_id = CAST(sei_anidb.external_id AS INTEGER)
                  AND episode.kind = 'regular'
                  AND episode.air_date_utc IS NOT NULL
-                 AND episode.air_date_source NOT IN ({placeholders})
-                 AND episode.air_date_utc != sp_min.earliest_utc"""
+                 AND {condition}"""
         ).fetchall()
 
         for row in rows:

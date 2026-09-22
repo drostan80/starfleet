@@ -53,6 +53,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from lcars import (
+    airdate_priority,
     anilist_client,
     art,
     fribb,
@@ -604,6 +605,27 @@ def _reconcile_air_dates(conn, show: dict) -> None:
     a stored column, since this branch's "value" is a computed message,
     not a single field. A genuinely new mismatch (the counts on either
     side actually changed) produces different text and opens for real.
+
+    **Redesigned 2026-09-22** — the fixed "manual > animeschedule >
+    syoboi" skip-tuple above described a real hierarchy that existed at
+    the time, but a *fixed* hierarchy has its own failure mode: a
+    higher-ranked source can be tracking a genuinely different, later
+    real broadcast than a lower-ranked source's already-correct,
+    already-aired date, and nothing could ever correct it (confirmed
+    live: "The World Is Dancing" episode 13 — a stale future Syoboi
+    date for a Thursday TV slot outranked AniDB's correct date for the
+    actual Monday release that had already been grabbed and watched).
+    The skip-tuple is gone; every candidate now goes through
+    `airdate_priority.should_apply()` — same source re-asserting a
+    changed value always applies (a genuine reschedule can move
+    later); a *different* source only wins by proposing an *earlier*
+    real date, never a later one. `manual` stays absolute either way.
+    The specific "already-downloaded + a later date" flag below is
+    kept as a visibility case on top of that general rule, not as the
+    only thing preventing the overwrite — it would already be rejected
+    silently by `should_apply()`, but a confirmed-real episode having
+    its date disputed backward-incompatibly is worth a human glance,
+    unlike ordinary pre-air schedule churn.
     """
     seasons = conn.execute(
         "SELECT id, season_number, anilist_id FROM season"
@@ -659,35 +681,32 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             ).fetchone()
             if episode_row is None:
                 continue  # not yet fetched into LCARS — A.8's Sonarr fetch's job, not this one's
-            if episode_row["air_date_source"] in ("manual", "animeschedule", "syoboi"):
-                continue  # hard-protected — see this function's own docstring
+            current_source = episode_row["air_date_source"]
+            current_date = episode_row["air_date_utc"]
             new_air_date = util.unix_to_iso(node["airingAt"])
-            if episode_row["air_date_utc"] == new_air_date:
+            if current_date == new_air_date:
                 continue
 
             # 2026-08-15 — real, user-caught bug: "Draw This, Then Die!"
             # episode 7. AniList's `airingSchedule` is one global value
             # that can reflect an overseas-only delay while the real
-            # Japan broadcast (and Sonarr's own real download) landed on
-            # the original date — this function had no way to tell that
-            # case apart from an ordinary schedule correction, and
-            # always trusted AniList (§6.7's priority order), silently
-            # overwriting a date a real downloaded file had already
-            # proven correct. Distinct from Frontier Lord's own
-            # early-streaming case (AniList's date *earlier* than
-            # Sonarr's, correctly applied): this guard only fires when
-            # AniList proposes something *later* than a date Sonarr's
-            # own already-imported file backs up — the direction that
-            # can never be legitimate ("aired and downloaded" cannot
-            # later become "hasn't aired yet"). Flags instead of
-            # applying — a human decides, same §3 principle 1 shape
-            # every other genuine ambiguity in this codebase gets,
-            # rather than silently trusting a source that just proved
-            # itself wrong for this one episode.
+            # Japan broadcast (and the real, already-imported file)
+            # landed on the original date. Generalized 2026-09-22 from
+            # "source == sonarr" to any different source — the point was
+            # never specifically about Sonarr, it's "a confirmed-real,
+            # already-downloaded episode having its date disputed
+            # *later* is worth a human glance," regardless of which
+            # source currently holds it. Excludes AniList re-asserting
+            # its own value (current_source == "anilist") — that's a
+            # same-source reschedule, not a dispute; should_apply()
+            # below already lets it through, and it's not the "a
+            # different source is second-guessing reality" case this
+            # flag exists for.
             if (
-                episode_row["air_date_source"] == "sonarr"
-                and episode_row["available_via_sonarr"] == "available"
-                and new_air_date > episode_row["air_date_utc"]
+                episode_row["available_via_sonarr"] == "available"
+                and current_source != "anilist"
+                and current_date is not None
+                and new_air_date > current_date
             ):
                 pending_review.open_or_extend(
                     conn,
@@ -695,21 +714,19 @@ def _reconcile_air_dates(conn, show: dict) -> None:
                     episode_row["id"],
                     "air_date_utc",
                     "anilist",
-                    episode_row["air_date_utc"],
+                    current_date,
                     f"AniList proposes {new_air_date} (a delay past the current "
-                    f"{episode_row['air_date_utc']}) but a file is already downloaded at "
-                    "the current date — likely a region-scoped delay that doesn't apply to "
-                    "the real broadcast; not applied automatically, needs a human look",
+                    f"{current_date}) but a file is already downloaded at the current "
+                    "date — likely a region-scoped delay that doesn't apply to the real "
+                    "broadcast; not applied automatically, needs a human look",
                 )
                 continue
 
-            # Retired 2026-09-08: Syoboi is now the authoritative anime
-            # schedule source, and airdate_priority.py gates every writer.
-            # AniList air-date changes for unprotected sources are applied
-            # silently — no pending_review noise.  The air_date_change table
-            # (populated by syoboi.rewire_airdates) keeps the audit trail.
-            # The Sonarr+available+delay guard above (:676) is kept — that's
-            # a genuine conflict signal, not schedule noise.
+            if not airdate_priority.should_apply(
+                "anilist", new_air_date, current_source, current_date
+            ):
+                continue  # see airdate_priority.py: same-source updates, else earliest wins
+
             conn.execute(
                 "UPDATE episode SET air_date_utc = ?, air_date_source = 'anilist',"
                 " updated_at = ? WHERE id = ?",
