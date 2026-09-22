@@ -4287,7 +4287,7 @@ def resolve_unlink_show_external_id(_, info, show_id, service):
 
 @mutation.field("amendShowArrLink")
 def resolve_amend_show_arr_link(
-    _, info, showId, service, newExternalId, deleteFiles=None
+    _, info, show_id, service, new_external_id, delete_files=None
 ):
     """Correct a wrong TVDB/TMDB external ID — delegates to
     shows.amend_show_arr_link() which validates, deletes old arr entry,
@@ -4300,16 +4300,16 @@ def resolve_amend_show_arr_link(
     try:
         return shows.amend_show_arr_link(
             conn,
-            showId,
+            show_id,
             service,
-            newExternalId,
-            delete_files=bool(deleteFiles),
+            new_external_id,
+            delete_files=bool(delete_files),
         )
     except shows.ShowInputError as e:
         return {
             "success": False,
             "old_external_id": None,
-            "new_external_id": newExternalId,
+            "new_external_id": new_external_id,
             "resolved_title": None,
             "arr_deleted": False,
             "arr_added": False,

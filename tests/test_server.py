@@ -11728,3 +11728,94 @@ async def test_delete_art_asset_removes_it(client):
     )
     assert refreshed["show"]["artAssets"] == []
     assert refreshed["show"]["posterUrl"] is None
+
+
+# ---------------------------------------------------------------------------
+# amendShowArrLink — correcting a wrong TVDB id (2026-09-22)
+# ---------------------------------------------------------------------------
+# Real bug, user-caught: the resolver's parameters were camelCase
+# (showId, newExternalId, deleteFiles), but Ariadne's convert_names_case
+# passes snake_case kwargs to every resolver — this mutation raised
+# "unexpected keyword argument 'show_id'" on every real call and had no
+# test at any level to catch it.
+
+
+class _FakeAmendSonarrClient:
+    """Distinguishes the pre-add existence check (old tvdb id, for the
+    delete step) from the post-lookup existence check (new tvdb id,
+    inside _ensure_in_arr) by argument, so a single fake covers the
+    whole amend_show_arr_link flow without needing real quality-profile/
+    root-folder config (the "already in Sonarr's library" branch of
+    _ensure_in_arr skips add_series entirely)."""
+
+    def __init__(self, old_tvdb_id, new_tvdb_id, new_title="Correct Show"):
+        self.old_tvdb_id = old_tvdb_id
+        self.new_tvdb_id = new_tvdb_id
+        self.new_title = new_title
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        pass
+
+    def lookup_series(self, term):
+        self.calls.append(("lookup_series", term))
+        return [{"tvdbId": self.new_tvdb_id, "title": self.new_title, "titleSlug": "correct-show"}]
+
+    def series_by_tvdb_id(self, tvdb_id):
+        self.calls.append(("series_by_tvdb_id", tvdb_id))
+        if tvdb_id == self.old_tvdb_id:
+            return {"id": 5, "tvdbId": self.old_tvdb_id, "title": "Wrong Show"}
+        if tvdb_id == self.new_tvdb_id:
+            return {
+                "tvdbId": self.new_tvdb_id, "title": self.new_title, "titleSlug": "correct-show",
+            }
+        return None
+
+    def delete_series(self, series_id, delete_files=False):
+        self.calls.append(("delete_series", series_id, delete_files))
+
+
+async def test_amend_show_arr_link_corrects_a_wrong_tvdb_id(client, monkeypatch):
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    show = await add_show(client, tvdbId=111)
+    fake = _FakeAmendSonarrClient(old_tvdb_id=111, new_tvdb_id=222)
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    data = await gql(
+        client,
+        """
+        mutation($id: ID!, $newId: String!) {
+          amendShowArrLink(showId: $id, service: "tvdb", newExternalId: $newId) {
+            success oldExternalId newExternalId resolvedTitle arrDeleted arrAdded message
+          }
+        }
+        """,
+        {"id": show["id"], "newId": "222"},
+        headers=auth_headers(),
+    )
+    result = data["amendShowArrLink"]
+    assert result["success"] is True
+    assert result["oldExternalId"] == "111"
+    assert result["newExternalId"] == "222"
+    assert result["resolvedTitle"] == "Correct Show"
+    assert result["arrDeleted"] is True
+    assert ("delete_series", 5, False) in fake.calls
+
+    refreshed = await gql(
+        client,
+        """
+        query($id: ID!) {
+          show(id: $id) { externalIds { edges { node { service externalId } } } }
+        }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    links = {
+        e["node"]["service"]: e["node"]["externalId"]
+        for e in refreshed["show"]["externalIds"]["edges"]
+    }
+    assert links["tvdb"] == "222"
