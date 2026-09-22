@@ -1,11 +1,11 @@
 # Next up
 
-Current version: **v0.2.40** (deployed 2026-09-20).
+Current version: **v0.2.49** (deployed 2026-09-22).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
-## Art-fetch negative cache + staged throttle — built, not yet deployed (2026-09-22)
+## Art-fetch negative cache + staged throttle — shipped v0.2.49 (2026-09-22)
 
 Closes the deferred item found 2026-09-20 while diagnosing the v0.2.38/
 v0.2.39 freeze incident (`art-fetch-negative-cache-and-throttle-plan` in
@@ -50,12 +50,14 @@ design points, built together:
       on the next stage timer) rather than contend for the same slot.
 - [x] **30 new tests** (`test_art.py`'s `TestDeleteAsset`,
       `test_art_fetch_staging.py`, 5 new GraphQL-level cases in
-      `test_server.py`) plus the full existing suite green. Not yet
-      tagged/deployed.
+      `test_server.py`) plus the full existing suite green. Tagged/
+      deployed as v0.2.49 (2026-09-22) — migration `45c08e4d9cff`
+      applied cleanly on `tiny`, all 4 new mutations confirmed resolving
+      live.
 
 ---
 
-## Sequel detection gap for id-blind auto-created shows — fixed, not yet deployed (2026-09-22)
+## Sequel detection gap for id-blind auto-created shows — shipped v0.2.49 (2026-09-22)
 
 Prompted by the user's Jellyseerr use (adds film and occasionally TV/anime
 directly to Sonarr/Radarr, bypassing LCARS's own Add flow entirely) —
@@ -103,7 +105,8 @@ sequel detection when LCARS picks it up.
 - [x] **5 new tests** (`test_flag_possible_sequel.py`) plus full existing
       suite (`test_availability.py`, `test_local_audit.py`,
       `test_sequel_detection.py`, `test_propose_sequel_seasons.py`,
-      `test_show_backfill.py`) green. Not yet tagged/deployed.
+      `test_show_backfill.py`) green. Tagged/deployed as v0.2.49
+      (2026-09-22).
 
 ## Production freeze incident — fixed in v0.2.38-v0.2.40 (2026-09-20)
 
