@@ -12,10 +12,12 @@ A. Purge: Tantei junk show s-qp3t5j (Milky Holmes mislink, hard delete
    requested 09-20; its seasons carry the real Tantei ids) and Aristocrat
    s-4k9g5s S4/S5 (manual, empty duplicates of S3's 185756).
 B. MAL identity: every tracked season whose MAL id Fribb assigns to a
-   different AniList entry gets Fribb's MAL id for its AniList id. On MAL:
-   the correct entry gets the season's status/score; an old entry no LCARS
-   season claims any more, whose AniList counterpart isn't on the AniList
-   list, is removed (it only exists because LCARS pushed to it).
+   different AniList entry gets Fribb's MAL id for its AniList id. On MAL,
+   every touched entry (the corrected one, and the old one it used to point
+   at) is re-mirrored from its own AniList entry — MAL mirrors AniList, not
+   LCARS — and nothing is pushed where the user has no AniList entry. An old
+   entry no LCARS season claims and with no AniList counterpart on the list
+   is removed (it only exists because LCARS pushed to it).
 C. Scores: each open `anilist_score_drift` season takes AniList's score
    (LCARS-side only; AniList already holds it).
 D. Milky Holmes (TVDB 197261): removed from AniList and MAL (pushed by the
@@ -35,13 +37,8 @@ from lcars import anilist_client, config, fribb, mal_client, util
 APPLY = "--apply" in sys.argv
 DB = "/db/lcars.db"
 NOTE = "Fixed 2026-09-23 (scripts/fix_review_queue_20260923.py): "
-STATUS_TO_MAL = {
-    "watching": "watching",
-    "completed": "completed",
-    "planned": "plan_to_watch",
-    "paused": "on_hold",
-    "dropped": "dropped",
-}
+AL_TO_MAL_STATUS = {"CURRENT": "watching", "REPEATING": "watching", "COMPLETED": "completed",
+                    "PLANNING": "plan_to_watch", "PAUSED": "on_hold", "DROPPED": "dropped"}
 
 cfg = config.load_config()
 c = sqlite3.connect(DB, timeout=30)
@@ -62,6 +59,20 @@ def resolve(where, params, note):
         (util.now_utc_iso(), NOTE + note, *params),
     ).rowcount
     say(f"  reviews resolved: {n}")
+
+
+def mirror_from_anilist(mal_id, anilist_ids, why):
+    """Queue a MAL push copying the user's AniList entry (status + score)
+    onto `mal_id` — MAL mirrors AniList. No AniList entry: nothing pushed."""
+    src = next((al_list[a] for a in anilist_ids if a in al_list), None)
+    if src is None:
+        say(f"  MAL {mal_id}: no AniList entry to mirror ({why}) — not pushed")
+        return
+    st = AL_TO_MAL_STATUS.get(src["status"])
+    sc = round(src["score"] / 10) if src.get("score") else None
+    remote.append((f"MAL {mal_id} <- AniList {src['anilist_id']} status={st} score={sc} ({why})",
+                   lambda m=mal_id, st=st, sc=sc: mal_client.update_my_list_status(
+                       cfg.mal_access_token, m, status=st, score=sc)))
 
 
 def purge_show_local(show_id):
@@ -184,18 +195,7 @@ for r, new in split:
         " (SELECT id FROM episode WHERE season_id = ?)",
         (r["id"],),
     )
-    mal_status = STATUS_TO_MAL.get(r["status"])
-    mal_score = round(r["score"] / 2) if r["score"] is not None else None
-    if mal_status or mal_score:
-        remote.append(
-            (
-                f"MAL {new} <- status={mal_status} score={mal_score}"
-                f" ({r['t']} S{r['season_number']})",
-                lambda m=new, st=mal_status, sc=mal_score: mal_client.update_my_list_status(
-                    cfg.mal_access_token, m, status=st, score=sc
-                ),
-            )
-        )
+    mirror_from_anilist(new, [r["anilist_id"]], f"{r['t']} S{r['season_number']}")
 for r, _new in split:
     old = r["mal_id"]
     still_claimed = c.execute("SELECT count(*) FROM season WHERE mal_id = ?", (old,)).fetchone()[0]
@@ -216,24 +216,12 @@ for r, _new in split:
             f"  MAL {old} kept (claimed by {still_claimed} season(s), on AniList: {on_anilist},"
             f" on MAL list: {old in mal_list})"
         )
-        # Re-mirror it from the season that rightfully owns it: the wrong
-        # season's pushes (e.g. Bungo S2 'watching' onto S3's entry) may be
-        # what MAL holds now.
-        owner = c.execute(
-            "SELECT status, score FROM season WHERE mal_id = ? LIMIT 1", (old,)
-        ).fetchone()
-        if owner is not None and old in mal_list:
-            st = STATUS_TO_MAL.get(owner["status"])
-            sc = round(owner["score"] / 2) if owner["score"] is not None else None
-            if st or sc:
-                remote.append(
-                    (
-                        f"MAL {old} <- status={st} score={sc} (re-mirrored from its owner)",
-                        lambda m=old, st=st, sc=sc: mal_client.update_my_list_status(
-                            cfg.mal_access_token, m, status=st, score=sc
-                        ),
-                    )
-                )
+        # Re-mirror it from its own AniList counterpart: the wrong season's
+        # pushes (e.g. Bungo S2 'watching' onto S3's entry) may be what MAL
+        # holds now.
+        if old in mal_list:
+            mirror_from_anilist(old, sorted(fribb.anilist_ids_for_mal(dataset, old)),
+                                "re-mirror of the old entry")
 
 # --- C. Scores ---------------------------------------------------------------
 say("C. Score drifts: AniList is authoritative")
