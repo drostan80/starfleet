@@ -5,6 +5,24 @@ Full build history archived to `~/repos/starfleet-archive`.
 
 ---
 
+## ❌ NOT FIXED: service icons render white/blank until hard refresh (+ planner banners)
+
+Declared fixed three times by Claude sessions, never verified in a browser, still
+broken (user report 2026-09-23). Do NOT mark this done without the user seeing
+it fixed.
+
+- What was tried: v0.2.52 nginx `no-cache` on `/ui/css/` (live, verified by
+  headers, but it didn't fix the icons); `show.js` TVmaze white-background badge.
+- What's known: the icons are inline SVGs / data-URI images built by JS
+  (`ui/src/js/icons.js`, `buildSvcStrip`), so CSS caching can't be the cause.
+  Server logs show every asset 200/304. Planner banners are CSS
+  `--banner-url` backgrounds loaded straight from the AniList/TVDB CDNs, with no
+  error handling or retry, so a failed load stays blank until a reload.
+  `icons.js` also reuses fixed SVG gradient ids (`tg`, `tmg`).
+- Next step: reproduce first. Either browser tools (`/chrome`), or the user's
+  console + network screenshot (reload normally, filter Img) at the moment it
+  happens, noting which icons are white. Then fix, and have the user confirm.
+
 ## Season/episode identity from absolute order — shipped v0.2.56-v0.2.58 (2026-09-23)
 
 User-reported: Slime S04E24 and S05E24 both "airing next Friday".
@@ -159,15 +177,6 @@ still treated "LCARS season N" as "TVDB season N".
       in headless Firefox against the real `search.js`/`main.css`: all four
       close paths (Escape in the input, Escape elsewhere, the chip, the
       backdrop) fail on the old code and pass on the new.
-
-## Service badge icons / planner banners blank until hard refresh — REOPENED 2026-09-23
-
-- [ ] **Still happening after v0.2.52.** The cache fix is live (verified:
-      all UI assets `no-cache` + ETag), but it wasn't the cause. The icons
-      are inline SVGs built by JS, not files. Server logs are clean
-      (all 200/304). Planner banners are CSS backgrounds from the
-      AniList/TVDB CDNs with no error handling. Needs client-side
-      evidence (console + network screenshot, or `/chrome`) before any fix.
 
 ## Service badge icons blank until hard refresh + special/OVA/bonus-movie cover art — built, not yet deployed (2026-09-22)
 
