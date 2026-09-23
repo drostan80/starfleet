@@ -88,10 +88,14 @@ still treated "LCARS season N" as "TVDB season N".
         have deleted AniList 186497 — the user's real, completed Ramparts
         S1 (`s-vkqrm9`, intact with 15 episodes).
       - Sonarr checked: neither junk series is in it.
-- [ ] **Maria-sama ga Miteru entries on the user's AniList/MAL** (444
-      Planning, 1729 Planning, 3750 Current/watching). Almost certainly
-      pushed by LCARS from Himekishi's junk seasons. Removal awaits the
-      user's OK (outward-facing).
+- [x] **Maria-sama ga Miteru removed everywhere (user: "not something I
+      watched")**: AniList 444/1729/3750 and MAL 444/1729/3750 deleted. Found
+      by title on AniList, and on MAL by a full-list title scan (1505
+      entries); the id set was cross-checked via Fribb (TVDB 84025 plus the
+      AniDB title matches, which adds 158, never on either list). Re-read
+      after: 0 left on AniList (1501), MAL (1502) and in LCARS. Only AniDB/
+      TVmaze *reference caches* keyed by those ids remain (dataset data, not
+      tracked content).
 - [ ] 82 pre-existing FK violations in prod (40 orphaned `watch_event`, 39
       `episode_external_id`, 2 `show_external_id`, 1
       `episode_numbering_mapping`): orphans from earlier deletes, untouched.
