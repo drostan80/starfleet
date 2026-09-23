@@ -116,6 +116,13 @@ def reconcile_season(
         int(tvdb_row["external_id"]) if tvdb_row is not None else None,
         tvdb_coords,
     )
+    if derived is None and existing is not None and (
+        existing["anilist_id"] is not None or existing["mal_id"] is not None
+    ):
+        # 2026-09-23 — "no candidate" is absence of evidence, not evidence
+        # that the stored link is wrong: never clear a stored link on it.
+        # A wrong stored link is identity_mismatch's job to flag.
+        derived = _NO_CLAIM
     if derived is _NO_CLAIM:
         if existing is not None:
             conn.execute(
@@ -218,6 +225,23 @@ def _derive_ids(conn, show_id: str, season_number: int, tvdb_id, tvdb_coords):
 
     if tvdb_id is None:
         return None
+    if not coords and not _season_has_episodes(conn, show_id, season_number):
+        # 2026-09-23 — a season with no episodes yet was created from
+        # Fribb's own season *order* (`season_ranges.ensure_fribb_season_
+        # rows` / `fribb.enumerate_real_seasons`, the 2026-09-21 season-
+        # number-gap fix), so that order is the only evidence there is.
+        # Looking it up by TVDB season number instead — the model those
+        # rows were never created with — cleared 47 such seasons in one
+        # weekly pass (JoJo, Pokémon, NieR...), and would have kept
+        # ping-ponging with the creator forever. No positional answer:
+        # no claim, the stored value stays.
+        dataset = dataset or fribb.load_dataset()
+        numbered = fribb.enumerate_real_seasons(
+            fribb.build_tvdb_index(dataset).get(tvdb_id, [])
+        )
+        if numbered is None or not 1 <= season_number <= len(numbered):
+            return _NO_CLAIM
+        return fribb.extract_ids(numbered[season_number - 1])
     if coords:
         tvdb_seasons = {c[0] for c in coords}
         if len(tvdb_seasons) != 1:
@@ -228,12 +252,28 @@ def _derive_ids(conn, show_id: str, season_number: int, tvdb_id, tvdb_coords):
     else:
         tvdb_season = season_number  # nothing says they differ — ordinary show
     dataset = dataset or fribb.load_dataset()
-    candidate = fribb.resolve_season_candidate(
-        fribb.build_tvdb_index(dataset), tvdb_id, tvdb_season
-    )
-    if candidate is None:
+    # Strict: the candidate's own TVDB season must match. Not
+    # `fribb.resolve_season_candidate`, whose "only one Fribb entry for
+    # this series -> return it for any season" shortcut would stamp that
+    # one entry onto every season of the show (found 2026-09-23 on a
+    # year-numbered show, seasons 2021/2022/2024, and on a show still
+    # carrying another series' season rows).
+    matches = [
+        c
+        for c in fribb.build_tvdb_index(dataset).get(tvdb_id, [])
+        if (c.get("season") or {}).get("tvdb") == tvdb_season
+    ]
+    if len(matches) != 1:
         return None
-    return fribb.extract_ids(candidate)
+    return fribb.extract_ids(matches[0])
+
+
+def _season_has_episodes(conn, show_id: str, season_number: int) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM episode WHERE show_id = ? AND season = ? LIMIT 1",
+        (show_id, season_number),
+    ).fetchone()
+    return row is not None
 
 
 def get_season(conn, season_id: str) -> dict | None:
