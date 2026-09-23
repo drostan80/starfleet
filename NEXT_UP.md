@@ -178,7 +178,10 @@ still treated "LCARS season N" as "TVDB season N".
       close paths (Escape in the input, Escape elsewhere, the chip, the
       backdrop) fail on the old code and pass on the new.
 
-## Service badge icons blank until hard refresh + special/OVA/bonus-movie cover art — built, not yet deployed (2026-09-22)
+## Special/OVA/bonus-movie cover art (2026-09-22) — its icon claim is WRONG
+
+> ⚠️ The "root cause and fix already shipped as v0.2.52" claim below was false:
+> the icons are still broken (2026-09-23). See the NOT FIXED item at the top.
 
 User-reported, recurring: AniDB/Syoboi/TVmaze icons render blank/white
 on first load, fixed by a hard refresh. Root cause and fix already
