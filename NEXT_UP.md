@@ -157,18 +157,18 @@ still treated "LCARS season N" as "TVDB season N".
       neither, the show is added unlinked and a `tvdb_link` review opens.
       The catalog presence sweep writes a Sonarr/Radarr link only on a
       tvdbId/tmdbId match.
-- [ ] **Waiting on user**: Kaketa Tsuki no Mercedes (s-n068em; everything but
-      AniList 197095 / MAL 62188 is the telenovela Maria Mercedes, 82 junk
-      episodes) and Majutsu wo Kiwamete... (s-fm4vws; only the title is
-      right; its seasons hold Hamefura S1/S2, and the real ids are AniList
-      202503 / MAL 62978). Same fix as Ore to Yuu-nii? Does the user know
-      their TVDB ids (both air in 2027)?
-- [ ] **Waiting on user: status rule for the 203 (AniList) / 193 (MAL)
-      tracked seasons missing from the lists.** Many season statuses were
-      copied from the show (`inherit_season_status`), e.g. unaired
-      "completed" and never-watched "dropped". Proposal: real watch data
-      keeps its status, everything never watched -> PLANNING, and new
-      seasons start PLANNING instead of copying the show.
+- [x] **Kaketa Tsuki no Mercedes + Majutsu wo Kiwamete... fixed (same as Ore
+      to Yuu-nii)**: wrong Sonarr series deleted (Maria Mercedes, My Next Life as
+      a Villainess; 0 files each); 82 + 43 junk episodes purged; every wrong id
+      removed; Majutsu S1 -> AniList 202503 / MAL 62978 and its Hamefura S2 row
+      removed; wrong-series posters cleared. Both stay without a TVDB link until
+      one exists (2027 shows). Import sweep afterwards: 0 shows created.
+- [ ] **Missing seasons on AniList/MAL: 202 (192 on MAL), under review.** User's
+      rule: future seasons -> PLANNING, older seasons -> their LCARS status. Full
+      list: https://claude.ai/artifact/MfTBLYCjrYGiLWdWDgVgTP. 165 of the 202
+      were auto-created on 2026-09-21 by `ensure_fribb_season_rows` (every season
+      Fribb knows, for every tracked show, status copied from the show); only
+      7 have watched episodes. Waiting on the user to review before pushing.
 - [ ] **First hourly tick after every restart blocks LCARS for tens of
       seconds** (ops read timeouts at 10:36 and 12:33): the long sync pass
       runs inside a request handler. Same class as the reopened app-stall
