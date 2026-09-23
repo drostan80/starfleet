@@ -623,7 +623,7 @@ async def test_run_forever_wires_up_all_six_loops(monkeypatch):
     calls = []
 
     async def fake_loop(coro_fn, client, interval_seconds, label):
-        calls.append((coro_fn.__name__, interval_seconds, label))
+        calls.append((getattr(coro_fn, "func", coro_fn).__name__, interval_seconds, label))
 
     availability_calls = []
 
@@ -648,7 +648,9 @@ async def test_run_forever_wires_up_all_six_loops(monkeypatch):
             "daily+weekly+animeschedule+local_presence+episode_movie_links"
             "+mal_token_refresh+untracked_shows+tvdb_backfill",
         ),
-        ("run_monthly_once", 2592000, "monthly+catalog_presence+show_merge"),
+        # Monthly now checks LCARS's persisted checkpoint on the hourly
+        # cadence rather than sleeping 30 days in-process (2026-09-23).
+        ("run_monthly_if_due", 3600, "monthly+catalog_presence+show_merge"),
         ("run_anilist_activity_once", 240, "anilist_activity"),
         ("run_mal_reconcile_once", 3600, "mal_reconcile"),
         ("run_memory_alpha_once", 1200, "memory_alpha"),
@@ -660,7 +662,7 @@ async def test_run_forever_defaults_anilist_activity_interval_to_240s(monkeypatc
     calls = []
 
     async def fake_loop(coro_fn, client, interval_seconds, label):
-        calls.append((coro_fn.__name__, interval_seconds, label))
+        calls.append((getattr(coro_fn, "func", coro_fn).__name__, interval_seconds, label))
 
     async def fake_availability_loop(client):
         pass
@@ -712,3 +714,70 @@ async def test_wait_for_lcars_gives_up_and_starts_anyway(monkeypatch):
     monkeypatch.setattr("ops.scheduler.asyncio.sleep", fake_sleep)
     monkeypatch.setattr(scheduler, "_LCARS_STARTUP_WAIT_SECONDS", 0)
     assert await scheduler._wait_for_lcars(_DownClient()) is False
+
+
+
+# --- monthly tier gated on LCARS's persisted checkpoint (2026-09-23) ---
+
+
+async def test_monthly_tier_does_nothing_when_not_due(monkeypatch):
+    from ops import scheduler
+
+    ran, marked = [], []
+
+    class _Client(_FakeClient):
+        async def ops_tier_due(self, tier, interval_seconds):
+            assert (tier, interval_seconds) == ("monthly", 2592000)
+            return False
+
+        async def mark_ops_tier_completed(self, tier):
+            marked.append(tier)
+
+    async def fake_monthly(client):
+        ran.append(True)
+        return 5
+
+    monkeypatch.setattr(scheduler, "run_monthly_once", fake_monthly)
+    assert await scheduler.run_monthly_if_due(_Client(), 2592000) == 0
+    assert ran == [] and marked == []
+
+
+async def test_monthly_tier_runs_and_records_completion_when_due(monkeypatch):
+    from ops import scheduler
+
+    marked = []
+
+    class _Client(_FakeClient):
+        async def ops_tier_due(self, tier, interval_seconds):
+            return True
+
+        async def mark_ops_tier_completed(self, tier):
+            marked.append(tier)
+
+    async def fake_monthly(client):
+        return 5
+
+    monkeypatch.setattr(scheduler, "run_monthly_once", fake_monthly)
+    assert await scheduler.run_monthly_if_due(_Client(), 2592000) == 5
+    assert marked == ["monthly"]
+
+
+async def test_a_failed_monthly_pass_is_not_recorded(monkeypatch):
+    from ops import scheduler
+
+    marked = []
+
+    class _Client(_FakeClient):
+        async def ops_tier_due(self, tier, interval_seconds):
+            return True
+
+        async def mark_ops_tier_completed(self, tier):
+            marked.append(tier)
+
+    async def failing_monthly(client):
+        raise RuntimeError("LCARS went away")
+
+    monkeypatch.setattr(scheduler, "run_monthly_once", failing_monthly)
+    with pytest.raises(RuntimeError):
+        await scheduler.run_monthly_if_due(_Client(), 2592000)
+    assert marked == []  # retried on the next hourly check

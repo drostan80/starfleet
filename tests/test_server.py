@@ -11920,3 +11920,84 @@ async def test_poll_score_sync_returns_its_counts(client):
         "malChecked": 0,
         "malFlagged": 0,
     }
+
+
+# --- setSeasonMapping: MAL mirrors AniList (2026-09-23) ---
+
+_MIRROR_FRIBB = [
+    {"anilist_id": 158927, "mal_id": 53887, "tvdb_id": 405920, "type": "TV",
+     "season": {"tvdb": 2}},
+    {"anilist_id": 177937, "mal_id": 59027, "tvdb_id": 405920, "type": "TV",
+     "season": {"tvdb": 3}},
+    {"anilist_id": 9338, "mal_id": 9338, "tvdb_id": 1, "type": "OVA", "season": {"tvdb": 1}},
+]
+
+
+async def _set_mapping(client, show_id, season, anilist_id, mal_id):
+    data = await gql(
+        client,
+        "mutation($s: ID!, $n: Int!, $a: Int, $m: Int) {"
+        " setSeasonMapping(showId: $s, seasonNumber: $n, anilistId: $a, malId: $m)"
+        " { anilistId malId } }",
+        {"s": show_id, "n": season, "a": anilist_id, "m": mal_id},
+        headers=auth_headers(),
+    )
+    return data["setSeasonMapping"]
+
+
+async def test_set_season_mapping_mal_follows_a_corrected_anilist_id(client, monkeypatch):
+    """SPY×FAMILY S3 shape: the editor pre-fills the current (Season 3)
+    MAL id; correcting only AniList must not re-save it."""
+    _patch_fribb_dataset(monkeypatch, _MIRROR_FRIBB)
+    show = await add_show(client)
+    await _set_mapping(client, show["id"], 1, 177937, 59027)
+    fixed = await _set_mapping(client, show["id"], 1, 158927, 59027)  # MAL left pre-filled
+    assert fixed == {"anilistId": 158927, "malId": 53887}
+
+
+async def test_set_season_mapping_mal_derived_when_omitted(client, monkeypatch):
+    _patch_fribb_dataset(monkeypatch, _MIRROR_FRIBB)
+    show = await add_show(client)
+    assert await _set_mapping(client, show["id"], 1, 177937, None) == {
+        "anilistId": 177937, "malId": 59027}
+
+
+async def test_set_season_mapping_respects_a_deliberately_changed_mal_id(client, monkeypatch):
+    _patch_fribb_dataset(monkeypatch, _MIRROR_FRIBB)
+    show = await add_show(client)
+    await _set_mapping(client, show["id"], 1, 158927, 53887)
+    assert await _set_mapping(client, show["id"], 1, 158927, 11111) == {
+        "anilistId": 158927, "malId": 11111}
+
+
+async def test_set_season_mapping_clears_a_stale_mal_id_owned_by_another_entry(
+    client, monkeypatch
+):
+    # AniList id Fribb has no MAL pairing for; the kept MAL id is known to
+    # belong to a different AniList entry -> cleared, not left pointing there.
+    _patch_fribb_dataset(monkeypatch, _MIRROR_FRIBB)
+    show = await add_show(client)
+    await _set_mapping(client, show["id"], 1, 9338, 9338)
+    assert await _set_mapping(client, show["id"], 1, 188546, 9338) == {
+        "anilistId": 188546, "malId": None}
+
+
+# --- ops_tier_checkpoint (2026-09-23) ---
+
+
+async def test_ops_monthly_tier_is_not_due_right_after_the_migration_seeds_it(client):
+    data = await gql(
+        client,
+        'query { opsTierDue(tier: "monthly", intervalSeconds: 2592000) }',
+        headers=auth_headers(),
+    )
+    assert data["opsTierDue"] is False
+
+
+async def test_ops_tier_due_tracks_completion(client):
+    due = 'query { opsTierDue(tier: "other", intervalSeconds: 60) }'
+    assert (await gql(client, due, headers=auth_headers()))["opsTierDue"] is True
+    await gql(client, 'mutation { markOpsTierCompleted(tier: "other") }', headers=auth_headers())
+    assert (await gql(client, due, headers=auth_headers()))["opsTierDue"] is False
+    zero = 'query { opsTierDue(tier: "other", intervalSeconds: 0) }'
+    assert (await gql(client, zero, headers=auth_headers()))["opsTierDue"] is True

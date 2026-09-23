@@ -26,6 +26,7 @@ process `ops run` (cli.py) awaits.
 """
 
 import asyncio
+import functools
 import logging
 
 from ops.lcars_client import LcarsClient, LcarsError
@@ -131,6 +132,22 @@ async def run_show_merge_once(client: LcarsClient) -> int:
     queue current."""
     result = await client.poll_show_merges()
     return result["reviewsOpened"]
+
+
+async def run_monthly_if_due(client: LcarsClient, monthly_interval_seconds: int) -> int:
+    """2026-09-23 — the monthly tier, gated on LCARS's persisted checkpoint
+    (`opsTierDue("monthly")`) instead of an in-process 30-day sleep. Ops is
+    stateless: the sleep restarted with every container, so the pass either
+    never ran (first tick lost to the startup race, then a month's sleep)
+    or — once Ops waited for LCARS — ran on every deploy. Checked on the
+    hourly cadence; runs `run_monthly_once` only when a month has really
+    passed since the last completed run, then records completion. A
+    failed pass isn't recorded, so the next hourly check retries it."""
+    if not await client.ops_tier_due("monthly", monthly_interval_seconds):
+        return 0
+    count = await run_monthly_once(client)
+    await client.mark_ops_tier_completed("monthly")
+    return count
 
 
 async def run_monthly_once(client: LcarsClient) -> int:
@@ -618,9 +635,11 @@ async def run_forever(
             "+mal_token_refresh+untracked_shows+tvdb_backfill",
         ),
         _loop(
-            run_monthly_once,
+            functools.partial(
+                run_monthly_if_due, monthly_interval_seconds=monthly_interval_seconds
+            ),
             client,
-            monthly_interval_seconds,
+            interval_seconds,
             "monthly+catalog_presence+show_merge",
         ),
         _availability_loop(client),

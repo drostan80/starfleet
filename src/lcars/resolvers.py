@@ -38,6 +38,7 @@ from lcars import (
     episode_movie_link,
     events,
     export_import,
+    fribb,
     fuzzy,
     identity_mismatch,
     ids,
@@ -3056,6 +3057,31 @@ def resolve_recommended_availability_poll_interval_seconds(_, info):
     return availability.recommended_poll_interval_seconds(conn)
 
 
+@query.field("opsTierDue")
+def resolve_ops_tier_due(_, info, tier, interval_seconds):
+    """See schema.graphql. Due when no checkpoint exists or the last
+    completion is older than `interval_seconds`."""
+    conn = db.get_connection()
+    row = conn.execute(
+        "SELECT last_completed_at FROM ops_tier_checkpoint WHERE tier = ?", (tier,)
+    ).fetchone()
+    if row is None:
+        return True
+    return row["last_completed_at"] <= util.utc_iso_offset_hours(-interval_seconds / 3600)
+
+
+@mutation.field("markOpsTierCompleted")
+def resolve_mark_ops_tier_completed(_, info, tier):
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO ops_tier_checkpoint (tier, last_completed_at) VALUES (?, ?)"
+        " ON CONFLICT (tier) DO UPDATE SET last_completed_at = excluded.last_completed_at",
+        (tier, util.now_utc_iso()),
+    )
+    conn.commit()
+    return True
+
+
 @query.field("serviceHealth")
 def resolve_service_health(_, info):
     """§6.7, B.6 — service_health.py's own get_all(), already shaped as
@@ -4401,6 +4427,36 @@ def resolve_refresh_show_service_presence(_, info, show_id, service, candidate_t
 # call require_client(): there's nowhere in the schema to put the value.
 
 
+def _mal_mirroring_anilist(anilist_id, mal_id, current_mal_id):
+    """The MAL id to store alongside `anilist_id` (AniList authoritative,
+    MAL mirrors it — project rule).
+
+    2026-09-23 — 14 manual seasons had a MAL id belonging to a different
+    entry (SPY×FAMILY S3 kept Season 3's MAL id after its AniList id was
+    corrected): the show-page and reviews-page editors pre-fill the
+    current MAL id, so correcting only AniList re-saved the stale one,
+    and every MAL push for that season landed on the wrong entry.
+
+    A MAL id the caller actually changed (differs from what's stored) is
+    respected. An absent or unchanged one follows Fribb's pairing for
+    `anilist_id`; with no pairing, an unchanged MAL id that Fribb says
+    belongs to a *different* AniList entry is cleared rather than kept."""
+    if anilist_id is None or (mal_id is not None and mal_id != current_mal_id):
+        return mal_id
+    try:
+        dataset = fribb.load_dataset()
+    except Exception:
+        return mal_id  # no dataset — can't derive; keep what was given
+    derived = fribb.mal_for_anilist(dataset, anilist_id)
+    if derived is not None:
+        return derived
+    if mal_id is not None:
+        owners = fribb.anilist_ids_for_mal(dataset, mal_id)
+        if owners and anilist_id not in owners:
+            return None
+    return mal_id
+
+
 @mutation.field("setSeasonMapping")
 def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None, mal_id=None):
     """Replaces setShowIdMapping (§5.5, A.4) — one show can span
@@ -4439,9 +4495,12 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
     _require_show(conn, show_id)
     now = util.now_utc_iso()
     existing = conn.execute(
-        "SELECT id FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT id, mal_id FROM season WHERE show_id = ? AND season_number = ?",
         (show_id, season_number),
     ).fetchone()
+    mal_id = _mal_mirroring_anilist(
+        anilist_id, mal_id, existing["mal_id"] if existing is not None else None
+    )
     if existing is not None:
         conn.execute(
             "UPDATE season"

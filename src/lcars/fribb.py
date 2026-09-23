@@ -226,6 +226,28 @@ def build_mal_index(dataset: list[dict]) -> dict[int, list[dict]]:
     return index
 
 
+def mal_for_anilist(dataset: list[dict], anilist_id: int) -> int | None:
+    """The one MAL id Fribb pairs with `anilist_id`, or None (unknown or
+    ambiguous). AniList is authoritative and MAL mirrors it (project
+    rule), so this is how a season's MAL id is derived from its AniList
+    id. Scans every entry, tvdb-linked or not."""
+    mals = {
+        e["mal_id"]
+        for e in dataset
+        if e.get("anilist_id") == anilist_id and e.get("mal_id") not in _MISSING
+    }
+    return mals.pop() if len(mals) == 1 else None
+
+
+def anilist_ids_for_mal(dataset: list[dict], mal_id: int) -> set[int]:
+    """Every AniList id Fribb pairs with `mal_id` (empty when unknown)."""
+    return {
+        e["anilist_id"]
+        for e in dataset
+        if e.get("mal_id") == mal_id and e.get("anilist_id") not in _MISSING
+    }
+
+
 def build_anidb_index(dataset: list[dict]) -> dict[int, list[dict]]:
     """Keyed by anidb_id — bridges AniDB→AniList/MAL/TMDB/IMDB via Fribb.
 

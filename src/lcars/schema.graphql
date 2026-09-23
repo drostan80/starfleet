@@ -1537,6 +1537,9 @@ type Query {
   "§5.2/§6.7, B.3 — Ops's own adaptive availability-poll cadence, computed server-side: 300 (5 min) while a WATCHING show has an episode that aired in the last 2 hours and isn't yet locally available; 900 (15 min) while one aired further in the past and still isn't available; 3600 (1 hour) baseline otherwise. Radarr has no equivalent urgency — a movie release has no 'just aired' moment."
   recommendedAvailabilityPollIntervalSeconds: Int!
 
+  "2026-09-23 — true when Ops tier `tier` hasn't completed within the last `intervalSeconds` (or never has). Backed by ops_tier_checkpoint so a slow tier's cadence survives container restarts — Ops keeps no state of its own. Ops's monthly tier checks this every hour and runs only when it's due."
+  opsTierDue(tier: String!, intervalSeconds: Int!): Boolean!
+
   "§6.7, B.6 — per-integration reachability, distinct from any individual show's tracking state. Always returns exactly one entry per TrackedService, even one never yet contacted (status UNKNOWN) — Data's status bar reads this as per-source indicators, not one aggregate value. No new polling: every entry reflects the outcome of whatever real Sonarr/Radarr/AniList/animeschedule.net call LCARS already made, whether triggered by Ops's automatic cadence or a human's on-demand action."
   serviceHealth: [ServiceHealth!]!
 
@@ -2202,6 +2205,9 @@ type Mutation {
   integration here gets, never a failure.
   """
   refreshMalTokenIfDue: MalTokenRefreshResult!
+
+  "2026-09-23 — records that Ops tier `tier` just completed (see opsTierDue). Returns true."
+  markOpsTierCompleted(tier: String!): Boolean!
 
   """
   B.15, live-caught 2026-08-12 — one-time-triggered (not part of Ops's

@@ -549,6 +549,24 @@ class LcarsClient:
         data = await self._query(query)
         return data["refreshMalTokenIfDue"]
 
+    async def ops_tier_due(self, tier: str, interval_seconds: int) -> bool:
+        """2026-09-23 — LCARS-persisted cadence for a slow tier (see
+        schema.graphql's opsTierDue): survives Ops restarts, which an
+        in-process sleep can't."""
+        query = """
+        query($tier: String!, $interval: Int!) {
+          opsTierDue(tier: $tier, intervalSeconds: $interval)
+        }
+        """
+        data = await self._query(query, {"tier": tier, "interval": interval_seconds})
+        return data["opsTierDue"]
+
+    async def mark_ops_tier_completed(self, tier: str) -> None:
+        query = """
+        mutation($tier: String!) { markOpsTierCompleted(tier: $tier) }
+        """
+        await self._query(query, {"tier": tier})
+
     async def recommended_availability_poll_interval_seconds(self) -> int:
         """§5.2/§6.7, B.3 — LCARS computes Ops's own adaptive cadence
         (300s/900s/3600s) server-side, from data only it holds (watching
