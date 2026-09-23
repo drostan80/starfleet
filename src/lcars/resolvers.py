@@ -2875,11 +2875,15 @@ def resolve_poll_score_sync(_, info):
     conn = db.get_connection()
     al = score_sync.check_anilist_score_drift(conn)
     mal = score_sync.check_mal_score_drift(conn)
+    # snake_case keys: convert_names_case=True (server.py) maps
+    # anilistChecked -> anilist_checked. The camelCase keys this used to
+    # return resolved to null, so every call errored after the sweep had
+    # already run (2026-09-23; ops logged "sweep failed" on every tick).
     return {
-        "anilistChecked": al["checked"],
-        "anilistFlagged": al["flagged"],
-        "malChecked": mal["checked"],
-        "malFlagged": mal["flagged"],
+        "anilist_checked": al["checked"],
+        "anilist_flagged": al["flagged"],
+        "mal_checked": mal["checked"],
+        "mal_flagged": mal["flagged"],
     }
 
 

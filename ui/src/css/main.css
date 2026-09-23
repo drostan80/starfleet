@@ -1539,6 +1539,10 @@ body {
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
 }
+/* `display: flex` above beats the browser's own `[hidden] { display: none }`,
+   so closeSearch()'s `overlay.hidden = true` never hid anything — Escape
+   did run, the overlay just stayed on screen (2026-09-23). */
+.search-overlay[hidden] { display: none; }
 
 .search-box {
   width: min(560px, 92vw);
@@ -1582,13 +1586,16 @@ body {
 .search-hint {
   font-family: 'DM Mono', monospace;
   font-size: 10px;
+  line-height: normal;
   color: var(--faint);
   background: var(--surface-2);
   padding: 2px 6px;
   border-radius: 4px;
   border: 1px solid var(--border);
   flex-shrink: 0;
+  cursor: pointer;
 }
+.search-hint:hover { color: var(--text); border-color: var(--faint); }
 
 .search-results {
   overflow-y: auto;

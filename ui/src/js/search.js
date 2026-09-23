@@ -92,9 +92,14 @@ function buildOverlay() {
   input.setAttribute('autocomplete', 'off');
   input.setAttribute('spellcheck', 'false');
 
-  const hint = document.createElement('kbd');
+  // A real button (was a decorative <kbd>) — clicking "esc" closes search.
+  const hint = document.createElement('button');
+  hint.type = 'button';
   hint.className = 'search-hint';
   hint.textContent = 'esc';
+  hint.title = 'Close search (Esc)';
+  hint.setAttribute('aria-label', 'Close search');
+  hint.addEventListener('click', closeSearch);
 
   inputRow.append(icon, input, hint);
 
@@ -263,6 +268,12 @@ export function initSearch() {
     if (e.key === '/' && !isEditableFocused() && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       openSearch();
+    }
+    // Escape closes search wherever focus is — the input's own handler
+    // only fires while the input itself is focused.
+    if (e.key === 'Escape' && open) {
+      e.preventDefault();
+      closeSearch();
     }
   });
 

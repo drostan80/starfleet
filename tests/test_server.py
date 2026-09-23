@@ -11902,3 +11902,21 @@ async def test_amend_show_arr_link_corrects_a_wrong_tvdb_id(client, monkeypatch)
         for e in refreshed["show"]["externalIds"]["edges"]
     }
     assert links["tvdb"] == "222"
+
+
+async def test_poll_score_sync_returns_its_counts(client):
+    """2026-09-23 — the resolver returned camelCase keys, which
+    convert_names_case resolved to null: every call errored ("Cannot
+    return null for non-nullable field anilistChecked") after the sweep
+    had already run. No tokens configured here, so both halves no-op."""
+    data = await gql(
+        client,
+        "mutation { pollScoreSync { anilistChecked anilistFlagged malChecked malFlagged } }",
+        headers=auth_headers(),
+    )
+    assert data["pollScoreSync"] == {
+        "anilistChecked": 0,
+        "anilistFlagged": 0,
+        "malChecked": 0,
+        "malFlagged": 0,
+    }

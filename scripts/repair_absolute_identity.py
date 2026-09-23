@@ -7,10 +7,12 @@ Needs the v0.2.55+ code (run inside the lcars container). Per show:
 
 1. Capture Sonarr's raw TVDB coordinates onto every episode, matched by
    absolute order (`sonarr_match.find_episode`).
-2. Drop Memory Alpha AniDB mappings — including 'air_date_confirmed'
-   locks — that disagree with Anime-Lists resolved from those real
-   coordinates (or that were derived from LCARS numbering on a show whose
-   numbering has diverged and has no coordinates), then re-derive.
+2. Drop Memory Alpha AniDB mappings that disagree with Anime-Lists
+   resolved from those real coordinates (or that were derived from LCARS
+   numbering on a diverged show with no coordinates), then re-derive.
+   'air_date_confirmed' locks are dropped too, *unless* Sonarr's own raw
+   date independently confirms them (a lock made against an AniList-
+   written date, like Slime S4's, is not).
 3. Re-reconcile every non-manual season from Memory Alpha; report (never
    touch) manual_override seasons whose stored ids disagree.
 4. For seasons whose AniList id changed, restore AniList-written air dates
@@ -106,11 +108,26 @@ def _drop_disagreeing_mappings(conn, show_id):
     diverged = sonarr_match.show_numbering_diverged(conn, show_id)
     dropped = 0
     for row in conn.execute(
-        "SELECT e.id, e.sonarr_season, e.sonarr_episode, m.anidb_anime_id, m.anidb_epno"
+        "SELECT e.id, e.sonarr_season, e.sonarr_episode, m.anidb_anime_id, m.anidb_epno,"
+        "   m.confidence,"
+        "   ABS(julianday(substr(e.air_date_raw_sonarr, 1, 10)) - julianday(ae.airdate))"
+        "     AS raw_gap_days"
         " FROM episode e JOIN episode_anidb_mapping m ON m.episode_id = e.id"
+        " LEFT JOIN anidb_episode ae ON ae.anidb_anime_id = m.anidb_anime_id"
+        "   AND ae.anidb_season = m.anidb_season AND ae.anidb_epno = m.anidb_epno"
         " WHERE e.show_id = ? AND e.kind = 'regular'",
         (show_id,),
     ).fetchall():
+        # A lock that Sonarr's own raw date independently confirms (same
+        # ±1-day window as the arbiter) is kept even when Anime-Lists
+        # disagrees — the community list can be stale (Tonbo! S2: locked
+        # to AniDB 18721 by matching dates, list says 18019 eps 14-26).
+        if (
+            row["confidence"] == "air_date_confirmed"
+            and row["raw_gap_days"] is not None
+            and row["raw_gap_days"] <= 1
+        ):
+            continue
         if row["sonarr_season"] is None:
             drop = diverged
         else:

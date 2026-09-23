@@ -24,7 +24,7 @@ from pathlib import Path
 
 import httpx
 
-from lcars import sonarr_match
+from lcars import fribb, sonarr_match
 
 log = logging.getLogger(__name__)
 
@@ -1038,6 +1038,11 @@ def derive_episode_mappings(conn) -> dict:
         # AniDB entry got locked as 'air_date_confirmed' (AniList had
         # already written the 2026 dates onto it).
         diverged = sonarr_match.show_numbering_diverged(conn, show_id)
+        manual_anidb = _manual_season_anidb_ids(conn, show_id)
+
+        def other_seasons_anidb(season_number, _m=manual_anidb):
+            return {aid for n, aid in _m.items() if n != season_number}
+
         episodes = conn.execute(
             """SELECT id, season, episode, absolute_number,
                       sonarr_season, sonarr_episode,
@@ -1078,6 +1083,24 @@ def derive_episode_mappings(conn) -> dict:
                 continue
 
             anidb_anime_id, anidb_season, anidb_epno = result
+
+            # 2026-09-23 — a human-confirmed season link beats a stale
+            # community list. Chitose S2: TVDB/Anime-Lists still file the
+            # 2026 season as S1 episodes 14-15, so the resolver put LCARS
+            # S2's episodes on AniDB 18811 — the entry LCARS S1's own
+            # manual link owns — while S2's manual link (AniList 198727)
+            # is AniDB 20240. Only fires on that exact contradiction (the
+            # resolver's entry belongs to a *different* manually-linked
+            # season); a genuine split-cour season spanning two entries,
+            # neither owned by another season, is left alone.
+            own_anidb = manual_anidb.get(lcars_season)
+            if (
+                own_anidb is not None
+                and anidb_season == 1
+                and anidb_anime_id != own_anidb
+                and anidb_anime_id in other_seasons_anidb(lcars_season)
+            ):
+                anidb_anime_id, anidb_epno = own_anidb, lcars_ep
 
             # Air-date arbiter (2026-09-22, per the user's own standing
             # rule since Memory Alpha's inception: when there's a real
@@ -1138,10 +1161,57 @@ def derive_episode_mappings(conn) -> dict:
                         "anidb_anime_id": anidb_anime_id,
                     })
 
+        # 2026-09-23 — never two episodes on one AniDB episode when one of
+        # them is date-confirmed: a TVDB-only extra (Bookworm's 08-28 slot,
+        # which AniDB doesn't list) fell back to the community offset and
+        # landed on the same AniDB episode the next week's real broadcast
+        # is confirmed to. The confirmed row wins; the guess makes no claim.
+        conn.execute(
+            """DELETE FROM episode_anidb_mapping
+               WHERE confidence = 'auto'
+                 AND episode_id IN (SELECT id FROM episode WHERE show_id = ?)
+                 AND EXISTS (
+                   SELECT 1 FROM episode_anidb_mapping c
+                   JOIN episode ce ON ce.id = c.episode_id
+                   WHERE ce.show_id = ? AND c.confidence = 'air_date_confirmed'
+                     AND c.episode_id <> episode_anidb_mapping.episode_id
+                     AND c.anidb_anime_id = episode_anidb_mapping.anidb_anime_id
+                     AND c.anidb_season = episode_anidb_mapping.anidb_season
+                     AND c.anidb_epno = episode_anidb_mapping.anidb_epno)""",
+            (show_id, show_id),
+        )
+
         stats["shows_processed"] += 1
 
     conn.commit()
     return stats
+
+
+def _manual_season_anidb_ids(conn, show_id: str) -> dict[int, int]:
+    """{LCARS season_number: AniDB id} for this show's manual_override
+    seasons, resolved from their AniList id through Fribb. A season whose
+    AniList id maps to no single AniDB id is simply absent."""
+    rows = conn.execute(
+        "SELECT season_number, anilist_id FROM season"
+        " WHERE show_id = ? AND manual_override = 1 AND season_number > 0"
+        "   AND anilist_id IS NOT NULL",
+        (show_id,),
+    ).fetchall()
+    if not rows:
+        return {}
+    try:
+        index = fribb.build_anilist_index(fribb.load_dataset())
+    except Exception:
+        log.warning("Fribb dataset unavailable; manual season links not applied this pass")
+        return {}
+    result = {}
+    for season_number, anilist_id in rows:
+        anidb_ids = {
+            c["anidb_id"] for c in index.get(anilist_id, []) if c.get("anidb_id")
+        }
+        if len(anidb_ids) == 1:
+            result[season_number] = anidb_ids.pop()
+    return result
 
 
 def anidb_ids_for_tvdb_coords(conn, tvdb_id, coords) -> set[int]:

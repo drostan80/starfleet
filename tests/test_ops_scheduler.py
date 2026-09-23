@@ -464,9 +464,11 @@ async def test_availability_loop_survives_a_sweep_failure_and_still_checks_inter
     assert sleep_calls == [900]
 
 
-async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_itself_fails(
+async def test_availability_loop_retries_soon_if_the_interval_check_itself_fails(
     monkeypatch,
 ):
+    """Was a 3600s fallback — after every deploy (ops up before LCARS) the
+    backup availability poll went blind for an hour."""
     class _BrokenIntervalClient(_FakeClient):
         async def recommended_availability_poll_interval_seconds(self):
             raise RuntimeError("totally unexpected")
@@ -481,7 +483,7 @@ async def test_availability_loop_falls_back_to_baseline_if_the_interval_check_it
     monkeypatch.setattr("ops.scheduler.asyncio.sleep", fake_sleep)
     with pytest.raises(SystemExit):
         await _availability_loop(client)
-    assert sleep_calls == [3600]
+    assert sleep_calls == [60]
 
 
 # --- run_daily_and_weekly_once (the unit run_forever's hourly loop calls) ---
@@ -668,3 +670,45 @@ async def test_run_forever_defaults_anilist_activity_interval_to_240s(monkeypatc
     client = _FakeClient()
     await run_forever(client, interval_seconds=3600, monthly_interval_seconds=2592000)
     assert ("run_anilist_activity_once", 240, "anilist_activity") in calls
+
+
+# --- startup wait for LCARS (2026-09-23) ---
+
+
+async def test_wait_for_lcars_retries_until_lcars_answers(monkeypatch):
+    from ops.scheduler import _wait_for_lcars
+
+    class _SlowStartClient(_FakeClient):
+        attempts = 0
+
+        async def recommended_availability_poll_interval_seconds(self):
+            self.attempts += 1
+            if self.attempts < 3:
+                raise RuntimeError("Could not connect to LCARS")
+            return 300
+
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("ops.scheduler.asyncio.sleep", fake_sleep)
+    client = _SlowStartClient()
+    assert await _wait_for_lcars(client) is True
+    assert client.attempts == 3
+    assert sleeps == [2, 2]
+
+
+async def test_wait_for_lcars_gives_up_and_starts_anyway(monkeypatch):
+    from ops import scheduler
+
+    class _DownClient(_FakeClient):
+        async def recommended_availability_poll_interval_seconds(self):
+            raise RuntimeError("Could not connect to LCARS")
+
+    async def fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr("ops.scheduler.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(scheduler, "_LCARS_STARTUP_WAIT_SECONDS", 0)
+    assert await scheduler._wait_for_lcars(_DownClient()) is False

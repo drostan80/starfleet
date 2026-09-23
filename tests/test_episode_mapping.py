@@ -64,6 +64,13 @@ def conn(tmp_path):
             sonarr_episode INTEGER,
             synopsis TEXT
         );
+        CREATE TABLE season (
+            id TEXT PRIMARY KEY,
+            show_id TEXT NOT NULL,
+            season_number INTEGER NOT NULL,
+            anilist_id INTEGER,
+            manual_override INTEGER NOT NULL DEFAULT 0
+        );
         CREATE TABLE anime_list_entry (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             anidb_id INTEGER NOT NULL,

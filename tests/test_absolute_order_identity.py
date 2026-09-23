@@ -298,3 +298,62 @@ def test_anilist_air_dates_skip_a_season_whose_schedule_is_far_from_sonarr(conn,
         "SELECT proposed_value_chain FROM pending_review WHERE entity_id = 'z-sea004'"
     ).fetchone()
     assert "wrong AniList entry" in review["proposed_value_chain"]
+
+
+def test_a_guess_never_shares_an_anidb_episode_with_a_confirmed_one(conn):
+    # Bookworm shape: TVDB lists an extra episode (S4E2 here, 2024-04-12)
+    # that AniDB doesn't; AniDB's ep 2 actually aired a week later and is
+    # date-confirmed to the *next* LCARS episode. The extra's offset-based
+    # guess would land on the same AniDB ep 2 — it must make no claim.
+    conn.execute("UPDATE anidb_episode SET airdate = '2024-04-19' WHERE anidb_anime_id = 103"
+                 " AND anidb_epno = 2")
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, absolute_number,"
+        " air_date_utc, air_date_source, air_date_raw_sonarr, season_id, sonarr_season,"
+        " sonarr_episode, created_at, updated_at)"
+        " VALUES ('e-43xxxx', ?, 4, 3, 'regular', 6.5, '2024-04-19T14:00:00Z', 'sonarr',"
+        " '2024-04-19T14:00:00Z', 'z-sea004', 3, 3, 'x', 'x')",
+        (SHOW,),
+    )
+    conn.commit()
+    _capture_all(conn)
+    anidb.derive_episode_mappings(conn)
+    rows = {
+        r["episode_id"]: (r["anidb_epno"], r["confidence"])
+        for r in conn.execute(
+            "SELECT episode_id, anidb_epno, confidence FROM episode_anidb_mapping"
+            " WHERE anidb_anime_id = 103"
+        )
+    }
+    assert rows["e-43xxxx"] == (2, "air_date_confirmed")
+    assert "e-42xxxx" not in rows  # the TVDB-only extra makes no claim
+    assert rows["e-41xxxx"] == (1, "air_date_confirmed")
+
+
+def test_a_manual_season_link_beats_a_community_list_that_files_it_under_another_season(conn):
+    # Chitose shape: LCARS S5 (the 2026 season) is manually linked to
+    # AniList 4004 (AniDB 104), but the community list still files its
+    # TVDB episodes as a continuation of TVDB S3 (AniDB 103) — the entry
+    # LCARS S4's own manual link owns. S5 follows its own link.
+    conn.execute("UPDATE season SET anilist_id = 3003, manual_override = 1 WHERE id = 'z-sea004'")
+    conn.execute("UPDATE season SET anilist_id = 4004, manual_override = 1 WHERE id = 'z-sea005'")
+    conn.execute("DELETE FROM anime_list_entry WHERE anidb_id = 104")
+    conn.execute("UPDATE anidb_episode SET airdate = NULL WHERE anidb_anime_id = 104")
+    for ep, tvdb_ep in ((1, 3), (2, 4)):
+        conn.execute(
+            "UPDATE episode SET sonarr_season = 3, sonarr_episode = ?"
+            " WHERE show_id = ? AND season = 5 AND episode = ?",
+            (tvdb_ep, SHOW, ep),
+        )
+    conn.commit()
+    anidb.derive_episode_mappings(conn)
+    s5 = [
+        (r["episode"], r["anidb_anime_id"], r["anidb_epno"])
+        for r in conn.execute(
+            "SELECT e.episode, m.anidb_anime_id, m.anidb_epno FROM episode e"
+            " JOIN episode_anidb_mapping m ON m.episode_id = e.id"
+            " WHERE e.show_id = ? AND e.season = 5 ORDER BY e.episode",
+            (SHOW,),
+        )
+    ]
+    assert s5 == [(1, 104, 1), (2, 104, 2)]

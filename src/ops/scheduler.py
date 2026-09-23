@@ -475,6 +475,9 @@ async def _loop(coro_fn, client: LcarsClient, interval_seconds: int, label: str)
         await asyncio.sleep(interval_seconds)
 
 
+_AVAILABILITY_RETRY_AFTER_FAILURE_SECONDS = 60
+
+
 async def _availability_loop(client: LcarsClient) -> None:
     """§5.2/§6.7, B.3 — the one loop with a genuinely dynamic interval,
     unlike every other tier's flat one: after each sweep, asks LCARS for
@@ -492,9 +495,53 @@ async def _availability_loop(client: LcarsClient) -> None:
         try:
             interval = await client.recommended_availability_poll_interval_seconds()
         except Exception:
-            logger.exception("availability: interval check failed, falling back to 3600s")
-            interval = 3600
+            # 2026-09-23 — was a 3600s fallback. On every deploy ops starts
+            # before LCARS answers, this check fails, and the backup file-
+            # availability poll then went blind for a full hour. A failed
+            # check means "couldn't ask", not "nothing's airing": retry soon.
+            logger.exception(
+                "availability: interval check failed, retrying in %ds",
+                _AVAILABILITY_RETRY_AFTER_FAILURE_SECONDS,
+            )
+            interval = _AVAILABILITY_RETRY_AFTER_FAILURE_SECONDS
         await asyncio.sleep(interval)
+
+
+_LCARS_STARTUP_WAIT_SECONDS = 300
+_LCARS_STARTUP_POLL_SECONDS = 2
+
+
+async def _wait_for_lcars(client: LcarsClient) -> bool:
+    """Block until LCARS answers a cheap query, up to
+    `_LCARS_STARTUP_WAIT_SECONDS`, then start the loops either way.
+
+    2026-09-23 — on every deploy ops and lcars start together, ops wins
+    the race, and every loop's first tick failed with "Could not connect
+    to LCARS" and then slept its *full* interval: the hourly tier, MAL
+    reconcile and the availability poll each went an hour without
+    running. Waiting a few seconds for LCARS here means the first tick
+    of every loop actually runs. Never waits forever: a genuinely down
+    LCARS still gets the loops' own log-and-retry behavior."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _LCARS_STARTUP_WAIT_SECONDS
+    warned = False
+    while True:
+        try:
+            await client.recommended_availability_poll_interval_seconds()
+            if warned:
+                logger.info("startup: LCARS is answering, starting loops")
+            return True
+        except Exception:
+            if loop.time() >= deadline:
+                logger.warning(
+                    "startup: LCARS still not answering after %ds, starting loops anyway",
+                    _LCARS_STARTUP_WAIT_SECONDS,
+                )
+                return False
+            if not warned:
+                logger.info("startup: waiting for LCARS to answer before starting loops")
+                warned = True
+            await asyncio.sleep(_LCARS_STARTUP_POLL_SECONDS)
 
 
 async def run_forever(
@@ -561,6 +608,7 @@ async def run_forever(
     the hourly tier because the drip-fetch rate-limiting means a faster
     cadence (20 min default) clears the AniDB/TVmaze backlog in hours
     rather than days, and each tick is cheap when there's nothing to do."""
+    await _wait_for_lcars(client)
     await asyncio.gather(
         _loop(
             run_daily_and_weekly_once,
