@@ -73,17 +73,28 @@ still treated "LCARS season N" as "TVDB season N".
       (140 reviews resolved with a note), verified equal to the snapshot.
       The same simulation on the final code: 0 cleared, 20 filled,
       2 replaced (Food Wars! re-aligned to the positional layout).
-- [ ] **Chitose: empty duplicate season 3 row** (`z-kzcj41`, same AniList
-      198727 as S2, left over from the 09-17 sequel attach; the 09-22 split
-      created the real S2). No episodes, art or reviews reference it. The
-      delete + S2 `abs_end` 14->15 fix is written but needs the user's OK
-      (the permission check blocked a manual row delete).
-- [ ] **Pre-existing bad season data surfaced, not changed**:
-      Himekishi-sama no Himo (`s-eecj4c`) S2-S4 carry another TVDB series'
-      ids (84025: AniList 444/1729/3750); The Guy She Was Interested In
-      (`s-xfq0e3`) has year-numbered seasons 2021/2022/2024; Ramparts of
-      Ice S2 (`s-n8qcjp`) holds 40 unrelated 2019 episodes. The last two are
-      season-2-linking-pattern cases.
+- [x] **Bad-link purge (user-directed, 2026-09-23)**, LCARS-local only,
+      snapshot `lcars.db.bak-20260923-pre-badlink-purge`, 0 new FK violations:
+      - Chitose: empty duplicate S3 (`z-kzcj41`) removed; S2 range 14->15.
+      - Himekishi (`s-eecj4c`): all 73 episodes were Maria-sama ga Miteru
+        (TVDB 84025). Purged, plus S2-S4, the Maria-sama TVmaze id/posters,
+        and TMDB 42468 -> 284563. A Sonarr fetch now brings 1 real (TBA)
+        episode.
+      - The Guy She Was Interested In (`s-xfq0e3`, anime starting 2027-01):
+        9 episodes of a 2021-2024 TV show purged, plus seasons
+        2021/2022/2024.
+      - Ramparts of Ice "S2" (`s-n8qcjp`, Sonarr link The Lost Tomb 2):
+        whole show purged locally. NOT via confirmHardDelete, which would
+        have deleted AniList 186497 — the user's real, completed Ramparts
+        S1 (`s-vkqrm9`, intact with 15 episodes).
+      - Sonarr checked: neither junk series is in it.
+- [ ] **Maria-sama ga Miteru entries on the user's AniList/MAL** (444
+      Planning, 1729 Planning, 3750 Current/watching). Almost certainly
+      pushed by LCARS from Himekishi's junk seasons. Removal awaits the
+      user's OK (outward-facing).
+- [ ] 82 pre-existing FK violations in prod (40 orphaned `watch_event`, 39
+      `episode_external_id`, 2 `show_external_id`, 1
+      `episode_numbering_mapping`): orphans from earlier deletes, untouched.
 - [ ] **Watch: ops hourly tier timed out once** right after the v0.2.58
       deploy (10s client read timeout; LCARS held a write transaction for
       30s+, then recovered). Now that ops no longer sleeps an hour after
