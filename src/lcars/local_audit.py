@@ -46,7 +46,15 @@ import logging
 import os
 import re
 
-from lcars import pending_review, radarr_client, service_health, shows, sonarr_client, util
+from lcars import (
+    pending_review,
+    radarr_client,
+    service_health,
+    shows,
+    sonarr_client,
+    sonarr_match,
+    util,
+)
 from lcars.config import get_current
 
 logger = logging.getLogger("lcars.local_audit")
@@ -82,11 +90,8 @@ def audit_local_files(conn) -> dict:
 
 
 def _show_id_for_tvdb(conn, tvdb_id: int) -> str | None:
-    row = conn.execute(
-        "SELECT show_id FROM show_external_id WHERE service = 'tvdb' AND external_id = ?",
-        (str(tvdb_id),),
-    ).fetchone()
-    return row["show_id"] if row else None
+    show_ids = sonarr_match.sibling_show_ids_for_tvdb(conn, tvdb_id)
+    return show_ids[0] if show_ids else None
 
 
 def _show_id_for_tmdb_movie(conn, tmdb_id: int) -> str | None:
@@ -343,12 +348,24 @@ def _audit_sonarr_series(
     episodes = client.episodes(series["id"], include_episode_file=True)
 
     known_file_paths: set[str] = set()
+    # 2026-09-23 — identity via sonarr_match (captured raw coordinates,
+    # then absolute order), not Sonarr's raw season/episode against
+    # LCARS's display ones: once LCARS subdivides a season those differ,
+    # and this used to put Slime's Sonarr S04 (2026) files onto LCARS S4
+    # (the 2024 season). Siblings sharing the tvdb id are searched
+    # together, same as the availability poller.
+    siblings = sonarr_match.sibling_show_ids_for_tvdb(conn, series["tvdbId"])
+    show_ids = siblings if show_id in siblings else [show_id]
     for ep in episodes:
-        row = conn.execute(
-            "SELECT id, available_via_sonarr, file_path_sonarr FROM episode"
-            " WHERE show_id = ? AND season = ? AND episode = ?",
-            (show_id, ep["seasonNumber"], ep["episodeNumber"]),
-        ).fetchone()
+        match = sonarr_match.find_episode(conn, show_ids, ep)
+        row = (
+            conn.execute(
+                "SELECT id, available_via_sonarr, file_path_sonarr FROM episode WHERE id = ?",
+                (match["id"],),
+            ).fetchone()
+            if match is not None
+            else None
+        )
         if row is None:
             continue  # not yet fetched into LCARS — A.8's job, not this audit's
         episode_file = ep.get("episodeFile")

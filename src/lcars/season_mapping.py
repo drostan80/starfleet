@@ -12,10 +12,12 @@ confirmed by the pre-existing `test_server.py`/`test_fribb.py` coverage
 still passing unchanged.
 """
 
-from lcars import fribb, ids, pending_review, season_ranges, util
+from lcars import anidb, fribb, ids, pending_review, season_ranges, sonarr_match, util
 
 
-def reconcile_season(conn, show_id: str, season_number: int) -> dict:
+def reconcile_season(
+    conn, show_id: str, season_number: int, *, tvdb_coords=None
+) -> dict:
     """Attempts automatic derivation against the Fribb/anime-lists
     dataset (§5.5, `fribb.py`) for this season and applies the result
     immediately (§3 principle 1) — except when the row is already
@@ -37,6 +39,23 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
     Caller's responsibility: `show_id` must already be a real show
     (both call sites — the mutation and A.20's Sonarr-fetch path —
     already hold a real `show` row before calling this).
+
+    **Identity comes from absolute order, not the season number
+    (2026-09-23).** LCARS subdivides seasons to the finest source, so its
+    season number is not TVDB's (Slime: TVDB S2 became LCARS S2+S3, and
+    looking up Fribb by `(tvdb_id, season_number)` put the 2026 season's
+    AniList id on LCARS S4, the 2024 season). The candidate is now
+    derived by `_derive_ids` below, most authoritative first: Memory
+    Alpha's own AniDB mapping for this season's episodes, then the
+    episodes' real TVDB coordinates through Anime-Lists, and only for a
+    show with no captured coordinates and no sign of divergence the old
+    `(tvdb_id, season_number)` Fribb lookup. Evidence that spans more
+    than one AniDB entry makes no claim at all — the stored value is
+    left untouched rather than cleared.
+
+    `tvdb_coords` — the real Sonarr/TVDB `(season, episode)` pairs the
+    caller just routed onto this LCARS season (`metadata._ensure_seasons`
+    on a Sonarr fetch, before the episode rows exist).
 
     `tracking_space != 'anime'` (a plain tv show) is skipped the same
     way season 0 already was (A.20, `_ensure_seasons`' own comment):
@@ -90,14 +109,24 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
         "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'tvdb'",
         (show_id,),
     ).fetchone()
-    candidate = None
-    if tvdb_row is not None:
-        dataset = fribb.load_dataset()
-        index = fribb.build_tvdb_index(dataset)
-        tvdb_id = int(tvdb_row["external_id"])
-        candidate = fribb.resolve_season_candidate(index, tvdb_id, season_number)
-    anilist_id, mal_id = fribb.extract_ids(candidate)
-    matched = candidate is not None
+    derived = _derive_ids(
+        conn,
+        show_id,
+        season_number,
+        int(tvdb_row["external_id"]) if tvdb_row is not None else None,
+        tvdb_coords,
+    )
+    if derived is _NO_CLAIM:
+        if existing is not None:
+            conn.execute(
+                "UPDATE season SET last_reconciled_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, existing["id"]),
+            )
+            conn.commit()
+            return get_season(conn, existing["id"])
+        derived = None
+    anilist_id, mal_id = derived if derived is not None else (None, None)
+    matched = derived is not None
     source = "fribb" if matched else "unmatched"
 
     if existing is not None:
@@ -139,6 +168,72 @@ def reconcile_season(conn, show_id: str, season_number: int) -> dict:
 
     conn.commit()
     return get_season(conn, season_id)
+
+
+_NO_CLAIM = object()
+
+
+def _derive_ids(conn, show_id: str, season_number: int, tvdb_id, tvdb_coords):
+    """(anilist_id, mal_id) for this LCARS season, None for a genuine "no
+    candidate", or `_NO_CLAIM` when the evidence is ambiguous. See
+    `reconcile_season`'s docstring for the order and why."""
+    if season_number is None or season_number <= 0:
+        return None
+
+    # 1. Memory Alpha: the AniDB entries this season's episodes map to.
+    anidb_ids = {
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT m.anidb_anime_id FROM episode e"
+            " JOIN episode_anidb_mapping m ON m.episode_id = e.id"
+            " WHERE e.show_id = ? AND e.season = ? AND e.kind = 'regular'"
+            "   AND m.anidb_season = 1",
+            (show_id, season_number),
+        ).fetchall()
+    }
+
+    # 2. The episodes' real TVDB coordinates -> Anime-Lists -> AniDB.
+    coords = set(tvdb_coords or ())
+    if tvdb_id is not None and not coords:
+        coords = {
+            (row[0], row[1])
+            for row in conn.execute(
+                "SELECT sonarr_season, sonarr_episode FROM episode"
+                " WHERE show_id = ? AND season = ? AND kind = 'regular'"
+                "   AND sonarr_season IS NOT NULL AND sonarr_season > 0",
+                (show_id, season_number),
+            ).fetchall()
+        }
+    if not anidb_ids and tvdb_id is not None and coords:
+        anidb_ids = anidb.anidb_ids_for_tvdb_coords(conn, tvdb_id, coords)
+
+    if len(anidb_ids) > 1:
+        return _NO_CLAIM  # spans several AniDB entries — never guess which one
+    dataset = None
+    if len(anidb_ids) == 1:
+        dataset = fribb.load_dataset()
+        ids_ = fribb.resolve_ids_for_anidb(fribb.build_anidb_index(dataset), anidb_ids.pop())
+        if ids_["anilist_id"] is not None or ids_["mal_id"] is not None:
+            return ids_["anilist_id"], ids_["mal_id"]
+
+    if tvdb_id is None:
+        return None
+    if coords:
+        tvdb_seasons = {c[0] for c in coords}
+        if len(tvdb_seasons) != 1:
+            return _NO_CLAIM
+        tvdb_season = tvdb_seasons.pop()
+    elif sonarr_match.show_numbering_diverged(conn, show_id):
+        return _NO_CLAIM  # no coordinates, and LCARS's number is known not to be TVDB's
+    else:
+        tvdb_season = season_number  # nothing says they differ — ordinary show
+    dataset = dataset or fribb.load_dataset()
+    candidate = fribb.resolve_season_candidate(
+        fribb.build_tvdb_index(dataset), tvdb_id, tvdb_season
+    )
+    if candidate is None:
+        return None
+    return fribb.extract_ids(candidate)
 
 
 def get_season(conn, season_id: str) -> dict | None:

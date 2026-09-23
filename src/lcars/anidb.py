@@ -24,6 +24,8 @@ from pathlib import Path
 
 import httpx
 
+from lcars import sonarr_match
+
 log = logging.getLogger(__name__)
 
 TITLES_DUMP_URL = "https://anidb.net/api/anime-titles.dat.gz"
@@ -1019,14 +1021,43 @@ def derive_episode_mappings(conn) -> dict:
         resolver = _SeasonResolver(_tvdb_cache[tvdb_id])
 
         # Get all regular episodes for this show
+        # 2026-09-23 — Anime-Lists is keyed on *TVDB* coordinates, so the
+        # resolver gets Sonarr's raw season/episode (captured by
+        # sonarr_match), never LCARS's display numbering: once LCARS
+        # subdivides a season those differ (Slime: TVDB S2 -> LCARS S2+S3
+        # put every later LCARS season one ahead, and LCARS S4 — the 2024
+        # season — was mapped to AniDB's 2026 entry). Display numbering is
+        # only a fallback for a row never captured on a show whose
+        # numbering nothing shows has diverged.
+        #
+        # The air-date arbiter gets an *independent* date only: Sonarr's
+        # raw one, else a stored date whose source doesn't itself follow
+        # this mapping. An AniList-sourced date comes from
+        # `season.anilist_id`, derived from this very mapping, so locking
+        # against it is circular — that is exactly how Slime S4's wrong
+        # AniDB entry got locked as 'air_date_confirmed' (AniList had
+        # already written the 2026 dates onto it).
+        diverged = sonarr_match.show_numbering_diverged(conn, show_id)
         episodes = conn.execute(
-            """SELECT id, season, episode, absolute_number, air_date_utc
+            """SELECT id, season, episode, absolute_number,
+                      sonarr_season, sonarr_episode,
+                      COALESCE(air_date_raw_sonarr,
+                               CASE WHEN air_date_source IN ('anilist', 'anidb')
+                                    THEN NULL ELSE air_date_utc END)
                FROM episode
                WHERE show_id = ? AND kind = 'regular'""",
             (show_id,),
         ).fetchall()
 
-        for ep_id, season, ep_num, existing_abs, air_date_utc in episodes:
+        for (ep_id, lcars_season, lcars_ep, existing_abs, sonarr_season,
+             sonarr_episode, air_date_utc) in episodes:
+            if sonarr_season is not None and sonarr_episode is not None:
+                season, ep_num = sonarr_season, sonarr_episode
+            elif diverged:
+                stats["skipped"] += 1
+                continue
+            else:
+                season, ep_num = lcars_season, lcars_ep
             # A row already locked by a previous air-date arbitration is
             # never revisited -- "lock those as confirmed, no further
             # changes" (2026-09-22). Checked before doing any resolution
@@ -1100,8 +1131,8 @@ def derive_episode_mappings(conn) -> dict:
                     stats["mismatch_details"].append({
                         "show_id": show_id,
                         "episode_id": ep_id,
-                        "season": season,
-                        "episode": ep_num,
+                        "season": lcars_season,
+                        "episode": lcars_ep,
                         "existing_abs": existing_abs,
                         "derived_anidb": anidb_epno,
                         "anidb_anime_id": anidb_anime_id,
@@ -1111,6 +1142,23 @@ def derive_episode_mappings(conn) -> dict:
 
     conn.commit()
     return stats
+
+
+def anidb_ids_for_tvdb_coords(conn, tvdb_id, coords) -> set[int]:
+    """The distinct AniDB anime ids Anime-Lists resolves a set of real
+    TVDB `(season, episode)` coordinates to (regular episodes only).
+    Used by `season_mapping.reconcile_season` to derive a season's
+    identity from Memory Alpha (TVDB coords -> AniDB -> Fribb) instead
+    of assuming LCARS's season number is TVDB's."""
+    resolver = _SeasonResolver(_load_entries_for_tvdb(conn, str(tvdb_id)))
+    found: set[int] = set()
+    for tvdb_season, tvdb_ep in coords:
+        if not tvdb_season:
+            continue
+        result = resolver.resolve(tvdb_season, tvdb_ep)
+        if result is not None and result[1] == 1:
+            found.add(result[0])
+    return found
 
 
 def _load_entries_for_tvdb(conn, tvdb_id: str) -> list[dict]:

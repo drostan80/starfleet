@@ -48,6 +48,7 @@ recorded.
 
 import json
 import logging
+import statistics
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -65,6 +66,7 @@ from lcars import (
     season_ranges,
     service_health,
     sonarr_client,
+    sonarr_match,
     tmdb_client,
     util,
 )
@@ -673,6 +675,31 @@ def _reconcile_air_dates(conn, show: dict) -> None:
                 )
             continue
 
+        # 2026-09-23 — wrong-entry guard. Slime's LCARS S4 (the 2024
+        # season) carried the 2026 season's AniList id; its episode count
+        # matched (24 = 24), so the guard above passed, and this pass
+        # wrote the 2026 schedule over every S4 date. Sonarr's own raw
+        # date for the same episode is independent of the AniList link:
+        # if AniList's schedule sits months away from it, the link — not
+        # the date — is what's wrong. Flag the season, write nothing.
+        drift_days = _anilist_schedule_drift_days(
+            conn, show["id"], season["season_number"], result["nodes"]
+        )
+        if drift_days is not None and drift_days > _ANILIST_SCHEDULE_MAX_DRIFT_DAYS:
+            reason = (
+                f"season {season['season_number']}: AniList media {season['anilist_id']}'s "
+                f"airing schedule is ~{int(drift_days)} days from Sonarr's own dates for "
+                "the same episodes — likely linked to the wrong AniList entry; air-date "
+                "reconciliation skipped for this season"
+            )
+            if not pending_review.already_resolved_with(
+                conn, "season", season["id"], "anilist_id", reason
+            ):
+                pending_review.open_or_extend(
+                    conn, "season", season["id"], "anilist_id", "anilist", None, reason
+                )
+            continue
+
         for node in result["nodes"]:
             episode_row = conn.execute(
                 "SELECT id, air_date_utc, air_date_source, available_via_sonarr FROM episode"
@@ -732,6 +759,34 @@ def _reconcile_air_dates(conn, show: dict) -> None:
                 " updated_at = ? WHERE id = ?",
                 (new_air_date, now, episode_row["id"]),
             )
+
+
+_ANILIST_SCHEDULE_MAX_DRIFT_DAYS = 60
+_ANILIST_SCHEDULE_DRIFT_MIN_SAMPLE = 3
+
+
+def _anilist_schedule_drift_days(conn, show_id: str, season_number: int, nodes) -> float | None:
+    """Median absolute gap, in days, between AniList's airing schedule and
+    Sonarr's raw air date for the same LCARS episodes (None when no
+    episode has both). Median, so one genuinely delayed episode can't
+    trip it — only a whole schedule from a different broadcast can."""
+    gaps = []
+    for node in nodes:
+        row = conn.execute(
+            "SELECT air_date_raw_sonarr FROM episode"
+            " WHERE show_id = ? AND season = ? AND episode = ?",
+            (show_id, season_number, node["episode"]),
+        ).fetchone()
+        if row is None or not row["air_date_raw_sonarr"]:
+            continue
+        raw = datetime.fromisoformat(row["air_date_raw_sonarr"].replace("Z", "+00:00"))
+        anilist = datetime.fromisoformat(
+            util.unix_to_iso(node["airingAt"]).replace("Z", "+00:00")
+        )
+        gaps.append(abs((anilist - raw).total_seconds()) / 86400.0)
+    if len(gaps) < _ANILIST_SCHEDULE_DRIFT_MIN_SAMPLE:
+        return None  # too few paired dates to call the whole link wrong
+    return statistics.median(gaps)
 
 
 def _existing_related_show(conn, anilist_id: str, mal_id) -> str | None:
@@ -1239,91 +1294,52 @@ def _fetch_sonarr(conn, show: dict) -> None:
     # overwhelmingly common case (exactly one show holds this tvdb id)
     # falls straight through the unchanged path below — this check costs
     # one indexed lookup and changes nothing else about it.
-    sibling_ids = [
-        row["show_id"]
-        for row in conn.execute(
-            "SELECT show_id FROM show_external_id WHERE service = 'tvdb' AND external_id = ?",
-            (tvdb_id_str,),
-        ).fetchall()
-    ]
+    sibling_ids = sonarr_match.sibling_show_ids_for_tvdb(conn, tvdb_id_str)
     if len(sibling_ids) > 1:
         _fetch_sonarr_multi_show(conn, sibling_ids, episodes)
         return
 
-    # A.20 (2026-08-09 consolidation pass) — real gap found in the audit:
-    # this function used to insert `episode` rows for whatever season
-    # numbers Sonarr reported without ever creating the corresponding
-    # `season` row (§5.5) or setting `episode.season_id`. Sonarr/TVDB is
-    # the only source that ever tells LCARS a season number exists at all
-    # (AniList doesn't — each AniList entry is already scoped to one
-    # season, per §5.5's own "TVDB groups a franchise's seasons... AniList
-    # splits each season" framing), so this is the one place a newly-
-    # discovered season number can be reconciled the moment it appears —
-    # same on-demand-immediately philosophy as every other A.8 branch,
-    # rather than leaving it as a bare unmatched row for a Phase B
-    # scheduler that doesn't exist yet. A season already known (existing
-    # `season` row, whatever its `manual_override`) is left untouched by
-    # `reconcile_season` itself — see that function's own docstring.
-    season_numbers = {ep.get("seasonNumber") for ep in episodes}
-    season_ids_by_number = _ensure_seasons(conn, show["id"], season_numbers)
+    # 2026-09-23 — identity by absolute order, not by season number.
+    # Every Sonarr episode is first matched to its LCARS row through
+    # `sonarr_match.find_episode` (captured raw coordinates, then
+    # absoluteEpisodeNumber, then — only where absolute order can't
+    # decide and nothing shows divergence — display numbering), which
+    # also captures `sonarr_season`/`sonarr_episode` on the row. A new
+    # episode is routed onto its LCARS season by absolute range
+    # (`route_new_episode`). Before this, the fallback matched Sonarr's
+    # raw season/episode against LCARS's display season/episode: once
+    # LCARS subdivided a season (Slime, TVDB S2 -> LCARS S2+S3), every
+    # later season was off by one, and a coincidental match would stamp
+    # the wrong Sonarr identity on the row (the migration-36bbe45d39f3
+    # boundary this comment used to warn about).
+    #
+    # A.20 (2026-08-09) — the season rows for every LCARS season seen here
+    # are reconciled on demand (`_ensure_seasons`), now keyed on the
+    # *routed* LCARS season number, with the real TVDB coordinates
+    # passed along so season identity is derived from them, never from
+    # the LCARS number itself.
+    routed = []
+    for ep in episodes:
+        if ep.get("seasonNumber") is None or ep.get("episodeNumber") is None:
+            continue
+        existing = sonarr_match.find_episode(conn, [show["id"]], ep)
+        if existing is not None:
+            routed.append((ep, existing, existing["season"], existing["episode"]))
+        else:
+            lcars_season, lcars_episode = sonarr_match.route_new_episode(conn, show["id"], ep)
+            routed.append((ep, None, lcars_season, lcars_episode))
+    tvdb_coords_by_season: dict[int, set] = {}
+    for ep, _existing, lcars_season, _lcars_episode in routed:
+        tvdb_coords_by_season.setdefault(lcars_season, set()).add(
+            (ep["seasonNumber"], ep["episodeNumber"])
+        )
+    season_ids_by_number = _ensure_seasons(
+        conn, show["id"], set(tvdb_coords_by_season), tvdb_coords_by_season
+    )
 
     now = util.now_utc_iso()
-    for ep in episodes:
-        season_number = ep.get("seasonNumber")
-        episode_number = ep.get("episodeNumber")
-        if season_number is None or episode_number is None:
-            continue
+    for ep, existing, season_number, episode_number in routed:
         season_id = season_ids_by_number.get(season_number)
-        # NEXT_UP.md, 2026-08-25 (setEpisodeNumber) — matches on
-        # sonarr_season/sonarr_episode, Sonarr's own raw numbering
-        # captured immutably at insert time (below), not the display
-        # season/episode a manual renumber may have since corrected.
-        # Matching on the display columns here would silently undo
-        # every renumber the moment this fetch next runs: Sonarr still
-        # reports the episode under its original number, that lookup
-        # would find no existing row, and a phantom duplicate would get
-        # INSERTed at the original slot instead of recognizing the
-        # renumbered row as already known.
-        existing = conn.execute(
-            "SELECT id FROM episode WHERE show_id = ? AND sonarr_season = ? AND sonarr_episode = ?",
-            (show["id"], season_number, episode_number),
-        ).fetchone()
-        if existing is None:
-            # Fallback for a row that predates sonarr_season/sonarr_episode
-            # capture entirely (e.g. scripts/import_trakt_history.py's own
-            # synthesized episode rows, which never set them) — match on
-            # the legacy display columns instead, `sonarr_season IS NULL`-
-            # guarded so this can only ever match a row genuinely never
-            # captured, never one that's since been through a real
-            # renumber (sonarr_season would be non-NULL there, correctly
-            # failing this guard). Backfills sonarr_season/sonarr_episode
-            # the moment it matches, same "capture once" shape as
-            # season_id/absolute_number below — every later fetch for this
-            # row uses the fast/correct lookup above instead of this
-            # fallback.
-            #
-            # Known boundary, not fixed here: migration 36bbe45d39f3 left
-            # this NULL for a show that was multi-show-tvdb-routed
-            # (_fetch_sonarr_multi_show) at migration time, precisely
-            # because its display season/episode are locally-derived
-            # per-part numbers, not Sonarr's raw ones. If that show later
-            # stops being multi-show-routed (unlinked, merged) and reaches
-            # this single-show path for the first time, this fallback
-            # compares Sonarr's *raw* season/episode against those
-            # locally-derived display values — a coincidental match here
-            # would backfill the wrong Sonarr identity onto the row.
-            # Nothing re-derives true identity for that case retroactively;
-            # see the migration's own docstring.
-            existing = conn.execute(
-                "SELECT id FROM episode WHERE show_id = ? AND season = ? AND episode = ?"
-                " AND sonarr_season IS NULL",
-                (show["id"], season_number, episode_number),
-            ).fetchone()
-            if existing is not None:
-                conn.execute(
-                    "UPDATE episode SET sonarr_season = ?, sonarr_episode = ? WHERE id = ?",
-                    (season_number, episode_number, existing["id"]),
-                )
         if existing is not None:
             # A.20 — backfill season_id on a pre-existing row that predates
             # this fix (or was inserted before its season was reconciled).
@@ -1388,12 +1404,12 @@ def _fetch_sonarr(conn, show: dict) -> None:
                 season_id,
                 episode_number,
                 # NEXT_UP.md, 2026-08-25 — the immutable raw-numbering
-                # capture setEpisodeNumber's own resync-safety depends on
-                # (see the `existing` lookup's own comment above). A brand
-                # new row has no correction yet, so season/episode (display)
-                # and sonarr_season/sonarr_episode (raw) start identical.
-                season_number,
-                episode_number,
+                # capture setEpisodeNumber's own resync-safety depends on.
+                # Always Sonarr's own raw numbers; the display season/
+                # episode above are the routed LCARS ones (identical for
+                # an ordinary show, different once LCARS has subdivided).
+                ep["seasonNumber"],
+                ep["episodeNumber"],
                 # A.25 — capture what the source actually says. §5.2's `kind`
                 # records how the source files an episode; season 0 is
                 # Sonarr/TVDB's specials bucket. Deliberately NOT a behavior
@@ -1520,15 +1536,24 @@ def _fetch_sonarr_multi_show(conn, sibling_ids: list[str], episodes: list[dict])
     for ep in regular_episodes:
         abs_number = float(ep["absoluteEpisodeNumber"])
         existing = conn.execute(
-            f"SELECT id, show_id, season_id FROM episode"
+            f"SELECT id, show_id, season_id, season FROM episode"
             f" WHERE show_id IN ({placeholders}) AND absolute_number = ?",
             (*sibling_ids, abs_number),
         ).fetchone()
         if existing is not None:
+            # 2026-09-23 — capture Sonarr's raw coordinates, same as the
+            # single-show path (sonarr_match.find_episode): Memory Alpha's
+            # TVDB-keyed Anime-Lists resolution needs the real ones, and
+            # this path never recorded them for already-filed rows.
+            conn.execute(
+                "UPDATE episode SET sonarr_season = ?, sonarr_episode = ?"
+                " WHERE id = ? AND sonarr_season IS NULL",
+                (ep["seasonNumber"], ep["episodeNumber"], existing["id"]),
+            )
             if existing["season_id"] is None:
                 season_row = conn.execute(
                     "SELECT id FROM season WHERE show_id = ? AND season_number = ?",
-                    (existing["show_id"], ep["seasonNumber"]),
+                    (existing["show_id"], existing["season"]),
                 ).fetchone()
                 if season_row is not None:
                     conn.execute(
@@ -1694,7 +1719,9 @@ def _synthesize_absolute_numbers(conn, show_id: str) -> None:
     conn.commit()
 
 
-def _ensure_seasons(conn, show_id: str, season_numbers: set) -> dict:
+def _ensure_seasons(
+    conn, show_id: str, season_numbers: set, tvdb_coords_by_season: dict | None = None
+) -> dict:
     """Reconciles a `season` row (§5.5) for every distinct season number
     just seen in a Sonarr fetch, creating one via `season_mapping.
     reconcile_season()` (A.4/A.20) for any number with no existing row
@@ -1728,7 +1755,12 @@ def _ensure_seasons(conn, show_id: str, season_numbers: set) -> dict:
             result[season_number] = row["id"]
             continue
         try:
-            season = season_mapping.reconcile_season(conn, show_id, season_number)
+            season = season_mapping.reconcile_season(
+                conn,
+                show_id,
+                season_number,
+                tvdb_coords=(tvdb_coords_by_season or {}).get(season_number),
+            )
             result[season_number] = season["id"]
         except Exception as e:
             season_id = ids.generate_id(conn, "z")

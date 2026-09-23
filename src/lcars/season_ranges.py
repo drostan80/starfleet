@@ -576,13 +576,44 @@ def seed_episode_external_ids(conn: sqlite3.Connection) -> dict[str, int]:
       ``'{anilist_id}:{episode_in_season}'``.
     - **mal**: same shape as anilist, from ``season_external_id(service='mal')``.
 
-    Strictly insert-only — skips any (episode_id, service) pair that
-    already exists.  Idempotent and safe to call every tick.
+    Insert-only for current rows — skips any (episode_id, service) pair
+    that already exists — but a derived anidb/anilist/mal row whose source
+    has since changed is dropped first and re-derived (2026-09-23).
+    Idempotent and safe to call every tick.
 
     Returns ``{"anidb": n, "tvdb": n, "anilist": n, "mal": n}``.
     """
     now = util.now_utc_iso()
     result = {"anidb": 0, "tvdb": 0, "anilist": 0, "mal": 0}
+
+    # 2026-09-23 — derived rows follow their source. Insert-only meant a
+    # corrected `episode_anidb_mapping` or `season_external_id` (Slime
+    # S4's AniList id, fixed after the season-number/TVDB mix-up) left
+    # the old per-episode ids in place forever. Drop any derived row that
+    # no longer matches what it's derived from; the inserts below
+    # re-create it from the current source.
+    stale = conn.execute(
+        "DELETE FROM episode_external_id"
+        " WHERE service = 'anidb' AND NOT EXISTS ("
+        "   SELECT 1 FROM episode_anidb_mapping eam"
+        "   WHERE eam.episode_id = episode_external_id.episode_id"
+        "     AND episode_external_id.external_id ="
+        "       CAST(eam.anidb_anime_id AS TEXT) || ':' || CAST(eam.anidb_epno AS TEXT)"
+        " )"
+    ).rowcount
+    stale += conn.execute(
+        "DELETE FROM episode_external_id"
+        " WHERE service IN ('anilist', 'mal') AND NOT EXISTS ("
+        "   SELECT 1 FROM episode e"
+        "   JOIN season_external_id sei"
+        "     ON sei.season_id = e.season_id AND sei.service = episode_external_id.service"
+        "   WHERE e.id = episode_external_id.episode_id"
+        "     AND episode_external_id.external_id LIKE sei.external_id || ':%'"
+        " )"
+    ).rowcount
+    if stale:
+        conn.commit()
+        log.info("seed_episode_external_ids: dropped %d stale derived row(s)", stale)
 
     # ── AniDB ──
     result["anidb"] = conn.execute(

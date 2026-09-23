@@ -133,7 +133,16 @@ checked.
 
 import logging
 
-from lcars import events, pending_review, radarr_client, service_health, shows, sonarr_client, util
+from lcars import (
+    events,
+    pending_review,
+    radarr_client,
+    service_health,
+    shows,
+    sonarr_client,
+    sonarr_match,
+    util,
+)
 from lcars.config import get_current
 
 logger = logging.getLogger("lcars.availability")
@@ -229,11 +238,7 @@ def _show_ids_for_tvdb(conn, tvdb_id: int) -> list[str]:
     single-show `_apply_episode_availability` path unchanged below; more
     than one routes through `_apply_episode_availability_multi_show`
     instead."""
-    rows = conn.execute(
-        "SELECT show_id FROM show_external_id WHERE service = 'tvdb' AND external_id = ?",
-        (str(tvdb_id),),
-    ).fetchall()
-    return [row["show_id"] for row in rows]
+    return sonarr_match.sibling_show_ids_for_tvdb(conn, tvdb_id)
 
 
 def _apply_episode_availability(
@@ -419,10 +424,14 @@ def _route_episode_availability(
 
     # 2. Single-show raw routing — no range matched; use Sonarr's own numbers.
     if len(show_ids) == 1:
-        if episode.get("seasonNumber") is None or episode.get("episodeNumber") is None:
+        # 2026-09-23 — through sonarr_match (captured raw coordinates,
+        # then display numbering only where nothing shows divergence),
+        # never Sonarr's raw numbers straight against LCARS's display ones.
+        match = sonarr_match.find_episode(conn, show_ids, episode)
+        if match is None:
             return None
         return _apply_episode_availability(
-            conn, show_ids[0], episode["seasonNumber"], episode["episodeNumber"], status, path
+            conn, show_ids[0], match["season"], match["episode"], status, path
         )
 
     # 3. Multi-show fallback (specials or shows without abs ranges).
