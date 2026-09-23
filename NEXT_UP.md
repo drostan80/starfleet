@@ -1,6 +1,6 @@
 # Next up
 
-Current version: **v0.2.58** (deployed 2026-09-23).
+Current version: **v0.2.61** (deployed 2026-09-23).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
@@ -100,39 +100,48 @@ still treated "LCARS season N" as "TVDB season N".
       correct (fills/realignments under the positional model) and resolved.
       The stale Ramparts conflict was resolved too (claimant purged). 14 left,
       all needing a decision.
-- [ ] **ops monthly full-library reconcile now runs on every deploy**. It is
-      a side effect of the v0.2.57 startup-wait fix: before it, the monthly
-      loop's first tick failed at startup and then slept 30 days, so the
-      pass rarely ran (it did on 09-12 — the run that swapped Slime S4 — and
-      09-20). It ran at 10:08 (v0.2.57, the 70-season clearing) and 10:36-
-      10:38 (v0.2.58, 19 fills). Now safe (never clears), but it's the wrong
-      cadence. Fix: persist the monthly tier's last-run time (LCARS
-      checkpoint) instead of relying on the in-process timer.
-- [ ] **Split AniList/MAL identities: 14 manual seasons** (SPY S3, Re:ZERO
-      S4, Nisekoi S2, Kyousougiga, Kiss x Sis, SNAFU S2, DanMachi S5, Made in
-      Abyss S2, Queen Millennia, Natsume S2, SAO S4, Bungo S2, Returner S2,
-      Househusband S2) have a MAL id that Fribb maps to a *different* AniList
-      entry, so MAL pushes land on the wrong entry. Root cause: the show-page
-      (`show.js:3030`) and reviews-page (`reviews.html:1612`) season editors
-      pre-fill the current MAL id, so correcting only AniList re-saves the
-      stale MAL. Fix: `setSeasonMapping` derives MAL from the AniList id via
-      Fribb (AniList authoritative, MAL mirrors), plus a data fix for the 14.
-- [ ] **Duplicate empty season rows**: Aristocrat S4+S5 (manual, same 185756
-      as the correct S3), same shape as Chitose S3. Purge needs the user's OK.
-- [ ] **Tantei junk show `s-qp3t5j`** (Milky Holmes mislink, hard delete
-      requested 09-20): my verify script set its seasons to 128712/152677 —
-      the user's REAL Tantei ids. confirmHardDelete would now delete the real
-      AniList entry, and the watch sync excludes the real Tantei S1/S2 while
-      two shows claim them. The monthly pass re-derives this from the junk
-      show's Tantei AniDB id on every run. Proposed: local purge (like
-      Ramparts S2), plus removing the junk Milky Holmes 7768/11341 PLANNING
-      entries from AniList/MAL.
-- [ ] **Score drifts (6)**: SPY S3 15.0 is contamination (= Season 3's
-      AniList 75; Season 2's AniList and MAL say 12). Kyousougiga 14 vs
-      AniList 10 (MAL 7 agrees with LCARS). Yuru Camp S3 14 vs 13. Goblin's
-      Crown / Undead Unluck Winter / Re:ZERO OVAs unscored in LCARS but rated
-      on AniList (score reverse-sync isn't built). Re:ZERO OVAs' MAL 36286
-      is a movie entry.
+- [x] **Monthly tier cadence persisted (v0.2.60)**: `ops_tier_checkpoint`
+      + `opsTierDue`/`markOpsTierCompleted`. Ops checks hourly and runs only
+      when a month has passed. Verified on the v0.2.60 deploy: the monthly
+      tier logged "processed 0" and no seasons were re-reconciled.
+- [x] **MAL mirrors AniList in `setSeasonMapping` (v0.2.59/60)**: an absent
+      or unchanged (pre-filled) MAL id follows Fribb's pairing for the AniList
+      id; a deliberately changed one is kept.
+- [x] **Fribb index caches id-reuse bug (v0.2.60)**: v0.2.59's CI failed on
+      a flaky test that got the previous test's index; the caches were keyed
+      on id(dataset) alone. Now `is`-checked.
+- [x] **MAL half-step drift false positive (v0.2.61)**: 13.0 is 6.5 on MAL,
+      so 6 and 7 both count as consistent.
+- [x] **Review queue cleared** (`scripts/fix_review_queue_20260923.py`,
+      dry-run reviewed twice, snapshot `...pre-queue-fix`): Tantei junk show
+      and Aristocrat S4/S5 purged locally; 14 split MAL ids corrected, with
+      the 20 affected MAL entries re-mirrored from their AniList entries;
+      8 drifted scores took AniList's values; Milky Holmes (4 AniList + 4
+      MAL) removed. Verified: 0 split identities, AniList drift check 0
+      flagged, real Tantei intact.
+- [ ] **Seasons tracked in LCARS but absent from the user's AniList** (no
+      MAL mirror pushed): Nisekoi S2, SNAFU S2, DanMachi S5, Made in Abyss
+      S2, Natsume S2, SAO S4, Returner S2. Bungo S3's MAL 38003 still says
+      "watching" (pushed by S2 before the fix) and has no AniList counterpart.
+- [ ] **REGRESSION from the queue fix: Milky Holmes recreated.** The Milky
+      Holmes series is still in Sonarr (TVDB 197261, unmonitored, 12 files,
+      31.8 GB). After the junk LCARS show was purged, the hourly
+      untracked-shows sweep re-imported it as `s-66qdd1` (12:49) and LCARS
+      re-pushed all 8 entries to AniList/MAL. The purge order must be Sonarr
+      -> LCARS -> lists. Waiting on the user: delete the Sonarr series with or
+      without its files; then purge s-66qdd1 and remove the 8 entries again.
+- [ ] **ROOT CAUSE, next: add path links shows to the wrong Sonarr/TVDB
+      series.** 09-21 20:14-20:23 batch: Kaketa Tsuki no Mercedes -> *Maria
+      Mercedes* (telenovela), Majutsu wo Kiwamete... -> *My Next Life as a
+      Villainess*, Ore to Yuu-nii! -> *My Sky: Detective Story* (1991; its
+      fribb_identity_mismatch review is the last open one). Each wrong series
+      is in Sonarr. Same pattern as the season-2-linking cases. Fix per the
+      plan: identity from the ID crosswalk, never a title-search guess; then
+      clean these three.
+- [ ] **First hourly tick after every restart blocks LCARS for tens of
+      seconds** (ops read timeouts at 10:36 and 12:33): the long sync pass
+      runs inside a request handler. Same class as the reopened app-stall
+      item.
 - [ ] 82 pre-existing FK violations in prod (40 orphaned `watch_event`, 39
       `episode_external_id`, 2 `show_external_id`, 1
       `episode_numbering_mapping`): orphans from earlier deletes, untouched.
