@@ -14,7 +14,9 @@ Needs the v0.2.55+ code (run inside the lcars container). Per show:
 3. Re-reconcile every non-manual season from Memory Alpha; report (never
    touch) manual_override seasons whose stored ids disagree.
 4. For seasons whose AniList id changed, restore AniList-written air dates
-   to Sonarr's raw date (logged in air_date_change).
+   that sit more than the drift threshold (60 days) from Sonarr's raw date —
+   the ones written through the wrong link; a small AniList correction from
+   an earlier, correct link is kept (logged in air_date_change).
 5. Re-seed derived per-episode external ids (stale rows dropped).
 6. Re-run the per-show local file audit.
 
@@ -26,7 +28,6 @@ Usage (inside the container):
 """
 
 import argparse
-import shutil
 import sqlite3
 import sys
 import tempfile
@@ -38,6 +39,7 @@ from lcars import (
     db,
     ids,
     local_audit,
+    metadata,
     season_mapping,
     season_ranges,
     sonarr_client,
@@ -165,8 +167,9 @@ def _restore_air_dates(conn, season_ids):
         for row in conn.execute(
             "SELECT id, air_date_utc, air_date_raw_sonarr FROM episode"
             " WHERE season_id = ? AND air_date_source = 'anilist'"
-            "   AND air_date_raw_sonarr IS NOT NULL AND air_date_raw_sonarr <> air_date_utc",
-            (season_id,),
+            "   AND air_date_raw_sonarr IS NOT NULL"
+            "   AND ABS(julianday(air_date_utc) - julianday(air_date_raw_sonarr)) > ?",
+            (season_id, metadata._ANILIST_SCHEDULE_MAX_DRIFT_DAYS),
         ).fetchall():
             conn.execute(
                 "UPDATE episode SET air_date_utc = ?, air_date_source = 'sonarr', updated_at = ?"
@@ -240,14 +243,17 @@ def main():
         for sid in args.show:
             notes[sid].append("coords: " + _capture_coords(conn, client, sid))
     for sid in args.show:
-        notes[sid].append(f"mappings dropped for re-derivation: {_drop_disagreeing_mappings(conn, sid)}")
+        dropped = _drop_disagreeing_mappings(conn, sid)
+        notes[sid].append(f"mappings dropped for re-derivation: {dropped}")
     anidb.derive_episode_mappings(conn)
     for sid in args.show:
         changed, disputed = _reconcile_seasons(conn, sid)
         for _season_id, n, b, a in changed:
             notes[sid].append(f"season {n} re-derived: {b} -> {a}")
         for n, b, d in disputed:
-            notes[sid].append(f"season {n} is manual_override {b} but Memory Alpha says {d} — NOT touched")
+            notes[sid].append(
+                f"season {n} is manual_override {b} but Memory Alpha says {d} — NOT touched"
+            )
         restored = _restore_air_dates(conn, [c[0] for c in changed])
         notes[sid].append(f"air dates restored to Sonarr's raw date: {restored}")
     season_ranges.seed_episode_external_ids(conn)
