@@ -971,11 +971,25 @@ def _resolve_arr_candidate(conn, input: dict) -> tuple[dict | None, dict]:
     if input["media_shape"] == "episodic":
         if not (cfg.sonarr_url and cfg.sonarr_api_key):
             return None, arr_result
-        term = (
-            f"tvdb:{input['tvdb_id']}"
-            if input.get("tvdb_id")
-            else input[f"title_{input['primary_title']}"]
+        # 2026-09-23 — identity from the ID crosswalk, never a title guess.
+        # This used to fall back to a free-text Sonarr title search and take
+        # results[0]: "Kaketa Tsuki no Mercedes" got the telenovela Maria
+        # Mercedes, "Ore to Yuu-nii!" got My Sky: Detective Story, a Tensei
+        # Elf anime got My Next Life as a Villainess — each added to Sonarr
+        # and linked (the long-unexplained "season 2 linking" pattern). A
+        # TVDB id now comes from the input or the crosswalk (Fribb from
+        # AniList/MAL, Wikidata from TMDB/IMDb); with neither, the show is
+        # added unlinked and flagged (`needs_tvdb_link`) instead of guessed.
+        # Picking by title stays available only as an explicit user choice
+        # (searchArrCandidates -> tvdbId).
+        tvdb_id = input.get("tvdb_id") or _resolve_tvdb_for_sequel(
+            None, input.get("anilist_id"), input.get("mal_id"),
+            input.get("tmdb_id"), input.get("imdb_id"),
         )
+        if not tvdb_id:
+            arr_result["needs_tvdb_link"] = True
+            return None, arr_result
+        term = f"tvdb:{tvdb_id}"
         results = _lookup_arr(conn, "episodic", term)
         if not results:
             raise ShowInputError(f"no Sonarr match found for {term!r}")
@@ -1656,4 +1670,12 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
         show_id = create_show(conn, resolved_input)
     if title_slug:
         write_arr_external_id(conn, show_id, input["media_shape"], title_slug)
+    if arr_result.pop("needs_tvdb_link", False):
+        pending_review.open_or_extend(
+            conn, "show", show_id, "tvdb_link", "sonarr", None,
+            "no TVDB id from the input or the ID crosswalk (Fribb/Wikidata) — added"
+            " without a Sonarr link rather than guessing by title; link it with"
+            " amendShowArrLink (or the Sonarr candidate picker) once a TVDB entry exists",
+        )
+        conn.commit()
     return show_id, arr_result

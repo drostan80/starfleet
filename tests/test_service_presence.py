@@ -353,13 +353,40 @@ def test_sonarr_and_radarr_presence_both_run_in_one_catalog_sweep(conn, monkeypa
 # --- deep-link backfill (2026-08-18) -------------------------------------------
 
 
+def _link(conn, show_id, service, external_id):
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES (?, ?, ?, '', 'x')",
+        (show_id, service, external_id),
+    )
+    conn.commit()
+
+
+def test_a_title_only_catalog_match_records_presence_but_writes_no_link(conn, monkeypatch):
+    """2026-09-23 — a fuzzy title hit whose tvdbId isn't the show's own is
+    presence information, never a link (it used to attach whatever Sonarr
+    series had a similar name)."""
+    _configure_sonarr()
+    config.get_current().sonarr_public_url = "http://sonarr.local"
+    _add_show(conn, "s-svp030", title_romaji="Kaketa Tsuki no Mercedes")
+    _link(conn, "s-svp030", "tvdb", "999001")
+    fake = _FakeSonarrCatalogClient(
+        [{"title": "Kaketa Tsuki no Mercedes", "titleSlug": "maria-mercedes", "tvdbId": 276151}]
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    service_presence.refresh_catalog_presence(conn)
+    assert _presence(conn, "s-svp030", "sonarr")["present"] == 1
+    assert _external_id(conn, "s-svp030", "sonarr") is None
+
+
 def test_sonarr_catalog_match_backfills_a_real_deep_link(conn, monkeypatch):
     _configure_sonarr()
     cfg = config.get_current()
     cfg.sonarr_public_url = "http://sonarr.local"
     _add_show(conn, "s-svp020", title_romaji="Attack on Titan")
+    _link(conn, "s-svp020", "tvdb", "267440")
     fake = _FakeSonarrCatalogClient(
-        [{"title": "Attack on Titan", "titleSlug": "attack-on-titan"}]
+        [{"title": "Attack on Titan", "titleSlug": "attack-on-titan", "tvdbId": 267440}]
     )
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
 
@@ -375,8 +402,9 @@ def test_radarr_catalog_match_backfills_a_real_deep_link(conn, monkeypatch):
     cfg = config.get_current()
     cfg.radarr_public_url = "http://radarr.local"
     _add_show(conn, "s-svp021", title_romaji="Project Hail Mary", media_shape="movie")
+    _link(conn, "s-svp021", "tmdb", "687163")
     fake = _FakeRadarrCatalogClient(
-        [{"title": "Project Hail Mary", "titleSlug": "project-hail-mary"}]
+        [{"title": "Project Hail Mary", "titleSlug": "project-hail-mary", "tmdbId": 687163}]
     )
     monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
 

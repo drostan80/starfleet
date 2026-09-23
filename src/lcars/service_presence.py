@@ -135,6 +135,10 @@ def _refresh_sonarr_presence(conn) -> int:
         return 0
     service_health.record_success(conn, "sonarr")
     by_title = {series["title"]: series for series in catalog if series.get("title")}
+    by_tvdb = {str(series.get("tvdbId")): series for series in catalog if series.get("tvdbId")}
+    tvdb_of = dict(conn.execute(
+        "SELECT show_id, external_id FROM show_external_id WHERE service = 'tvdb'"
+    ).fetchall())
 
     updated = 0
     for show in shows:
@@ -142,14 +146,15 @@ def _refresh_sonarr_presence(conn) -> int:
         present = matched_title is not None
         if _upsert_presence(conn, show["id"], "sonarr", present):
             updated += 1
-        # Backfill (B.7, 2026-08-18): same match this sweep already made,
-        # spent regardless of whether `present` flipped — a real
-        # titleSlug here means a real deep link for a show addShowWithArr
-        # never wrote one for. See write_arr_external_id's own docstring.
-        if present:
-            title_slug = by_title[matched_title].get("titleSlug")
-            if title_slug:
-                shows_module.write_arr_external_id(conn, show["id"], "episodic", title_slug)
+        # Backfill (B.7, 2026-08-18) — a deep link for a show addShowWithArr
+        # never wrote one for. 2026-09-23: presence stays fuzzy
+        # (informational), but the hard link is written only for an ID
+        # match — the series' tvdbId must equal the show's own tvdb id. A
+        # fuzzy title hit used to become a link to whatever Sonarr series
+        # had a similar name.
+        series = by_tvdb.get(tvdb_of.get(show["id"]) or "")
+        if series is not None and series.get("titleSlug"):
+            shows_module.write_arr_external_id(conn, show["id"], "episodic", series["titleSlug"])
     return updated
 
 
@@ -173,6 +178,10 @@ def _refresh_radarr_presence(conn) -> int:
         return 0
     service_health.record_success(conn, "radarr")
     by_title = {movie["title"]: movie for movie in catalog if movie.get("title")}
+    by_tmdb = {str(movie.get("tmdbId")): movie for movie in catalog if movie.get("tmdbId")}
+    tmdb_of = dict(conn.execute(
+        "SELECT show_id, external_id FROM show_external_id WHERE service = 'tmdb'"
+    ).fetchall())
 
     updated = 0
     for show in shows:
@@ -180,10 +189,10 @@ def _refresh_radarr_presence(conn) -> int:
         present = matched_title is not None
         if _upsert_presence(conn, show["id"], "radarr", present):
             updated += 1
-        if present:
-            title_slug = by_title[matched_title].get("titleSlug")
-            if title_slug:
-                shows_module.write_arr_external_id(conn, show["id"], "movie", title_slug)
+        # 2026-09-23 — link only on an ID match (tmdbId), same as Sonarr above.
+        movie = by_tmdb.get(tmdb_of.get(show["id"]) or "")
+        if movie is not None and movie.get("titleSlug"):
+            shows_module.write_arr_external_id(conn, show["id"], "movie", movie["titleSlug"])
     return updated
 
 

@@ -23,6 +23,7 @@ from lcars import (
     fribb,
     mal_client,
     radarr_client,
+    shows,
     sonarr_client,
     tmdb_client,
     util,
@@ -1406,6 +1407,7 @@ async def test_add_show_with_arr_creates_new_sonarr_series(client, monkeypatch):
                 "trackingSpace": "ANIME",
                 "titleRomaji": "Shangri-La Frontier",
                 "primaryTitle": "ROMAJI",
+                    "tvdbId": 421855,
             }
         },
         headers=auth_headers(),
@@ -1510,6 +1512,7 @@ async def test_add_show_with_arr_new_sonarr_series_writes_a_real_sonarr_deep_lin
                 "trackingSpace": "ANIME",
                 "titleRomaji": "Shangri-La Frontier",
                 "primaryTitle": "ROMAJI",
+                    "tvdbId": 421855,
             }
         },
         headers=auth_headers(),
@@ -1764,6 +1767,7 @@ async def test_add_show_with_arr_unmonitored_sonarr_adds_as_unmonitored(client, 
                 "trackingSpace": "ANIME",
                 "titleRomaji": "Shangri-La Frontier",
                 "primaryTitle": "ROMAJI",
+                    "tvdbId": 421855,
                 "unmonitored": True,
             }
         },
@@ -1861,6 +1865,7 @@ async def test_add_show_with_arr_zero_lookup_results_rejects_nothing_created(cli
                     "trackingSpace": "ANIME",
                     "titleRomaji": "Does Not Exist",
                     "primaryTitle": "ROMAJI",
+                    "tvdbId": 999999,
                 }
             },
         },
@@ -1949,6 +1954,7 @@ async def test_add_show_with_arr_missing_add_defaults_raises_before_writing(clie
                     "trackingSpace": "ANIME",
                     "titleRomaji": "x",
                     "primaryTitle": "ROMAJI",
+                    "tvdbId": 421855,
                 }
             },
         },
@@ -12001,3 +12007,67 @@ async def test_ops_tier_due_tracks_completion(client):
     assert (await gql(client, due, headers=auth_headers()))["opsTierDue"] is False
     zero = 'query { opsTierDue(tier: "other", intervalSeconds: 0) }'
     assert (await gql(client, zero, headers=auth_headers()))["opsTierDue"] is True
+
+
+
+async def test_add_show_with_arr_never_guesses_a_sonarr_series_by_title(client, monkeypatch):
+    """2026-09-23 — with no tvdbId and nothing in the ID crosswalk, the add
+    must not take Sonarr's first title-search hit (that's how "Kaketa Tsuki
+    no Mercedes" got linked to the telenovela Maria Mercedes). The show is
+    added unlinked, nothing touches Sonarr, and a review asks for a link."""
+    config.set_current(_sonarr_configured_config())
+    _patch_fribb_dataset(monkeypatch, [])
+    fake = _FakeSonarrClient(
+        series=None,
+        lookup_results=[
+            {"tvdbId": 276151, "title": "Maria Mercedes", "titleSlug": "maria-mercedes"}
+        ],
+        add_series_result={"id": 9, "tvdbId": 276151, "title": "Maria Mercedes"},
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {"input": {"mediaShape": "EPISODIC", "trackingSpace": "ANIME",
+                   "titleRomaji": "Kaketa Tsuki no Mercedes", "primaryTitle": "ROMAJI"}},
+        headers=auth_headers(),
+    )
+    result = data["addShowWithArr"]
+    assert result["sonarrSeriesCreated"] is False and result["matchedTvdbId"] is None
+    assert [c for c in fake.calls if c[0] in ("lookup_series", "add_series")] == []
+    conn = db.get_connection()
+    show_id = result["show"]["id"]
+    assert conn.execute(
+        "SELECT COUNT(*) FROM show_external_id WHERE show_id = ? AND service IN ('tvdb','sonarr')",
+        (show_id,),
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM pending_review WHERE entity_id = ? AND field = 'tvdb_link'"
+        " AND resolved_at IS NULL", (show_id,),
+    ).fetchone()[0] == 1
+
+
+async def test_add_show_with_arr_resolves_tvdb_through_the_crosswalk(client, monkeypatch):
+    """No tvdbId given, but Fribb maps the AniList id to one: Sonarr is
+    looked up by that exact id, never by title."""
+    config.set_current(_sonarr_configured_config())
+    _patch_fribb_dataset(monkeypatch, [
+        {"anilist_id": 151807, "mal_id": 52347, "tvdb_id": 421855, "season": {"tvdb": 1}},
+    ])
+    monkeypatch.setattr(shows, "_try_load_fribb_dataset", lambda: fribb.load_dataset())
+    fake = _FakeSonarrClient(
+        series=None,
+        lookup_results=[{"tvdbId": 421855, "title": "Shangri-La Frontier", "titleSlug": "x"}],
+        add_series_result={"id": 4, "tvdbId": 421855, "title": "Shangri-La Frontier"},
+    )
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    data = await gql(
+        client,
+        ADD_SHOW_WITH_ARR,
+        {"input": {"mediaShape": "EPISODIC", "trackingSpace": "ANIME", "anilistId": 151807,
+                   "titleRomaji": "Shangri-La Frontier", "primaryTitle": "ROMAJI"}},
+        headers=auth_headers(),
+    )
+    assert data["addShowWithArr"]["matchedTvdbId"] == 421855
+    lookups = [c for c in fake.calls if c[0] == "lookup_series"]
+    assert lookups and all(c[1] == "tvdb:421855" for c in lookups)
