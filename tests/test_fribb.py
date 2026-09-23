@@ -237,3 +237,23 @@ def test_build_tvdb_index_is_memoized_per_dataset_object():
 
     other = list(SAMPLE)  # a genuinely different object -> rebuilt
     assert fribb.build_tvdb_index(other) is not first
+
+
+def test_index_caches_never_serve_another_datasets_index():
+    """2026-09-23 — the caches were keyed on id(dataset) alone; a freed
+    list's id can be reused by a new list, which then got the old list's
+    index (CI-only flaky test_no_raise_for_ambiguous_s1). Simulate the
+    collision directly: a cached entry under this list's id but built
+    from a *different* list must not be returned."""
+    new = [{"anilist_id": 7, "tvdb_id": 70, "mal_id": 77, "anidb_id": 700, "season": {"tvdb": 1}}]
+    stale = {999: [{"anilist_id": 999}]}
+    other = [{"anilist_id": 999}]
+    for cache, build, key in (
+        (fribb._index_cache, fribb.build_tvdb_index, 70),
+        (fribb._anilist_index_cache, fribb.build_anilist_index, 7),
+        (fribb._mal_index_cache, fribb.build_mal_index, 77),
+        (fribb._anidb_index_cache, fribb.build_anidb_index, 700),
+    ):
+        cache.clear()
+        cache[id(new)] = (other, stale)
+        assert key in build(new) and 999 not in build(new)

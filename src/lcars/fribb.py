@@ -59,20 +59,27 @@ _MISSING = (None, "", "unknown")
 # Keyed on mtime so a refreshed download is picked up immediately
 # without any explicit invalidation.
 _parse_cache: dict[tuple[str, int], list[dict]] = {}
-_index_cache: dict[int, dict[int, list[dict]]] = {}
+# 2026-09-23 — the index caches below are keyed on id(dataset) but also
+# keep the dataset object itself and require `is` on lookup. id() alone is
+# only unique among *live* objects: once a dataset list was freed (a new
+# weekly download, or a test's throwaway list), a new list could get the
+# same id and be handed the old list's index. Found as a CI-only flaky test
+# (test_no_raise_for_ambiguous_s1 got the previous test's one-S1 index);
+# the same reuse could serve a stale index after a real dataset refresh.
+_index_cache: dict[int, tuple[list[dict], dict[int, list[dict]]]] = {}
 # 2026-08-18 — the reverse of _index_cache above, same "keyed on the
 # dataset object's identity" memoization; see build_anilist_index()'s
 # own docstring for why this exists as a genuinely separate index
 # rather than a lookup derived from build_tvdb_index()'s output.
-_anilist_index_cache: dict[int, dict[int, list[dict]]] = {}
+_anilist_index_cache: dict[int, tuple[list[dict], dict[int, list[dict]]]] = {}
 # 2026-09-06 — keyed by mal_id, same structure as the anilist index.
 # Used by browse's MAL-fallback path to recover tvdb/anilist/imdb IDs
 # when AniList is down and only MAL IDs are available.
-_mal_index_cache: dict[int, dict[int, list[dict]]] = {}
+_mal_index_cache: dict[int, tuple[list[dict], dict[int, list[dict]]]] = {}
 # 2026-09-12 — keyed by anidb_id, same structure.  Used by
 # propagate_cross_ids to bridge AniDB→AniList/MAL/TMDB/IMDB for
 # shows that enter the system via TVDB (Sonarr) and have no AniList.
-_anidb_index_cache: dict[int, dict[int, list[dict]]] = {}
+_anidb_index_cache: dict[int, tuple[list[dict], dict[int, list[dict]]]] = {}
 
 
 def _dataset_is_stale(path: Path, max_age: float) -> bool:
@@ -136,15 +143,15 @@ def build_tvdb_index(dataset: list[dict]) -> dict[int, list[dict]]:
     list object for an unchanged file — a new download produces a new
     object and therefore a new index, with no explicit invalidation."""
     cached = _index_cache.get(id(dataset))
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] is dataset:
+        return cached[1]
     index: dict[int, list[dict]] = {}
     for entry in dataset:
         if entry.get("tvdb_id") in _MISSING or entry.get("anilist_id") in _MISSING:
             continue
         index.setdefault(entry["tvdb_id"], []).append(entry)
     _index_cache.clear()  # same one-version-at-a-time policy as _parse_cache
-    _index_cache[id(dataset)] = index
+    _index_cache[id(dataset)] = (dataset, index)
     return index
 
 
@@ -166,15 +173,15 @@ def build_anilist_index(dataset: list[dict]) -> dict[int, list[dict]]:
     intact, which resolve_tvdb_id_for_anilist() below needs to detect a
     genuinely ambiguous case (see its own docstring)."""
     cached = _anilist_index_cache.get(id(dataset))
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] is dataset:
+        return cached[1]
     index: dict[int, list[dict]] = {}
     for entry in dataset:
         if entry.get("anilist_id") in _MISSING or entry.get("tvdb_id") in _MISSING:
             continue
         index.setdefault(entry["anilist_id"], []).append(entry)
     _anilist_index_cache.clear()  # same one-version-at-a-time policy as _index_cache
-    _anilist_index_cache[id(dataset)] = index
+    _anilist_index_cache[id(dataset)] = (dataset, index)
     return index
 
 
@@ -209,8 +216,8 @@ def build_mal_index(dataset: list[dict]) -> dict[int, list[dict]]:
     Entries with only a mal_id (no anilist, no tvdb) still aren't useful,
     so we require at least one of anilist_id or tvdb_id."""
     cached = _mal_index_cache.get(id(dataset))
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] is dataset:
+        return cached[1]
     index: dict[int, list[dict]] = {}
     for entry in dataset:
         if entry.get("mal_id") in _MISSING:
@@ -222,7 +229,7 @@ def build_mal_index(dataset: list[dict]) -> dict[int, list[dict]]:
             continue
         index.setdefault(entry["mal_id"], []).append(entry)
     _mal_index_cache.clear()
-    _mal_index_cache[id(dataset)] = index
+    _mal_index_cache[id(dataset)] = (dataset, index)
     return index
 
 
@@ -256,8 +263,8 @@ def build_anidb_index(dataset: list[dict]) -> dict[int, list[dict]]:
     then this index recovers all other IDs without needing AniList as root.
     Same memoization and "never guess" discipline as the other indexes."""
     cached = _anidb_index_cache.get(id(dataset))
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] is dataset:
+        return cached[1]
     index: dict[int, list[dict]] = {}
     for entry in dataset:
         if entry.get("anidb_id") in _MISSING:
@@ -269,7 +276,7 @@ def build_anidb_index(dataset: list[dict]) -> dict[int, list[dict]]:
             continue
         index.setdefault(entry["anidb_id"], []).append(entry)
     _anidb_index_cache.clear()
-    _anidb_index_cache[id(dataset)] = index
+    _anidb_index_cache[id(dataset)] = (dataset, index)
     return index
 
 
