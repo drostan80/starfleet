@@ -3,6 +3,9 @@
 Current version: **v0.2.62** (deployed 2026-09-23).
 Full build history archived to `~/repos/starfleet-archive`.
 
+> Full account of the 2026-09-23 session (changes, data operations, backups,
+> plan violations, open items): **HANDOFF-2026-09-23.md**.
+
 ---
 
 ## ❌ NOT FIXED: service icons render white/blank until hard refresh (+ planner banners)
