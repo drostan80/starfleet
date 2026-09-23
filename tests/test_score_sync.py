@@ -640,3 +640,29 @@ class TestMalMultiple:
             "SELECT entity_id FROM pending_review WHERE resolved_at IS NULL"
         ).fetchone()
         assert flagged_id["entity_id"] == "z-bbbbbb"
+
+
+class TestMalHalfStep:
+    """2026-09-23 — an LCARS score that lands exactly between two MAL
+    integers (13.0 -> 6.5) is consistent with either neighbour; only a
+    real disagreement (more than one conversion step) is drift."""
+
+    def setup_method(self, _):
+        config.get_current().mal_access_token = "mal-token"
+
+    def test_half_step_either_neighbour_is_consistent(self, conn):
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=13.0)
+        _season_with_mal(conn, "z-bbbbbb", "s-aaaaaa", 2, 201, score=13.0)
+        conn.commit()
+        with _fake_mal_list([_mal(200, 6), _mal(201, 7)]):
+            result = score_sync.check_mal_score_drift(conn)
+        assert result == {"checked": 2, "flagged": 0}
+
+    def test_more_than_one_step_is_still_drift(self, conn):
+        _show(conn, "s-aaaaaa")
+        _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=14.0)
+        conn.commit()
+        with _fake_mal_list([_mal(200, 6)]):
+            result = score_sync.check_mal_score_drift(conn)
+        assert result == {"checked": 1, "flagged": 1}

@@ -219,8 +219,14 @@ def check_mal_score_drift(conn: sqlite3.Connection) -> dict[str, int]:
         # nor show scored) means no assertion at all.
         expected_mal = round(effective_lcars / 2) if effective_lcars is not None else None
 
-        if expected_mal is not None and mal_score == expected_mal:
-            continue  # consistent — LCARS pushed this, round-trip is clean
+        # Consistent when MAL is within one conversion step of LCARS, not
+        # only when it equals round(): MAL's 0-10 integer can't hold half a
+        # step, so an LCARS 13.0 (6.5 on MAL's scale) is equally right as 6
+        # or 7 — MAL may hold either (mirrored from AniList's 65, set by
+        # hand, or rounded the other way). 2026-09-23: exact-match flagged
+        # Goblin's Crown and Laid-Back Camp S3 (13.0 vs MAL 7) as drift.
+        if expected_mal is not None and abs(mal_score * 2 - effective_lcars) <= 1:
+            continue
 
         # Discrepancy: either LCARS has no score and MAL does, or the MAL
         # score no longer matches what LCARS pushed.
