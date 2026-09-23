@@ -163,12 +163,24 @@ still treated "LCARS season N" as "TVDB season N".
       removed; Majutsu S1 -> AniList 202503 / MAL 62978 and its Hamefura S2 row
       removed; wrong-series posters cleared. Both stay without a TVDB link until
       one exists (2027 shows). Import sweep afterwards: 0 shows created.
-- [ ] **Missing seasons on AniList/MAL: 202 (192 on MAL), under review.** User's
-      rule: future seasons -> PLANNING, older seasons -> their LCARS status. Full
-      list: https://claude.ai/artifact/MfTBLYCjrYGiLWdWDgVgTP. 165 of the 202
-      were auto-created on 2026-09-21 by `ensure_fribb_season_rows` (every season
-      Fribb knows, for every tracked show, status copied from the show); only
-      7 have watched episodes. Waiting on the user to review before pushing.
+- [x] **Missing seasons pushed per the user's rules (2026-09-23)**: 109 added
+      via setSeasonStatus (LCARS status + AniList + MAL): 92 PLANNING, 9
+      PAUSED, 7 COMPLETED (all episodes), 1 DROPPED. 93 deliberately skipped:
+      86 auto-created "dropped" sequels, 4 unreleased seasons of dropped shows,
+      Railgun S3, DanMachi S4/S5. Verified by re-reading both lists: all 109
+      present with the right status; 0 push failures.
+- [ ] **setSeasonStatus(completed) doesn't push MAL episode progress**: MAL
+      doesn't auto-fill it (AniList does), so completed seasons showed 0/N on
+      MAL. The 7 from today were fixed by hand; the push needs
+      `num_watched_episodes` = the episode count when completing.
+- [ ] **Sonarr "TBA" placeholder episodes get marked watched**: 6 unreleased
+      S2s each had a single 2x1 TBA placeholder, dated to the S1 premiere and
+      state=watched, which made them look watched and completed. Find what
+      marks them (a completion sweep or mark-show-watched?) and exclude
+      unaired/TBA episodes.
+- [ ] **Auto-created seasons copy the show's status** (`inherit_season_status`
+      in `ensure_fribb_season_rows`, 09-21): a show dropped at S1 got S2..Sn
+      as "dropped". New seasons should start PLANNED; the user decides from there.
 - [ ] **First hourly tick after every restart blocks LCARS for tens of
       seconds** (ops read timeouts at 10:36 and 12:33): the long sync pass
       runs inside a request handler. Same class as the reopened app-stall
