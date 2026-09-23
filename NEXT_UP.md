@@ -1,9 +1,112 @@
 # Next up
 
-Current version: **v0.2.52** (deployed 2026-09-22).
+Current version: **v0.2.58** (deployed 2026-09-23).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
+
+## Season/episode identity from absolute order — shipped v0.2.56-v0.2.58 (2026-09-23)
+
+User-reported: Slime S04E24 and S05E24 both "airing next Friday".
+Root cause: once LCARS subdivided TVDB S2 into LCARS S2+S3, every
+later LCARS season sat one ahead of TVDB's, and several writers
+still treated "LCARS season N" as "TVDB season N".
+
+- [x] **Traced on prod.** `reconcile_season` (Fribb by tvdb+LCARS
+      season number) moved the 2026 season's AniList id (182205) onto
+      LCARS S4 (2024) on 09-12. That change was then accepted by the 09-15
+      bulk cleanup, and the correct 09-21 identity_mismatch flag was
+      resolved as "Fribb wrong". The AniList air-date pass then wrote
+      the 2026 schedule over S4. Memory Alpha's arbiter locked S4 to
+      AniDB 18884 (2026) against those AniList-written dates.
+      local_audit put Sonarr S04 files on LCARS S4. Sonarr coordinates
+      were never captured because a merged-away "S2 Part 2" stub still
+      held the tvdb id, forcing the multi-show path.
+- [x] **Code (v0.2.55 failed CI on lint; v0.2.56 shipped):** new
+      `sonarr_match` (Sonarr<->LCARS by captured coords, then absolute
+      number; captures coords; merge losers aren't siblings), used by
+      `_fetch_sonarr`, local_audit, and the availability fallback.
+      Anime-Lists now gets real TVDB coords, and the arbiter only locks
+      against independent dates. `reconcile_season` derives from Memory
+      Alpha (AniDB -> Fribb). AniList air dates get a >60-day drift guard
+      vs Sonarr raw dates. Derived episode ids follow their source.
+      11 new tests, 1396 total passing.
+- [x] **Data repaired** (`scripts/repair_absolute_identity.py`, dry-run
+      first, snapshot `lcars.db.bak-20260923-pre-v0.2.56`): Slime,
+      Re:ZERO, SPY x FAMILY, Mushoku Tensei, Dr. STONE, Mob Psycho,
+      Bakemonogatari. Verified live: only S5E24 airs 2026-09-25, and all
+      scheduled passes re-run against Slime changed nothing.
+- [x] **Slime S4 score confirmed 14.5 by the user** (2026-09-23). It was
+      applied on 09-22 while S4 was mislinked; kept as-is.
+- [x] **AniList token restored 2026-09-23** (pulled 09-21 for the score/DB
+      alignment work). The value came from `lcars.ini.bak-20260921-before-token-
+      pull`; the pre-restore config was saved as `...bak-20260923-before-anilist-
+      token-restore`, and only that one line changed. The token is valid until
+      2027-08-11. lcars and ops were restarted; the first drift run flagged
+      7 seasons (open `score` reviews), including Slime S4 (LCARS 14.5 vs
+      AniList 156822 = 57 -> 11.4).
+- [x] **Slime S4 score pushed**: `setSeasonScore(14.5)`, read back from
+      both services (AniList 156822 = 72, MAL 53580 = 7), review resolved.
+- [x] **`pollScoreSync` fixed (v0.2.57)**: it returned camelCase keys, but
+      `convert_names_case` expects snake_case. Verified live: 1201 AniList /
+      1190 MAL seasons checked.
+- [x] **ops startup race fixed (v0.2.57)**: ops waits for LCARS before
+      starting its loops, and the availability loop retries in 60s instead
+      of 3600s. Verified on two deploys: 0 connection errors, loops start
+      about 2s after LCARS answers.
+- [x] **Remaining candidates repaired (v0.2.57)**: every tracked anime show
+      with uncaptured or renumbered Sonarr coords (5 more). Bookworm S4E21-24
+      are now date-confirmed; its TVDB-only 08-28 slot makes no claim.
+      Chitose S2 moved to AniDB 20240 (manual link beats the stale list).
+      Fire Force S4 and Black Lagoon S2 got their first mappings. Tonbo! S2
+      kept its date-confirmed lock (the repair now respects independently
+      confirmed locks).
+- [x] **v0.2.57 incident, fixed in v0.2.58**: the first weekly reconcile
+      after the deploy changed 70 seasons (cleared 47 links, e.g. JoJo,
+      Pokémon, NieR). This was a latent ping-pong: episode-less seasons are
+      created by Fribb *position* but were reconciled by TVDB season number.
+      Simulated on the pre-deploy DB, the pre-session code does the same to
+      66 of the 70 (and 51 clears across all 399 seasons). v0.2.58: episode-
+      less seasons follow Fribb's order, the TVDB lookup is strict (no "one
+      entry -> every season" shortcut), and "no candidate" never clears a
+      link. All 70 were restored from `lcars.db.bak-20260923-pre-v0.2.57`
+      (140 reviews resolved with a note), verified equal to the snapshot.
+      The same simulation on the final code: 0 cleared, 20 filled,
+      2 replaced (Food Wars! re-aligned to the positional layout).
+- [ ] **Chitose: empty duplicate season 3 row** (`z-kzcj41`, same AniList
+      198727 as S2, left over from the 09-17 sequel attach; the 09-22 split
+      created the real S2). No episodes, art or reviews reference it. The
+      delete + S2 `abs_end` 14->15 fix is written but needs the user's OK
+      (the permission check blocked a manual row delete).
+- [ ] **Pre-existing bad season data surfaced, not changed**:
+      Himekishi-sama no Himo (`s-eecj4c`) S2-S4 carry another TVDB series'
+      ids (84025: AniList 444/1729/3750); The Guy She Was Interested In
+      (`s-xfq0e3`) has year-numbered seasons 2021/2022/2024; Ramparts of
+      Ice S2 (`s-n8qcjp`) holds 40 unrelated 2019 episodes. The last two are
+      season-2-linking-pattern cases.
+- [ ] **Watch: ops hourly tier timed out once** right after the v0.2.58
+      deploy (10s client read timeout; LCARS held a write transaction for
+      30s+, then recovered). Now that ops no longer sleeps an hour after
+      starting, the heavy first tick runs cold. Next hourly result is being
+      checked.
+
+## Global search box: Escape / esc doesn't close it — shipped v0.2.57 (2026-09-23)
+
+- [x] `.search-overlay[hidden] { display: none; }` (the author `display:
+      flex` rule beat the UA `[hidden]` rule). Escape now closes from
+      anywhere while open, and the "esc" chip is a real close button. Verified
+      in headless Firefox against the real `search.js`/`main.css`: all four
+      close paths (Escape in the input, Escape elsewhere, the chip, the
+      backdrop) fail on the old code and pass on the new.
+
+## Service badge icons / planner banners blank until hard refresh — REOPENED 2026-09-23
+
+- [ ] **Still happening after v0.2.52.** The cache fix is live (verified:
+      all UI assets `no-cache` + ETag), but it wasn't the cause. The icons
+      are inline SVGs built by JS, not files. Server logs are clean
+      (all 200/304). Planner banners are CSS backgrounds from the
+      AniList/TVDB CDNs with no error handling. Needs client-side
+      evidence (console + network screenshot, or `/chrome`) before any fix.
 
 ## Service badge icons blank until hard refresh + special/OVA/bonus-movie cover art — built, not yet deployed (2026-09-22)
 
