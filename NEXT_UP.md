@@ -1,6 +1,6 @@
 # Next up
 
-Current version: **v0.2.61** (deployed 2026-09-23).
+Current version: **v0.2.62** (deployed 2026-09-23).
 Full build history archived to `~/repos/starfleet-archive`.
 
 ---
@@ -141,21 +141,34 @@ still treated "LCARS season N" as "TVDB season N".
       MAL mirror pushed): Nisekoi S2, SNAFU S2, DanMachi S5, Made in Abyss
       S2, Natsume S2, SAO S4, Returner S2. Bungo S3's MAL 38003 still says
       "watching" (pushed by S2 before the fix) and has no AniList counterpart.
-- [ ] **REGRESSION from the queue fix: Milky Holmes recreated.** The Milky
-      Holmes series is still in Sonarr (TVDB 197261, unmonitored, 12 files,
-      31.8 GB). After the junk LCARS show was purged, the hourly
-      untracked-shows sweep re-imported it as `s-66qdd1` (12:49) and LCARS
-      re-pushed all 8 entries to AniList/MAL. The purge order must be Sonarr
-      -> LCARS -> lists. Waiting on the user: delete the Sonarr series with or
-      without its files; then purge s-66qdd1 and remove the 8 entries again.
-- [ ] **ROOT CAUSE, next: add path links shows to the wrong Sonarr/TVDB
-      series.** 09-21 20:14-20:23 batch: Kaketa Tsuki no Mercedes -> *Maria
-      Mercedes* (telenovela), Majutsu wo Kiwamete... -> *My Next Life as a
-      Villainess*, Ore to Yuu-nii! -> *My Sky: Detective Story* (1991; its
-      fribb_identity_mismatch review is the last open one). Each wrong series
-      is in Sonarr. Same pattern as the season-2-linking cases. Fix per the
-      plan: identity from the ID crosswalk, never a title-search guess; then
-      clean these three.
+- [x] **Milky Holmes deleted everywhere (user: "delete all")**, in the order
+      Sonarr -> LCARS -> lists: Sonarr series + 12 files (31.8 GB), 6 LCARS
+      shows (s-66qdd1 + 5 relation stubs), 4 AniList + 4 MAL entries. Proven
+      by running reconcileArrState afterwards: 0 shows created; nothing back
+      on either list.
+- [x] **Ore to Yuu-nii! fixed**: the wrong Sonarr series (My Sky: Detective
+      Story, 458465) was deleted; relinked to TVDB 473179 (Me and Older
+      Brother Yu) via amendShowArrLink, now added and monitored in Sonarr;
+      TMDB 280953 and IMDb tt28863748 (My Sky's) removed; AniDB 7705 -> 19949.
+      2 junk episodes purged; review resolved.
+- [x] **ROOT CAUSE fixed (v0.2.62): no more title-guessed Sonarr links.**
+      addShowWithArr took Sonarr's first title-search hit when no tvdbId was
+      given. Now the tvdb id comes from the input or the ID crosswalk; with
+      neither, the show is added unlinked and a `tvdb_link` review opens.
+      The catalog presence sweep writes a Sonarr/Radarr link only on a
+      tvdbId/tmdbId match.
+- [ ] **Waiting on user**: Kaketa Tsuki no Mercedes (s-n068em; everything but
+      AniList 197095 / MAL 62188 is the telenovela Maria Mercedes, 82 junk
+      episodes) and Majutsu wo Kiwamete... (s-fm4vws; only the title is
+      right; its seasons hold Hamefura S1/S2, and the real ids are AniList
+      202503 / MAL 62978). Same fix as Ore to Yuu-nii? Does the user know
+      their TVDB ids (both air in 2027)?
+- [ ] **Waiting on user: status rule for the 203 (AniList) / 193 (MAL)
+      tracked seasons missing from the lists.** Many season statuses were
+      copied from the show (`inherit_season_status`), e.g. unaired
+      "completed" and never-watched "dropped". Proposal: real watch data
+      keeps its status, everything never watched -> PLANNING, and new
+      seasons start PLANNING instead of copying the show.
 - [ ] **First hourly tick after every restart blocks LCARS for tens of
       seconds** (ops read timeouts at 10:36 and 12:33): the long sync pass
       runs inside a request handler. Same class as the reopened app-stall
