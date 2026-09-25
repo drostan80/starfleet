@@ -944,6 +944,32 @@ def test_reconcile_flags_a_remonitored_paused_show_for_resume(conn, monkeypatch)
     assert result["to_pause"] == []
 
 
+@pytest.mark.parametrize("configure,shape", [("sonarr", "episodic"), ("radarr", "movie")])
+def test_reconcile_never_pauses_a_completed_unmonitored_show(conn, monkeypatch, configure, shape):
+    # Real incident, 09-19 -> 09-25: completed shows are unmonitored in
+    # Sonarr as a matter of course; pausing them made the AniList/MAL
+    # reconcilers flip them back to completed every hour (29 shows,
+    # ~1,300 status changes, each pushed to both lists).
+    if configure == "sonarr":
+        _configure_sonarr()
+        _add_show(conn, "s-rec007", tvdb_id=457078)
+        entry = {"id": 1, "tvdbId": 457078, "title": "T", "path": "/d/s", "monitored": False}
+        fake = _FakeSonarrClient([entry], {1: []})
+        monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    else:
+        _configure_radarr()
+        _add_show(conn, "s-rec007", tmdb_id=687163, media_shape=shape)
+        entry = {"id": 1, "tmdbId": 687163, "title": "T", "path": "/m/x", "monitored": False}
+        fake = _FakeRadarrClient([entry])
+        monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+    conn.execute("UPDATE show SET status = 'completed' WHERE id = 's-rec007'")
+    conn.commit()
+
+    result = local_audit.reconcile_arr_state(conn)
+    assert result["to_pause"] == []
+    assert result["to_resume"] == []
+
+
 def test_reconcile_never_auto_resumes_a_show_with_no_recorded_pause_reason(conn, monkeypatch):
     # Real bug caught in review: a show dropped/paused before this feature
     # existed (or whose pause wasn't recorded by _apply_status_change for

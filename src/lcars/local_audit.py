@@ -866,7 +866,12 @@ def _check_monitored(conn, show_id: str, monitored: bool, result: dict) -> None:
     if row is None:
         return
     is_paused = row["status"] in ("paused", "dropped")
-    if not monitored and not is_paused:
+    # A completed show is normally unmonitored — there is nothing left to
+    # grab. Pausing it on that signal is wrong, and the AniList/MAL
+    # reconcilers set it straight back to completed from the lists, so
+    # 29 shows flipped completed <-> paused every hour from 09-19 to
+    # 09-25, pushing both statuses to AniList/MAL each time.
+    if not monitored and not is_paused and row["status"] != "completed":
         result["to_pause"].append(show_id)
     elif monitored and is_paused and row["status_before_pause"] is not None:
         result["to_resume"].append(show_id)
