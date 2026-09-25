@@ -209,6 +209,8 @@ IDS = [
 c = sqlite3.connect("/db/lcars.db", timeout=30)
 n = 0
 for sid in IDS:
-    n += c.execute("UPDATE season SET list_sync = 0 WHERE id = ? AND list_sync = 1", (sid,)).rowcount
+    n += c.execute(
+        "UPDATE season SET list_sync = 0 WHERE id = ? AND list_sync = 1", (sid,)
+    ).rowcount
 print(("" if APPLY else "[dry] ") + f"list_sync -> 0: {n} of {len(IDS)} seasons")
 c.commit() if APPLY else c.rollback()
