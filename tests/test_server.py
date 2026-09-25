@@ -10709,8 +10709,9 @@ async def test_reconcile_watch_progress_backfills_and_corrects_status_through_re
     )
     for ep in (1, 2, 3):
         conn.execute(
-            "INSERT INTO episode (id, show_id, season, episode, kind, created_at, updated_at)"
-            " VALUES (?, ?, 1, ?, 'regular', 'x', 'x')",
+            "INSERT INTO episode"
+            " (id, show_id, season, episode, kind, air_date_utc, created_at, updated_at)"
+            " VALUES (?, ?, 1, ?, 'regular', '2020-01-01T00:00:00Z', 'x', 'x')",
             (f"e-recon{ep}", show["id"], ep),
         )
     conn.commit()
@@ -10781,7 +10782,7 @@ async def test_reconcile_watch_progress_never_marks_an_unaired_episode_watched(c
         " VALUES ('z-recon2', 'anilist', 556, 'x')"
     )
     future = (datetime.now(UTC) + timedelta(days=7)).isoformat()
-    for ep, air_date in ((1, None), (2, None), (3, future)):
+    for ep, air_date in ((1, "2020-01-01T00:00:00Z"), (2, None), (3, future)):
         conn.execute(
             "INSERT INTO episode"
             " (id, show_id, season, episode, kind, air_date_utc, created_at, updated_at)"
