@@ -17,6 +17,11 @@ D. Future seasons set paused/watching by the 09-19 -> 09-25 loop or the
    -> planned (user rule: a not-yet-released season is planned), pushed to
    AniList + MAL (they are on both lists).
 E. Orphaned rows (FK violations left by earlier deletes; user: "delete").
+F. The 28 seasons where LCARS and AniList disagreed, per the user's call
+   (09-25): LCARS set to the decided status and the decision pushed to both
+   lists, so the hub release (list_baseline) starts from agreement.
+G. Blue Box / The Dangers in My Heart: re-monitored in Sonarr and resumed
+   (user: "re-monitor").
 """
 
 import sqlite3
@@ -173,10 +178,65 @@ for table, rowids in by_table.items():
         c.execute(f'DELETE FROM "{table}" WHERE rowid = ?', (rid,))
     say(f"  {table}: {len(rowids)} deleted")
 
+# F ---------------------------------------------------------------------------
+say("F. The 28 LCARS/AniList disagreements, as decided by the user")
+decided = {
+    # AniList was right (dropped): 17 seasons LCARS had as completed
+    "dropped": ["z-805bk9", "z-gdha5q", "z-tszb6m", "z-wb7bkw", "z-z308ec", "z-8vvd65",
+                "z-qew9pn", "z-hvc0zh", "z-cxd7tq", "z-kwhnaq", "z-hxqztq", "z-1rhz4m",
+                "z-pf4dtg", "z-yycbxm", "z-0l95da", "z-e4dtzk", "z-il6f9r",
+                # LCARS was right (dropped): Natsume S1, Returner S1
+                "z-pcevp8", "z-0gsptq"],
+    # LCARS right (completed): Aristocrat S2, Ranma S2, Saint's Magic S2;
+    # AniList right (completed): Bungo S2, Re:ZERO S4
+    "completed": ["z-za0jay", "z-ovp0d0", "z-5dyw3e", "z-nb167o", "z-qx1hnx"],
+    # LCARS right (still airing): HELL MODE S2, Polar Opposites S2, Slime S5
+    "watching": ["z-ghhst4", "z-t16q0y", "z-1578my"],
+}
+AL = {"dropped": "DROPPED", "completed": "COMPLETED", "watching": "CURRENT"}
+MAL = {"dropped": "dropped", "completed": "completed", "watching": "watching"}
+f_shows = set()
+for target, season_ids in decided.items():
+    for sid in season_ids:
+        se = c.execute("SELECT * FROM season WHERE id = ?", (sid,)).fetchone()
+        if se is None:
+            say(f"  {sid}: MISSING")
+            continue
+        if se["status"] != target:
+            c.execute("UPDATE season SET status = ?, updated_at = ? WHERE id = ?",
+                      (target, now, sid))
+        f_shows.add(se["show_id"])
+        say(f"  {se['show_id']} S{se['season_number']}: {se['status']} -> {target}")
+        if se["anilist_id"]:
+            remote.append((f"AniList {se['anilist_id']} {AL[target]}",
+                           lambda a=se["anilist_id"], t=AL[target]:
+                           anilist_client.save_media_list_entry(
+                               cfg.anilist_access_token, a, status=t)))
+        if se["mal_id"]:
+            remote.append((f"MAL {se['mal_id']} {MAL[target]}",
+                           lambda m=se["mal_id"], t=MAL[target]:
+                           mal_client.update_my_list_status(cfg.mal_access_token, m, status=t)))
+
+# G ---------------------------------------------------------------------------
+say("G. Blue Box / The Dangers in My Heart: re-monitor in Sonarr and resume")
+g_shows = ["s-aq4na5", "s-5tq9ae"]
+for show_id in g_shows:
+    say(f"  {show_id}: re-monitor in Sonarr, recompute status, clear status_before_pause")
+
 left = c.execute("PRAGMA foreign_key_check").fetchall()
 say(f"FK violations remaining: {len(left)}")
 
 if APPLY:
+    # Show-status derivation runs only here: its completed path marks
+    # episodes and commits, which a dry run must never do.
+    for show_id in sorted(f_shows):
+        resolvers._recompute_show_status(c, show_id, "captains_log", _skip_push=True)
+    for show_id in g_shows:
+        resolvers._remonitor_in_arr_on_resume(c, show_id)
+        resolvers._recompute_show_status(c, show_id, "captains_log", _skip_push=True)
+        c.execute("UPDATE show SET status_before_pause = NULL WHERE id = ?", (show_id,))
+        st = c.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()[0]
+        print(f"{show_id}: re-monitored, show status {st}")
     c.commit()
     for desc, fn in remote:
         try:
