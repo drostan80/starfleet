@@ -1765,12 +1765,13 @@ def _ensure_seasons(
         except Exception as e:
             season_id = ids.generate_id(conn, "z")
             now = util.now_utc_iso()
+            status, list_sync = season_ranges.auto_season_fields(conn, show_id, season_number)
             conn.execute(
                 "INSERT INTO season"
                 " (id, show_id, season_number, status, source, matched, manual_override,"
-                "  created_at, updated_at)"
-                " VALUES (?, ?, ?, 'planned', 'unmatched', 0, 0, ?, ?)",
-                (season_id, show_id, season_number, now, now),
+                "  created_at, updated_at, list_sync)"
+                " VALUES (?, ?, ?, ?, 'unmatched', 0, 0, ?, ?, ?)",
+                (season_id, show_id, season_number, status, now, now, list_sync),
             )
             pending_review.open_or_extend(
                 conn, "season", season_id, "anilist_id", "fribb", None, str(e)

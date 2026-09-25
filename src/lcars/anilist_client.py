@@ -300,6 +300,32 @@ def fetch_seasonal_page(
     return data["Page"]
 
 
+_MEDIA_STATUSES_QUERY = """
+query ($ids: [Int], $page: Int) {
+  Page(page: $page, perPage: 50) {
+    media(id_in: $ids, type: ANIME) { id status }
+  }
+}
+"""
+
+
+def fetch_media_statuses(anilist_ids, client: httpx.Client | None = None) -> dict[int, str]:
+    """AniList release status (FINISHED, RELEASING, NOT_YET_RELEASED,
+    CANCELLED, HIATUS) for many media ids, 50 per call — public, no auth.
+    Used when LCARS creates season rows on its own and has no episodes to
+    tell an old season from a future one. Raises AniListError like every
+    other call here; an id AniList doesn't know is simply absent."""
+    ids = list(dict.fromkeys(int(i) for i in anilist_ids))
+    out: dict[int, str] = {}
+    for i in range(0, len(ids), 50):
+        data = _graphql_request(
+            _MEDIA_STATUSES_QUERY, {"ids": ids[i:i + 50], "page": 1}, token=None, client=client
+        )
+        for media in (data.get("Page") or {}).get("media") or []:
+            out[media["id"]] = media["status"]
+    return out
+
+
 def search_media(query: str, client: httpx.Client | None = None) -> list[dict]:
     """Search AniList's anime catalog by title — public, no auth needed.
 

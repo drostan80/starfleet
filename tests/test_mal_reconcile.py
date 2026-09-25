@@ -28,6 +28,14 @@ def conn(tmp_path) -> sqlite3.Connection:
     c = sqlite3.connect(db_path)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
+    # Baselines already seeded (the steady state): a list value with no
+    # baseline row reads as an edit made on the list. First-run behaviour
+    # has its own tests (test_list_baseline.py).
+    c.execute(
+        "INSERT INTO list_baseline_seed (service, seeded_at)"
+        " VALUES ('anilist', 'x'), ('mal', 'x')"
+    )
+    c.commit()
     return c
 
 

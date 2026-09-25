@@ -63,6 +63,96 @@ def inherit_season_status(conn: sqlite3.Connection, show_id: str) -> str:
     return "planned"
 
 
+def _previous_season_status(conn: sqlite3.Connection, show_id: str, season_number: int):
+    row = conn.execute(
+        "SELECT status FROM season WHERE show_id = ? AND season_number > 0"
+        " AND season_number < ? AND status IS NOT NULL"
+        " ORDER BY season_number DESC LIMIT 1",
+        (show_id, season_number),
+    ).fetchone()
+    if row is not None:
+        return row["status"]
+    row = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
+    return row["status"] if row is not None else None
+
+
+def season_finished_locally(conn: sqlite3.Connection, show_id: str, season_number: int):
+    """True when every episode of this season has aired, False when one
+    hasn't (future or undated), None when LCARS has no episodes for it."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n,"
+        " SUM(air_date_utc IS NOT NULL AND air_date_utc <= ?) AS aired"
+        " FROM episode WHERE show_id = ? AND season = ?",
+        (util.now_utc_iso(), show_id, season_number),
+    ).fetchone()
+    if not row["n"]:
+        return None
+    return row["aired"] == row["n"]
+
+
+def new_season_status(
+    conn: sqlite3.Connection, show_id: str, season_number: int, finished: bool | None
+) -> str:
+    """Status of a season LCARS creates on its own (user rule, 2026-09-25):
+      - not finished airing (future or currently airing) -> planned
+      - finished (or unknown), previous season watching/completed/paused
+        -> paused
+      - finished (or unknown), previous season dropped -> dropped
+      - anything else -> planned
+    Such seasons are also never pushed to AniList/MAL (`list_sync = 0`)."""
+    if finished is False:
+        return "planned"
+    previous = _previous_season_status(conn, show_id, season_number)
+    if previous in ("watching", "completed", "paused"):
+        return "paused"
+    if previous == "dropped":
+        return "dropped"
+    return "planned"
+
+
+def is_users_own_season(
+    conn: sqlite3.Connection, show_id: str, season_number: int, anilist_id
+) -> bool:
+    """The season the user added the show for: the show's first season
+    row, or the one carrying the show's own AniList id. It keeps the
+    old status inheritance and is mirrored to AniList/MAL."""
+    other = conn.execute(
+        "SELECT 1 FROM season WHERE show_id = ? AND season_number > 0"
+        " AND season_number != ? LIMIT 1",
+        (show_id, season_number),
+    ).fetchone()
+    if other is None:
+        return True
+    if anilist_id is None:
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM show_external_id WHERE show_id = ? AND service = 'anilist'"
+        " AND external_id = ?",
+        (show_id, str(anilist_id)),
+    ).fetchone()
+    return row is not None
+
+
+def auto_season_fields(
+    conn: sqlite3.Connection, show_id: str, season_number: int,
+    anilist_id=None, finished: bool | None = None,
+) -> tuple[str, int]:
+    """(status, list_sync) for a season row LCARS is creating on its own.
+    `finished` falls back to the season's own episodes when not given."""
+    if is_users_own_season(conn, show_id, season_number, anilist_id):
+        return inherit_season_status(conn, show_id), 1
+    if finished is None:
+        finished = season_finished_locally(conn, show_id, season_number)
+    if finished is None and anilist_id is not None:
+        try:
+            status = anilist_client.fetch_media_statuses([anilist_id]).get(int(anilist_id))
+            if status is not None:
+                finished = status in ("FINISHED", "CANCELLED")
+        except anilist_client.AniListError:
+            finished = None
+    return new_season_status(conn, show_id, season_number, finished), 0
+
+
 # ---------------------------------------------------------------------------
 # Width-check internals (ported from scripts/backfill_season_ranges.py so
 # the same logic is reachable from the live server, not only the one-time
@@ -369,25 +459,25 @@ def ensure_all_season_rows(conn: sqlite3.Connection) -> int:
                 ).fetchone()
                 if not exists:
                     season_id = ids.generate_id(conn, "z")
-                    status = inherit_season_status(conn, show_id)
+                    status, list_sync = auto_season_fields(conn, show_id, season_number)
                     conn.execute(
                         "INSERT INTO season"
                         " (id, show_id, season_number, status, source, matched,"
-                        "  manual_override, created_at, updated_at)"
-                        " VALUES (?, ?, ?, ?, 'unmatched', 0, 0, ?, ?)",
-                        (season_id, show_id, season_number, status, now, now),
+                        "  manual_override, created_at, updated_at, list_sync)"
+                        " VALUES (?, ?, ?, ?, 'unmatched', 0, 0, ?, ?, ?)",
+                        (season_id, show_id, season_number, status, now, now, list_sync),
                     )
                     conn.commit()
         else:
             # TV/movies — direct creation, no Fribb, no pending_review
             season_id = ids.generate_id(conn, "z")
-            status = inherit_season_status(conn, show_id)
+            status, list_sync = auto_season_fields(conn, show_id, season_number)
             conn.execute(
                 "INSERT INTO season"
                 " (id, show_id, season_number, status, source, matched,"
-                "  manual_override, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, 'unmatched', 0, 0, ?, ?)",
-                (season_id, show_id, season_number, status, now, now),
+                "  manual_override, created_at, updated_at, list_sync)"
+                " VALUES (?, ?, ?, ?, 'unmatched', 0, 0, ?, ?, ?)",
+                (season_id, show_id, season_number, status, now, now, list_sync),
             )
             conn.commit()
 
@@ -478,6 +568,19 @@ def ensure_fribb_season_rows(conn: sqlite3.Connection) -> dict:
         existing_anilist_ids = {
             r["anilist_id"] for r in existing_rows if r["anilist_id"] is not None
         }
+        # One batched AniList call per show that actually gains rows —
+        # tells an old season (finished) from a future one.
+        missing_ids = [
+            fribb.extract_ids(real_seasons[p - 1])[0]
+            for p in range(1, len(real_seasons) + 1) if p not in existing
+        ]
+        missing_ids = [i for i in missing_ids if i is not None]
+        release_status: dict[int, str] = {}
+        if missing_ids:
+            try:
+                release_status = anilist_client.fetch_media_statuses(missing_ids)
+            except anilist_client.AniListError:
+                log.warning("ensure_fribb_season_rows: AniList status lookup failed")
         for position in range(1, len(real_seasons) + 1):
             if position in existing:
                 continue
@@ -494,15 +597,20 @@ def ensure_fribb_season_rows(conn: sqlite3.Connection) -> dict:
                     # this function's job to silently paper over.
                     continue
                 season_id = ids.generate_id(conn, "z")
-                status = inherit_season_status(conn, row["show_id"])
+                finished = None
+                if anilist_id is not None and int(anilist_id) in release_status:
+                    finished = release_status[int(anilist_id)] in ("FINISHED", "CANCELLED")
+                status, list_sync = auto_season_fields(
+                    conn, row["show_id"], position, anilist_id, finished
+                )
                 conn.execute(
                     "INSERT INTO season"
                     " (id, show_id, season_number, status, anilist_id, mal_id,"
                     "  source, matched, manual_override, last_reconciled_at,"
-                    "  created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, 'fribb', 1, 0, ?, ?, ?)",
+                    "  created_at, updated_at, list_sync)"
+                    " VALUES (?, ?, ?, ?, ?, ?, 'fribb', 1, 0, ?, ?, ?, ?)",
                     (season_id, row["show_id"], position, status, anilist_id, mal_id,
-                     now, now, now),
+                     now, now, now, list_sync),
                 )
                 conn.commit()
                 created += 1

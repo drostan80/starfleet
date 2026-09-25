@@ -38,3 +38,12 @@ def _no_real_anilist_throttle_sleep(monkeypatch):
 @pytest.fixture(autouse=True)
 def _reset_anilist_viewer_id_cache(monkeypatch):
     monkeypatch.setattr(watch_reconcile, "_viewer_id_cache", None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_anilist_release_status(monkeypatch):
+    """2026-09-25 — `season_ranges.auto_season_fields` asks AniList
+    whether a season has finished airing when LCARS creates a season row
+    with no episodes. No test may reach the real API through that; a
+    test that cares patches `fetch_media_statuses` itself."""
+    monkeypatch.setattr(anilist_client, "fetch_media_statuses", lambda ids, client=None: {})

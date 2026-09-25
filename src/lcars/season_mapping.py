@@ -94,13 +94,13 @@ def reconcile_season(
             conn.commit()
             return get_season(conn, existing["id"])
         season_id = ids.generate_id(conn, "z")
-        status = season_ranges.inherit_season_status(conn, show_id)
+        status, list_sync = season_ranges.auto_season_fields(conn, show_id, season_number)
         conn.execute(
             "INSERT INTO season"
             " (id, show_id, season_number, status, anilist_id, mal_id, source, matched,"
-            "  manual_override, last_reconciled_at, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, NULL, NULL, 'unmatched', 0, 0, ?, ?, ?)",
-            (season_id, show_id, season_number, status, now, now, now),
+            "  manual_override, last_reconciled_at, created_at, updated_at, list_sync)"
+            " VALUES (?, ?, ?, ?, NULL, NULL, 'unmatched', 0, 0, ?, ?, ?, ?)",
+            (season_id, show_id, season_number, status, now, now, now, list_sync),
         )
         conn.commit()
         return get_season(conn, season_id)
@@ -155,14 +155,16 @@ def reconcile_season(
         )
     else:
         season_id = ids.generate_id(conn, "z")
-        status = season_ranges.inherit_season_status(conn, show_id)
+        status, list_sync = season_ranges.auto_season_fields(
+            conn, show_id, season_number, anilist_id
+        )
         conn.execute(
             "INSERT INTO season"
             " (id, show_id, season_number, status, anilist_id, mal_id, source, matched,"
-            "  manual_override, last_reconciled_at, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+            "  manual_override, last_reconciled_at, created_at, updated_at, list_sync)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
             (season_id, show_id, season_number, status,
-             anilist_id, mal_id, source, matched, now, now, now),
+             anilist_id, mal_id, source, matched, now, now, now, list_sync),
         )
         if not matched:
             pending_review.open_or_extend(

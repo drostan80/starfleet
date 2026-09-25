@@ -26,10 +26,23 @@ superseded wherever these rules disagree with it.
 |---|---|
 | **Absolute episode order is the spine.** Memory Alpha/AniDB sets the order; everything else maps onto it. An LCARS season number is never a TVDB season number. | Your 09-23 message; D1–D3 memo |
 | **AniList is authoritative.** On a score disagreement, AniList's value wins. | 09-22: "accept scores from anilist, this is intended" |
-| **MAL is a mirror of AniList.** A MAL id follows AniList's pairing (Fribb), and MAL status/score/progress follow the AniList entry. | Memory `mal-mirrored-from-anilist-nothing-unique` |
+| **LCARS is the hub and the source of truth.** An edit made on AniList or MAL goes into LCARS and on to the other list; an LCARS change goes out to both. Which side changed is decided against the last state they agreed on (`list_baseline`), never "the list always wins". A MAL id still follows AniList's pairing (Fribb). | User, 2026-09-25 (#6) |
 | **Identity comes only from ID crosswalks** (Fribb, Wikidata, Anime-Lists). Never from a title search. No match means the item stays unlinked and a review opens. | v0.2.62 root cause; 09-23 |
 | **Missing evidence is not evidence.** Having no candidate never clears a stored link. | v0.2.58 incident |
 | **Purge order: Sonarr → LCARS → lists.** | Memory `junk-purge-order-sonarr-first` |
+
+## Findings (2026-09-25)
+
+| # | Finding | State |
+|---|---|---|
+| 1 | Sonarr reconcile paused completed (unmonitored) shows; list reconcilers set them back: 29 shows flipped hourly since 09-19, ~1,300 pushes to each list | Fixed v0.2.63, deployed, verified (0 paused since) |
+| 2 | Syoboi ProgLookup 400 every tick (duplicate TID 1536 in the batch) — Syoboi sync never ran | Fixed in v0.2.65 |
+| 3 | Progress backfill marked undated placeholders of unstarted seasons watched (Kaiju S3E1) | Fixed in v0.2.65; 8 episodes cleared by scripts/fix_20260925.py |
+| 4 | Every show status change pushed every season's status to both lists (incl. auto-created) | Fixed: `season.list_sync`, new-season rule (v0.2.66) |
+| 5 | Haruhi (2009) untracked stub shared 4382 with 2006 S2 — hidden by the same-TVDB suppression, looped | Stub purged by script; suppression removed (v0.2.66) |
+| 6 | Reconcilers had no idea which side changed: the list always won, so failed pushes were reverted and disagreements looped | Fixed: `list_baseline` hub (v0.2.66) |
+| 7 | ~130 untracked relation stubs carry real seasons' AniList ids | Reconcilers now skip untracked shows (v0.2.66) |
+| 8 | v0.2.64 CI failed (server fixtures undated) — never deployed | Re-released as v0.2.65 |
 
 ## 2. Rules for how the work is done (from the 09-23 mistakes)
 

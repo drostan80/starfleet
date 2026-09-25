@@ -692,7 +692,12 @@ class TestAutoAttachSequel:
                 manual_override INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT '2026-01-01',
                 updated_at TEXT NOT NULL DEFAULT '2026-01-01',
+                list_sync INTEGER NOT NULL DEFAULT 1,
                 UNIQUE (show_id, season_number, part_number)
+            );
+            CREATE TABLE episode (
+                id TEXT PRIMARY KEY, show_id TEXT, season INTEGER, episode INTEGER,
+                air_date_utc TEXT
             );
             CREATE TABLE season_external_id (
                 season_id TEXT NOT NULL REFERENCES season (id),
@@ -737,8 +742,12 @@ class TestAutoAttachSequel:
         c.commit()
         return c
 
-    def test_auto_attach_creates_season(self, attach_conn):
-        from lcars import show_backfill
+    def test_auto_attach_creates_season(self, attach_conn, monkeypatch):
+        from lcars import anilist_client, show_backfill
+        monkeypatch.setattr(
+            anilist_client, "fetch_media_statuses",
+            lambda ids, client=None: {176314: "NOT_YET_RELEASED"},
+        )
         err = shows.SequelDetectedError(
             "s-parent", "Sasaki and Peeps", 2,
             sequel_anilist_id=176314, sequel_mal_id=58518,
@@ -759,7 +768,8 @@ class TestAutoAttachSequel:
         assert row["anilist_id"] == 176314
         assert row["mal_id"] == 58518
         assert row["manual_override"] == 0
-        assert row["status"] == "planned"
+        assert row["status"] == "planned"  # not yet released -> planned
+        assert row["list_sync"] == 0  # auto-created: never pushed to AniList/MAL
 
     def test_auto_attach_skips_existing_season(self, attach_conn):
         from lcars import show_backfill

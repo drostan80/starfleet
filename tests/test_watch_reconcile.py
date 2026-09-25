@@ -30,6 +30,14 @@ def conn(tmp_path) -> sqlite3.Connection:
     c = sqlite3.connect(db_path)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
+    # Baselines already seeded (the steady state): a list value with no
+    # baseline row reads as an edit made on the list. First-run behaviour
+    # has its own tests (test_list_baseline.py).
+    c.execute(
+        "INSERT INTO list_baseline_seed (service, seeded_at)"
+        " VALUES ('anilist', 'x'), ('mal', 'x')"
+    )
+    c.commit()
     return c
 
 
@@ -418,42 +426,62 @@ def test_two_seasons_sharing_one_anilist_id_each_get_their_own_pending_review(co
     assert {r["entity_id"] for r in reviews} == {"z-dup001", "z-dup002"}
 
 
-def test_subdivision_same_tvdb_suppresses_conflict(conn, monkeypatch):
-    """Shows that share a TVDB ID are season subdivisions of the same
-    Sonarr series.  A shared AniList ID between them is expected — the
-    reconciler should NOT flag it as a conflict, and should still apply
-    the remote watch state to both seasons normally."""
+def test_two_tracked_seasons_sharing_an_entry_are_never_synced(conn, monkeypatch):
+    """Real incident, 09-19 -> 09-25 (Haruhi 2006 S2 and a "Haruhi 2009"
+    show both on AniList/MAL 4382, same TVDB id): the old same-TVDB
+    "subdivision" exemption let both seasons read and push one entry, so
+    each one's status bounced the other's every hour. One entry claimed
+    by two tracked seasons is now excluded and flagged — read from and
+    pushed from neither — whatever TVDB ids the shows share."""
+    from lcars import mal_client
+
     _show(conn, "s-sub001", status="planned")
     _show(conn, "s-sub002", status="planned")
-    # Both shows share TVDB 355774 (e.g. Dr. STONE parent + split-out cour).
-    conn.execute(
-        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
-        " VALUES ('s-sub001', 'tvdb', '355774', '', 'x')"
-    )
-    conn.execute(
-        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
-        " VALUES ('s-sub002', 'tvdb', '355774', '', 'x')"
-    )
+    for sid in ("s-sub001", "s-sub002"):
+        conn.execute(
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES (?, 'tvdb', '355774', '', 'x')",
+            (sid,),
+        )
     _season(conn, "z-sub001", "s-sub001", 3, anilist_id=162670)
     _season(conn, "z-sub002", "s-sub002", 1, anilist_id=162670)
     _episode(conn, "e-sub001", "s-sub001", 3, 1, air_date=PAST)
     _episode(conn, "e-sub002", "s-sub002", 1, 1, air_date=PAST)
     conn.commit()
     _configure_anilist(monkeypatch, [_entry(162670, status="COMPLETED", progress=1)])
+    pushes = []
+    monkeypatch.setattr(
+        anilist_client, "save_media_list_entry", lambda *a, **kw: pushes.append(kw)
+    )
+    monkeypatch.setattr(
+        mal_client, "update_my_list_status", lambda *a, **kw: pushes.append(kw)
+    )
+
+    for _ in range(2):
+        result = watch_reconcile.reconcile_watch_progress(conn)
+
+    assert result["ambiguous_anilist_id_conflicts"] == 2
+    assert pushes == []
+    for eid in ("e-sub001", "e-sub002"):
+        ep = conn.execute("SELECT state FROM episode WHERE id = ?", (eid,)).fetchone()
+        assert ep["state"] == "unwatched"
+
+
+def test_untracked_stub_sharing_an_entry_does_not_block_the_real_season(conn, monkeypatch):
+    # ~130 untracked relation stubs carry the same AniList id as a real
+    # tracked season; they must not turn the real one into a conflict.
+    _show(conn, "s-real01", status="watching")
+    _show(conn, "s-stub01", status="planned", tracked=0)
+    _season(conn, "z-real01", "s-real01", 2, anilist_id=4382)
+    _season(conn, "z-stub01", "s-stub01", 1, anilist_id=4382)
+    _episode(conn, "e-real01", "s-real01", 2, 1, air_date=PAST)
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(4382, status="CURRENT", progress=1)])
 
     result = watch_reconcile.reconcile_watch_progress(conn)
 
-    # No conflict flagged — subdivision suppression.
     assert result["ambiguous_anilist_id_conflicts"] == 0
-    # No pending_review created.
-    reviews = conn.execute(
-        "SELECT * FROM pending_review WHERE field = 'anilist_id_conflict'"
-    ).fetchall()
-    assert len(reviews) == 0
-    # Watch state was still applied to both seasons' episodes.
-    for eid in ("e-sub001", "e-sub002"):
-        ep = conn.execute("SELECT state FROM episode WHERE id = ?", (eid,)).fetchone()
-        assert ep["state"] == "watched"
+    assert result["episodes_backfilled"] == 1
 
 
 def test_a_stale_link_on_the_highest_season_does_not_fall_back_to_a_lower_seasons_status(

@@ -479,15 +479,17 @@ def _auto_attach_sequel(
 
     now = util.now_utc_iso()
     season_id = ids.generate_id(conn, "z")
-    status = season_ranges.inherit_season_status(conn, parent_id)
+    status, list_sync = season_ranges.auto_season_fields(
+        conn, parent_id, season_number, anilist_id
+    )
 
     conn.execute(
         "INSERT INTO season"
         " (id, show_id, season_number, status, anilist_id, mal_id,"
-        "  source, matched, manual_override, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, 'auto', 0, 0, ?, ?)",
+        "  source, matched, manual_override, created_at, updated_at, list_sync)"
+        " VALUES (?, ?, ?, ?, ?, ?, 'auto', 0, 0, ?, ?, ?)",
         (season_id, parent_id, season_number, status,
-         anilist_id, mal_id, now, now),
+         anilist_id, mal_id, now, now, list_sync),
     )
 
     season_ranges.upsert_season_external_id(conn, season_id, anilist_id, mal_id, now)

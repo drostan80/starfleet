@@ -46,6 +46,16 @@ def migrated_db(tmp_path) -> Path:
     return db_path
 
 
+
+def _seed_list_baselines():
+    """2026-09-25 — the AniList/MAL reconcilers compare against a baseline
+    (list_baseline.py); on a first run they only seed it. Tests about
+    applying a list's changes start from the seeded steady state."""
+    db.get_connection().execute(
+        "INSERT OR IGNORE INTO list_baseline_seed (service, seeded_at)"
+        " VALUES ('anilist', 'x'), ('mal', 'x')"
+    )
+
 @pytest.fixture
 async def client(migrated_db, monkeypatch):
     db.connect(migrated_db)
@@ -10673,6 +10683,7 @@ async def test_reconcile_watch_progress_no_op_when_anilist_not_configured(client
 async def test_reconcile_watch_progress_backfills_and_corrects_status_through_real_graphql(
     client, monkeypatch
 ):
+    _seed_list_baselines()  # steady state: a list value with no baseline is an edit
     # The actual live-caught scenario: a show LCARS thinks is COMPLETED with
     # every episode UNWATCHED, while AniList's own real list says CURRENT
     # with real progress — reconciling should fix both, end to end, through
@@ -10759,6 +10770,7 @@ async def test_reconcile_watch_progress_backfills_and_corrects_status_through_re
 
 
 async def test_reconcile_watch_progress_never_marks_an_unaired_episode_watched(client, monkeypatch):
+    _seed_list_baselines()  # steady state: a list value with no baseline is an edit
     # Fix 3, 2026-08-19 — the real Ascendance of a Bookworm bug: AniList's
     # own progress/status can be ahead of an episode's real air date (a
     # premature total-episode count, a stray click). Episode 3 here has a
@@ -11067,6 +11079,7 @@ async def test_poll_anilist_activity_first_call_seeds_without_reconciling(client
 async def test_poll_anilist_activity_new_activity_returns_nested_reconcile_result(
     client, monkeypatch
 ):
+    _seed_list_baselines()  # steady state: a list value with no baseline is an edit
     show = await add_show(client, anilistId=100, titleRomaji="Poll Test")
     await _link_season_anilist(client, show["id"], 1, 100)
     await gql(
@@ -11301,6 +11314,7 @@ async def test_add_watch_event_pushes_episode_progress_to_mal(client, monkeypatc
 
 
 async def test_poll_mal_list_applies_and_returns_result(client, monkeypatch):
+    _seed_list_baselines()  # steady state: a list value with no baseline is an edit
     config.set_current(_mal_authenticated_config())
     show = await add_show(client)  # created 'planned' by default
     await _link_season_mal(client, show["id"], 1, 111)

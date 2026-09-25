@@ -42,6 +42,7 @@ from lcars import (
     fuzzy,
     identity_mismatch,
     ids,
+    list_baseline,
     local_audit,
     mal_client,
     mal_reconcile,
@@ -243,6 +244,23 @@ _STATUS_TO_ANILIST = {
 }
 
 
+def _season_list_sync(conn, season_id: str) -> bool:
+    """False for a season LCARS created on its own and the user hasn't
+    acted on (`season.list_sync = 0`): nothing about it may be written to
+    AniList/MAL (user rule, 2026-09-25). Every season-level push checks
+    this; the show-level fanouts filter on the column directly."""
+    row = conn.execute("SELECT list_sync FROM season WHERE id = ?", (season_id,)).fetchone()
+    return row is None or bool(row["list_sync"])
+
+
+def _enable_list_sync(conn, season: dict) -> None:
+    """The user acted on this season (set its status or score, watched
+    one of its episodes): from now on it is mirrored to AniList/MAL."""
+    if not season.get("list_sync", 1):
+        conn.execute("UPDATE season SET list_sync = 1 WHERE id = ?", (season["id"],))
+        season["list_sync"] = 1
+
+
 def _push_season_score(conn, season: dict, fallback_show_score) -> None:
     """One season's own effective score (its own `season.score` when
     set, else the show's `score` — resolved directly with the user,
@@ -252,6 +270,8 @@ def _push_season_score(conn, season: dict, fallback_show_score) -> None:
     anilist-login` has ever been run."""
     if season["anilist_id"] is None:
         return
+    if not _season_list_sync(conn, season["id"]):
+        return
     cfg = config.get_current()
     if not cfg.anilist_access_token:
         return
@@ -259,8 +279,8 @@ def _push_season_score(conn, season: dict, fallback_show_score) -> None:
     if effective_score is None:
         return
     try:
-        anilist_client.save_media_list_entry(
-            cfg.anilist_access_token, season["anilist_id"], score=effective_score * 5
+        list_baseline.anilist_save(
+            conn, cfg.anilist_access_token, season["anilist_id"], score=effective_score * 5
         )
     except anilist_client.AniListError as e:
         pending_review.open_or_extend(
@@ -287,7 +307,7 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
         return
     seasons = conn.execute(
         "SELECT id, anilist_id, status AS season_status"
-        " FROM season WHERE show_id = ? AND anilist_id IS NOT NULL",
+        " FROM season WHERE show_id = ? AND anilist_id IS NOT NULL AND list_sync = 1",
         (show_id,),
     ).fetchall()
     for season in seasons:
@@ -296,8 +316,8 @@ def _push_show_status(conn, show_id: str, status: str) -> None:
         if anilist_status is None:
             continue  # 'skipped' — no AniList equivalent
         try:
-            anilist_client.save_media_list_entry(
-                cfg.anilist_access_token, season["anilist_id"], status=anilist_status
+            list_baseline.anilist_save(
+                conn, cfg.anilist_access_token, season["anilist_id"], status=anilist_status
             )
         except anilist_client.AniListError as e:
             pending_review.open_or_extend(
@@ -311,6 +331,8 @@ def _push_season_status(conn, season: dict, status: str) -> None:
     seasons as _push_show_status does.  Used by setSeasonStatus."""
     if season.get("anilist_id") is None:
         return
+    if not _season_list_sync(conn, season["id"]):
+        return
     cfg = config.get_current()
     if not cfg.anilist_access_token:
         return
@@ -318,8 +340,8 @@ def _push_season_status(conn, season: dict, status: str) -> None:
     if anilist_status is None:
         return  # 'skipped' — no AniList equivalent
     try:
-        anilist_client.save_media_list_entry(
-            cfg.anilist_access_token, season["anilist_id"], status=anilist_status
+        list_baseline.anilist_save(
+            conn, cfg.anilist_access_token, season["anilist_id"], status=anilist_status
         )
     except anilist_client.AniListError as e:
         pending_review.open_or_extend(
@@ -327,10 +349,25 @@ def _push_season_status(conn, season: dict, status: str) -> None:
         )
 
 
+def _mal_episode_count(mal_id: int) -> int | None:
+    """The MAL entry's own episode count (public API, client id only);
+    None when unknown or MAL can't be reached."""
+    cfg = config.get_current()
+    if not cfg.mal_client_id:
+        return None
+    try:
+        details = mal_client.fetch_anime_details(mal_id, cfg.mal_client_id)
+    except mal_client.MALError:
+        return None
+    return (details or {}).get("num_episodes") or None
+
+
 def _push_mal_season_status(conn, season: dict, status: str) -> None:
     """Per-season MAL status push (2.1c) — mirrors _push_season_status
     for MAL, using mal_id."""
     if season.get("mal_id") is None:
+        return
+    if not _season_list_sync(conn, season["id"]):
         return
     cfg = config.get_current()
     if not cfg.mal_access_token:
@@ -338,10 +375,16 @@ def _push_mal_season_status(conn, season: dict, status: str) -> None:
     mal_status = _STATUS_TO_MAL.get(status)
     if mal_status is None:
         return  # 'skipped' — no MAL equivalent
+    fields = {"status": mal_status}
+    if status == "completed":
+        # MAL doesn't fill progress on completion the way AniList does
+        # (completed seasons showed 0/N on MAL, 09-23). The count is the
+        # MAL entry's own — an LCARS season isn't always one MAL entry.
+        count = _mal_episode_count(season["mal_id"])
+        if count:
+            fields["num_watched_episodes"] = count
     try:
-        mal_client.update_my_list_status(
-            cfg.mal_access_token, season["mal_id"], status=mal_status
-        )
+        list_baseline.mal_save(conn, cfg.mal_access_token, season["mal_id"], **fields)
     except mal_client.MALError as e:
         pending_review.open_or_extend(
             conn, "season", season["id"], "mal_push", "mal", None, str(e)
@@ -359,12 +402,14 @@ def _push_season_started_at(conn, season_id: str, anilist_id: int | None, starte
     failure shape as `_push_season_score`."""
     if anilist_id is None:
         return
+    if not _season_list_sync(conn, season_id):
+        return
     cfg = config.get_current()
     if not cfg.anilist_access_token:
         return
     try:
-        anilist_client.save_media_list_entry(
-            cfg.anilist_access_token, anilist_id, started_at=started_at
+        list_baseline.anilist_save(
+            conn, cfg.anilist_access_token, anilist_id, started_at=started_at
         )
     except anilist_client.AniListError as e:
         pending_review.open_or_extend(
@@ -429,12 +474,14 @@ def _push_season_completed_at(
     on-failure shape."""
     if anilist_id is None:
         return
+    if not _season_list_sync(conn, season_id):
+        return
     cfg = config.get_current()
     if not cfg.anilist_access_token:
         return
     try:
-        anilist_client.save_media_list_entry(
-            cfg.anilist_access_token, anilist_id, completed_at=completed_at
+        list_baseline.anilist_save(
+            conn, cfg.anilist_access_token, anilist_id, completed_at=completed_at
         )
     except anilist_client.AniListError as e:
         pending_review.open_or_extend(
@@ -836,12 +883,15 @@ def _push_season_rewatch(conn, season: dict, repeat_count: int) -> None:
     pending_review-on-failure shape as _push_season_score."""
     if season["anilist_id"] is None:
         return
+    if not _season_list_sync(conn, season["id"]):
+        return
     cfg = config.get_current()
     if not cfg.anilist_access_token:
         return
     try:
-        anilist_client.save_media_list_entry(
-            cfg.anilist_access_token, season["anilist_id"], status="REPEATING", repeat=repeat_count
+        list_baseline.anilist_save(
+            conn, cfg.anilist_access_token, season["anilist_id"],
+            status="REPEATING", repeat=repeat_count,
         )
     except anilist_client.AniListError as e:
         pending_review.open_or_extend(
@@ -892,13 +942,15 @@ def _push_season_progress(conn, season: dict) -> None:
     idea) for split-cour shows, not newly introduced here."""
     if season["anilist_id"] is None:
         return
+    if not _season_list_sync(conn, season["id"]):
+        return
     cfg = config.get_current()
     if not cfg.anilist_access_token:
         return
     progress = _compute_season_episode_progress(conn, season["show_id"], season["season_number"])
     try:
-        anilist_client.save_media_list_entry(
-            cfg.anilist_access_token, season["anilist_id"], progress=progress
+        list_baseline.anilist_save(
+            conn, cfg.anilist_access_token, season["anilist_id"], progress=progress
         )
     except anilist_client.AniListError as e:
         pending_review.open_or_extend(
@@ -926,7 +978,9 @@ def _push_show_episode_progress(conn, show_id: str, season_number: int) -> None:
     ).fetchone()
     if season is None:
         return
-    _push_season_progress(conn, dict(season))
+    season = dict(season)
+    _enable_list_sync(conn, season)
+    _push_season_progress(conn, season)
 
 
 # -- MAL push (§6.1/§6.9, B.10) ----------------------------------------------
@@ -967,6 +1021,8 @@ def _push_mal_season_score(conn, season: dict, fallback_show_score) -> None:
     just scaled."""
     if season["mal_id"] is None:
         return
+    if not _season_list_sync(conn, season["id"]):
+        return
     cfg = config.get_current()
     if not cfg.mal_access_token:
         return
@@ -974,8 +1030,8 @@ def _push_mal_season_score(conn, season: dict, fallback_show_score) -> None:
     if effective_score is None:
         return
     try:
-        mal_client.update_my_list_status(
-            cfg.mal_access_token, season["mal_id"], score=round(effective_score / 2)
+        list_baseline.mal_save(
+            conn, cfg.mal_access_token, season["mal_id"], score=round(effective_score / 2)
         )
     except mal_client.MALError as e:
         pending_review.open_or_extend(conn, "season", season["id"], "mal_push", "mal", None, str(e))
@@ -1000,7 +1056,7 @@ def _push_mal_show_status(conn, show_id: str, status: str) -> None:
         return
     seasons = conn.execute(
         "SELECT id, mal_id, status AS season_status"
-        " FROM season WHERE show_id = ? AND mal_id IS NOT NULL",
+        " FROM season WHERE show_id = ? AND mal_id IS NOT NULL AND list_sync = 1",
         (show_id,),
     ).fetchall()
     for season in seasons:
@@ -1009,8 +1065,8 @@ def _push_mal_show_status(conn, show_id: str, status: str) -> None:
         if mal_status is None:
             continue  # 'skipped' — no MAL equivalent
         try:
-            mal_client.update_my_list_status(
-                cfg.mal_access_token, season["mal_id"], status=mal_status
+            list_baseline.mal_save(
+                conn, cfg.mal_access_token, season["mal_id"], status=mal_status
             )
         except mal_client.MALError as e:
             pending_review.open_or_extend(
@@ -1027,13 +1083,15 @@ def _push_mal_season_progress(conn, season: dict) -> None:
     "watch episodes... need to be reflected on MAL")."""
     if season["mal_id"] is None:
         return
+    if not _season_list_sync(conn, season["id"]):
+        return
     cfg = config.get_current()
     if not cfg.mal_access_token:
         return
     progress = _compute_season_episode_progress(conn, season["show_id"], season["season_number"])
     try:
-        mal_client.update_my_list_status(
-            cfg.mal_access_token, season["mal_id"], num_watched_episodes=progress
+        list_baseline.mal_save(
+            conn, cfg.mal_access_token, season["mal_id"], num_watched_episodes=progress
         )
     except mal_client.MALError as e:
         pending_review.open_or_extend(conn, "season", season["id"], "mal_push", "mal", None, str(e))
@@ -3463,6 +3521,7 @@ def resolve_set_season_score(_, info, season_id, score):
         "UPDATE season SET score = ?, updated_at = ? WHERE id = ?", (rounded, now, season_id)
     )
     season["score"] = rounded
+    _enable_list_sync(conn, season)
     _push_season_score(conn, season, fallback_show_score=None)  # A.9 — best-effort
     _push_mal_season_score(conn, season, fallback_show_score=None)  # B.10 — best-effort
     conn.commit()
@@ -3495,6 +3554,7 @@ def resolve_set_season_status(_, info, season_id, status=None, confirmed=False):
         "UPDATE season SET status = ?, updated_at = ? WHERE id = ?",
         (status, now, season_id),
     )
+    _enable_list_sync(conn, season)
     # Push this season's own status to AniList/MAL
     effective = status or conn.execute(
         "SELECT status FROM show WHERE id = ?", (season["show_id"],)
@@ -3517,6 +3577,7 @@ def resolve_mark_season_rewatch(_, info, season_id, repeat_count):
     season = season_mapping.get_season(conn, season_id)
     if season is None:
         raise GraphQLError(f"no such season: {season_id}")
+    _enable_list_sync(conn, season)
     _push_season_rewatch(conn, season, repeat_count)
     conn.commit()
     return season_mapping.get_season(conn, season_id)
@@ -3857,7 +3918,8 @@ def _delete_from_anilist_before_purge(conn, show_id: str) -> None:
     if not cfg.anilist_access_token:
         return
     seasons = conn.execute(
-        "SELECT id, anilist_id FROM season WHERE show_id = ? AND anilist_id IS NOT NULL",
+        "SELECT id, anilist_id FROM season"
+        " WHERE show_id = ? AND anilist_id IS NOT NULL AND list_sync = 1",
         (show_id,),
     ).fetchall()
     for season in seasons:
