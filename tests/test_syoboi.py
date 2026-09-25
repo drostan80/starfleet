@@ -615,3 +615,27 @@ class TestRewireAirdates:
         # Nothing changed
         ep1 = conn.execute("SELECT air_date_source FROM episode WHERE id='e-001'").fetchone()
         assert ep1["air_date_source"] == "sonarr"
+
+
+class TestDuplicateTids:
+    """Syoboi answers a TID list with a duplicate in it with 400 Bad
+    Request. Several shows can share one TID, so the batch helpers must
+    de-duplicate (prod, 09-23 -> 09-25: the first batch failed every tick)."""
+
+    def test_program_batches_never_repeat_a_tid(self):
+        from lcars import syoboi
+
+        with mock.patch.object(syoboi, "fetch_programs", return_value=[]) as fp:
+            syoboi._fetch_programs_all_tids([927, 1536, 1536, 1536, 7387], client=mock.Mock())
+        sent = [t for call in fp.call_args_list for t in call.args[0]]
+        assert sent == [927, 1536, 7387]
+
+    def test_title_batches_never_repeat_a_tid(self):
+        from lcars import syoboi
+
+        result = {"titles_stored": 0}
+        with mock.patch.object(syoboi, "fetch_titles", return_value=[]) as ft, \
+                mock.patch.object(syoboi, "ingest_titles", return_value=0):
+            syoboi._fetch_and_ingest_titles(None, [5, 5, 6], "now", mock.Mock(), result)
+        sent = [t for call in ft.call_args_list for t in call.args[0]]
+        assert sent == [5, 6]

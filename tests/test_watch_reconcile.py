@@ -66,12 +66,17 @@ def _season(conn, season_id, show_id, season_number, anilist_id):
         )
 
 
-def _episode(conn, episode_id, show_id, season, episode, state="unwatched"):
+def _episode(
+    conn, episode_id, show_id, season, episode, state="unwatched", air_date=None,
+):
     conn.execute(
-        "INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, 'regular', ?, 'x', 'x')",
-        (episode_id, show_id, season, episode, state),
+        "INSERT INTO episode (id, show_id, season, episode, kind, state, air_date_utc,"
+        " created_at, updated_at) VALUES (?, ?, ?, ?, 'regular', ?, ?, 'x', 'x')",
+        (episode_id, show_id, season, episode, state, air_date),
     )
+
+
+PAST = "2020-01-01T00:00:00Z"
 
 
 def _watch_event(conn, event_id, show_id, season, episode):
@@ -105,7 +110,7 @@ def test_returns_all_zero_when_anilist_not_configured(conn):
 def test_backfills_unwatched_episodes_up_to_anilist_progress(conn, monkeypatch):
     _show(conn, "s-showw1", status="watching")
     _season(conn, "z-seasn1", "s-showw1", 1, anilist_id=100)
-    _episode(conn, "e-episd1", "s-showw1", 1, 1)
+    _episode(conn, "e-episd1", "s-showw1", 1, 1, air_date=PAST)
     _episode(conn, "e-episd2", "s-showw1", 1, 2)
     _episode(conn, "e-episd3", "s-showw1", 1, 3)
     conn.commit()
@@ -126,7 +131,7 @@ def test_backfills_unwatched_episodes_up_to_anilist_progress(conn, monkeypatch):
 def test_never_touches_a_skipped_episode(conn, monkeypatch):
     _show(conn, "s-showw1", status="watching")
     _season(conn, "z-seasn1", "s-showw1", 1, anilist_id=100)
-    _episode(conn, "e-episd1", "s-showw1", 1, 1, state="unwatched")
+    _episode(conn, "e-episd1", "s-showw1", 1, 1, state="unwatched", air_date=PAST)
     _episode(conn, "e-episd2", "s-showw1", 1, 2, state="skipped")
     _episode(conn, "e-episd3", "s-showw1", 1, 3, state="unwatched")
     conn.commit()
@@ -431,8 +436,8 @@ def test_subdivision_same_tvdb_suppresses_conflict(conn, monkeypatch):
     )
     _season(conn, "z-sub001", "s-sub001", 3, anilist_id=162670)
     _season(conn, "z-sub002", "s-sub002", 1, anilist_id=162670)
-    _episode(conn, "e-sub001", "s-sub001", 3, 1)
-    _episode(conn, "e-sub002", "s-sub002", 1, 1)
+    _episode(conn, "e-sub001", "s-sub001", 3, 1, air_date=PAST)
+    _episode(conn, "e-sub002", "s-sub002", 1, 1, air_date=PAST)
     conn.commit()
     _configure_anilist(monkeypatch, [_entry(162670, status="COMPLETED", progress=1)])
 
@@ -575,7 +580,7 @@ def test_anilist_reconcile_pushes_changes_onward_to_mal(conn, monkeypatch):
         "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
         " VALUES ('z-hubma1', 'mal', 555, 'x')"
     )
-    _episode(conn, "e-hubp11", "s-hubma1", 1, 1)
+    _episode(conn, "e-hubp11", "s-hubma1", 1, 1, air_date=PAST)
     _episode(conn, "e-hubp12", "s-hubma1", 1, 2)
     conn.commit()
 
@@ -670,3 +675,50 @@ def test_status_change_pushes_to_mal_exactly_once_never_back_to_anilist(conn, mo
     assert anilist_calls == []  # never push back to the service the change came from
     status_pushes = [c for c in mal_calls if "status" in c]
     assert status_pushes == [{"mal_id": 900, "status": "watching"}]  # exactly once
+
+
+def test_undated_placeholder_of_an_unstarted_season_is_never_marked_watched(conn, monkeypatch):
+    # Real incident, 09-23: Kaiju No. 8 S3 (not yet aired) had one Sonarr
+    # "TBA" placeholder with no air date; a stray progress=1 on AniList
+    # marked it watched. A season with no aired episode has nothing to mark.
+    _show(conn, "s-kaiju1", status="watching")
+    _season(conn, "z-kaiju1", "s-kaiju1", 3, anilist_id=204362)
+    _episode(conn, "e-kaiju1", "s-kaiju1", 3, 1, air_date=None)
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(204362, status="PLANNING", progress=1)])
+
+    result = watch_reconcile.reconcile_watch_progress(conn)
+
+    assert result["episodes_backfilled"] == 0
+    state = conn.execute("SELECT state FROM episode WHERE id = 'e-kaiju1'").fetchone()[0]
+    assert state == "unwatched"
+
+
+def test_undated_episode_of_a_started_season_is_still_backfilled(conn, monkeypatch):
+    # Old seasons often lack dates for some real episodes — once the
+    # season has an aired episode, undated ones stay eligible.
+    _show(conn, "s-olds01", status="watching")
+    _season(conn, "z-olds01", "s-olds01", 1, anilist_id=300)
+    _episode(conn, "e-olds01", "s-olds01", 1, 1, air_date=PAST)
+    _episode(conn, "e-olds02", "s-olds01", 1, 2, air_date=None)
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(300, status="CURRENT", progress=2)])
+
+    result = watch_reconcile.reconcile_watch_progress(conn)
+
+    assert result["episodes_backfilled"] == 2
+
+
+def test_fully_undated_completed_season_keeps_its_completed_status(conn, monkeypatch):
+    # The unstarted-season guard only blocks the progress backfill; it must
+    # not turn a remote COMPLETED into watching for an old undated OVA.
+    _show(conn, "s-ova001", status="planned")
+    _season(conn, "z-ova001", "s-ova001", 1, anilist_id=400)
+    _episode(conn, "e-ova001", "s-ova001", 1, 1, state="watched")
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(400, status="COMPLETED", progress=1)])
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    status = conn.execute("SELECT status FROM season WHERE id = 'z-ova001'").fetchone()[0]
+    assert status == "completed"

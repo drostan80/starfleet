@@ -748,7 +748,12 @@ def _fetch_programs_all_tids(
     batch_size: int = 50,
 ) -> list[dict]:
     """Fetch programmes for all TIDs in batches, optionally filtered
-    by LastUpdate range.  Returns aggregated list of programme dicts."""
+    by LastUpdate range.  Returns aggregated list of programme dicts.
+
+    TIDs are de-duplicated first: several shows can share one TID, and
+    Syoboi answers a TID list containing a duplicate with 400 Bad Request
+    (the whole first batch failed on every tick until 2026-09-25)."""
+    tids = list(dict.fromkeys(tids))
     all_programs: list[dict] = []
     for i in range(0, len(tids), batch_size):
         batch = tids[i:i + batch_size]
@@ -770,7 +775,9 @@ def _fetch_and_ingest_titles(
     client: httpx.Client, result: dict,
     batch_size: int = 50,
 ) -> None:
-    """Fetch and ingest title metadata for a list of TIDs."""
+    """Fetch and ingest title metadata for a list of TIDs (de-duplicated,
+    same 400-on-duplicate reason as _fetch_programs_all_tids)."""
+    tids = list(dict.fromkeys(tids))
     for i in range(0, len(tids), batch_size):
         batch = tids[i:i + batch_size]
         try:

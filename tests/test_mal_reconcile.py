@@ -98,7 +98,7 @@ def test_applies_status_and_progress_from_mal_and_pushes_onward_to_anilist(conn,
     _add_show(conn, "s-000001", status="planned")
     _add_season(conn, "z-000001", "s-000001", 1, mal_id=101, anilist_id=201)
     for n in (1, 2, 3):
-        _add_episode(conn, f"e-00000{n}", "s-000001", 1, n)
+        _add_episode(conn, f"e-00000{n}", "s-000001", 1, n, air_date="2020-01-01T00:00:00Z")
     conn.commit()
     _mal_list(monkeypatch, [{"mal_id": 101, "status": "watching", "num_watched_episodes": 2}])
     anilist_calls = _capture_anilist(monkeypatch)
@@ -121,7 +121,7 @@ def test_applies_status_and_progress_from_mal_and_pushes_onward_to_anilist(conn,
 def test_unaired_episode_is_never_marked_or_completed(conn, monkeypatch):
     _add_show(conn, "s-000002", status="watching")
     _add_season(conn, "z-000002", "s-000002", 1, mal_id=102, anilist_id=202)
-    _add_episode(conn, "e-0000a1", "s-000002", 1, 1)
+    _add_episode(conn, "e-0000a1", "s-000002", 1, 1, air_date="2020-01-01T00:00:00Z")
     _add_episode(conn, "e-0000b1", "s-000002", 1, 2, air_date="2099-01-01T00:00:00Z")  # far future
     conn.commit()
     # MAL claims completed through ep 2, but ep 2 hasn't aired.

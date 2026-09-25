@@ -330,6 +330,30 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
                 (show_id, season_number, now),
             ).fetchall()
         }
+        # A season that hasn't started (no episode with a past air date)
+        # has nothing aired: its undated episodes — Sonarr "TBA"
+        # placeholders — are unaired too. Kaiju No. 8 S3E1 was marked
+        # watched this way on 09-23 from a stray progress=1 on AniList.
+        # Undated episodes of a season that has started stay eligible
+        # (old TV seasons often lack dates for real, watched episodes).
+        # Kept separate from `unaired_episodes`: it only blocks the
+        # progress backfill, never the completed -> watching downgrade
+        # (an old, fully undated OVA season is genuinely completed).
+        unstarted_undated: set[int] = set()
+        season_started = conn.execute(
+            "SELECT 1 FROM episode WHERE show_id = ? AND season = ?"
+            " AND air_date_utc IS NOT NULL AND air_date_utc <= ? LIMIT 1",
+            (show_id, season_number, now),
+        ).fetchone()
+        if season_started is None:
+            unstarted_undated = {
+                row["episode"]
+                for row in conn.execute(
+                    "SELECT episode FROM episode"
+                    " WHERE show_id = ? AND season = ? AND air_date_utc IS NULL",
+                    (show_id, season_number),
+                ).fetchall()
+            }
 
         if season_number == highest_season_number_by_show.get(show_id):
             lcars_status = entry["lcars_status"]
@@ -346,7 +370,11 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
             " WHERE show_id = ? AND season = ? AND episode <= ? AND state = 'unwatched'",
             (show_id, season_number, progress),
         ).fetchall()
-        unwatched = [row for row in unwatched if row["episode"] not in unaired_episodes]
+        unwatched = [
+            row for row in unwatched
+            if row["episode"] not in unaired_episodes
+            and row["episode"] not in unstarted_undated
+        ]
         for ep_row in unwatched:
             conn.execute(
                 "INSERT INTO watch_event"
