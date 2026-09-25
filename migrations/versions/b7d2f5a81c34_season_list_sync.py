@@ -21,6 +21,9 @@ the list against it to tell *which side changed* — a list edit goes into
 LCARS and on to the other list; an LCARS change the list hasn't taken yet
 is pushed again. Before this the list always won, so a failed or lagging
 push, or two LCARS seasons sharing an entry, ping-ponged forever.
+`lcars_progress` is LCARS's own watched count at that moment — many
+seasons have list progress but no LCARS episode rows, so "LCARS went back"
+(an unwatch to push) means LCARS dropped below *that*, not below the list.
 `list_baseline_seed` records when each service's baseline was first
 seeded (only where LCARS and the list already agreed).
 
@@ -51,6 +54,7 @@ def upgrade() -> None:
             status       TEXT CHECK (status IS NULL OR status IN
                              ('watching','completed','planned','paused','dropped')),
             progress     INTEGER,
+            lcars_progress INTEGER,
             updated_at   TEXT NOT NULL,
             PRIMARY KEY (service, external_id)
         )

@@ -141,15 +141,30 @@ def test_first_run_seeds_agreement_without_writing(conn, lists):
     assert list_baseline.get(conn, "mal", 200)["status"] == "watching"
 
 
-def test_first_run_disagreement_lcars_wins(conn, lists):
+def test_first_run_writes_nothing_then_lcars_wins(conn, lists):
     state, calls, _ = lists
     _season_show(conn, season_status="completed", watched=2)
     state["anilist"][100] = {"status": "DROPPED", "progress": 2}
 
     watch_reconcile.reconcile_watch_progress(conn)
+    assert calls == []  # the first run only seeds
 
+    watch_reconcile.reconcile_watch_progress(conn)
     assert _season_status(conn) == "completed"
     assert state["anilist"][100]["status"] == "COMPLETED"
+
+
+def test_list_progress_without_lcars_episodes_is_never_pushed_back(conn, lists):
+    # ~1,000 prod seasons have list progress but no LCARS episode rows;
+    # that gap is not an unwatch and must never be "corrected" to 0.
+    state, calls, _ = lists
+    _season_show(conn, season_status="completed", episodes=0)
+    state["anilist"][100] = {"status": "COMPLETED", "progress": 12}
+    state["mal"][200] = {"status": "completed", "progress": 12}
+    for _ in range(3):
+        _run_both(conn)
+    assert calls == []
+    assert state["anilist"][100]["progress"] == 12
 
 
 def test_a_failed_push_is_retried_not_overwritten_by_the_list(conn, lists):
@@ -194,22 +209,42 @@ def test_a_list_edit_reaches_lcars_and_the_other_list_once(conn, lists):
     assert calls == []  # converged: nothing bounces
 
 
-def test_anilist_completing_an_entry_itself_is_not_an_edit(conn, lists):
-    # AniList sets COMPLETED on its own when progress reaches the episode
-    # count; the wrapper records what AniList saved, so the next reconcile
-    # doesn't read it as a list edit and write it back into LCARS.
+@pytest.mark.parametrize("start,lcars_before,watched,expect_status,expect_lcars", [
+    ("CURRENT", "watching", 2, "COMPLETED", "completed"),   # AniList completes it
+    ("PLANNING", "planned", 1, "CURRENT", "watching"),      # AniList starts it
+])
+def test_anilist_moving_status_itself_is_taken_not_reverted(
+    conn, lists, start, lcars_before, watched, expect_status, expect_lcars
+):
+    # A progress push makes AniList change the status on its own. The next
+    # reconcile must bring that status into LCARS (and on to MAL) — not see
+    # "LCARS differs" and push the old status back.
     state, calls, _ = lists
-    _season_show(conn, season_status="watching", episodes=2)
+    _season_show(conn, season_status=lcars_before, episodes=2)
     state["episodes"][100] = 2
-    state["anilist"][100] = {"status": "CURRENT", "progress": 0}
-    watch_reconcile.reconcile_watch_progress(conn)  # seed
+    state["anilist"][100] = {"status": start, "progress": 0}
+    state["mal"][200] = {"status": {"CURRENT": "watching", "PLANNING": "plan_to_watch"}[start],
+                         "progress": 0}
+    _run_both(conn)  # seed
 
-    conn.execute("UPDATE episode SET state = 'watched' WHERE show_id = 's-hub001'")
+    conn.execute(
+        "UPDATE episode SET state = 'watched' WHERE show_id = 's-hub001' AND episode <= ?",
+        (watched,),
+    )
     season = dict(conn.execute("SELECT * FROM season WHERE id='z-hub001'").fetchone())
     resolvers._push_season_progress(conn, season)
     conn.commit()
-    assert state["anilist"][100]["status"] == "COMPLETED"
-    assert list_baseline.get(conn, "anilist", 100)["status"] == "completed"
+    if start == "PLANNING":
+        state["anilist"][100]["status"] = "CURRENT"  # what AniList does on first progress
+    assert state["anilist"][100]["status"] == expect_status
+
+    _run_both(conn)
+    assert _season_status(conn) == expect_lcars
+    assert state["anilist"][100]["status"] == expect_status  # not pushed back
+
+    calls.clear()
+    _run_both(conn)
+    assert calls == []
 
 
 def test_an_lcars_unwatch_is_pushed_not_re_marked_from_the_list(conn, lists):

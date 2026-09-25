@@ -12,8 +12,7 @@ external_id)`, the last status/progress LCARS and that list agreed on:
   - all equal                       -> nothing to do
 
 Every write to a list goes through `anilist_save` / `mal_save`, which
-record what the list *saved* (AniList changes status on its own when
-progress moves), and never record on failure — so a failed push is retried
+record only what they wrote, and never record on failure — so a failed push is retried
 on the next reconcile instead of being overwritten by the list's old value.
 """
 
@@ -40,27 +39,36 @@ _UNSET = object()
 
 def get(conn, service: str, external_id) -> dict | None:
     row = conn.execute(
-        "SELECT status, progress FROM list_baseline WHERE service = ? AND external_id = ?",
+        "SELECT status, progress, lcars_progress FROM list_baseline"
+        " WHERE service = ? AND external_id = ?",
         (service, int(external_id)),
     ).fetchone()
     return dict(row) if row is not None else None
 
 
-def record(conn, service: str, external_id, *, status=_UNSET, progress=_UNSET) -> None:
+def record(
+    conn, service: str, external_id, *, status=_UNSET, progress=_UNSET, lcars_progress=_UNSET
+) -> None:
     """Upsert the fields given; a field not passed keeps its stored value."""
     now = util.now_utc_iso()
-    current = get(conn, service, external_id) or {"status": None, "progress": None}
+    current = get(conn, service, external_id) or {
+        "status": None, "progress": None, "lcars_progress": None
+    }
     if status is not _UNSET:
         current["status"] = status
     if progress is not _UNSET:
         current["progress"] = progress
+    if lcars_progress is not _UNSET:
+        current["lcars_progress"] = lcars_progress
     conn.execute(
-        "INSERT INTO list_baseline (service, external_id, status, progress, updated_at)"
-        " VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO list_baseline"
+        " (service, external_id, status, progress, lcars_progress, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)"
         " ON CONFLICT (service, external_id) DO UPDATE SET"
         " status = excluded.status, progress = excluded.progress,"
-        " updated_at = excluded.updated_at",
-        (service, int(external_id), current["status"], current["progress"], now),
+        " lcars_progress = excluded.lcars_progress, updated_at = excluded.updated_at",
+        (service, int(external_id), current["status"], current["progress"],
+         current["lcars_progress"], now),
     )
 
 
@@ -78,37 +86,37 @@ def mark_seeded(conn, service: str) -> None:
 
 
 def anilist_save(conn, token: str, anilist_id: int, **fields) -> dict:
-    """`anilist_client.save_media_list_entry` + record what AniList saved.
+    """`anilist_client.save_media_list_entry` + record what was agreed.
     Raises exactly like the client; nothing is recorded on failure.
 
-    Only the fields this push wrote are recorded — a score push must not
-    stamp the list's current status as agreed, or an edit made on the list
-    moments earlier would be swallowed. A progress push also records the
-    saved status: AniList moves PLANNING -> CURRENT -> COMPLETED itself."""
+    Only the fields this push wrote are recorded. In particular a progress
+    push does *not* record status even though AniList may have moved it
+    (PLANNING -> CURRENT -> COMPLETED): LCARS hasn't taken that status yet,
+    so the next reconcile must see it as a list change and bring it in —
+    recording it here would make LCARS look changed and push the old
+    status straight back."""
     saved = anilist_client.save_media_list_entry(token, anilist_id, **fields) or {}
     kw = {}
-    if "status" in fields or "progress" in fields:
-        status = saved.get("status") or fields.get("status")
-        if status in ANILIST_TO_STATUS:
-            kw["status"] = ANILIST_TO_STATUS[status]
+    if fields.get("status") in ANILIST_TO_STATUS:
+        kw["status"] = ANILIST_TO_STATUS[fields["status"]]
     if "progress" in fields:
         kw["progress"] = saved.get("progress", fields["progress"])
+        kw["lcars_progress"] = fields["progress"]
     if kw:
         record(conn, "anilist", anilist_id, **kw)
     return saved
 
 
 def mal_save(conn, token: str, mal_id: int, **fields) -> dict:
-    """`mal_client.update_my_list_status` + record what MAL saved (same
+    """`mal_client.update_my_list_status` + record what was agreed (same
     only-what-was-written rule as `anilist_save`)."""
     saved = mal_client.update_my_list_status(token, mal_id, **fields) or {}
     kw = {}
-    if "status" in fields or "num_watched_episodes" in fields:
-        status = saved.get("status") or fields.get("status")
-        if status in MAL_TO_STATUS:
-            kw["status"] = MAL_TO_STATUS[status]
+    if fields.get("status") in MAL_TO_STATUS:
+        kw["status"] = MAL_TO_STATUS[fields["status"]]
     if "num_watched_episodes" in fields:
         kw["progress"] = saved.get("num_episodes_watched", fields["num_watched_episodes"])
+        kw["lcars_progress"] = fields["num_watched_episodes"]
     if kw:
         record(conn, "mal", mal_id, **kw)
     return saved

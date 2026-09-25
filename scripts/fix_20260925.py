@@ -145,7 +145,12 @@ say("D. Future seasons -> planned")
 for show_id, sn in (("s-aq4na5", 2), ("s-5tq9ae", 3), ("s-vkqrm9", 2)):
     se = season(show_id, sn)
     c.execute("UPDATE season SET status = 'planned', updated_at = ? WHERE id = ?", (now, se["id"]))
-    resolvers._recompute_show_status(c, show_id, "captains_log", _skip_push=True)
+    if show_id == "s-vkqrm9":
+        # Blue Box / Dangers stay paused at show level: Sonarr has them
+        # unmonitored, and re-deriving them to watching would get them
+        # re-paused (and PAUSED pushed) by the Sonarr reconcile. Whether
+        # they're active again is the user's call.
+        resolvers._recompute_show_status(c, show_id, "captains_log", _skip_push=True)
     show_status = c.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()[0]
     say(f"  {show_id} S{sn} ({se['status']} -> planned); show status now {show_status}")
     if se["anilist_id"]:
