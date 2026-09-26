@@ -19,7 +19,9 @@ unchanged), matched last so the two `/webhooks/*` routes take priority.
 """
 
 import hmac
+import json
 import logging
+import re
 from importlib import resources
 from pathlib import Path
 
@@ -78,8 +80,16 @@ class TransactionBoundaryMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        body = bytearray()
+
+        async def receive_and_keep():
+            message = await receive()
+            if message.get("type") == "http.request" and len(body) < 4096:
+                body.extend(message.get("body", b"")[: 4096 - len(body)])
+            return message
+
         try:
-            await self.app(scope, receive, send)
+            await self.app(scope, receive_and_keep, send)
         except Exception:
             conn = db._connection
             if conn is not None and conn.in_transaction:
@@ -88,9 +98,25 @@ class TransactionBoundaryMiddleware:
         conn = db._connection
         if conn is not None and conn.in_transaction:
             logger.warning(
-                "%s %s left a transaction open — committing", scope.get("method"), scope["path"]
+                "%s %s left a transaction open — committing (%s)",
+                scope.get("method"), scope["path"], _operation_of(bytes(body)),
             )
             conn.commit()
+
+
+def _operation_of(body: bytes) -> str:
+    """The GraphQL operation a request body names — operationName, else the
+    first selected field — for the transaction-leak warning above."""
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return "?"
+    if not isinstance(payload, dict):
+        return "?"
+    if payload.get("operationName"):
+        return str(payload["operationName"])
+    match = re.search(r"{\s*(\w+)", payload.get("query") or "")
+    return match.group(1) if match else "?"
 
 
 class BearerTokenMiddleware:

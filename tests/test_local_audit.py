@@ -910,7 +910,7 @@ def test_reconcile_creates_a_tracked_show_for_an_untracked_sonarr_series(conn, m
     assert row["status"] == "planned"
 
 
-def test_reconcile_flags_a_newly_unmonitored_show_for_pause(conn, monkeypatch):
+def test_reconcile_never_pauses_a_show_unmonitored_in_sonarr(conn, monkeypatch):
     _configure_sonarr()
     _add_show(conn, "s-rec001", tvdb_id=457078)  # status defaults to 'watching'
     series = [{
@@ -920,12 +920,13 @@ def test_reconcile_flags_a_newly_unmonitored_show_for_pause(conn, monkeypatch):
     fake = _FakeSonarrClient(series, {1: []})
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
 
+    # User rule, 2026-09-26: Sonarr's monitoring never changes LCARS.
     result = local_audit.reconcile_arr_state(conn)
-    assert result["to_pause"] == ["s-rec001"]
+    assert result["to_pause"] == []
     assert result["to_resume"] == []
 
 
-def test_reconcile_flags_a_remonitored_paused_show_for_resume(conn, monkeypatch):
+def test_reconcile_never_resumes_a_show_remonitored_in_sonarr(conn, monkeypatch):
     _configure_sonarr()
     _add_show(conn, "s-rec002", tvdb_id=457078)
     conn.execute(
@@ -940,7 +941,7 @@ def test_reconcile_flags_a_remonitored_paused_show_for_resume(conn, monkeypatch)
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
 
     result = local_audit.reconcile_arr_state(conn)
-    assert result["to_resume"] == ["s-rec002"]
+    assert result["to_resume"] == []  # Sonarr's monitoring never changes LCARS
     assert result["to_pause"] == []
 
 
@@ -1081,7 +1082,7 @@ def test_reconcile_movie_added_creates_a_tracked_movie(conn, monkeypatch):
     assert row["media_shape"] == "movie"
 
 
-def test_reconcile_flags_an_unmonitored_radarr_movie_for_pause(conn, monkeypatch):
+def test_reconcile_never_pauses_a_movie_unmonitored_in_radarr(conn, monkeypatch):
     _configure_radarr()
     _add_show(conn, "s-rec005", tmdb_id=687163, media_shape="movie")
     movie = {
@@ -1092,4 +1093,4 @@ def test_reconcile_flags_an_unmonitored_radarr_movie_for_pause(conn, monkeypatch
     monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
 
     result = local_audit.reconcile_arr_state(conn)
-    assert result["to_pause"] == ["s-rec005"]
+    assert result["to_pause"] == []  # Radarr's monitoring never changes LCARS

@@ -756,27 +756,22 @@ def reconcile_arr_state(conn) -> dict:
          didn't.
       2. Availability correction (existing
          `_audit_sonarr_series`/`_audit_radarr_movie`, walk_orphans=False).
-      3. monitored<->status reconcile intent, returned as DATA
-         (`to_pause`/`to_resume` show_id lists) rather than written
-         directly: applying it needs resolvers.py's own
-         `_apply_status_change` (AniList/MAL push, season fanout, arr
-         re-monitor-on-resume — the same side effects a client-driven
-         setStatus gets), which this module can't import without a
-         circular dependency (resolvers.py already imports
-         local_audit.py). The caller
-         (`resolve_reconcile_arr_state`) applies both lists.
+      3. (Removed 2026-09-26.) Sonarr/Radarr's `monitored` flag no longer
+         pauses/resumes LCARS shows — user rule: LCARS drives Sonarr's
+         monitoring (drop/pause unmonitors, resume re-monitors, add adds),
+         never the reverse; only a series *added* in Sonarr flows back
+         (step 1). It paused 29 completed shows every hour (09-19..09-25).
 
     A source that fails to connect this tick contributes nothing to any
-    of the three for that service — no partial "everything looks
-    unmonitored" false signal from a transient outage. This is the
-    single highest-consequence failure mode here: a Sonarr blip must
-    never read as "the whole library got paused," so a connection
-    failure skips this service's untracked-create, correction, AND
-    monitored-sync together, not just the piece that happened to fail."""
+    of the steps for that service — a connection failure skips this
+    service's untracked-create and correction together."""
     result: dict = {
         "episodes_corrected": 0,
         "shows_corrected": 0,
         "shows_created": 0,
+        # Always empty since 2026-09-26 (user rule: "changing monitoring
+        # status on Sonarr does not impact LCARS"; LCARS -> Sonarr only).
+        # Kept so reconcileArrState's shape and ops's log line don't change.
         "to_pause": [],
         "to_resume": [],
         "create_failures": [],
@@ -803,7 +798,6 @@ def reconcile_arr_state(conn) -> dict:
                         conn, client, show_id, series, now, walk_orphans=False
                     )
                     result["episodes_corrected"] += corrected
-                    _check_monitored(conn, show_id, series.get("monitored", True), result)
             service_health.record_success(conn, "sonarr")
             conn.commit()
         except sonarr_client.SonarrError as e:
@@ -829,7 +823,6 @@ def reconcile_arr_state(conn) -> dict:
                         conn, show_id, movie, now, walk_orphans=False
                     )
                     result["shows_corrected"] += corrected
-                    _check_monitored(conn, show_id, movie.get("monitored", True), result)
             service_health.record_success(conn, "radarr")
             conn.commit()
         except radarr_client.RadarrError as e:
@@ -839,39 +832,3 @@ def reconcile_arr_state(conn) -> dict:
 
     return result
 
-
-def _check_monitored(conn, show_id: str, monitored: bool, result: dict) -> None:
-    """Compares Sonarr's/Radarr's own current `monitored` flag against
-    LCARS's current status, appending to `result["to_pause"]`/
-    `["to_resume"]` on a real mismatch — never writes show.status
-    itself (see reconcile_arr_state's own docstring for why).
-
-    The resume direction is deliberately narrower than "monitored=true
-    and LCARS says paused": it only fires when `status_before_pause` is
-    set, i.e. THIS mechanism (or a client-driven setStatus,
-    `_apply_status_change` sets it the same way) is what paused the
-    show. Without this guard, every show ever dropped/paused for an
-    unrelated reason before this feature existed — `status_before_pause`
-    NULL on every pre-migration row — reads as "should resume" on the
-    very first reconcile tick the moment Sonarr happens to still report
-    monitored=true (never unmonitored, a push that failed, a show
-    re-added to Sonarr later), silently reactivating shows the user
-    deliberately dropped and pushing that to AniList/MAL. A show that
-    genuinely was paused by this mechanism always has
-    status_before_pause set, so the real "someone re-monitored it in
-    Sonarr, resume" case still works."""
-    row = conn.execute(
-        "SELECT status, status_before_pause FROM show WHERE id = ?", (show_id,)
-    ).fetchone()
-    if row is None:
-        return
-    is_paused = row["status"] in ("paused", "dropped")
-    # A completed show is normally unmonitored — there is nothing left to
-    # grab. Pausing it on that signal is wrong, and the AniList/MAL
-    # reconcilers set it straight back to completed from the lists, so
-    # 29 shows flipped completed <-> paused every hour from 09-19 to
-    # 09-25, pushing both statuses to AniList/MAL each time.
-    if not monitored and not is_paused and row["status"] != "completed":
-        result["to_pause"].append(show_id)
-    elif monitored and is_paused and row["status_before_pause"] is not None:
-        result["to_resume"].append(show_id)

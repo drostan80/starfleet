@@ -50,3 +50,11 @@ async def test_a_request_that_raised_is_rolled_back(conn):
     await _get(_app(raise_after_write=True))
     assert not conn.in_transaction
     assert conn.execute("SELECT count(*) FROM t").fetchone()[0] == 0
+
+
+def test_the_leak_warning_names_the_graphql_operation():
+    from lcars.server import _operation_of
+
+    assert _operation_of(b'{"query":"mutation { pollScoreSync { x } }"}') == "pollScoreSync"
+    assert _operation_of(b'{"operationName":"Shows","query":"query Shows { a }"}') == "Shows"
+    assert _operation_of(b"not json") == "?"
