@@ -1,6 +1,6 @@
 # Next up
 
-Current version: **v0.2.67** deployed 2026-09-26 (v0.2.68 pending deploy).
+Current version: **v0.2.69** (deployed 2026-09-26). Start from **HANDOFF-2026-09-26.md**.
 Full build history archived to `~/repos/starfleet-archive`.
 
 > Full account of the 2026-09-23 session (changes, data operations, backups,
@@ -30,11 +30,15 @@ Full build history archived to `~/repos/starfleet-archive`.
 - [x] 28 LCARS/AniList disagreements settled per the user; Blue Box and The
       Dangers in My Heart re-monitored and resumed.
 - [x] 82 orphaned FK rows deleted (0 left).
-- [ ] **v0.2.68: transaction leak** — a request that wrote without committing
-      held the SQLite write lock indefinitely (blocked scripts; ops ReadError).
-      Middleware commits/rolls back at request end and logs the leaky request.
-      Deploy, then watch the lcars log for "left a transaction open" to find
-      and fix the resolver itself.
+- [x] **Transaction leak safety net** (v0.2.68/69): middleware commits what a
+      request left open and logs the GraphQL operation.
+- [ ] **Find the leaking resolver** from `left a transaction open (<op>)` in the
+      lcars log and make it commit.
+- [ ] **Metadata fetch FOREIGN KEY failure** on s-qpb26y (09-26 00:02).
+- [x] **Sonarr monitoring never changes LCARS** (v0.2.69, user's final call).
+- [x] 30 loop-leftover seasons aligned to AniList; review queue cleared (45).
+- [ ] **Air dates: Sonarr is a weak source** (Syoboi can push a correct earlier
+      Sonarr date 2 days later). User: keep for now, decide next season.
 - [ ] **First hourly sweep after a restart blocks LCARS** (long sync inside a
       request handler). Re-check after v0.2.68; a job-timing change needs its
       own review.
