@@ -43,6 +43,9 @@ superseded wherever these rules disagree with it.
 | 6 | Reconcilers had no idea which side changed: the list always won, so failed pushes were reverted and disagreements looped | Fixed: `list_baseline` hub (v0.2.66) |
 | 7 | ~130 untracked relation stubs carry real seasons' AniList ids | Reconcilers now skip untracked shows (v0.2.66) |
 | 8 | v0.2.64 CI failed (server fixtures undated) — never deployed | Re-released as v0.2.65 |
+| 9 | v0.2.66 tag: lint error in a new script, CI cancelled | Re-released as v0.2.67 (deployed 09-26) |
+| 10 | A request left a SQLite transaction open: write lock held indefinitely | Middleware in v0.2.68 |
+| 11 | Repair script --apply failed at G (config not registered) and rolled back | Fixed (97889c1), applied 09-26 |
 
 ## 2. Rules for how the work is done (from the 09-23 mistakes)
 

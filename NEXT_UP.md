@@ -1,10 +1,48 @@
 # Next up
 
-Current version: **v0.2.62** (deployed 2026-09-23).
+Current version: **v0.2.67** deployed 2026-09-26 (v0.2.68 pending deploy).
 Full build history archived to `~/repos/starfleet-archive`.
 
 > Full account of the 2026-09-23 session (changes, data operations, backups,
 > plan violations, open items): **HANDOFF-2026-09-23.md**.
+> 2026-09-25/26 bug-fix session: plan, decisions and findings in
+> **BUGFIX-PLAN-2026-09-25.md**.
+
+## Bug-fix session 2026-09-25/26 — v0.2.63 → v0.2.68
+
+- [x] **Completed shows flipped completed <-> paused every hour** since 09-19
+      (29 shows, ~1,300 pushes to each list): the Sonarr reconcile paused any
+      unmonitored show. v0.2.63, verified in prod (0 paused since).
+- [x] **Syoboi sync never ran** (duplicate TID -> 400 on every batch). v0.2.65,
+      verified (programmes stored, 0 failures).
+- [x] **Unaired placeholders marked watched** (undated TBA episodes of an
+      unstarted season). v0.2.65 guard; 8 episodes cleared; Kaiju S3 AniList
+      progress 0 (verified).
+- [x] **LCARS as the hub** (user rule): `list_baseline` decides which side
+      changed — list edit -> LCARS -> other list; LCARS change -> pushed,
+      retried on failure. Only tracked shows sync; a shared entry is excluded.
+      First run seeded both services with no writes. v0.2.67, verified quiet.
+- [x] **Auto-created seasons never pushed** (`season.list_sync`); new-season
+      status: future -> planned, else previous season watched/paused -> paused,
+      dropped -> dropped. 193 seasons set LCARS-only.
+- [x] **Completing a season pushes MAL progress** = the MAL entry's own count.
+- [x] Haruhi (2009) duplicate stub purged; Haruhi S1 -> MAL 849.
+- [x] 28 LCARS/AniList disagreements settled per the user; Blue Box and The
+      Dangers in My Heart re-monitored and resumed.
+- [x] 82 orphaned FK rows deleted (0 left).
+- [ ] **v0.2.68: transaction leak** — a request that wrote without committing
+      held the SQLite write lock indefinitely (blocked scripts; ops ReadError).
+      Middleware commits/rolls back at request end and logs the leaky request.
+      Deploy, then watch the lcars log for "left a transaction open" to find
+      and fix the resolver itself.
+- [ ] **First hourly sweep after a restart blocks LCARS** (long sync inside a
+      request handler). Re-check after v0.2.68; a job-timing change needs its
+      own review.
+- [ ] **Icons / planner banners white until hard refresh** — still not
+      reproduced (below).
+- [ ] MAL-side disagreements couldn't be inspected (no token read); MAL now
+      follows LCARS through the hub.
+- [ ] One AniList HTTP 429 seen in lcars logs on 09-25; watch.
 
 ---
 
