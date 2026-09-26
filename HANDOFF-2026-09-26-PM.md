@@ -86,3 +86,21 @@ of the last 3 weeks stays; only the data is in question.
 2. Plan the rollback-and-replay from 09-06 with the user; validate on a copy; nothing
    applied without explicit approval.
 3. Read-only by default. Answer questions before acting. One prod command at a time.
+
+## 7. Evening update (freeze)
+
+- User: **ops is cut** (container stopped) — this stops all scheduled automation
+  (reconciles, AniList/MAL hub, anilist_activity, metadata refresh, Memory Alpha,
+  merges, sweeps). Webhooks left as they are ("good enough for now").
+  At 15:15Z, before the stop, anilist_reconcile changed Slime (watching→completed) and
+  Torture Princess (→dropped), auto-created 14 Slime S0 watch events, and wrote ~30
+  entries to AniList/MAL (15:15–15:19Z, see list_baseline.updated_at).
+- **v0.2.71 tagged, NOT deployed** (user stopped for the day): `lcars/freeze.py`, on by
+  default — no metadata fetch; a show-level status change writes only show.status +
+  status_change (no season fanout, no list push, no auto-mark, no arr monitor change).
+  Deploy only if the user asks; restart only `lcars web`, never a bare `up -d` (it would
+  restart ops).
+- Still automatic even so: watching an episode can move a season's status; the
+  manual `addWatchEvent` resolver left a transaction open at 11:43Z (safety net committed).
+- User's plan: roll the data back to good data from before the damage (lose only the
+  last 2–4 weeks), after restating the basic rules in full.
