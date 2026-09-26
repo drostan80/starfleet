@@ -33,6 +33,8 @@ APPLY = "--apply" in sys.argv
 DB = sys.argv[sys.argv.index("--db") + 1] if "--db" in sys.argv else "/db/lcars.db"
 
 cfg = config.load_config() if APPLY else None
+if cfg is not None:
+    config.set_current(cfg)  # resolvers' Sonarr re-monitor (G) reads get_current()
 c = sqlite3.connect(DB, timeout=30)
 c.row_factory = sqlite3.Row
 c.execute("PRAGMA foreign_keys = ON")
