@@ -1,6 +1,7 @@
 # Next up
 
-Current version: **v0.2.69** (deployed 2026-09-26). Start from **HANDOFF-2026-09-26.md**.
+Current version: **v0.2.70** (deployed 2026-09-26). Start from **HANDOFF-2026-09-26.md**, then the
+2026-09-26 afternoon section below.
 Full build history archived to `~/repos/starfleet-archive`.
 
 > Full account of the 2026-09-23 session (changes, data operations, backups,
@@ -32,8 +33,9 @@ Full build history archived to `~/repos/starfleet-archive`.
 - [x] 82 orphaned FK rows deleted (0 left).
 - [x] **Transaction leak safety net** (v0.2.68/69): middleware commits what a
       request left open and logs the GraphQL operation.
-- [ ] **Find the leaking resolver** from `left a transaction open (<op>)` in the
-      lcars log and make it commit.
+- [x] **Leaking resolver found: `pollMemoryAlpha`** — helpers committed only when rows
+      changed; a 0-row UPDATE still holds the write lock. v0.2.70, verified in prod
+      (0 warnings over 3 cycles incl. a full dataset refresh).
 - [ ] **Metadata fetch FOREIGN KEY failure** on s-qpb26y (09-26 00:02).
 - [x] **Sonarr monitoring never changes LCARS** (v0.2.69, user's final call).
 - [x] 30 loop-leftover seasons aligned to AniList; review queue cleared (45).
@@ -47,6 +49,32 @@ Full build history archived to `~/repos/starfleet-archive`.
 - [ ] MAL-side disagreements couldn't be inspected (no token read); MAL now
       follows LCARS through the hub.
 - [ ] One AniList HTTP 429 seen in lcars logs on 09-25; watch.
+
+
+## 2026-09-26 afternoon — v0.2.70 + sequel/stub rule
+
+- [x] **Failed steps leave no partial writes** (`db.undo_on_error`): metadata `_guarded`
+      and every `pollMemoryAlpha` step. v0.2.70.
+- [x] **User rules recorded** (memory: episode-atomic-core-rule, auto-season-push-rule-by-parent):
+      sequel on the same TVDB series = season; movie sits inside the show; a different
+      TVDB series = separate show linked as a franchise (franchise layer: later).
+      Parent watching/completed/planned/rewatching -> planned + pushed + Sonarr future
+      episodes; paused/dropped -> paused/dropped stub, never pushed. Direct
+      SEQUEL/PREQUEL only.
+- [x] **Stubs only for SEQUEL/PREQUEL, never for an id that is already a season** —
+      branch `feat/sequel-only-stubs` (adf4951), full suite green, **not released**.
+- [x] Relation types re-read from AniList (read-only): the 1,446 untyped were 443
+      sequel/prequel, 240 side story, 142 character (the cross-franchise links), ...
+- [ ] **User: review page** https://claude.ai/artifact/Vo9guuPKsXKDX3jnbWy3dF —
+      369 sequel parents: true status, "don't add" per sequel, notes.
+- [ ] Lists for approval: 207 duplicate stubs of existing seasons (remove); 860
+      stubs with no sequel/prequel link (keep, unlink).
+- [ ] Auto-add rule (planned + lists + Sonarr future) — build behind an off switch;
+      enable only after the review + an approved simulation. The 193 LCARS-only
+      seasons get the rule then (user: apply).
+- [ ] First-sweep blocking: re-check now that v0.2.70 is live.
+- [ ] Sasaki and Peeps FK failure — may be explained by the partial-write fix; watch
+      the nightly refresh for a new `metadata_fetch` review.
 
 ---
 
