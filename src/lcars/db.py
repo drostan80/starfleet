@@ -12,10 +12,14 @@ runtime guard: if some future change accidentally introduces threading
 instead of silently allowing unsynchronized concurrent access.
 """
 
+import itertools
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 _connection: sqlite3.Connection | None = None
+_savepoint_ids = itertools.count(1)
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -45,3 +49,43 @@ def close() -> None:
     if _connection is not None:
         _connection.close()
         _connection = None
+
+
+@contextmanager
+def undo_on_error(conn: sqlite3.Connection) -> Iterator[None]:
+    """A best-effort step whose failure is caught by the caller: if the
+    body raises, its own uncommitted writes are undone, so a half-done
+    step never rides along with whatever commits next (2026-09-26 — the
+    `pollMemoryAlpha` transaction leak, and metadata._guarded keeping a
+    failed step's partial writes). Writes made before the block are kept.
+
+    Many steps commit part-way (service_health right after the HTTP
+    call); that commit also ends the savepoint. Everything still open at
+    the failure then belongs to this step alone, so a plain rollback
+    undoes exactly the step's own writes after its last commit."""
+    began = not conn.in_transaction
+    if began:
+        # Without an outer transaction, RELEASE would commit — keep the
+        # old "pending until the caller commits" behaviour instead.
+        conn.execute("BEGIN")
+    changes = conn.total_changes
+    name = f"undo_{next(_savepoint_ids)}"
+    conn.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+    except Exception:
+        try:
+            conn.execute(f"ROLLBACK TO {name}")
+            conn.execute(f"RELEASE {name}")
+        except sqlite3.OperationalError:
+            conn.rollback()
+        else:
+            if began and conn.in_transaction:
+                conn.rollback()
+        raise
+    try:
+        conn.execute(f"RELEASE {name}")
+    except sqlite3.OperationalError:
+        return  # the body committed; nothing of ours is left open
+    if began and conn.in_transaction and conn.total_changes == changes:
+        conn.rollback()  # nothing written: don't leave an empty transaction open

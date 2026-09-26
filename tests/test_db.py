@@ -63,3 +63,72 @@ def test_close_resets_singleton(tmp_path):
     db.close()
     with pytest.raises(RuntimeError):
         db.get_connection()
+
+
+# --- undo_on_error (2026-09-26) ------------------------------------------------
+
+
+def _undo_conn(tmp_path):
+    conn = db.connect(tmp_path / "test.db")
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.commit()
+    return conn
+
+
+def _xs(conn):
+    return [r[0] for r in conn.execute("SELECT x FROM t ORDER BY x")]
+
+
+def test_undo_on_error_undoes_only_the_failed_steps_writes(tmp_path):
+    conn = _undo_conn(tmp_path)
+    conn.execute("INSERT INTO t VALUES (1)")  # caller's own, uncommitted
+    with pytest.raises(ValueError):
+        with db.undo_on_error(conn):
+            conn.execute("INSERT INTO t VALUES (2)")
+            raise ValueError("step failed")
+    assert _xs(conn) == [1]
+    assert conn.in_transaction  # the caller's write is still pending
+
+
+def test_undo_on_error_after_a_commit_inside_the_step(tmp_path):
+    conn = _undo_conn(tmp_path)
+    with pytest.raises(ValueError):
+        with db.undo_on_error(conn):
+            conn.execute("INSERT INTO t VALUES (1)")
+            conn.commit()  # e.g. service_health right after the HTTP call
+            conn.execute("INSERT INTO t VALUES (2)")
+            raise ValueError("step failed")
+    assert _xs(conn) == [1]
+    assert not conn.in_transaction
+
+
+def test_undo_on_error_success_keeps_writes_pending(tmp_path):
+    conn = _undo_conn(tmp_path)
+    with db.undo_on_error(conn):
+        conn.execute("INSERT INTO t VALUES (1)")
+    assert conn.in_transaction  # committed by the caller, as before
+    conn.commit()
+    assert _xs(conn) == [1]
+
+
+def test_undo_on_error_without_writes_leaves_no_transaction_open(tmp_path):
+    conn = _undo_conn(tmp_path)
+    with db.undo_on_error(conn):
+        conn.execute("SELECT 1").fetchone()
+    assert not conn.in_transaction
+    with pytest.raises(ValueError):
+        with db.undo_on_error(conn):
+            raise ValueError("no writes")
+    assert not conn.in_transaction
+
+
+def test_undo_on_error_nests(tmp_path):
+    conn = _undo_conn(tmp_path)
+    with db.undo_on_error(conn):
+        conn.execute("INSERT INTO t VALUES (1)")
+        with pytest.raises(ValueError):
+            with db.undo_on_error(conn):
+                conn.execute("INSERT INTO t VALUES (2)")
+                raise ValueError("inner")
+    conn.commit()
+    assert _xs(conn) == [1]

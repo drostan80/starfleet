@@ -425,7 +425,7 @@ def fill_airdate_gaps(conn) -> int:
              AND (te.airstamp IS NOT NULL OR (te.airdate IS NOT NULL AND te.airdate != ''))"""
     )
     filled = cursor.rowcount
+    conn.commit()  # unconditional: a no-op write still holds the lock
     if filled:
-        conn.commit()
         log.info("Filled %d episode airdate gaps from TVmaze", filled)
     return filled

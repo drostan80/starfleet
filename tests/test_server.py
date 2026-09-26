@@ -2944,6 +2944,31 @@ async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(cl
     assert anilist_health["lastErrorMessage"] is None
 
 
+async def test_failed_metadata_step_leaves_no_partial_writes(client, monkeypatch):
+    """2026-09-26 — a step that fails part-way is undone: _fetch_anilist
+    wrote the poster, then failed on synonyms; the poster must not stay
+    behind to be committed by whatever commits next."""
+    from lcars import metadata
+
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("synonyms broke")
+
+    monkeypatch.setattr(metadata, "_sync_synonyms", _boom)
+    show = await add_show(client, anilistId=12345)
+
+    bare = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
+    assert bare["show"]["posterUrl"] is None
+    reviews = await _pending_reviews_for(client, show["id"])
+    assert [r["proposedValueChain"] for r in reviews] == [["synonyms broke"]]
+    # AniList itself answered: the health record says so despite the undo.
+    health_data = await gql(client, SERVICE_HEALTH_QUERY, headers=auth_headers())
+    anilist_health = next(e for e in health_data["serviceHealth"] if e["service"] == "ANILIST")
+    assert anilist_health["status"] == "OK"
+
+
 # --- AniList→MAL source failover (2026-09-05) --------------------------------
 
 FAKE_MAL_DETAILS = {

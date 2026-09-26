@@ -364,8 +364,8 @@ def fill_airdate_gaps(conn) -> int:
              AND episode.kind = 'regular'"""
     )
     filled = cursor.rowcount
+    conn.commit()  # unconditional: a no-op write still holds the lock
     if filled:
-        conn.commit()
         log.info("Filled %d episode airdate gaps from Syoboi", filled)
     return filled
 

@@ -57,6 +57,7 @@ from lcars import (
     airdate_priority,
     anilist_client,
     art,
+    db,
     fribb,
     ids,
     mal_client,
@@ -166,8 +167,11 @@ def _guarded(conn, show: dict, service: str, fn: Callable[[object, dict], None])
     client call directly — see `_fetch_anilist`/`_reconcile_air_dates`/
     `_fetch_sonarr`/`_fetch_radarr`'s own docstrings/comments."""
     try:
-        fn(conn, show)
+        with db.undo_on_error(conn):
+            fn(conn, show)
     except Exception as e:
+        # The step's own partial writes are gone (undo_on_error); its
+        # service_health failure was committed before it raised.
         pending_review.open_or_extend(
             conn, "show", show["id"], "metadata_fetch", service, None, str(e)
         )
@@ -294,6 +298,9 @@ def _fetch_anilist(conn, show: dict) -> None:
         # fallback is best-effort gap-fill, not a full substitute.
         try:
             _fetch_mal_fallback(conn, show)
+            # Kept on purpose: committed so _guarded's undo of this failed
+            # step doesn't discard the gap-fill.
+            conn.commit()
         except Exception:
             log.exception("MAL fallback also failed during AniList outage")
         raise

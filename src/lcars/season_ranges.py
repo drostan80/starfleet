@@ -656,8 +656,10 @@ def backfill_episode_season_id(conn: sqlite3.Connection) -> int:
         "       AND se.season_number = episode.season"
         "   )",
     ).rowcount
+    # Unconditional: an UPDATE matching no rows still opens a transaction
+    # and holds the write lock (the 09-26 pollMemoryAlpha leak).
+    conn.commit()
     if updated:
-        conn.commit()
         log.info("backfill_episode_season_id: linked %d episodes", updated)
     return updated
 
@@ -719,8 +721,8 @@ def seed_episode_external_ids(conn: sqlite3.Connection) -> dict[str, int]:
         "     AND episode_external_id.external_id LIKE sei.external_id || ':%'"
         " )"
     ).rowcount
+    conn.commit()  # unconditional: a no-op write still holds the lock
     if stale:
-        conn.commit()
         log.info("seed_episode_external_ids: dropped %d stale derived row(s)", stale)
 
     # ── AniDB ──
@@ -885,8 +887,8 @@ def backfill_season_names(conn: sqlite3.Connection) -> int:
             )
             filled += 1
 
+    conn.commit()  # unconditional: a no-op write still holds the lock
     if filled:
-        conn.commit()
         log.info("backfill_season_names: filled %d names", filled)
     return filled
 
@@ -993,7 +995,7 @@ def fill_season_ranges_bulk(conn: sqlite3.Connection) -> int:
             running = abs_end + 1
             updated += 1
 
+    conn.commit()  # unconditional: a no-op write still holds the lock
     if updated:
-        conn.commit()
         log.info("fill_season_ranges_bulk: updated %d seasons", updated)
     return updated

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import httpx
 
-from lcars import fribb, sonarr_match
+from lcars import db, fribb, sonarr_match
 
 log = logging.getLogger(__name__)
 
@@ -1561,8 +1561,8 @@ def fill_title_gaps(conn) -> int:
              AND ae.title_en != ''"""
     )
     filled = cursor.rowcount
+    conn.commit()  # unconditional: a no-op write still holds the lock
     if filled:
-        conn.commit()
         log.info("Filled %d episode title gaps from AniDB", filled)
     return filled
 
@@ -1589,8 +1589,8 @@ def fill_airdate_gaps_anidb(conn) -> int:
              AND ae.airdate != ''"""
     )
     filled = cursor.rowcount
+    conn.commit()  # unconditional: a no-op write still holds the lock
     if filled:
-        conn.commit()
         log.info("Filled %d episode airdate gaps from AniDB", filled)
     return filled
 
@@ -1641,41 +1641,42 @@ def poll_memory_alpha(conn) -> dict:
 
     if al_stale or titles_stale or wd_stale or arm_stale:
         try:
-            result["datasets_refreshed"] = True
+            with db.undo_on_error(conn):
+                result["datasets_refreshed"] = True
 
-            # Anime-Lists XML
-            al_root = anime_lists.load_xml()
-            al_entries = anime_lists.parse_entries(al_root)
-            al_stats = anime_lists.ingest_to_db(conn, al_entries, now)
-            result["anime_list_entries"] = (
-                al_stats["inserted"] + al_stats["updated"]
-            )
+                # Anime-Lists XML
+                al_root = anime_lists.load_xml()
+                al_entries = anime_lists.parse_entries(al_root)
+                al_stats = anime_lists.ingest_to_db(conn, al_entries, now)
+                result["anime_list_entries"] = (
+                    al_stats["inserted"] + al_stats["updated"]
+                )
 
-            # AniDB titles dump
-            titles = load_titles()
-            anime_entries = extract_anime_entries(titles)
-            t_stats = ingest_to_db(conn, titles, anime_entries, now)
-            result["anidb_titles"] = t_stats["title_count"]
+                # AniDB titles dump
+                titles = load_titles()
+                anime_entries = extract_anime_entries(titles)
+                t_stats = ingest_to_db(conn, titles, anime_entries, now)
+                result["anidb_titles"] = t_stats["title_count"]
 
-            # Seed AniDB IDs from Fribb
-            fribb_data = fribb.load_dataset()
-            result["anidb_ids_seeded"] = seed_anidb_external_ids(
-                conn, fribb_data
-            )
+                # Seed AniDB IDs from Fribb
+                fribb_data = fribb.load_dataset()
+                result["anidb_ids_seeded"] = seed_anidb_external_ids(
+                    conn, fribb_data
+                )
 
-            # Re-derive episode mappings
-            mapping_stats = derive_episode_mappings(conn)
-            result["episodes_mapped"] = mapping_stats["mapped"]
+                # Re-derive episode mappings
+                mapping_stats = derive_episode_mappings(conn)
+                result["episodes_mapped"] = mapping_stats["mapped"]
 
-            # Wikidata TV bridge
-            if wd_stale:
-                wd_data = wikidata.load_dataset()
-                log.info("Wikidata TV bridge: %d records", len(wd_data))
+                # Wikidata TV bridge
+                if wd_stale:
+                    wd_data = wikidata.load_dataset()
+                    log.info("Wikidata TV bridge: %d records", len(wd_data))
 
-            # ARM dataset (AniList↔Syoboi bridge)
-            if arm_stale:
-                arm_data = arm.load_dataset()
-                log.info("ARM: %d entries", len(arm_data))
+                # ARM dataset (AniList↔Syoboi bridge)
+                if arm_stale:
+                    arm_data = arm.load_dataset()
+                    log.info("ARM: %d entries", len(arm_data))
         except Exception:
             log.exception("Memory Alpha dataset refresh failed")
             # Continue to drip-fetch and title-fill regardless
@@ -1684,23 +1685,25 @@ def poll_memory_alpha(conn) -> dict:
     # fribb.load_dataset() / wikidata.load_dataset() / arm.load_dataset()
     # use cached files, cheap
     try:
-        fribb_data = fribb.load_dataset()
-        try:
-            wd_data = wikidata.load_dataset()
-        except Exception:
-            wd_data = None
-            log.warning("Wikidata load failed, skipping TV/movie ID propagation")
-        id_counts = propagate_cross_ids(conn, fribb_data, wd_data)
-        result["ids_propagated"] = sum(id_counts.values())
+        with db.undo_on_error(conn):
+            fribb_data = fribb.load_dataset()
+            try:
+                wd_data = wikidata.load_dataset()
+            except Exception:
+                wd_data = None
+                log.warning("Wikidata load failed, skipping TV/movie ID propagation")
+            id_counts = propagate_cross_ids(conn, fribb_data, wd_data)
+            result["ids_propagated"] = sum(id_counts.values())
     except Exception:
         log.exception("Memory Alpha ID propagation failed")
 
     # ── 2b. Seed Syoboi TIDs from ARM (every tick, idempotent) ──
     try:
-        arm_data = arm.load_dataset()
-        result["syoboi_tids_seeded"] = arm.seed_syoboi_external_ids(
-            conn, arm_data
-        )
+        with db.undo_on_error(conn):
+            arm_data = arm.load_dataset()
+            result["syoboi_tids_seeded"] = arm.seed_syoboi_external_ids(
+                conn, arm_data
+            )
     except Exception:
         log.exception("ARM Syoboi TID seeding failed")
 
@@ -1712,17 +1715,18 @@ def poll_memory_alpha(conn) -> dict:
     # backlog alike. Must run before drip-fetch so that new season rows
     # exist before episode-level data gets attached.
     try:
-        from lcars import season_ranges
-        result["season_rows_created"] = season_ranges.ensure_all_season_rows(conn)
-        # Proactive counterpart (2026-09-21): the reactive creation above
-        # only makes a row once Sonarr episodes already exist for that
-        # season — a real Fribb-known season with no synced episodes yet
-        # never gets one, which is exactly how the SPY×FAMILY season-gap
-        # bug happened. Must also run before identity_mismatch's own
-        # sweep so a season it just created is there to verify.
-        fribb_result = season_ranges.ensure_fribb_season_rows(conn)
-        result["season_rows_created"] += fribb_result["season_rows_created"]
-        result["episode_season_ids_linked"] = season_ranges.backfill_episode_season_id(conn)
+        with db.undo_on_error(conn):
+            from lcars import season_ranges
+            result["season_rows_created"] = season_ranges.ensure_all_season_rows(conn)
+            # Proactive counterpart (2026-09-21): the reactive creation above
+            # only makes a row once Sonarr episodes already exist for that
+            # season — a real Fribb-known season with no synced episodes yet
+            # never gets one, which is exactly how the SPY×FAMILY season-gap
+            # bug happened. Must also run before identity_mismatch's own
+            # sweep so a season it just created is there to verify.
+            fribb_result = season_ranges.ensure_fribb_season_rows(conn)
+            result["season_rows_created"] += fribb_result["season_rows_created"]
+            result["episode_season_ids_linked"] = season_ranges.backfill_episode_season_id(conn)
     except Exception:
         log.exception("Season row / episode.season_id backfill failed")
 
@@ -1732,9 +1736,10 @@ def poll_memory_alpha(conn) -> dict:
     # INSERT OR IGNORE, safe every tick.  Must run after 2c (needs
     # episode.season_id set) and after AniDB mapping derivation.
     try:
-        from lcars import season_ranges as _sr
-        ext_ids = _sr.seed_episode_external_ids(conn)
-        result["episode_ext_ids"] = ext_ids
+        with db.undo_on_error(conn):
+            from lcars import season_ranges as _sr
+            ext_ids = _sr.seed_episode_external_ids(conn)
+            result["episode_ext_ids"] = ext_ids
     except Exception:
         log.exception("episode_external_id seeding failed")
 
@@ -1742,8 +1747,9 @@ def poll_memory_alpha(conn) -> dict:
     # Fills NULL season_external_id.name from anidb_title (anime) or
     # show.primary_title (single-season fallback).  Idempotent.
     try:
-        from lcars import season_ranges as _sr2
-        result["season_names_filled"] = _sr2.backfill_season_names(conn)
+        with db.undo_on_error(conn):
+            from lcars import season_ranges as _sr2
+            result["season_names_filled"] = _sr2.backfill_season_names(conn)
     except Exception:
         log.exception("season_external_id name backfill failed")
 
@@ -1751,8 +1757,9 @@ def poll_memory_alpha(conn) -> dict:
     # Bulk fill season absolute-episode ranges for anime (from Sonarr
     # absolute_number) and TV (from episode counts per season).
     try:
-        from lcars import season_ranges as _sr3
-        result["season_ranges_filled"] = _sr3.fill_season_ranges_bulk(conn)
+        with db.undo_on_error(conn):
+            from lcars import season_ranges as _sr3
+            result["season_ranges_filled"] = _sr3.fill_season_ranges_bulk(conn)
     except Exception:
         log.exception("Season range bulk fill failed")
 
@@ -1761,10 +1768,11 @@ def poll_memory_alpha(conn) -> dict:
     # that share a TVDB ID and auto-merge the child into the parent as a
     # new season.  Records pending_review for user confirmation.
     try:
-        from lcars import show_merge as _sm
-        collision_result = _sm.detect_franchise_collisions(conn)
-        result["franchise_collisions_found"] = collision_result["collisions_found"]
-        result["franchise_merges_performed"] = collision_result["merges_performed"]
+        with db.undo_on_error(conn):
+            from lcars import show_merge as _sm
+            collision_result = _sm.detect_franchise_collisions(conn)
+            result["franchise_collisions_found"] = collision_result["collisions_found"]
+            result["franchise_merges_performed"] = collision_result["merges_performed"]
     except Exception:
         log.exception("Franchise collision detection failed")
 
@@ -1778,35 +1786,42 @@ def poll_memory_alpha(conn) -> dict:
 
     # ── 5. TVmaze drip-fetch (TV/movies, 5 shows/tick) ──
     try:
-        tvmaze_drip = tvmaze.drip_fetch_episodes(conn, limit=5)
-        result["tvmaze_drip_fetched"] = tvmaze_drip["fetched"]
-        result["tvmaze_episodes_stored"] = tvmaze_drip["episodes_stored"]
+        with db.undo_on_error(conn):
+            tvmaze_drip = tvmaze.drip_fetch_episodes(conn, limit=5)
+            result["tvmaze_drip_fetched"] = tvmaze_drip["fetched"]
+            result["tvmaze_episodes_stored"] = tvmaze_drip["episodes_stored"]
     except Exception:
         log.exception("TVmaze drip fetch failed")
 
     # ── 6. Syoboi change-driven sync (proginfo.xml pulse + LastUpdate) ──
     try:
-        sync = syoboi.incremental_sync(conn)
-        result["syoboi_programs_fetched"] = sync["programs_stored"]
+        with db.undo_on_error(conn):
+            sync = syoboi.incremental_sync(conn)
+            result["syoboi_programs_fetched"] = sync["programs_stored"]
     except Exception:
         log.exception("Syoboi incremental sync failed")
 
     # ── 7. Fill airdate gaps from AniDB + TVmaze + Syoboi ──
     try:
-        anidb_dates = fill_airdate_gaps_anidb(conn)
-        tvmaze_dates = tvmaze.fill_airdate_gaps(conn)
-        syoboi_dates = syoboi.fill_airdate_gaps(conn)
-        result["airdate_gaps_filled"] = anidb_dates + tvmaze_dates + syoboi_dates
+        with db.undo_on_error(conn):
+            anidb_dates = fill_airdate_gaps_anidb(conn)
+            tvmaze_dates = tvmaze.fill_airdate_gaps(conn)
+            syoboi_dates = syoboi.fill_airdate_gaps(conn)
+            result["airdate_gaps_filled"] = anidb_dates + tvmaze_dates + syoboi_dates
     except Exception:
         log.exception("Airdate gap fill failed")
 
     # ── 8. Rewire anime airdates to Syoboi (idempotent) ──
     try:
-        rw = syoboi.rewire_airdates(conn)
-        result["syoboi_airdates_rewired"] = rw["updated"]
+        with db.undo_on_error(conn):
+            rw = syoboi.rewire_airdates(conn)
+            result["syoboi_airdates_rewired"] = rw["updated"]
     except Exception:
         log.exception("Syoboi airdate rewire failed")
 
+    # Every step's writes are meant to stay; commit them here so this
+    # request never ends with a transaction open (the 09-26 leak).
+    conn.commit()
     return result
 
 
