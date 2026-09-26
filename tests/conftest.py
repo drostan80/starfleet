@@ -47,3 +47,11 @@ def _no_real_anilist_release_status(monkeypatch):
     with no episodes. No test may reach the real API through that; a
     test that cares patches `fetch_media_statuses` itself."""
     monkeypatch.setattr(anilist_client, "fetch_media_statuses", lambda ids, client=None: {})
+
+
+@pytest.fixture(autouse=True)
+def _automation_unfrozen_by_default(monkeypatch):
+    """The freeze (lcars/freeze.py, 2026-09-26) is ON by default in
+    production; the existing suite tests the unfrozen behaviour. Tests of
+    the freeze itself set LCARS_AUTOMATION_FROZEN back to "1"."""
+    monkeypatch.setenv("LCARS_AUTOMATION_FROZEN", "0")

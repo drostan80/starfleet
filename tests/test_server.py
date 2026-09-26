@@ -20,6 +20,7 @@ from lcars import (
     config,
     db,
     export_import,
+    freeze,
     fribb,
     mal_client,
     radarr_client,
@@ -12111,3 +12112,58 @@ async def test_add_show_with_arr_resolves_tvdb_through_the_crosswalk(client, mon
     assert data["addShowWithArr"]["matchedTvdbId"] == 421855
     lookups = [c for c in fake.calls if c[0] == "lookup_series"]
     assert lookups and all(c[1] == "tvdb:421855" for c in lookups)
+
+
+# --- Automation freeze (user order 2026-09-26) ---------------------------------
+
+def test_frozen_is_the_default(monkeypatch):
+    monkeypatch.delenv("LCARS_AUTOMATION_FROZEN", raising=False)
+    assert freeze.frozen() is True
+    monkeypatch.setenv("LCARS_AUTOMATION_FROZEN", "0")
+    assert freeze.frozen() is False
+
+
+@pytest.fixture
+def frozen(monkeypatch):
+    monkeypatch.setenv("LCARS_AUTOMATION_FROZEN", "1")
+
+
+def _frozen_boom(*a, **kw):
+    raise AssertionError("no outbound call allowed while frozen")
+
+
+async def test_frozen_add_show_fetches_nothing(client, monkeypatch, frozen):
+    monkeypatch.setattr(anilist_client, "fetch_media", _frozen_boom)
+    show = await add_show(client, anilistId=111)
+    conn = db.get_connection()
+    assert conn.execute("SELECT COUNT(*) FROM show").fetchone()[0] == 1  # no stubs
+    assert conn.execute(
+        "SELECT metadata_last_refreshed_at FROM show WHERE id = ?", (show["id"],)
+    ).fetchone()[0] is None
+
+
+async def test_frozen_show_status_change_does_not_cascade(client, monkeypatch):
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
+    show = await add_show(client, anilistId=111)
+    conn = db.get_connection()
+    seasons_before = conn.execute(
+        "SELECT season_number, status FROM season WHERE show_id = ? ORDER BY 1", (show["id"],)
+    ).fetchall()
+    monkeypatch.setenv("LCARS_AUTOMATION_FROZEN", "1")
+    monkeypatch.setattr("lcars.list_baseline.anilist_save", _frozen_boom)
+    monkeypatch.setattr("lcars.list_baseline.mal_save", _frozen_boom)
+    data = await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: DROPPED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    assert data["setStatus"]["status"] == "DROPPED"
+    assert conn.execute(
+        "SELECT season_number, status FROM season WHERE show_id = ? ORDER BY 1", (show["id"],)
+    ).fetchall() == seasons_before
+    assert conn.execute(
+        "SELECT new_status FROM status_change WHERE show_id = ? ORDER BY changed_at DESC LIMIT 1",
+        (show["id"],),
+    ).fetchone()[0] == "dropped"

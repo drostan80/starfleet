@@ -38,6 +38,7 @@ from lcars import (
     episode_movie_link,
     events,
     export_import,
+    freeze,
     fribb,
     fuzzy,
     identity_mismatch,
@@ -3399,6 +3400,20 @@ def _apply_status_change(conn, show_id: str, status: str, changed_by: str):
     was_paused = previous_status in ("paused", "dropped")
     now_paused = status in ("paused", "dropped")
     now = util.now_utc_iso()
+    if freeze.frozen():
+        # User order 2026-09-26: no cascade of any kind — the show's own
+        # status and its history row only (see freeze.py).
+        conn.execute(
+            "UPDATE show SET status = ?, updated_at = ? WHERE id = ?", (status, now, show_id)
+        )
+        conn.execute(
+            "INSERT INTO status_change"
+            " (id, show_id, previous_status, new_status, changed_at, changed_by)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (ids.generate_id(conn, "c"), show_id, previous_status, status, now, changed_by),
+        )
+        conn.commit()
+        return _get_show(conn, show_id)
     # Fanout: only stomp the highest season's status — earlier seasons
     # keep their own deliberate per-season status (user rule: "show
     # level only stomp last season if needed").

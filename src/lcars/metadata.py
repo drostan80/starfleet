@@ -58,6 +58,7 @@ from lcars import (
     anilist_client,
     art,
     db,
+    freeze,
     fribb,
     ids,
     mal_client,
@@ -90,6 +91,9 @@ def fetch_and_populate(conn, show_id: str) -> None:
     row = conn.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone()
     if row is None:
         raise ValueError(f"no such show: {show_id}")
+    if freeze.frozen():
+        log.warning("automation frozen: metadata fetch skipped for %s", show_id)
+        return
     show = dict(row)
 
     if show["tracking_space"] == "anime":
