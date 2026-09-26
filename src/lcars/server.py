@@ -55,6 +55,44 @@ def _context_value(request: Request, _data: dict) -> dict:
     return {"client": request.headers.get("x-lcars-client")}
 
 
+class TransactionBoundaryMiddleware:
+    """Every HTTP request ends with no open transaction (2026-09-26).
+
+    LCARS shares one sqlite3 connection (db.py), and Python's sqlite3 opens
+    a transaction on the first write and holds it until someone commits. A
+    resolver that wrote and returned without committing left the write lock
+    held indefinitely: prod sat idle at 0% CPU holding it, blocking every
+    other writer (repair scripts, and ops's own sweeps via ReadError) until
+    some later request happened to commit. Here: commit what a finished
+    request left open (logged, so the leaky path can be found and fixed),
+    roll back if the request raised."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    def __getattr__(self, name):
+        # Transparent wrapper: `.routes` etc. still reach the Router.
+        return getattr(self.app, name)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        try:
+            await self.app(scope, receive, send)
+        except Exception:
+            conn = db._connection
+            if conn is not None and conn.in_transaction:
+                conn.rollback()
+            raise
+        conn = db._connection
+        if conn is not None and conn.in_transaction:
+            logger.warning(
+                "%s %s left a transaction open — committing", scope.get("method"), scope["path"]
+            )
+            conn.commit()
+
+
 class BearerTokenMiddleware:
     """§8 — single static bearer token auth. Plain ASGI middleware, not
     GraphQL-context-based: an auth failure is a transport-level 401, not
@@ -209,7 +247,7 @@ def build_app(
             logger.warning("web_root %s does not exist — web client not served", web_root)
 
     routes.append(Mount("/", app=protected_graphql))  # catch-all, must come last
-    return Router(routes)
+    return TransactionBoundaryMiddleware(Router(routes))
 
 
 def create_app() -> ASGIApp:
