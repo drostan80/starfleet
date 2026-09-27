@@ -494,3 +494,21 @@ Project: restart** (not followed; its show goes on the skip list).
 its own show, planned (normal add path).
 
 → No individual seasons remain from existing data (Narumi goes to Kaiju No. 8).
+
+## Watches during the rebuild (keep until cutover)
+
+The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
+land in the final database. Three sources, reconciled at cutover (gap re-derived to the
+cutover moment, PLAN-DATA §2):
+1. **The user's own notes in the conversation** — logged here by Claude, every time:
+
+   | Date | Show / season / episode | Note |
+   |---|---|---|
+   | 2026-09-27 | As a Reincarnated Aristocrat, I'll Use My Appraisal Skill to Rise in the World — S3 E1 | season planned → watching (R2.14) |
+
+2. **Live LCARS** (v0.2.70): watch events and status changes after 09-27 in the live DB
+   (take a fresh `.backup` at cutover).
+3. **AniList activity** since 09-27, classified as before (the user's own vs LCARS push).
+
+Where the three disagree, the user's note wins; anything only in LCARS/AniList that
+isn't on an airing show goes on the review list.
