@@ -75,6 +75,13 @@ rule applies to TV series, ask — do not assume.
     anime), and the user may confirm them.
 - **R1.9 Season naming** (apart from season 0) follows the TVDB main numbering
   `S00E00` (the numbering, not the id).
+- **R1.9a Season numbers follow TVDB first** `[clarified 2026-09-27]`: TVDB's
+  main seasons keep their numbers. A level that isn't a TVDB main season (side
+  pieces, minis, OVA runs redistributed from season 0) never takes the next whole
+  season number: placed by air date **between** TVDB seasons N and N+1 it gets a
+  decimal season number (e.g. the Frieren mini-anime, between S2 and the unaired
+  S3, is **S2.5**, not S4); inside a season's air window it is a sub-season of
+  that season (R1.13). Memory Alpha must be reworked to follow this.
 - **R1.10 Sub-seasons.** When a different source divides a season further (e.g.
   AniList gives cour 1 and cour 2 of a season separate ids), the season may be
   organised into sub-seasons on its page, each named with that source's naming.
@@ -307,6 +314,21 @@ An episode can be unaired but watched (pre-air showing, leak…).
   **not appear in TVDB** may be added provisionally as an **individual season**,
   **planned only**, until TVDB adds the season / maps the episodes to a show with a
   TVDB id.
+- **R3.6c Scope of individual seasons** `[clarified 2026-09-27]`: only for a **new
+  planned season** (e.g. found on AniList) that can't be reconciled to a TVDB id
+  **yet**, because TVDB doesn't have it. Never used for anything existing today,
+  except seasons added in the last two weeks (since 2026-09-13) that have no TVDB
+  link. Existing shows without a TVDB id get one (lookup), or go to the user
+  (R3.3); they are not turned into individual seasons.
+- **R3.7 TVDB links must be verified** `[clarified 2026-09-27]`: wrongly matched
+  TVDB ids started much of the mess. A TVDB id is only accepted automatically
+  when an independent source agrees (Fribb/anime-lists, or Sonarr's own series
+  for that TVDB id) **and** the TVDB name matches the season's titles. A link
+  from a title search alone is never accepted automatically; any disagreement
+  goes to the user.
+- **R3.7a** A TVDB id that LCARS derived but no other source confirms is shown in
+  **browse** (and the add confirmation) for the user to confirm: the user is then
+  the second independent source. `[clarified 2026-09-27]`
 - **R3.6b** An individual season is mirrored to AniList/MAL like any other season.
   `[clarified 2026-09-27, Q-I2]`
 - **R3.6a** An individual season follows the normal status rules: e.g. an episode
@@ -516,5 +538,7 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-27 — Q-P2, Q-D2, Q-J4 answered: R1.12 (span list), R5.9 (never auto-add a
   pre-existing show to Sonarr), R2.16 (user-planned later seasons skipped after a
   warning). All §9 questions answered.
+- 2026-09-27 — R3.6c (individual seasons: new planned seasons only) and R3.7 (TVDB links verified).
+- 2026-09-27 — R3.7a (unconfirmed TVDB id shown in browse for the user to confirm); R1.9a (season numbers TVDB first, side pieces between seasons get decimal season numbers, e.g. S2.5).
 - 2026-09-27 — naming must follow rulebook terms (§7).
 - 2026-09-27 — R1.2c: Memory Alpha sets every absolute number (confirmed).

@@ -110,7 +110,9 @@ abs_to REAL)`; a level may have several rows. `season.abs_start/abs_end` dropped
   rows. breaks: the `UNIQUE(show_id, season_number, part_number)` key; all code
   selecting seasons by `season_number` (completion, progress, status).
 
-**2.3 Individual seasons (R3.2, R3.6, R3.6a–b; B5).**
+**2.3 Individual seasons (R3.2, R3.6, R3.6a–c; B5).** Scope (R3.6c): new planned
+seasons TVDB doesn't have yet; nothing existing except seasons added since 09-13
+with no TVDB link.
 - **P3 (approved):** `season.show_id` becomes nullable; an individual season is a
   season row with no show, carrying its own AniList/MAL ids and episodes. LCARS
   **looks up TVDB** to find a matching show; a match is **proposed for your
@@ -127,6 +129,11 @@ local_audit.py, tvdb_backfill.py, resolvers.py), incl. `find_existing_show`,
 `_find_stub_show`, `is_users_own_season`, `_find_parent_via_anilist`,
 `_ensure_anilist_link`.
 - data: existing show-level rows removed in the rebuild.
+
+**2.4b TVDB movie ids apart from TVDB series ids (R1.23, R3.7).** LCARS stores
+both as `tvdb`, and several films carry a TVDB *movie* id read as a series id
+(Your Name. = movie 197). Films get `tvdb_movie`; a film inside its show uses the
+show's series id plus its own abs number (R1.4).
 
 **2.5 Episode watched is a boolean (R2.2; C11).** Episodes can't be skipped; the
 code still has a third `skipped` state and a `markEpisodeSkipped` mutation. Both
@@ -212,6 +219,9 @@ discovery. Decides: new season of an existing show / part of a season / first
 season of a new show / individual season (no TVDB id).
 - R3.2 TVDB id required, else individual season; R3.3 historical exception is
   never automated.
+- R3.7 every automatic TVDB link verified: an independent source (Fribb, Sonarr's
+  series) agrees and the TVDB name matches the titles; else the user decides. A
+  title-search match is never accepted on its own.
 - R3.5/R3.5a related entry: added only to a show by TVDB id (same show or a
   tracked show); else **not added**.
 - R5.3 Sonarr add of multi-season show: latest season planned, earlier skipped.

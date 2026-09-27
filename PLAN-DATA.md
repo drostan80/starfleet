@@ -399,3 +399,58 @@ cutover, so this and any later watch is picked up then.
 
 Most structural counts (R1.x, R3.x) are fixed by the rebuild engines, not by hand;
 status counts (R2.x) by the status engine + the review decisions.
+
+## TVDB alignment (2026-09-27, read-only checks; for confirmation)
+
+**Rule:** the **show-level TVDB id** of every season comes from today's data (the
+latest fixes), **verified** (R3.7). The **season placement inside the show** does
+**not** come from today: the 09-06 13:12Z merge put side pieces in as seasons
+(Eromanga Sensei OVA → S2, ROOM CAMP → Laid-Back Camp S5, Haganai Episode 0 → S4,
+Mushoku/Food Wars OVAs, Frieren mini-anime → S4…). Placement is decided per
+episode by Memory Alpha (R1.17, R1.2c).
+
+09-06 vs today, per AniList season: 1,147 identical; 167 same TVDB show but a
+different season number (the merge — placement re-derived, above); 35 had no TVDB
+id on 09-06 and gained one; **0 conflicting TVDB ids**.
+
+Verification of today's TVDB ids (1,595 AniList seasons of tracked shows):
+- **1,439 agree with Fribb** → accepted.
+- 5 disagree, settled on TVDB itself:
+  - LCARS right (Fribb id deleted on TVDB): DARK MACHINE THE ANIMATION 480909,
+    Uncle's Obsession With Cute Things 480889;
+  - **LCARS wrong → corrected**: Mouse Cursor… 482380 (doesn't exist) → **473125**;
+    Gensou Suikoden 427736 ("Don: Gokudou Suikoden", 1992) → **482279** (Suikoden:
+    The Anime, 2026-10-03); Kekkaishi no Ichirinka 429767 ("Kits 'N' Cruisin'",
+    1998) → **467053**.
+- 151 with no Fribb TVDB (44 TVDB ids) → TVDB name check: 38 match;
+  **wrong, link removed** (standalone films / wrong series): Your Name. (197, doesn't
+  exist), Perfect Blue (72933 "Nowhere Man"), The Girl Who Leapt Through Time
+  (81248 "In Treatment"), Dead Leaves (251785 "Wainy Days"), Historié (335920
+  "Norsk Historie") → correct id looked up, else user; **to confirm**: Magical Girl
+  Raising Project restart on the 2016 series 316815.
+- All 5 wrong ids are title-search matches from the 09-17/18 adds or cross-id
+  propagation — the R3.7 check is added to the add path (PLAN-CODE 5.1).
+
+## Individual seasons (R3.6c)
+
+Candidates (added since 09-13, no TVDB link): Narumi's Week at Work, Kaketa Tsuki no
+Mercedes (series) — each first gets a TVDB lookup; individual only if TVDB has
+nothing yet. 5 films in the same list (To You in the Beyond, GROTESQQQUE, Rakuen
+Tsuihou: Kokoro no Resonance, Medalist Movie, ghost – end of night) are films,
+placed by R1.4 / franchise, not seasons. The 55 older series without a TVDB id are
+**not** individual seasons: TVDB lookup, else your review (R3.3).
+
+### TVDB checks for the user (2026-09-27, review page "TVDB:" sections)
+
+User asked to verify personally (links to AniList and TVDB on every line):
+- **55 series without a TVDB id**: 12 with an own TVDB series (name + year match),
+  24 specials/OVAs that belong to their AniList parent's TVDB show (placed by air
+  date, R1.8), 19 with nothing reliable → user decides (R3.3).
+- **35 that gained a TVDB id**: strict check. Films turned out to be the problem:
+  some are legitimately inside their show (TVDB lists them as specials:
+  Evangelion Death & Rebirth, Mugen Train, Dreaming Girl, SHIROBAKO Movie, Time of
+  Eve), others were linked to unrelated series or stored a TVDB *movie* id as a
+  series id (Your Name. = movie 197, Perfect Blue → movie 3807, The Girl Who Leapt
+  Through Time → movie 1384, Dead Leaves → movie 16387, 5 Centimeters → movie 3000,
+  VIRGIN PUNK → movie 367630; Harlock Riddle of Arcadia, Ninja Scroll → user).
+- **5 Fribb disagreements** and **MahoIku restart**: user checks via the links.
