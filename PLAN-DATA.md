@@ -1,0 +1,379 @@
+# Data plan — a correct starting database (step 1, draft for validation, 2026-09-27)
+
+**Status: PROPOSAL, read-only analysis so far.** Nothing was written anywhere.
+Analysis copies (scratchpad, not in repo): the 09-06, 09-07, 09-04, 08-27
+snapshots, and a consistent `.backup` of today's live DB (09-27 14:46).
+
+Order agreed with the user: **this plan first** (a correct starting database),
+then the code phases in `PLAN-CODE.md`, then the rebuild.
+
+---
+
+## 1. Is the 09-06 snapshot the right starting point?
+
+### What the file really contains
+
+`lcars.db.bak-20260906-141520` was made with `cp` from a WAL database, so it holds
+the last checkpoint, not 14:15:
+
+| | 09-06 file | 09-07 file |
+|---|---|---|
+| last status change | 09-05 22:18Z | 09-06 14:27Z |
+| last watch event | **09-06 08:26Z** | 09-06 21:46Z |
+| last season write | **09-06 08:53Z** | 09-06 13:12Z (the merge) |
+| tracked shows | 1,989 | 1,810 (178 merged away) |
+
+→ The 09-06 file is the state at **09-06 08:53Z**, before the 13:12Z merge.
+The gap to replay starts there.
+
+### How to judge it
+
+The new code rebuilds all **structure** from the sources (absolute numbering,
+seasons/parts/specials as spans, ids at the right level, season 0 redistributed).
+So structural faults in the snapshot (38 duplicate stubs, 4 side pieces as
+seasons, missing numbers) don't disqualify it: they are regenerated anyway.
+
+What must be right at the start is **your data**: show/season statuses, watch
+history, scores, which shows are tracked, and any structural decision you made
+by hand.
+
+### Findings
+
+| Check | 08-27 | 09-04 | **09-06** |
+|---|---|---|---|
+| tracked shows whose status was last set by automation (AniList reconcile / MAL reconcile / auto-complete) | 60 | 71 | **72** (42 / 27 / 3) |
+
+Also in 09-06:
+- 22 tracked shows whose status differs from their last logged change (changed
+  by a code path that didn't log it).
+- 220 tracked shows with **no status history at all** (created by paths that
+  never logged a status).
+- 1,518 seasons flagged `manual_override`. That flag was also set by automated
+  adds (a "caller-supplied id" counted as manual), so it **cannot** tell your own
+  decisions apart. Your real manual structure decisions have to be found another
+  way (merge/split mutations you ran, reviews you resolved).
+
+**Going earlier doesn't help:** the older snapshots hold the same kinds of
+automated status writes, only slightly fewer, and every earlier day adds replay.
+Mass automation (Sonarr "reconcile" pause/resume, hub ping-pong) starts
+**09-19**; before that, automated status changes are a few dozen per day,
+all logged.
+
+### Season statuses have no provenance (applies to any snapshot)
+
+`season.status` only exists since 09-03. Migration `c3d4e5f60718` (09-02) filled
+it by copying each show's status onto its seasons, then setting `completed` /
+`watching` from episode states; it also re-derived show statuses without logging
+them (likely the 22 unlogged differences). `setSeasonStatus` never logged
+anything. In 09-06: 1,773 seasons of tracked shows, 1,593 equal to their show's
+status, 176 differ, 55 touched after 09-03, 133 shows with several seasons.
+
+→ **09-06 is fine for show statuses and watch history, but season statuses must be
+rebuilt whichever snapshot is used** (earlier ones don't have the column at all).
+Since statuses live on seasons (R2.13), this matters most. Proposed sources, for
+your approval:
+- **anime:** each AniList entry is a season; its status history is in your
+  AniList activity feed, which was purely yours until LCARS started pushing
+  (mid-August, §6.8 of the old design) — after that, LCARS pushes are separated
+  by `list_baseline` times;
+- **TV:** no external source → seeded from the show status + watch history, then
+  your review (TV multi-season shows only).
+
+### Watch history inside the snapshot (08-16 → 09-06)
+
+The completion auto-sync shipped on 08-16, so bursts before the cutoff are
+reviewed too (same-timestamp groups of ≥3 events):
+
+| Cause | Bursts | Events | Shows | Treatment |
+|---|---|---|---|---|
+| Trakt import (08-18) | 1 | 13,112 | 419 | your import — kept |
+| completion via Data | 52 | 543 | 52 | valid (R2.7: completing marks every episode) |
+| completion via Holodeck | 4 | 19 | 4 | valid |
+| auto-complete | 4 | 154 | 4 | **suspect** — reviewed (e.g. Inspector Gadget) |
+| nothing logged | 18 | 450 | 39 | **to review** (e.g. Tonbo!, Urusei Yatsura) |
+
+**Recommendation: start from 09-06 (08:53Z state)**, with one review list for
+you before anything else:
+- the 72 automation-set statuses (some are genuine: a change you made on
+  AniList/MAL that LCARS pulled is valid under R4.3);
+- the 22 unlogged status differences;
+- the 220 shows with no history (status only needs checking against R2.13 after
+  the rebuild).
+
+## Decisions (user, 2026-09-27)
+
+- Start from 09-06 (08:53Z state). ✔
+- Reads of AniList activity and Sonarr/Radarr added dates: yes. **Writes only
+  once alignment is complete.** ✔
+- Season statuses rebuilt (anime from AniList activity, TV from show status +
+  watch history + review) — accounting for LCARS's own pushes (§2.6). ✔
+- Rule of thumb for everything since 09-06: **you were only watching airing
+  shows.**
+
+## 2. Deriving the gap (09-06 08:53Z → cutover)
+
+### 2.0 Older (not airing) shows — snapshot status, then the rules
+
+(user, 2026-09-27)
+- **Start from the 09-06 status**, then **align it to the new rules** by
+  derivation, e.g.:
+  - a show marked watching whose episodes are all watched (so every season
+    completed) → completed (R2.15, R2.13);
+  - S3 dropped, S4–S6 also dropped → S4–S6 skipped (R2.16), show dropped (R2.13).
+- **Changes you made to older shows/seasons since 09-06 are discarded.** They
+  were corrections of bad data, but we can't tell whether that bad data predated
+  09-06 or came from the confusion.
+- They are **tracked**: wherever the status re-derived from the snapshot + rules
+  does **not** match a change you explicitly made in between, it goes on a
+  **reconciliation list** for you to double-check.
+
+### 2.0b Sanity check against an older snapshot (before the schema change)
+
+- Reference: `lcars.db.bak-20260826-pre-v0.1.38-seasonschema` (08-26, effective
+  state 08-26 13:33Z; 1,982 tracked shows, 1,323 anime + 659 TV). Each anime
+  AniList entry was its own show, so its status is **season level** and mostly
+  correct; it has duplicates (126 TVDB ids shared by several shows) and the
+  show-TVDB / season-AniList confusion.
+- (08-15 is older but has anime only; TV came with the 08-18 Trakt import.)
+- Use: for **older, not-airing shows**, map each 08-26 AniList-entry show to its
+  season in the rebuilt DB (by AniList/MAL id), align the 08-26 status to the new
+  rules, and compare with the starting status. Differences → the same
+  reconciliation list. A check only; it doesn't overwrite anything.
+
+From today's live DB (read-only copy):
+
+| Evidence | Count | Treatment |
+|---|---|---|
+| Show status changes by you (holodeck / data / captains_log) | 40 on 33 shows | **not replayed blindly**: some were you correcting automation's mistakes, or reacting to a swap. Shows **airing at the time** → replayed as best guess, aligned with the rules. Older shows → **discarded** (see §2.0), only tracked for the reconciliation list |
+| Show status changes by automation | 5,323 on 302 shows | not replayed, **except** changes you made on AniList/MAL yourself, found through the AniList activity feed (R4.3). MAL has no activity feed, only a per-entry `updated_at`: weaker evidence |
+| Watch events, single (one episode at a time) | 147 on 53 shows | split by the rule of thumb: on a show **airing at the time** → replayed (with or without a player tag); on an older show → likely a status adjustment or a backfill, **not** replayed as a watch, listed for you. Also checked against reconcile run times and the activity feed |
+| Watch events in same-timestamp bursts | 112 in 10 bursts | reviewed one by one (below) |
+| Score change | 1 (holodeck) | replayed |
+| Shows created, now tracked | 77 | each goes through the R3.1 check |
+| Shows created, untracked (stubs) | 171 | dropped (R3.5) |
+| **Season** status changes you made | **not logged anywhere** | see §2.3 |
+
+### 2.1 Watch-event bursts since 09-06 (to review)
+
+| When (UTC) | Episodes | Show | What caused it |
+|---|---|---|---|
+| 09-06 13:30 | 9 | Mob Psycho 100 | to check |
+| 09-15 12:35 | 24 (4 shows) | HEAD START AT BIRTH … | to check |
+| 09-17 14:18 | 12 | Sasaki and Peeps | MAL reconcile |
+| 09-19 10:34 | 33 | Bakemonogatari | to check |
+| 09-23 10:10 | 14 | Haruhi Suzumiya | AniList reconcile |
+| 09-24 09:52 | 4 | Star Trek: Strange New Worlds | auto-complete |
+| 09-26 15:15 | 14 | Slime | AniList reconcile (after the stop) |
+| + 3 smaller | | | |
+
+A burst can be yours (marking a whole season watched) or automation's; you
+decide per line.
+
+### 2.2 Independent check: AniList activity feed (read-only)
+
+AniList keeps a timestamped activity for every progress/status change on your
+account ("watched episode 5 of X", "completed X"…). Reading it since 09-06:
+- confirms the airing-show watches (you said you weren't watching older shows,
+  so the real gap is mostly airing shows, one episode a week each);
+- catches watches made outside LCARS;
+- gives **season-level** evidence (AniList entries are seasons).
+LCARS's own pushes also show up there. They are separated by matching
+`list_baseline.updated_at` (the time LCARS pushed) against the activity time.
+**Only reads AniList.**
+
+### 2.3 Season statuses since 09-06
+
+`setSeasonStatus` never wrote a history row, so your season-level changes after
+09-06 exist only as the current value in the live DB, mixed with automation.
+Evidence available: the AniList activity feed (§2.2) and your confirmation for the
+airing shows. Code plan gets a season status history (see PLAN-CODE 0.2) so this
+can't happen again.
+
+### 2.4 Shows created since 09-06 (77 tracked)
+
+| Created | Kind | Count | Notes |
+|---|---|---|---|
+| 09-17/18/21 | anime series | 49 | 46 in Sonarr; Sonarr reconcile auto-create |
+| 09-17/18 | anime movies | 5 | no TVDB id |
+| 09-11/18/19 | TV series | 4 | 3 with watch events |
+| 09-19 | TV movies (Radarr) | 19 | Radarr reconcile auto-create |
+
+Each is checked against Sonarr/Radarr's own **added date** (read-only API): added by
+you after 09-06 → added per R5.2/R5.3; already in Sonarr before and only
+auto-created by the reconcile pass → listed for you.
+
+### 2.5 Skipped list — saved and reapplied
+
+The live DB holds **178 skipped shows** (untracked rows with status `skipped`,
+created by "skip" in browse/add); **159 were made after 09-06** and would be lost
+by the rollback. No season is skipped. The list is exported from the latest DB
+(ids: AniList/MAL/TVDB/TMDB + title), checked against the rules (a skipped
+entry is not followed, R2.10), then reapplied to the rebuilt DB. It is your
+work of the last weeks and is treated as correct.
+
+### 2.6 LCARS's own pushes to AniList/MAL during the confusion
+
+LCARS pushed wrong values to AniList/MAL (cascades, reconcile ping-pong, the
+09-26 15:15Z run). So AniList/MAL are **not** trusted as they stand, and an AniList
+activity only counts as your evidence if it is yours:
+- the push log (`list_baseline.updated_at`) only goes back to **09-26 05:30Z**
+  (2,969 rows), so it can't separate earlier pushes;
+- instead each AniList activity is matched by time against LCARS's own events
+  (status changes, watch events, season writes, within seconds):
+  - no LCARS event near it → **you, on AniList directly** → evidence;
+  - matches an LCARS event from Data/Holodeck/Captain's Log → your action via
+    LCARS → evidence;
+  - matches an automated LCARS event (reconcile, auto-complete, cascade) →
+    **LCARS's push** → discarded;
+- MAL: only a per-entry `updated_at`, same matching, weaker evidence;
+- at the end, the aligned values are written back to AniList/MAL, which also
+  repairs what was wrongly pushed (after your review of the write list).
+
+### 2.7 Gap end
+
+The live DB was still written today (WAL at 09:43; web and webhooks are running).
+The gap is re-derived at cutover time, not frozen now.
+
+## 3. Rebuild (after the code is approved and built)
+
+1. Copy of 09-06 (`sqlite3 .backup`).
+2. Apply your review decisions from §1 and §2.
+3. Run the new engines: numbering (AniDB / TVmaze **with specials**), levels and
+   spans, status rules, the add check. No hand-edited rows.
+4. Replay the gap through the normal code paths (not raw inserts).
+5. `rulecheck` must pass.
+6. Diff against the live AniList/MAL lists and Sonarr monitoring → you review
+   the exact list of external writes.
+7. Apply; external writes last, in capped batches.
+
+## Access so far
+
+On tiny, read-only: copied four snapshot files, and made a temporary
+`sqlite3 .backup` of the live DB in `/tmp` on tiny, copied it, then deleted it.
+Nothing else was touched.
+
+## Worth knowing (no action taken)
+
+The live DB is still being written (WAL modified 09-27 09:43). v0.2.70 is
+running: every episode you mark watched still runs the old cascade and pushes to
+AniList/MAL. Deploying the v0.2.71 freeze (show status changes without cascade)
+is your call.
+
+## Needs you
+
+- Agree 09-06 (08:53Z state) as the starting point?
+- OK to read the AniList activity feed and the Sonarr/Radarr "added" dates
+  (read-only) to build the review lists?
+- Then: the review lists (§1 and §2.1–2.4) are produced for you to go through.
+
+## Review lists — built 2026-09-27 (read-only)
+
+Page: https://claude.ai/artifact/XMJyKsTFySwzgqq3MthvSa (private; your overrides
+are saved in its `decisions` collection, read back by Claude).
+Sources: 09-06 snapshot, today's live `.backup`, Sonarr/Radarr catalogs (GET only,
+via the lcars container), AniList activity 08-01 → 09-27 (2,046 entries, public
+read). Nothing written anywhere.
+
+Findings used for the proposals:
+- AniList activity since 09-06: **1,667 LCARS pushes**, 92 yours (65 watches
+  logged in LCARS, 19 made on AniList directly, 8 via Data/Holodeck/Captain's Log).
+  An LCARS watch reaches AniList ~298 s later; automation comes in dense clusters.
+- Single watch events since 09-06: 142 of 147 on shows airing at the time.
+- New shows: 47 were your adds through LCARS add-with-Sonarr/Radarr on 09-17/18;
+  21 TV items were auto-created from Sonarr/Radarr (18 movies already in Radarr
+  before 09-06); 7 anime aren't in Sonarr/Radarr at all.
+- Snapshot statuses set by automation: 37 kept (AniList pulls before 08-16, or you
+  had just changed them on AniList), 35 to check (27 MAL, 5 AniList, 3
+  auto-complete).
+
+## Your review decisions — read back 2026-09-27 (119 lines)
+
+Stored in the review page's `decisions` collection (copy in scratchpad).
+Lines you didn't touch keep my proposal.
+
+**Watch events since 09-06**
+- All single watches on airing shows: **valid**, replayed (48 shows).
+- Kaiju No. 8 S0E5–7: the season of minis being watched; the watch **may be on the
+  wrong episode** → realigned by absolute numbering (R1.0, R1.13), then replayed.
+- The Dangers in My Heart S0E1 (the film): not finished → not replayed.
+- Haruhi S0E1: invalid.
+- Bursts: Bakemonogatari, HEAD START AT BIRTH group (4 shows), Mob Psycho 100,
+  Haruhi → **invalid**; Ludwig (2 episodes, 09-11) → **valid**.
+
+**Status changes since 09-06**: your notes give the authoritative status. The
+recurring rule is "completed, unless a later season exists → that season planned
+→ show planned" (R2.13, R2.16, R2.17), applied by the rebuild:
+- completed: A Knight's Tale*, A Silent Voice, Delicious in Dungeon, From Dusk
+  Till Dawn, HEAD START AT BIRTH, I Left My A-Rank Party…, Nisekoi*, The Rising
+  of the Shield Hero*, Neagley, Tommy & Tuppence, Ludwig (all aired seasons),
+  A Livid Lady's Guide, Love Unseen…, Oh Boy…, My Stepmother…
+  (* = unless a later season is planned)
+- Blue Box, Reincarnated as a Sword: past seasons completed, next (unaired)
+  season planned → show planned.
+- watching: Last Seen, S.W.A.T. Exiles (first episode just watched), The Dangers
+  in My Heart (film being watched).
+- dropped: Cyberpunk: Edgerunners.
+- 100 Girlfriends: completed if the last episode has aired.
+
+**Snapshot statuses (09-06)**
+- Kaiju No. 8: season of minis = watching, next real season = planned (the
+  confusion comes from the minis; aligned by absolute numbering).
+- Slime Season 2 Part 2: **duplicate** (check at season level whether episodes are
+  still airing); Slime overall: watching unless the current season is confirmed
+  completed and a future season planned.
+- 100 Girlfriends, The Frontier Lord…: completed since.
+- Tomb Raider King: watching, may be completed (to check).
+- SAKAMOTO DAYS: **dropped** (the 09-06 14:10 "completed" on AniList was not you).
+
+**Shows created since 09-06**
+- 6 anime not in Sonarr/Radarr (The Guy She Was Interested In…, Historié, Kaketa
+  Tsuki no Mercedes, Kekkaishi no Ichirinka, Kyoufu Collector, Majutsu wo
+  Kiwamete…) → **add through the normal check**.
+- S.W.A.T. Exiles → add, actively watched.
+- 17 Urusei Yatsura movies + The Dog Stars (already in Radarr before 09-06) →
+  "no add to Sonarr" (see question below).
+- The other 51 as proposed (add again through the normal check).
+
+**Skipped list**: untouched → all 178 kept.
+
+### Correction to the AniList classification
+
+Your SAKAMOTO DAYS note showed LCARS pushes classed as "you on AniList
+directly": completions seconds apart (09-20 18:26, 09-26 05:46), the 09-26
+15:15–15:19 run, and 09-06 14:10 after the unlogged merge. Tightened rule:
+two or more changes within 60 s, or inside a known LCARS run window, count as
+LCARS; only isolated, spaced-out changes count as yours.
+
+### Follow-ups (user, 2026-09-27)
+
+- **Slime Season 2 Part 2** — checked: correct at **season level** (AniList 116742
+  = TVDB S3, 12 eps, abs 37–48, aired 2021-07→09, 12/12 watched → completed);
+  **duplicate at show level** (tracked show row `s-1tcd6r`, same AniList 116742
+  and TVDB 352408 as `s-hyj69b`, 0 episodes) → dropped by the rebuild (R1.14).
+  Also: S5 ended 09-25, 24/24 watched → completed; "S6" = AniList 161802
+  *Visions of Coleus* is a side piece → placed by air date as specials with
+  their own abs numbers (R1.8, R1.13), not a season.
+- **Urusei Yatsura movies (17) + The Dog Stars** — answer (a): kept in LCARS as
+  tracked, status **skipped**, no Sonarr/Radarr change; each gets its absolute
+  number by the rules (films placed by air date in their show, R1.4/R1.8).
+
+## Season-status evidence — built 2026-09-27 (read-only)
+
+New sections on the review page ("Season statuses to check" 161, "sources agree"
+1,539), one line per season of a tracked episodic show in the 09-06 snapshot.
+Proposal = first available of: all episodes watched (428) → AniList entry
+untouched since before 08-16, i.e. purely yours (1,030 of your 1,607 entries
+qualify) → your own AniList activity (tightened classification) → 08-26
+snapshot (47) → 09-06 status (125, no other evidence). "To check" = sources
+disagree or you left a note on the show. Your earlier 119 decisions are kept.
+
+### Season statuses — accepted (user, 2026-09-27)
+
+All 1,700 season proposals accepted as shown (no overrides). With this, every
+input for the starting database is decided: 09-06 base, season statuses, gap
+replay list, new shows, skipped list, Slime/Urusei Yatsura follow-ups.
+
+Live note (gap, after this review): *As a Reincarnated Aristocrat, I'll Use My
+Appraisal Skill to Rise in the World* **Season 3 ep 1** airs and is watched on
+09-27 → that season goes planned → watching (R2.14). The gap is re-derived at
+cutover, so this and any later watch is picked up then.
