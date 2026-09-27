@@ -82,6 +82,9 @@ rule applies to TV series, ask — do not assume.
   decimal season number (e.g. the Frieren mini-anime, between S2 and the unaired
   S3, is **S2.5**, not S4); inside a season's air window it is a sub-season of
   that season (R1.13). Memory Alpha must be reworked to follow this.
+  Numbering between two TVDB seasons `[clarified 2026-09-27]`: one side piece →
+  **N.5** (preferred look; N.1 acceptable if .5 is really troublesome); two or
+  more → **N.1, N.2, …** in air-date order.
 - **R1.10 Sub-seasons.** When a different source divides a season further (e.g.
   AniList gives cour 1 and cour 2 of a season separate ids), the season may be
   organised into sub-seasons on its page, each named with that source's naming.
@@ -540,5 +543,6 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
   warning). All §9 questions answered.
 - 2026-09-27 — R3.6c (individual seasons: new planned seasons only) and R3.7 (TVDB links verified).
 - 2026-09-27 — R3.7a (unconfirmed TVDB id shown in browse for the user to confirm); R1.9a (season numbers TVDB first, side pieces between seasons get decimal season numbers, e.g. S2.5).
+- 2026-09-27 — R1.9a: one side piece N.5, several N.1, N.2…
 - 2026-09-27 — naming must follow rulebook terms (§7).
 - 2026-09-27 — R1.2c: Memory Alpha sets every absolute number (confirmed).

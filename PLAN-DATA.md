@@ -464,8 +464,8 @@ Rows without a note = my proposal confirmed. Every id below was re-read on TVDB
 Girl 367630 · Your Name. 197 · The Girl Who Leapt Through Time 1384 · Perfect Blue
 3807 · Dead Leaves 16387 · Kuro no Sumika -Chronus- 48409 · Ghost in the Shell
 (1995) 4549 · Voices of a Distant Star 9702 · Rescue ME! 102515 · THE UROTSUKI
-101794 · Urotsukidoji: Legend of the Overfiend 17387 (**to confirm**: 17387 is
-"Urotsukidoji III: Return of the Overfiend").
+101794. Urotsukidoji: Legend of the Overfiend: no TVDB id (AniList 2341 is the
+3-episode OVA; TVDB only has the 1989 film cut 11857) → own show, R3.3.
 
 **Series ids confirmed:** HEAD START AT BIRTH 450837 · I Parry Everything 441727 ·
 Possibly the Greatest Alchemist 449884 · Re:Monster 439755 · Dark Gathering 422090 ·
@@ -474,7 +474,7 @@ Dangers in My Heart 422981 · Ōoku 432839 · Onmyoji 425298 · Captain Harlock 
 80886 (Riddle of the Arcadia Episode belongs to it) · Ninja Scroll → 72842 (film in
 the series show) · Gantz: Second Stage → 78916 · Aki-Sora 467259 · Henkei Shoujo
 331278 · Huckleberry Finn Monogatari 327702 · Little Women (1981) 281234 · Chou
-Futsuu-ken Chiba Densetsu 443365 (**to confirm**: 443365 is "Child's Play", 2023) ·
+Futsuu-ken Chiba Densetsu 443355 (The Legend of Super Normal Pref. Chiba, 2024) ·
 Zeikin de Katta Hon 474749.
 
 **Belong to a parent show (specials/seasons placed by air date):** Frieren minis →
@@ -484,7 +484,7 @@ Shagahai ReLIFE Kenkyuujo → 299508 (OVA after the final arc) · Narumi's Week 
 → 423075 (Kaiju No. 8) · Dungeon Meshi: Senshi no Kantan Cooking! → Dungeon Meshi.
 
 **Own show, no TVDB id (R3.3 exception, user-checked):** Muramata-san no Himitsu,
-Uji ni wa Monogatari ga Aru (user said "one only" — to confirm which).
+Uji ni wa Monogatari ga Aru, Urotsukidoji: Legend of the Overfiend (OVA).
 
 **Remove from LCARS and AniList/MAL** (added by mistake): Huhuan Shaonü Special,
 TENSAI BANPAKU Opening Animation, Sword Art OFFline, **Magical Girl Raising
