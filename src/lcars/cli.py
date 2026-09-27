@@ -154,6 +154,13 @@ def _cmd_list_users(args: argparse.Namespace) -> None:
         print(f"  {r['id']}  {r['username']}  (created {r['created_at'][:10]})")
 
 
+def _cmd_rulecheck(args: argparse.Namespace) -> None:
+    from lcars import rulecheck
+
+    argv = [args.database] + (["--json"] if args.json else [])
+    raise SystemExit(rulecheck.main(argv))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="lcars", description="Starfleet's GraphQL server.")
     subparsers = parser.add_subparsers(dest="command")
@@ -184,6 +191,13 @@ def main() -> None:
 
     list_users = subparsers.add_parser("list-users", help="list web UI user accounts")
     list_users.set_defaults(func=_cmd_list_users)
+
+    rulecheck = subparsers.add_parser(
+        "rulecheck", help="read-only check of a database against RULEBOOK.md"
+    )
+    rulecheck.add_argument("database", help="path to an LCARS SQLite file (opened read-only)")
+    rulecheck.add_argument("--json", action="store_true", help="print findings as JSON")
+    rulecheck.set_defaults(func=_cmd_rulecheck)
 
     # No subcommand at all ("lcars" alone, e.g. the Dockerfile's CMD) still
     # means "serve", with serve's own --host/--port defaults — argparse

@@ -377,3 +377,25 @@ Live note (gap, after this review): *As a Reincarnated Aristocrat, I'll Use My
 Appraisal Skill to Rise in the World* **Season 3 ep 1** airs and is watched on
 09-27 → that season goes planned → watching (R2.14). The gap is re-derived at
 cutover, so this and any later watch is picked up then.
+
+## Rule check baseline (lcars rulecheck, 2026-09-27)
+
+| Rule | 09-06 snapshot | today (09-27 copy) |
+|---|---|---|
+| R1.0 episode without absolute number | 10,211 | 10,211 |
+| R1.8 episode outside every season (season 0 etc.) | 11,584 | 1,393 |
+| R1.11 season without a span | 1,463 | 1,281 |
+| R1.12 overlapping spans | 0 | 0 |
+| R1.14 several shows per TVDB id | 126 | 0 |
+| R1.22 AniList/MAL id on several seasons | 25 | 0 |
+| R1.23 AniList/MAL id on the show | 1,651 | 2,220 |
+| §2.2 season without status | 4 | 1 |
+| R2.13 show status ≠ last non-skipped season | 16 | **444** |
+| R2.15 all watched but not completed | 19 | **891** |
+| R2.7 completed with unwatched episodes | 37 | 15 |
+| R2.16 planned after paused/dropped/skipped (check) | 0 | 2 |
+| R3.2 tracked series without TVDB id | 126 | 56 |
+| R3.5 untracked stub shows | 1,100 | 1,376 |
+
+Most structural counts (R1.x, R3.x) are fixed by the rebuild engines, not by hand;
+status counts (R2.x) by the status engine + the review decisions.

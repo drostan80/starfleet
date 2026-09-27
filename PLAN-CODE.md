@@ -31,7 +31,7 @@ Each change lists: **fixes** · **files** · **behaviour** · **data** ·
 
 ---
 
-## Phase 0 — Supporting changes found while planning (validate)
+## Phase 0 — Supporting changes found while planning — DONE 2026-09-27 (e72c968)
 
 **0.1 TVmaze specials** (approved 2026-09-27). `tvmaze.py:117` calls `/shows/{id}/episodes`, which leaves
 out specials (1 special among 26,534 fetched rows), and `tvmaze.py:141` skips
@@ -70,7 +70,10 @@ renamed (after your check):
   R2.2) disappears with 2.5.
 - A full pass over GraphQL/UI labels for other clashes is part of phase 8.
 
-## Phase 1 — Rule validator (read-only, built first)
+## Phase 1 — Rule validator (read-only, built first) — DONE 2026-09-27
+
+`lcars rulecheck <db> [--json]`, `src/lcars/rulecheck.py`, 17 checks; exit 1 on any
+violation. Baseline results are in PLAN-DATA.md.
 
 **1.1 `lcars/rulecheck.py` + `lcars rulecheck <db>` CLI.** One check per rule:
 every episode has an abs number (R1.0); no episode left only in TVDB season 0
