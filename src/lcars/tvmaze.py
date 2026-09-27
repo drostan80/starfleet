@@ -107,14 +107,18 @@ def fetch_show_images(
 
 
 def fetch_episodes(
-    tvmaze_id: int, *, client: httpx.Client | None = None
+    tvmaze_id: int, *, client: httpx.Client | None = None, specials: bool = False
 ) -> list[dict] | None:
-    """Fetch all episodes for a TVmaze show.  Returns episode list or None."""
+    """Fetch all episodes for a TVmaze show.  Returns episode list or None.
+
+    `specials=True` adds TVmaze's specials (`?specials=1`): they come with
+    `number = null` and the season they aired in (RULEBOOK R1.8)."""
     _rate_limit()
     owns_client = client is None
     client = client or httpx.Client(timeout=30.0, follow_redirects=True)
     try:
-        resp = client.get(f"{BASE_URL}/shows/{tvmaze_id}/episodes")
+        query = "?specials=1" if specials else ""
+        resp = client.get(f"{BASE_URL}/shows/{tvmaze_id}/episodes{query}")
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
@@ -128,15 +132,21 @@ def fetch_episodes(
 
 
 def ingest_episodes(conn, tvmaze_show_id: int, episodes: list[dict],
-                    fetched_at: str) -> int:
+                    fetched_at: str, *, store_specials: bool = False) -> int:
     """Write TVmaze episodes into tvmaze_episode table.
 
-    Returns number of rows written.
+    Specials (null numbering) are skipped, or written to `tvmaze_special`
+    when `store_specials` is set (a `?specials=1` fetch). Returns number of
+    rows written.
     """
     count = 0
     for ep in episodes:
         season = ep.get("season")
         number = ep.get("number")
+        if number is None and store_specials and ep.get("id") is not None:
+            _ingest_special(conn, tvmaze_show_id, ep, fetched_at)
+            count += 1
+            continue
         if season is None or number is None:
             continue  # skip specials with null numbering
         conn.execute(
@@ -169,6 +179,48 @@ def ingest_episodes(conn, tvmaze_show_id: int, episodes: list[dict],
     return count
 
 
+def _ingest_special(conn, tvmaze_show_id: int, ep: dict, fetched_at: str) -> None:
+    conn.execute(
+        """INSERT INTO tvmaze_special
+           (tvmaze_episode_id, tvmaze_show_id, season, type, title,
+            airdate, airstamp, airtime, runtime_minutes, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (tvmaze_episode_id) DO UPDATE SET
+             tvmaze_show_id = excluded.tvmaze_show_id,
+             season = excluded.season,
+             type = excluded.type,
+             title = excluded.title,
+             airdate = excluded.airdate,
+             airstamp = excluded.airstamp,
+             airtime = excluded.airtime,
+             runtime_minutes = excluded.runtime_minutes,
+             fetched_at = excluded.fetched_at""",
+        (
+            ep["id"],
+            tvmaze_show_id,
+            ep.get("season"),
+            ep.get("type"),
+            ep.get("name"),
+            ep.get("airdate"),
+            _normalize_airstamp(ep.get("airstamp")),
+            ep.get("airtime"),
+            ep.get("runtime"),
+            fetched_at,
+        ),
+    )
+
+
+def mark_specials_fetched(conn, tvmaze_show_id: int, fetched_at: str) -> None:
+    """Record that this show's specials were fetched (even if it has none)."""
+    conn.execute(
+        """INSERT INTO tvmaze_special_fetch (tvmaze_show_id, fetched_at)
+           VALUES (?, ?)
+           ON CONFLICT (tvmaze_show_id) DO UPDATE SET fetched_at = excluded.fetched_at""",
+        (tvmaze_show_id, fetched_at),
+    )
+    conn.commit()
+
+
 def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
     """Fetch TVmaze episodes for up to `limit` TV shows that need them.
 
@@ -183,7 +235,7 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     stats = {"fetched": 0, "episodes_stored": 0, "skipped": 0,
-             "shows_without_tvmaze": 0, "anime_id_only": 0}
+             "shows_without_tvmaze": 0, "anime_id_only": 0, "specials_refetched": 0}
 
     # Find tracked shows that need TVmaze work.
     # Strategy: shows with a tvmaze external_id but no tvmaze_episode rows,
@@ -233,6 +285,34 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
         (limit,),
     ).fetchall()
 
+    # Phase 3: shows whose episodes were fetched before specials were
+    # (PLAN-CODE 0.1) — one re-fetch each with ?specials=1. Tombstoned
+    # shows (the (0, 0) placeholder) had nothing to fetch and are skipped.
+    needs_specials = conn.execute(
+        """SELECT s.id, tm.external_id AS tvmaze_id
+           FROM show s
+           JOIN show_external_id tm
+             ON tm.show_id = s.id AND tm.service = 'tvmaze'
+           WHERE s.tracked = 1
+             AND s.tracking_space != 'anime'
+             AND tm.external_id != '-1'
+             AND EXISTS (
+               SELECT 1 FROM tvmaze_episode te
+               WHERE te.tvmaze_show_id = CAST(tm.external_id AS INTEGER)
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM tvmaze_episode te
+               WHERE te.tvmaze_show_id = CAST(tm.external_id AS INTEGER)
+                 AND te.season = 0 AND te.episode = 0
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM tvmaze_special_fetch f
+               WHERE f.tvmaze_show_id = CAST(tm.external_id AS INTEGER)
+             )
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+
     # Build a lookup for anime shows so we can skip episode fetch for them.
     # Covers both query results — if phase 2's filter is later widened to
     # include anime, this guard still works.
@@ -259,6 +339,12 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
         if show_id not in seen and len(work_items) < limit:
             work_items.append((show_id, int(tvmaze_id_str), None, None))
             seen.add(show_id)
+
+    for show_id, tvmaze_id_str in needs_specials:
+        if show_id not in seen and len(work_items) < limit:
+            work_items.append((show_id, int(tvmaze_id_str), None, None))
+            seen.add(show_id)
+            stats["specials_refetched"] += 1
 
     if not work_items:
         return stats
@@ -340,7 +426,7 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
             if show_id in anime_show_ids:
                 stats["anime_id_only"] += 1
                 continue
-            episodes = fetch_episodes(tvmaze_id, client=client)
+            episodes = fetch_episodes(tvmaze_id, client=client, specials=True)
             if episodes is None:
                 stats["skipped"] += 1
                 # Write a tombstone so we don't retry
@@ -352,7 +438,8 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
                 _write_tvmaze_tombstone(conn, tvmaze_id, now)
                 continue
 
-            count = ingest_episodes(conn, tvmaze_id, episodes, now)
+            count = ingest_episodes(conn, tvmaze_id, episodes, now, store_specials=True)
+            mark_specials_fetched(conn, tvmaze_id, now)
             stats["fetched"] += 1
             stats["episodes_stored"] += count
             log.info("TVmaze drip: show_id=%s, tvmaze=%d → %d episodes",

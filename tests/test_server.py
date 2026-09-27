@@ -12167,3 +12167,48 @@ async def test_frozen_show_status_change_does_not_cascade(client, monkeypatch):
         "SELECT new_status FROM status_change WHERE show_id = ? ORDER BY changed_at DESC LIMIT 1",
         (show["id"],),
     ).fetchone()[0] == "dropped"
+
+
+# -- season status history (PLAN-CODE 0.2) ----------------------------------
+
+
+def _season_status_log(season_id: str) -> list[tuple]:
+    return [
+        tuple(r)
+        for r in db.get_connection().execute(
+            "SELECT previous_status, new_status, changed_by FROM season_status_change"
+            " WHERE season_id = ? ORDER BY changed_at, rowid",
+            (season_id,),
+        ).fetchall()
+    ]
+
+
+async def test_set_season_status_is_logged_with_its_client(client, migrated_db):
+    show = await add_show(client)
+    season_id = await _create_season(client, show["id"], 1)
+    before = db.get_connection().execute(
+        "SELECT status FROM season WHERE id = ?", (season_id,)
+    ).fetchone()["status"]
+    mutation = (
+        "mutation($sid: ID!) { setSeasonStatus(seasonId: $sid, status: DROPPED) { id } }"
+    )
+    await gql(client, mutation, {"sid": season_id}, headers=auth_headers("holodeck"))
+    await gql(client, mutation, {"sid": season_id}, headers=auth_headers("holodeck"))
+    # the second, identical set changes nothing and logs nothing
+    assert _season_status_log(season_id) == [(before, "dropped", "holodeck")]
+
+
+async def test_show_status_fanout_to_last_season_is_logged(client, migrated_db):
+    show = await add_show(client)
+    await _create_season(client, show["id"], 1)
+    s2 = await _create_season(client, show["id"], 2)
+    before = db.get_connection().execute(
+        "SELECT status FROM season WHERE id = ?", (s2,)
+    ).fetchone()["status"]
+    await gql(
+        client,
+        "mutation($id: ID!) { setStatus(showId: $id, status: PAUSED) { status } }",
+        {"id": show["id"]},
+        headers=auth_headers("data"),
+    )
+    assert _season_status_log(s2) == [(before, "paused", "data")]

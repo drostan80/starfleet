@@ -54,6 +54,7 @@ from lcars import (
     score_sync,
     season_mapping,
     season_ranges,
+    season_status_log,
     service_health,
     service_presence,
     show_backfill,
@@ -551,7 +552,7 @@ def _season_still_airing(conn, show_id: str, season_number: int) -> bool:
     whole-show, which would wrongly block a finished earlier season
     from ever completing just because a later, still-airing season
     exists under the same show (an ordinary, common case for an
-    ongoing multi-cour franchise, e.g. Ascendance of a Bookworm this
+    ongoing multi-cour show, e.g. Ascendance of a Bookworm this
     same week)."""
     row = conn.execute(
         "SELECT 1 FROM episode"
@@ -595,6 +596,9 @@ def _try_complete_season(conn, show_id: str, season_number: int, completed_at: s
     conn.execute(
         "UPDATE season SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
         (completed_at, now, season["id"]),
+    )
+    season_status_log.record(
+        conn, season["id"], show_id, season["status"], "completed", "auto_complete", now
     )
     _push_season_completed_at(conn, season["id"], season["anilist_id"], completed_at)
     return True
@@ -2718,8 +2722,8 @@ def resolve_reverse_show_merge(_, info, id):
     return _get_show_merge(conn, id)
 
 
-@mutation.field("resolveFranchiseMerge")
-def resolve_resolve_franchise_merge(
+@mutation.field("resolveTvdbConsolidation")
+def resolve_resolve_tvdb_consolidation(
     _, info, review_id, action,
     correct_parent_id=None, correct_season=None,
     corrected_tvdb_id=None, corrected_anilist_id=None,
@@ -2728,21 +2732,21 @@ def resolve_resolve_franchise_merge(
     client = require_client(info)
     if client not in RESOLVING_CLIENTS:
         raise GraphQLError(
-            f"{client!r} cannot resolve a franchise merge — only "
+            f"{client!r} cannot resolve a same-TVDB consolidation — only "
             f"{sorted(RESOLVING_CLIENTS)} can"
         )
 
     review = conn.execute(
         "SELECT * FROM pending_review WHERE id = ?"
-        " AND field IN ('franchise_auto_merge', 'franchise_season_collision')",
+        " AND field IN ('tvdb_consolidation_merge', 'tvdb_consolidation_season_collision')",
         (review_id,),
     ).fetchone()
     if review is None:
-        raise GraphQLError(f"no such franchise merge review: {review_id}")
+        raise GraphQLError(f"no such same-TVDB consolidation review: {review_id}")
     if review["resolved_at"] is not None:
         raise GraphQLError(f"review {review_id} already resolved")
 
-    is_season_collision = review["field"] == "franchise_season_collision"
+    is_season_collision = review["field"] == "tvdb_consolidation_season_collision"
     chain = json.loads(review["proposed_value_chain"])
     # The last chain entry is the parent_id (used as the dedup key).
     parent_id_from_chain = chain[-1]
@@ -2795,7 +2799,7 @@ def resolve_resolve_franchise_merge(
             f"season collision reviews support confirm/reject, not {action!r}"
         )
 
-    # franchise_auto_merge — a merge exists.
+    # tvdb_consolidation_merge — a merge exists.
     merge_row = conn.execute(
         "SELECT id FROM show_merge"
         " WHERE winner_show_id = ? AND loser_show_id = ? AND reversed_at IS NULL"
@@ -2851,7 +2855,7 @@ def resolve_resolve_franchise_merge(
 
 
 def _correct_child_ids(conn, child_id, corrected_tvdb_id, corrected_anilist_id, now):
-    """Apply corrected external IDs on a rejected franchise merge child."""
+    """Apply corrected external IDs on a rejected same-TVDB consolidation child."""
     if corrected_tvdb_id is not None:
         conn.execute(
             "UPDATE show_external_id SET external_id = ? WHERE show_id = ? AND service = 'tvdb'",
@@ -3417,14 +3421,14 @@ def _apply_status_change(conn, show_id: str, status: str, changed_by: str):
     # Fanout: only stomp the highest season's status — earlier seasons
     # keep their own deliberate per-season status (user rule: "show
     # level only stomp last season if needed").
-    conn.execute(
-        "UPDATE season SET status = ?, updated_at = ?"
-        " WHERE show_id = ? AND season_number = ("
+    for last_season in conn.execute(
+        "SELECT id FROM season WHERE show_id = ? AND season_number = ("
         "   SELECT MAX(season_number) FROM season"
         "   WHERE show_id = ? AND season_number > 0"
         " )",
-        (status, now, show_id, show_id),
-    )
+        (show_id, show_id),
+    ).fetchall():
+        season_status_log.set_status(conn, last_season["id"], status, changed_by)
     status_before_pause = row["status_before_pause"]
     if now_paused and not was_paused:
         status_before_pause = previous_status
@@ -3564,11 +3568,7 @@ def resolve_set_season_status(_, info, season_id, status=None, confirmed=False):
                 "with no known air date, or one that hasn't aired yet — mark it completed anyway? "
                 "pass confirmed: true to proceed"
             )
-    now = util.now_utc_iso()
-    conn.execute(
-        "UPDATE season SET status = ?, updated_at = ? WHERE id = ?",
-        (status, now, season_id),
-    )
+    season_status_log.set_status(conn, season_id, status, client)
     _enable_list_sync(conn, season)
     # Push this season's own status to AniList/MAL
     effective = status or conn.execute(

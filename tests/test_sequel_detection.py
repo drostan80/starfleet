@@ -404,7 +404,7 @@ class TestCreateShowSequelDetection:
 
 
 class TestTvdbCollision:
-    """W1 — TVDB franchise collision tier: same TVDB ID = same franchise."""
+    """W1 — Same-TVDB show tier: same TVDB ID = same show."""
 
     @pytest.fixture()
     def tvdb_conn(self, conn):
@@ -825,9 +825,9 @@ class TestAutoAttachSequel:
 
 class TestCheckLaterSeasonPreAdd:
     """W6: _check_later_season_pre_add raises LaterSeasonError when the
-    entry is S2+ of an untracked franchise, carrying S1's info."""
+    entry is S2+ of an untracked show, carrying S1's info."""
 
-    def test_raises_for_s2_untracked_franchise(self, conn):
+    def test_raises_for_s2_untracked_show(self, conn):
         fake_dataset = [
             {"anilist_id": 100, "tvdb_id": 9000, "mal_id": 200,
              "season": {"tvdb": 1}},
@@ -858,7 +858,7 @@ class TestCheckLaterSeasonPreAdd:
         with patch.object(shows, "_try_load_fribb_dataset", return_value=fake_dataset):
             shows._check_later_season_pre_add(conn, 100)
 
-    def test_no_raise_when_franchise_tracked(self, conn):
+    def test_no_raise_when_show_tracked(self, conn):
         conn.execute(
             "INSERT INTO show (id, tracked) VALUES ('s-tracked', 1)"
         )
@@ -897,7 +897,7 @@ class TestCheckLaterSeasonPreAdd:
         with patch.object(shows, "_try_load_fribb_dataset", return_value=fake_dataset):
             shows._check_later_season_pre_add(conn, 101)
 
-    def test_no_raise_for_single_entry_franchise(self, conn):
+    def test_no_raise_for_single_entry_show(self, conn):
         """Only one Fribb entry for the TVDB ID (the S2 itself) — no S1
         to point to, so don't raise."""
         fake_dataset = [

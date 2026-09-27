@@ -1178,8 +1178,8 @@ type MemoryAlphaPollResult {
   syoboiProgramsFetched: Int!
   syoboiAirdatesRewired: Int!
   airdateGapsFilled: Int!
-  franchiseCollisionsFound: Int!
-  franchiseMergesPerformed: Int!
+  sameTvdbDuplicatesFound: Int!
+  sameTvdbConsolidationsPerformed: Int!
 }
 
 "AniDB per-episode data resolved through episode_anidb_mapping → anidb_episode. Null when the episode has no AniDB mapping or when anidb_episode hasn't been fetched yet for that anime."
@@ -1820,13 +1820,13 @@ type Mutation {
   """
   reverseShowMerge(id: ID!): ShowMerge!
   """
-  W3(b) — resolve a franchise_auto_merge pending_review.
+  W3(b) — resolve a same-TVDB show consolidation pending_review (tvdb_consolidation_merge / tvdb_consolidation_season_collision).
   action: "confirm" (merge stands), "redirect" (reverse + re-merge into
   correctParentId as correctSeason), or "reject" (reverse, restore child
   as standalone, optionally correct its TVDB/AniList via correctedTvdbId/
   correctedAnilistId so the collision doesn't recur).
   """
-  resolveFranchiseMerge(
+  resolveTvdbConsolidation(
     reviewId: ID!
     action: String!
     correctParentId: ID

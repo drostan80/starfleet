@@ -94,7 +94,7 @@ class SequelDetectedError(ShowInputError):
 
 class LaterSeasonError(ShowInputError):
     """Raised when the add flow detects that the requested show is S2+
-    of a franchise where *no* season is tracked yet.  Carries S1's info
+    of a show (TVDB id) where *no* season is tracked yet.  Carries S1's info
     so the client can offer "Add Season 1 instead?".
     """
 
@@ -136,12 +136,12 @@ def find_sequel_parent(
 
     Tiers of lookup (stops at first hit):
       1. Local DB relations (show_relation, both directions).
-      2. TVDB franchise collision — same TVDB ID = same franchise.
+      2. Same-TVDB show — same TVDB ID = same show (RULEBOOK R1.14).
          Resolves TVDB from input, or via Fribb (anilist/mal→tvdb)
          or Wikidata (tmdb/imdb→tvdb), cache-only (no network).
       3. Live AniList relations — last resort, only when no local
          stub exists (no show_external_id row for any provided ID
-         except tvdb, which is franchise-level and excluded from
+         except tvdb, which is show-level and excluded from
          stub lookup).
 
     Matches both explicit SEQUEL relations and NULL-typed relations.
@@ -161,7 +161,7 @@ def find_sequel_parent(
         if parent_row is not None:
             return _build_sequel_result(conn, parent_row, stub_show_id)
 
-    # Tier 2: TVDB franchise collision.
+    # Tier 2: Same-TVDB show.
     resolved_tvdb = _resolve_tvdb_for_sequel(tvdb_id, anilist_id, mal_id, tmdb_id, imdb_id)
     if resolved_tvdb is not None:
         parent_row = _find_parent_via_tvdb(conn, resolved_tvdb, stub_show_id)
@@ -189,7 +189,7 @@ def find_sequel_parent(
 def _find_stub_show(conn, anilist_id, tvdb_id, tmdb_id, imdb_id, mal_id) -> str | None:
     """Find an existing show row that owns any of the provided IDs.
 
-    Excludes tvdb_id: TVDB groups a franchise under one series ID, so
+    Excludes tvdb_id: TVDB groups a show's seasons under one series ID, so
     the incoming sequel's tvdb_id IS the parent's — looking it up here
     would find the parent and then self-exclude it in the TVDB collision
     tier, defeating the purpose."""
@@ -296,7 +296,7 @@ def _resolve_fribb_season(anilist_id) -> int | None:
 
 def _check_later_season_pre_add(conn, anilist_id) -> None:
     """Raise LaterSeasonError if Fribb says this AniList entry is S2+
-    of a franchise with no tracked seasons.  Called before creating the
+    of a show (TVDB id) with no tracked seasons.  Called before creating the
     show so the client can offer to add S1 instead."""
     if anilist_id is None:
         return
@@ -320,7 +320,7 @@ def _check_later_season_pre_add(conn, anilist_id) -> None:
     if tvdb_id in (None, "", "unknown"):
         return
 
-    # If a tracked show already owns this TVDB ID, the franchise IS
+    # If a tracked show already owns this TVDB ID, the show IS
     # tracked — SequelDetectedError (or normal add) handles that path.
     tracked_owner = conn.execute(
         "SELECT 1 FROM show_external_id sei"
@@ -371,7 +371,7 @@ def _check_later_season_pre_add(conn, anilist_id) -> None:
 
 
 def _find_parent_via_tvdb(conn, tvdb_id_str: str, exclude_show_id: str | None) -> dict | None:
-    """Find a tracked show sharing the same TVDB ID (franchise collision)."""
+    """Find a tracked show sharing the same TVDB ID (same-TVDB duplicate)."""
     params: list = [tvdb_id_str]
     exclude = ""
     if exclude_show_id is not None:
@@ -533,7 +533,7 @@ def find_existing_show(conn, input: dict) -> str | None:
 
 def _promote_stub(conn, show_id: str, input: dict) -> str:
     """SCOPE.md §5.1's own "Show-row promotion paths": a bare
-    tracked = false relation/franchise stub becomes a real tracked show
+    tracked = false relation stub becomes a real tracked show
     by flipping tracked = true on the *existing* row — no re-creation,
     identity/relation data carries over. Only reached when
     `find_existing_show` above matched a stub (`create_show` raises
@@ -750,7 +750,7 @@ def flag_possible_sequel(conn, show_id: str) -> None:
     tvdb_id/tmdb_id, no anilist_id (nothing in a webhook payload or an
     Sonarr/Radarr catalog entry carries one), so `create_show`'s own
     pre-insert `find_sequel_parent` call there can only ever use tier 2
-    (TVDB/Wikidata franchise collision) — tiers 1 and 3, the ones that
+    (TVDB/Wikidata same-TVDB duplicate) — tiers 1 and 3, the ones that
     actually catch an anime sequel, need an anilist_id neither path
     supplies. By the time `create_show` returns, its own inline
     `metadata.fetch_and_populate` has already resolved the anilist_id

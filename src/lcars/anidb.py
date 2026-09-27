@@ -1621,8 +1621,8 @@ def poll_memory_alpha(conn) -> dict:
         "syoboi_programs_fetched": 0,
         "syoboi_airdates_rewired": 0,
         "airdate_gaps_filled": 0,
-        "franchise_collisions_found": 0,
-        "franchise_merges_performed": 0,
+        "same_tvdb_duplicates_found": 0,
+        "same_tvdb_consolidations_performed": 0,
     }
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -1763,18 +1763,18 @@ def poll_memory_alpha(conn) -> dict:
     except Exception:
         log.exception("Season range bulk fill failed")
 
-    # ── 2g. Franchise collision detection ──
+    # ── 2g. Same-TVDB show consolidation ──
     # After cross-IDs are propagated and season rows exist, detect shows
     # that share a TVDB ID and auto-merge the child into the parent as a
     # new season.  Records pending_review for user confirmation.
     try:
         with db.undo_on_error(conn):
             from lcars import show_merge as _sm
-            collision_result = _sm.detect_franchise_collisions(conn)
-            result["franchise_collisions_found"] = collision_result["collisions_found"]
-            result["franchise_merges_performed"] = collision_result["merges_performed"]
+            collision_result = _sm.consolidate_same_tvdb_shows(conn)
+            result["same_tvdb_duplicates_found"] = collision_result["collisions_found"]
+            result["same_tvdb_consolidations_performed"] = collision_result["merges_performed"]
     except Exception:
-        log.exception("Franchise collision detection failed")
+        log.exception("Same-TVDB show consolidation failed")
 
     # ── 3. Drip-fetch episode data from AniDB API ──
     drip = drip_fetch_episodes(conn, limit=5)

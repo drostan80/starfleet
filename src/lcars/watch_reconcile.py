@@ -46,7 +46,16 @@ Scope, deliberately narrow:
     the honest fallback rather than fabricating a real-looking one.
 """
 
-from lcars import anilist_client, config, ids, list_baseline, mal_client, pending_review, util
+from lcars import (
+    anilist_client,
+    config,
+    ids,
+    list_baseline,
+    mal_client,
+    pending_review,
+    season_status_log,
+    util,
+)
 
 # B.5.3, 2026-08-13 — see the module docstring's own note above for how
 # this relates to reconcile_watch_progress. Design checked live against
@@ -350,10 +359,7 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
             elif remote_status != base["status"]:
                 # Edited on the list (or AniList moved it itself): LCARS takes it.
                 if lcars_status != effective:
-                    conn.execute(
-                        "UPDATE season SET status = ?, updated_at = ? WHERE id = ?",
-                        (effective, now, season["id"]),
-                    )
+                    season_status_log.set_status(conn, season["id"], effective, source)
                     changed_status[season["id"]] = effective
                     touched_shows.add(show_id)
                 list_baseline.record(conn, service, ext_id, status=remote_status)

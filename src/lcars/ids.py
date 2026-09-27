@@ -46,6 +46,7 @@ PREFIX_TABLES = {
     "u": "untracked_show_finding",  # B.11e, 2026-08-10
     "y": "show_merge",  # B.14, 2026-08-11
     "h": "art_asset",  # multi-source artwork storage, 2026-08-30
+    "j": "season_status_change",  # PLAN-CODE 0.2, 2026-09-27
 }
 
 MAX_ATTEMPTS = 10

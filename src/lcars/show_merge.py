@@ -715,11 +715,11 @@ def reverse_show_merge(conn, merge_id: str, changed_by: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Franchise collision detection — W3(b) ops-loop sweep
+# Same-TVDB show consolidation — W3(b) ops-loop sweep
 # ---------------------------------------------------------------------------
 
 
-def detect_franchise_collisions(conn) -> dict:
+def consolidate_same_tvdb_shows(conn) -> dict:
     """Find shows sharing a TVDB external_id and auto-merge the child into
     the parent as a new season.
 
@@ -777,13 +777,13 @@ def detect_franchise_collisions(conn) -> dict:
                 _promote_stub(conn, promote_id, {"tvdb_id": tvdb_id})
             except Exception:
                 logger.exception(
-                    "franchise collision: failed to promote %s (tvdb=%s)",
+                    "same-TVDB duplicate: failed to promote %s (tvdb=%s)",
                     promote_id, tvdb_id,
                 )
                 conn.rollback()
                 continue
             logger.info(
-                "franchise collision: promoted %s as parent (tvdb=%s, no tracked shows)",
+                "same-TVDB duplicate: promoted %s as parent (tvdb=%s, no tracked shows)",
                 promote_id, tvdb_id,
             )
             # Re-query so the promoted show appears as tracked.
@@ -822,7 +822,7 @@ def detect_franchise_collisions(conn) -> dict:
                 continue
 
             # Skip if already reviewed and resolved for this pair (either field).
-            if _already_resolved_franchise(conn, child["id"], parent["id"]):
+            if _already_resolved_tvdb_consolidation(conn, child["id"], parent["id"]):
                 continue
 
             # Determine target season number.
@@ -835,13 +835,13 @@ def detect_franchise_collisions(conn) -> dict:
             if _would_be_season_collision(conn, parent["id"], child["id"], target_season):
                 try:
                     pending_review.open_or_extend(
-                        conn, "show", child["id"], "franchise_season_collision",
+                        conn, "show", child["id"], "tvdb_consolidation_season_collision",
                         "show_merge", None, parent["id"],
                     )
                     conn.commit()
                 except Exception:
                     logger.exception(
-                        "franchise collision review failed: parent=%s child=%s tvdb=%s",
+                        "same-TVDB duplicate review failed: parent=%s child=%s tvdb=%s",
                         parent["id"], child["id"], tvdb_id,
                     )
                     conn.rollback()
@@ -859,7 +859,7 @@ def detect_franchise_collisions(conn) -> dict:
                 conn.commit()
             except Exception:
                 logger.exception(
-                    "franchise collision merge failed: parent=%s child=%s tvdb=%s",
+                    "same-TVDB duplicate merge failed: parent=%s child=%s tvdb=%s",
                     parent["id"], child["id"], tvdb_id,
                 )
                 conn.rollback()
@@ -870,15 +870,15 @@ def detect_franchise_collisions(conn) -> dict:
     return {"collisions_found": len(collision_groups), "merges_performed": merges_performed}
 
 
-def _already_resolved_franchise(conn, child_id: str, parent_id: str) -> bool:
-    """Check if a franchise collision pair has already been resolved
+def _already_resolved_tvdb_consolidation(conn, child_id: str, parent_id: str) -> bool:
+    """Check if a same-TVDB duplicate pair has already been resolved
     (either as an auto_merge or a season_collision)."""
     return (
         pending_review.already_resolved_with(
-            conn, "show", child_id, "franchise_auto_merge", parent_id
+            conn, "show", child_id, "tvdb_consolidation_merge", parent_id
         )
         or pending_review.already_resolved_with(
-            conn, "show", child_id, "franchise_season_collision", parent_id
+            conn, "show", child_id, "tvdb_consolidation_season_collision", parent_id
         )
     )
 

@@ -222,21 +222,21 @@ export async function unlinkShowExternalId(showId, service) {
 }
 
 /**
- * Resolve a franchise_season_collision pending review.
+ * Resolve a tvdb_consolidation_season_collision pending review.
  * action: "confirm" (merge into correctParentId/chain parent as correctSeason)
  * or "reject" (no merge; optionally correctedTvdbId/correctedAnilistId so
  * the collision doesn't recur).
  */
-export async function resolveFranchiseMerge(reviewId, action, opts = {}) {
+export async function resolveTvdbConsolidation(reviewId, action, opts = {}) {
   const { correctParentId, correctSeason, correctedTvdbId, correctedAnilistId } = opts;
   const data = await gql(`
-    mutation ResolveFranchiseMerge($reviewId: ID!, $action: String!, $correctParentId: ID, $correctSeason: Int, $correctedTvdbId: String, $correctedAnilistId: Int) {
-      resolveFranchiseMerge(reviewId: $reviewId, action: $action, correctParentId: $correctParentId, correctSeason: $correctSeason, correctedTvdbId: $correctedTvdbId, correctedAnilistId: $correctedAnilistId) {
+    mutation ResolveTvdbConsolidation($reviewId: ID!, $action: String!, $correctParentId: ID, $correctSeason: Int, $correctedTvdbId: String, $correctedAnilistId: Int) {
+      resolveTvdbConsolidation(reviewId: $reviewId, action: $action, correctParentId: $correctParentId, correctSeason: $correctSeason, correctedTvdbId: $correctedTvdbId, correctedAnilistId: $correctedAnilistId) {
         id
       }
     }
   `, { reviewId, action, correctParentId, correctSeason, correctedTvdbId, correctedAnilistId });
-  return data.resolveFranchiseMerge;
+  return data.resolveTvdbConsolidation;
 }
 
 /**

@@ -590,6 +590,9 @@ class TestDripLookupFailureMarker:
                 PRIMARY KEY (tvmaze_show_id, season, episode)
             )
         """)
+        self.conn.execute(
+            "CREATE TABLE tvmaze_special_fetch (tvmaze_show_id INTEGER PRIMARY KEY,"
+            " fetched_at TEXT NOT NULL)")
 
         # Two non-anime shows with IMDB IDs but no tvmaze
         self.conn.execute("INSERT INTO show VALUES ('s-fail1', 1, 'tv')")
@@ -636,3 +639,100 @@ class TestDripLookupFailureMarker:
         stats2 = drip_fetch_episodes(self.conn, limit=5)
         # s-fail1 is gated out; s-ok1 already has tvmaze ID from run 1
         assert stats2["shows_without_tvmaze"] == 0
+
+
+# ── TVmaze specials (PLAN-CODE 0.1) ──
+
+_SPECIALS_SCHEMA = """
+    CREATE TABLE show (id TEXT PRIMARY KEY, tracked INTEGER DEFAULT 1,
+                       tracking_space TEXT DEFAULT 'tv');
+    CREATE TABLE show_external_id (
+        show_id TEXT, service TEXT, external_id TEXT, url TEXT, created_at TEXT,
+        UNIQUE(show_id, service));
+    CREATE TABLE tvmaze_episode (
+        tvmaze_show_id INTEGER NOT NULL, season INTEGER NOT NULL,
+        episode INTEGER NOT NULL, title TEXT, airdate TEXT, airstamp TEXT,
+        airtime TEXT, runtime_minutes INTEGER, fetched_at TEXT NOT NULL,
+        PRIMARY KEY (tvmaze_show_id, season, episode));
+    CREATE TABLE tvmaze_special (
+        tvmaze_episode_id INTEGER PRIMARY KEY, tvmaze_show_id INTEGER NOT NULL,
+        season INTEGER, type TEXT, title TEXT, airdate TEXT, airstamp TEXT,
+        airtime TEXT, runtime_minutes INTEGER, fetched_at TEXT NOT NULL);
+    CREATE TABLE tvmaze_special_fetch (
+        tvmaze_show_id INTEGER PRIMARY KEY, fetched_at TEXT NOT NULL);
+"""
+
+_EPISODES_WITH_SPECIAL = [
+    {"id": 1, "season": 1, "number": 1, "name": "Pilot", "airdate": "2020-01-01",
+     "airstamp": "2020-01-02T01:00:00+00:00", "airtime": "20:00", "runtime": 42},
+    {"id": 9, "season": 1, "number": None, "type": "significant_special",
+     "name": "Christmas Special", "airdate": "2020-12-25",
+     "airstamp": "2020-12-25T20:00:00+00:00", "airtime": "20:00", "runtime": 60},
+]
+
+
+class TestTvmazeSpecials:
+    def setup_method(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript(_SPECIALS_SCHEMA)
+
+    def test_fetch_asks_for_specials(self):
+        import httpx
+
+        from lcars import tvmaze
+
+        seen = []
+
+        def handler(request):
+            seen.append(str(request.url))
+            return httpx.Response(200, json=[])
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            tvmaze.fetch_episodes(100, client=client, specials=True)
+            tvmaze.fetch_episodes(100, client=client)
+        assert seen[0].endswith("/shows/100/episodes?specials=1")
+        assert seen[1].endswith("/shows/100/episodes")
+
+    def test_specials_go_to_their_own_table(self):
+        from lcars.tvmaze import ingest_episodes
+
+        count = ingest_episodes(self.conn, 100, _EPISODES_WITH_SPECIAL,
+                                "2026-09-27T12:00:00Z", store_specials=True)
+        assert count == 2
+        assert self.conn.execute("SELECT COUNT(*) FROM tvmaze_episode").fetchone()[0] == 1
+        row = self.conn.execute(
+            "SELECT tvmaze_show_id, season, type, title, airstamp FROM tvmaze_special"
+        ).fetchone()
+        assert row == (100, 1, "significant_special", "Christmas Special",
+                       "2020-12-25T20:00:00Z")
+
+    def test_specials_skipped_without_flag(self):
+        from lcars.tvmaze import ingest_episodes
+
+        count = ingest_episodes(self.conn, 100, _EPISODES_WITH_SPECIAL, "2026-09-27T12:00:00Z")
+        assert count == 1
+        assert self.conn.execute("SELECT COUNT(*) FROM tvmaze_special").fetchone()[0] == 0
+
+    def test_drip_refetches_old_shows_once_for_specials(self):
+        from lcars import tvmaze
+
+        self.conn.executescript("""
+            INSERT INTO show (id) VALUES ('s-aaaaaa'), ('s-bbbbbb');
+            INSERT INTO show_external_id VALUES ('s-aaaaaa', 'tvmaze', '100', '', '');
+            INSERT INTO show_external_id VALUES ('s-bbbbbb', 'tvmaze', '200', '', '');
+            INSERT INTO tvmaze_episode (tvmaze_show_id, season, episode, fetched_at)
+                VALUES (100, 1, 1, 'old');
+            INSERT INTO tvmaze_episode (tvmaze_show_id, season, episode, fetched_at)
+                VALUES (200, 0, 0, 'tombstone');
+        """)
+        with patch.object(tvmaze, "fetch_episodes", return_value=_EPISODES_WITH_SPECIAL) as fetch:
+            stats = tvmaze.drip_fetch_episodes(self.conn, limit=5)
+            again = tvmaze.drip_fetch_episodes(self.conn, limit=5)
+        fetch.assert_called_once()
+        assert fetch.call_args.args[0] == 100  # the tombstoned show is left alone
+        assert fetch.call_args.kwargs["specials"] is True
+        assert stats["specials_refetched"] == 1
+        assert again["specials_refetched"] == 0
+        assert self.conn.execute(
+            "SELECT tvmaze_show_id FROM tvmaze_special_fetch").fetchall() == [(100,)]
+        assert self.conn.execute("SELECT COUNT(*) FROM tvmaze_special").fetchone()[0] == 1

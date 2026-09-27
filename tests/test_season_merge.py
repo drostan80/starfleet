@@ -1,6 +1,6 @@
 """Season-level merge — W3(b): merging a child show (that is actually
 season N of a parent) into the parent, and reversing that merge.
-Also covers franchise collision detection.
+Also covers same-TVDB duplicate detection.
 """
 
 import json
@@ -522,7 +522,7 @@ class TestReverseSeasonMerge:
             show_merge.reverse_season_merge(conn, "y-fake01", "test_client")
 
 
-class TestDetectFranchiseCollisions:
+class TestConsolidateSameTvdbShows:
     def test_detects_tvdb_collision_and_merges(self, tmp_path):
         """Two shows sharing a TVDB ID: the child is merged into the parent."""
         conn = _make_db(tmp_path)
@@ -532,7 +532,7 @@ class TestDetectFranchiseCollisions:
         with mock.patch(
             "lcars.show_merge._determine_target_season", return_value=3
         ):
-            result = show_merge.detect_franchise_collisions(conn)
+            result = show_merge.consolidate_same_tvdb_shows(conn)
 
         assert result["collisions_found"] >= 1
         assert result["merges_performed"] == 1
@@ -541,10 +541,10 @@ class TestDetectFranchiseCollisions:
         child = conn.execute("SELECT tracked FROM show WHERE id = 's-chi001'").fetchone()
         assert child["tracked"] == 0
 
-        # No pending_review created (franchise_auto_merge reviews removed as non-actionable).
+        # No pending_review created (tvdb_consolidation_merge reviews removed as non-actionable).
         review = conn.execute(
             "SELECT * FROM pending_review WHERE entity_id = 's-chi001'"
-            " AND field = 'franchise_auto_merge'"
+            " AND field = 'tvdb_consolidation_merge'"
         ).fetchone()
         assert review is None
 
@@ -557,11 +557,11 @@ class TestDetectFranchiseCollisions:
         with mock.patch(
             "lcars.show_merge._determine_target_season", return_value=3
         ):
-            r1 = show_merge.detect_franchise_collisions(conn)
+            r1 = show_merge.consolidate_same_tvdb_shows(conn)
             assert r1["merges_performed"] == 1
 
             # Second run: already merged, should skip.
-            r2 = show_merge.detect_franchise_collisions(conn)
+            r2 = show_merge.consolidate_same_tvdb_shows(conn)
             assert r2["merges_performed"] == 0
 
     def test_no_collision_when_single_show(self, tmp_path):
@@ -570,7 +570,7 @@ class TestDetectFranchiseCollisions:
         _insert_parent(conn)
         # No child — only one show with this TVDB.
 
-        result = show_merge.detect_franchise_collisions(conn)
+        result = show_merge.consolidate_same_tvdb_shows(conn)
         assert result["collisions_found"] == 0
         assert result["merges_performed"] == 0
 
@@ -596,7 +596,7 @@ class TestDetectFranchiseCollisions:
         ), mock.patch(
             "lcars.shows._promote_stub", side_effect=fake_promote
         ):
-            result = show_merge.detect_franchise_collisions(conn)
+            result = show_merge.consolidate_same_tvdb_shows(conn)
 
         # Oldest show (parent, most content) got promoted.
         parent = conn.execute("SELECT tracked FROM show WHERE id = 's-par001'").fetchone()
@@ -608,7 +608,7 @@ class TestDetectFranchiseCollisions:
 
     def test_season_collision_opens_correction_review(self, tmp_path):
         """Case 2: target season exists on parent, episodes collide — opens
-        franchise_season_collision review without merging or demoting."""
+        tvdb_consolidation_season_collision review without merging or demoting."""
         conn = _make_db(tmp_path)
         _insert_parent(conn)
         _insert_child_with_episodes(conn)
@@ -618,7 +618,7 @@ class TestDetectFranchiseCollisions:
         with mock.patch(
             "lcars.show_merge._determine_target_season", return_value=2
         ):
-            result = show_merge.detect_franchise_collisions(conn)
+            result = show_merge.consolidate_same_tvdb_shows(conn)
 
         # No merge performed — only a review opened.
         assert result["merges_performed"] == 0
@@ -636,14 +636,14 @@ class TestDetectFranchiseCollisions:
         # The review asks for the correct season number.
         review = conn.execute(
             "SELECT * FROM pending_review WHERE entity_id = 's-chi001'"
-            " AND field = 'franchise_season_collision'"
+            " AND field = 'tvdb_consolidation_season_collision'"
         ).fetchone()
         assert review is not None
         chain = json.loads(review["proposed_value_chain"])
         assert chain[0] == "s-par001"
 
     def test_merged_pair_not_remerged(self, tmp_path):
-        """After a franchise merge, re-running detection does not
+        """After a same-TVDB consolidation, re-running detection does not
         re-merge the same pair (guarded by existing show_merge row)."""
         conn = _make_db(tmp_path)
         _insert_parent(conn)
@@ -652,14 +652,14 @@ class TestDetectFranchiseCollisions:
         with mock.patch(
             "lcars.show_merge._determine_target_season", return_value=3
         ):
-            r1 = show_merge.detect_franchise_collisions(conn)
+            r1 = show_merge.consolidate_same_tvdb_shows(conn)
         assert r1["merges_performed"] == 1
 
         # Re-run: the existing show_merge row prevents a duplicate merge.
         with mock.patch(
             "lcars.show_merge._determine_target_season", return_value=3
         ):
-            r2 = show_merge.detect_franchise_collisions(conn)
+            r2 = show_merge.consolidate_same_tvdb_shows(conn)
         assert r2["merges_performed"] == 0
 
 
@@ -727,7 +727,7 @@ class TestDetermineTargetSeason:
         _insert_parent(conn)
         _insert_child_stub(conn)
 
-        # Use real Row objects like detect_franchise_collisions does.
+        # Use real Row objects like consolidate_same_tvdb_shows does.
         parent = conn.execute(
             "SELECT s.id, s.tracked, s.created_at,"
             "  (SELECT MAX(z.season_number) FROM season z WHERE z.show_id = s.id) AS max_season"
