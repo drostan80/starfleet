@@ -454,3 +454,43 @@ User asked to verify personally (links to AniList and TVDB on every line):
   Through Time → movie 1384, Dead Leaves → movie 16387, 5 Centimeters → movie 3000,
   VIRGIN PUNK → movie 367630; Harlock Riddle of Arcadia, Ninja Scroll → user).
 - **5 Fribb disagreements** and **MahoIku restart**: user checks via the links.
+
+### TVDB decisions — user, 2026-09-27 (authoritative)
+
+Rows without a note = my proposal confirmed. Every id below was re-read on TVDB
+(series and movie) before recording. Full data: ~/starfleet-review-2026-09-27/.
+
+**Films → TVDB movie ids:** 5 Centimeters per Second 3000 · VIRGIN PUNK Clockwork
+Girl 367630 · Your Name. 197 · The Girl Who Leapt Through Time 1384 · Perfect Blue
+3807 · Dead Leaves 16387 · Kuro no Sumika -Chronus- 48409 · Ghost in the Shell
+(1995) 4549 · Voices of a Distant Star 9702 · Rescue ME! 102515 · THE UROTSUKI
+101794 · Urotsukidoji: Legend of the Overfiend 17387 (**to confirm**: 17387 is
+"Urotsukidoji III: Return of the Overfiend").
+
+**Series ids confirmed:** HEAD START AT BIRTH 450837 · I Parry Everything 441727 ·
+Possibly the Greatest Alchemist 449884 · Re:Monster 439755 · Dark Gathering 422090 ·
+A Wild Last Boss Appeared! 453694 · The Brilliant Healer's New Life 447246 · The
+Dangers in My Heart 422981 · Ōoku 432839 · Onmyoji 425298 · Captain Harlock (1978)
+80886 (Riddle of the Arcadia Episode belongs to it) · Ninja Scroll → 72842 (film in
+the series show) · Gantz: Second Stage → 78916 · Aki-Sora 467259 · Henkei Shoujo
+331278 · Huckleberry Finn Monogatari 327702 · Little Women (1981) 281234 · Chou
+Futsuu-ken Chiba Densetsu 443365 (**to confirm**: 443365 is "Child's Play", 2023) ·
+Zeikin de Katta Hon 474749.
+
+**Belong to a parent show (specials/seasons placed by air date):** Frieren minis →
+424536, decimal season number (R1.9a) · The Irregular at Magic High School: Get to
+Know… → 278329 · Rurouni Kenshin 3rd Season → 413578 (new season, planned) ·
+Shagahai ReLIFE Kenkyuujo → 299508 (OVA after the final arc) · Narumi's Week at Work
+→ 423075 (Kaiju No. 8) · Dungeon Meshi: Senshi no Kantan Cooking! → Dungeon Meshi.
+
+**Own show, no TVDB id (R3.3 exception, user-checked):** Muramata-san no Himitsu,
+Uji ni wa Monogatari ga Aru (user said "one only" — to confirm which).
+
+**Remove from LCARS and AniList/MAL** (added by mistake): Huhuan Shaonü Special,
+TENSAI BANPAKU Opening Animation, Sword Art OFFline, **Magical Girl Raising
+Project: restart** (not followed; its show goes on the skip list).
+
+**New add after the rebuild:** Books Bought with Tax (live action, TVDB 474758) →
+its own show, planned (normal add path).
+
+→ No individual seasons remain from existing data (Narumi goes to Kaiju No. 8).
