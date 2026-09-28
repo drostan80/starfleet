@@ -161,6 +161,12 @@ def _cmd_rulecheck(args: argparse.Namespace) -> None:
     raise SystemExit(rulecheck.main(argv))
 
 
+def _cmd_consolidation(args: argparse.Namespace) -> None:
+    from lcars import consolidation
+
+    raise SystemExit(consolidation.main(args.rest))
+
+
 def _cmd_numbering(args: argparse.Namespace) -> None:
     from lcars import numbering
 
@@ -210,6 +216,12 @@ def main() -> None:
     )
     numbering_cmd.add_argument("rest", nargs=argparse.REMAINDER)
     numbering_cmd.set_defaults(func=_cmd_numbering)
+
+    consolidation_cmd = subparsers.add_parser(
+        "consolidation", help="same-TVDB merge + films plan for review (read-only)"
+    )
+    consolidation_cmd.add_argument("rest", nargs=argparse.REMAINDER)
+    consolidation_cmd.set_defaults(func=_cmd_consolidation)
 
     # No subcommand at all ("lcars" alone, e.g. the Dockerfile's CMD) still
     # means "serve", with serve's own --host/--port defaults — argparse
