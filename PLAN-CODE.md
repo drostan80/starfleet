@@ -389,6 +389,10 @@ monitoring by the show's status. Failures → `sonarr_monitor` / `sonarr_add` re
 
 ## Phase 7 — AniList/MAL mirroring (R4.x; C3, C10, E1–E3)
 
+**APPROVED 2026-09-28**, with R4.8a (remote completed → all episodes watched; review
+when that includes unaired ones) and individual seasons following your list's status
+added.
+
 - **7.1** Push every non-skipped season's status (drop `list_sync = 0`) (C3).
 - **7.2** Skipped: never pushed; an auto-added planned season moved to skipped is
   **deleted** from AniList/MAL (R2.10; E3).
