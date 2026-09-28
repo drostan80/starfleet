@@ -396,7 +396,8 @@ export function fmtEpBadge(ep) {
     const e = String(ep.episode).padStart(2, '0');
     return `S${s}E${e}`;
   }
-  if (ep.absoluteNumber != null) return `#${ep.absoluteNumber}`;
+  // R1.0a: 5000+ is a placeholder (no air date yet) — shown as x.
+  if (ep.absoluteNumber != null) return ep.absoluteNumber >= 5000 ? '#x' : `#${ep.absoluteNumber}`;
   return '—';
 }
 
