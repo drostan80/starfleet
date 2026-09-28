@@ -281,6 +281,29 @@ def fetch_media(anilist_id: int, client: httpx.Client | None = None) -> dict | N
     return data["Media"]
 
 
+_FACTS_QUERY = """
+query ($mediaId: Int) {
+  Media(id: $mediaId) {
+    title { romaji english native }
+    synonyms
+    startDate { year }
+    countryOfOrigin
+    format
+    episodes
+    coverImage { large }
+  }
+}
+"""
+
+
+def fetch_media_facts(anilist_id: int, client: httpx.Client | None = None) -> dict | None:
+    """What PLAN-CODE 8.8 compares with a TVDB show (R3.7): titles, first
+    air year, country, format, episode count, cover. None if no such id;
+    raises AniListError when AniList can't be reached."""
+    data = _graphql_request(_FACTS_QUERY, {"mediaId": anilist_id}, token=None, client=client)
+    return data["Media"]
+
+
 def fetch_seasonal_page(
     season: str, year: int, page: int = 1, client: httpx.Client | None = None
 ) -> dict:

@@ -11876,3 +11876,188 @@ async def test_season_episode_ids_follow_the_level_spans(client, monkeypatch):
     sources = {e["node"]["kind"]: e["node"]["source"] for e in data["show"]["levels"]["edges"]}
     assert sources["special"] == "AUTO"
     assert sorted(by_kind["tvdb_season"]) == sorted([ep_id[(1, 1)], ep_id[(1, 2)]])
+
+
+# --- PLAN-CODE 8.8: TVDB links nothing confirmed (R3.7) -----------------------
+
+_FRIEREN_LOOKUP = {
+    "tvdbId": 424536, "title": "Frieren: Beyond Journey's End", "year": 2023,
+    "originalLanguage": {"id": 8, "name": "Japanese"},
+    "genres": ["Adventure", "Animation", "Anime"], "network": "Nippon TV",
+    "seasons": [{"seasonNumber": 0}, {"seasonNumber": 1}], "titleSlug": "frieren",
+}
+_MARIA_LOOKUP = {
+    "tvdbId": 276151, "title": "Maria Mercedes", "year": 1992,
+    "originalLanguage": {"id": 3, "name": "Spanish"}, "genres": ["Drama", "Romance", "Soap"],
+    "network": "Las Estrellas", "seasons": [{"seasonNumber": 1}], "titleSlug": "maria-mercedes",
+}
+
+
+def _vetting_env(monkeypatch, *, lookup=None, in_library=False, fribb=(), facts=None):
+    """Sonarr answers `lookup` for any tvdb: term; AniList facts are `facts`."""
+    config.set_current(_sonarr_configured_config())
+    fake = _FakeSonarrClient(series={"id": 5, "title": "x", "tvdbId": (lookup or {}).get("tvdbId"),
+                                     "titleSlug": "x"} if in_library else None,
+                             lookup_results=[lookup] if lookup else [])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    monkeypatch.setattr(shows, "_try_load_fribb_dataset", lambda: list(fribb))
+    _patch_fribb_dataset(monkeypatch, list(fribb))
+    monkeypatch.setattr(anilist_client, "fetch_media_facts", lambda anilist_id: facts)
+    return fake
+
+
+_FRIEREN_FACTS = {"title": {"english": "Frieren: Beyond Journey's End",
+                            "romaji": "Sousou no Frieren", "native": None},
+                  "synonyms": [], "startDate": {"year": 2023}, "countryOfOrigin": "JP",
+                  "format": "TV", "episodes": 28, "coverImage": {"large": None}}
+
+
+async def _add_raw(client, **input_):
+    base = {"mediaShape": "EPISODIC", "trackingSpace": "ANIME", "primaryTitle": "ROMAJI",
+            "titleRomaji": "Sousou no Frieren"}
+    resp = await client.post("/", json={"query": ADD_SHOW_WITH_ARR,
+                                        "variables": {"input": {**base, **input_}}},
+                             headers=auth_headers())
+    return resp.json()
+
+
+def _open_link_review():
+    return db.get_connection().execute(
+        "SELECT * FROM pending_review WHERE field = 'tvdb_link' AND resolved_at IS NULL"
+    ).fetchone()
+
+
+async def test_a_guess_loses_to_fribb(client, monkeypatch):
+    _vetting_env(monkeypatch, fribb=[{"anilist_id": 154587, "tvdb_id": 424536,
+                                      "season": {"tvdb": 1}}])
+    config.set_current(config.Config())  # no Sonarr: nothing to look up or add
+    body = await _add_raw(client, anilistId=154587, tvdbCandidateId=276151)
+    show_id = body["data"]["addShowWithArr"]["show"]["id"]
+    assert await _external_id_url(client, show_id, "tvdb") == (
+        "https://thetvdb.com/dereferrer/series/424536")
+
+
+async def test_a_guess_in_your_sonarr_library_with_matching_titles_is_taken(client, monkeypatch):
+    _vetting_env(monkeypatch, lookup=_FRIEREN_LOOKUP, in_library=True, facts=_FRIEREN_FACTS)
+    body = await _add_raw(client, anilistId=154587, tvdbCandidateId=424536)
+    assert "errors" not in body, body
+    assert body["data"]["addShowWithArr"]["show"]["tracked"] is True
+    assert _open_link_review() is None
+
+
+async def test_an_unconfirmed_guess_becomes_an_individual_season_with_a_review(client, monkeypatch):
+    fake = _vetting_env(monkeypatch, lookup=_FRIEREN_LOOKUP, facts=_FRIEREN_FACTS)
+    body = await _add_raw(client, anilistId=154587, tvdbCandidateId=424536)
+    assert body["errors"][0]["message"].startswith("individual_season:")
+    assert not [c for c in fake.calls if c[0] == "add_series"]  # Sonarr untouched
+    review = _open_link_review()
+    assert [c["id"] for c in json.loads(review["choices"])] == [
+        "link_tvdb", "link_other_tvdb", "keep_individual"]
+    assert json.loads(review["payload"])["tvdbId"] == 424536
+
+
+async def test_maria_mercedes_is_only_linkable_despite_its_mismatches(client, monkeypatch):
+    _vetting_env(monkeypatch, lookup=_MARIA_LOOKUP, facts={
+        **_FRIEREN_FACTS, "title": {"romaji": "Kaketa Tsuki no Mercedes"}})
+    body = await _add_raw(client, anilistId=180000, titleRomaji="Kaketa Tsuki no Mercedes",
+                          tvdbCandidateId=276151)
+    assert body["errors"][0]["message"].startswith("individual_season:")
+    review = _open_link_review()
+    assert [c["id"] for c in json.loads(review["choices"])][0] == "link_tvdb_despite"
+    mismatches = json.loads(review["payload"])["mismatches"]
+    assert any("isn't animation" in m for m in mismatches)
+    assert any("1992" in m for m in mismatches)
+    # the plain link is refused by the server, not just hidden by a page
+    resp = await client.post("/", json={
+        "query": "mutation($id: ID!) { resolveReviewChoice(id: $id, choice: \"link_tvdb\")"
+                 " { id } }", "variables": {"id": review["id"]}}, headers=auth_headers())
+    assert "errors" in resp.json()
+
+
+async def test_your_own_tvdb_id_still_meets_the_hard_stops(client, monkeypatch):
+    _vetting_env(monkeypatch, lookup=_MARIA_LOOKUP, facts=_FRIEREN_FACTS)
+    body = await _add_raw(client, anilistId=154587, tvdbId=276151)
+    assert body["errors"][0]["message"].startswith("individual_season:")
+    assert _open_link_review() is not None
+
+
+async def test_you_can_add_despite_the_mismatches_when_you_say_so(client, monkeypatch):
+    _vetting_env(monkeypatch, lookup=_MARIA_LOOKUP, facts=_FRIEREN_FACTS)
+    config.set_current(config.Config())  # the facts are checked; nothing added to Sonarr
+    monkeypatch.setattr(shows, "_lookup_arr", lambda conn, shape, term: [_MARIA_LOOKUP])
+    body = await _add_raw(client, anilistId=154587, tvdbId=276151,
+                          tvdbMismatchAcknowledged=True)
+    assert "errors" not in body, body
+
+
+async def test_with_no_list_id_an_unconfirmed_guess_is_asked_about(client, monkeypatch):
+    _vetting_env(monkeypatch, lookup=_MARIA_LOOKUP, facts=None)
+    body = await _add_raw(client, trackingSpace="TV", titleRomaji="Mercedes",
+                          tvdbCandidateId=276151)
+    message = body["errors"][0]["message"]
+    assert message.startswith("tvdb_check:")
+    assert json.loads(message[len("tvdb_check:"):])["tvdb"]["title"] == "Maria Mercedes"
+    assert db.get_connection().execute("SELECT COUNT(*) FROM show").fetchone()[0] == 0
+
+
+async def _resolve(client, review_id, choice, note=None):
+    return (await client.post("/", json={
+        "query": "mutation($id: ID!, $c: String!, $n: String) {"
+                 " resolveReviewChoice(id: $id, choice: $c, note: $n) { id resolvedAt } }",
+        "variables": {"id": review_id, "c": choice, "n": note}}, headers=auth_headers())).json()
+
+
+async def test_linking_joins_the_individual_season_to_a_new_show(client, monkeypatch):
+    _vetting_env(monkeypatch, lookup=_FRIEREN_LOOKUP, facts=_FRIEREN_FACTS)
+    body = await _add_raw(client, anilistId=154587, tvdbCandidateId=424536)
+    season_id = json.loads(body["errors"][0]["message"][len("individual_season:"):])["seasonId"]
+    await gql(client, "mutation($id: ID!) { setSeasonStatus(seasonId: $id, status: WATCHING)"
+                      " { id } }", {"id": season_id}, headers=auth_headers())
+    config.set_current(config.Config())  # the join itself: no Sonarr in this test
+    review = _open_link_review()
+    result = await _resolve(client, review["id"], "link_tvdb")
+    assert "errors" not in result, result
+    conn = db.get_connection()
+    assert conn.execute("SELECT COUNT(*) FROM season WHERE id = ?", (season_id,)).fetchone()[0] == 0
+    level = conn.execute(
+        "SELECT s.* FROM season s JOIN season_external_id x ON x.season_id = s.id"
+        " WHERE x.service = 'anilist' AND x.external_id = '154587'").fetchall()
+    assert len(level) == 1
+    assert (level[0]["kind"], level[0]["season_number"], level[0]["status"]) == (
+        "tvdb_season", 1, "watching")
+    assert level[0]["show_id"] is not None
+    history = conn.execute("SELECT COUNT(*) FROM season_status_change WHERE season_id = ?",
+                           (level[0]["id"],)).fetchone()[0]
+    assert history >= 1  # your status history came along
+
+
+async def test_linking_to_a_tracked_show_adds_another_cour_to_a_held_season(client, monkeypatch):
+    _vetting_env(monkeypatch, lookup=_FRIEREN_LOOKUP, facts=_FRIEREN_FACTS)
+    show = await add_show(client, tvdbId=424536, anilistId=154587)
+    await _link_season_anilist(client, show["id"], 1, 154587)
+    body = await _add_raw(client, anilistId=182255, titleRomaji="Sousou no Frieren 2nd Season",
+                          tvdbId=None, tvdbCandidateId=424536)
+    assert body["errors"][0]["message"].startswith("individual_season:")
+    review = _open_link_review()
+    result = await _resolve(client, review["id"], "link_tvdb", "season 1")
+    assert "errors" not in result, result
+    conn = db.get_connection()
+    row = conn.execute(
+        "SELECT s.kind, s.show_id FROM season s JOIN season_external_id x ON x.season_id = s.id"
+        " WHERE x.service = 'anilist' AND x.external_id = '182255'").fetchone()
+    assert tuple(row) == ("part", show["id"])
+
+
+async def test_another_tvdb_id_that_does_not_fit_becomes_the_reviews_candidate(
+    client, monkeypatch,
+):
+    _vetting_env(monkeypatch, lookup=_FRIEREN_LOOKUP, facts=_FRIEREN_FACTS)
+    await _add_raw(client, anilistId=154587, tvdbCandidateId=424536)
+    review = _open_link_review()
+    monkeypatch.setattr(shows, "_lookup_arr", lambda conn, shape, term: [_MARIA_LOOKUP])
+    result = await _resolve(client, review["id"], "link_other_tvdb", "276151")
+    assert "doesn't fit" in result["errors"][0]["message"]
+    still = _open_link_review()
+    assert still["id"] == review["id"]
+    assert json.loads(still["payload"])["tvdbId"] == 276151
+    assert json.loads(still["choices"])[0]["id"] == "link_tvdb_despite"

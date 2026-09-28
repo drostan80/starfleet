@@ -640,6 +640,8 @@ type PendingReview {
   choices: [ReviewChoice!]!
   "The show page this review is about."
   showId: ID
+  "The data the review's choices act on, as JSON — e.g. a `tvdb_link` review's evidence (the TVDB show's and the entry's facts, the mismatches), PLAN-CODE 8.8."
+  payload: String
 }
 
 type ReviewChoice {
@@ -1313,6 +1315,10 @@ input AddShowInput {
   malId: Int
   "2026-09-22 — when true, skips the sequel/later-season auto-detection for this one add. For the explicit \"It isn't a sequel — add as new show anyway\" choice, where a human already rejected the auto-detected match once: resubmitting the same input without this flag would re-run the exact same detection against the same static data and loop back into the same prompt. Defaults to false."
   skipSequelCheck: Boolean
+  "PLAN-CODE 8.8 (R3.7): a TVDB id from a title search — a guess. LCARS confirms it (Fribb, or the series already in Sonarr with matching titles) before using it; unconfirmed, the add becomes an individual season with a review (or, with no AniList/MAL id, a `tvdb_check:{json}` error carrying the evidence)."
+  tvdbCandidateId: Int
+  "PLAN-CODE 8.8: you saw the mismatches in the evidence (anime vs a non-animation TVDB show, first-air years apart) and it's right anyway."
+  tvdbMismatchAcknowledged: Boolean
 }
 
 "B.21 — addShowWithArr's own input, mirrors AddShowInput plus the unmonitored flag for PAUSED adds."
@@ -1332,6 +1338,10 @@ input AddShowWithArrInput {
   unmonitored: Boolean
   "2026-09-22 — see AddShowInput's own field docstring. Same bypass, same reason, this input's own sequel checks."
   skipSequelCheck: Boolean
+  "PLAN-CODE 8.8 (R3.7): a TVDB id from a title search — a guess. LCARS confirms it (Fribb, or the series already in Sonarr with matching titles) before using it; unconfirmed, the add becomes an individual season with a review (or, with no AniList/MAL id, a `tvdb_check:{json}` error carrying the evidence)."
+  tvdbCandidateId: Int
+  "PLAN-CODE 8.8: you saw the mismatches in the evidence (anime vs a non-animation TVDB show, first-air years apart) and it's right anyway."
+  tvdbMismatchAcknowledged: Boolean
 }
 
 """

@@ -12,7 +12,10 @@ Kinds with choices:
 - `remote_completed` — a list said completed over unaired episodes (R4.8a):
   accept (every episode watched) / revert to watching;
 - `later_planned` — a remote pause/drop would skip seasons you planned (Q-J4):
-  skip them too / keep them planned.
+  skip them too / keep them planned;
+- `tvdb_link` — an add whose TVDB link nothing confirmed (PLAN-CODE 8.8): link
+  it (or "despite" its mismatches) / link the TVDB id in your note / keep it an
+  individual season.
 """
 
 from __future__ import annotations
@@ -31,11 +34,21 @@ LABELS = {
     "revert_watching": "Revert to watching, don't mark the episodes",
     "skip_later": "Skip the later seasons too",
     "keep_later": "Keep the later seasons planned",
+    "link_tvdb": "Link this TVDB show",
+    "link_tvdb_despite": "Link this TVDB show despite the mismatches",
+    "link_other_tvdb": "Link the TVDB id in my note instead",
+    "keep_individual": "Keep it an individual season for now",
 }
 
 
 class ReviewError(ValueError):
-    """A choice that doesn't fit the review."""
+    """A choice that doesn't fit the review. `reopen`: new evidence the
+    review should carry from now on (a TVDB id from your note that didn't
+    fit becomes the review's candidate, PLAN-CODE 8.8)."""
+
+    def __init__(self, message: str, reopen: dict | None = None):
+        super().__init__(message)
+        self.reopen = reopen
 
 
 def open_review(
@@ -110,6 +123,10 @@ def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | N
         for sid, old, new in fx.seasons:
             if new == "skipped":
                 list_sync.delete_if_auto_skipped(conn, sid, old)
+    elif field == "tvdb_link":
+        from lcars import tvdb_vetting
+
+        tvdb_vetting.resolve(conn, payload, choice, note)
     elif field == "same_tvdb_show" and choice == "merge":
         result = consolidation.apply_group(conn, payload["tvdb_id"], fribb.load_dataset())
         if not result.get("merged"):

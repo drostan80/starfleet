@@ -139,6 +139,9 @@ class _FakeSonarrClient:
     def series_by_tvdb_id(self, tvdb_id):
         return self._series
 
+    def lookup_series(self, term):
+        return []  # no TVDB facts (PLAN-CODE 8.8 treats them as unknown)
+
     def episodes(self, series_id, include_episode_file=False):
         return self._episodes
 

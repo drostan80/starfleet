@@ -62,20 +62,22 @@ class Decision:
     proposal: str = ""
 
 
-def _season_by_list_id(conn, anilist_id, mal_id):
-    """R1.23: AniList/MAL ids are season level."""
+def _season_by_list_id(conn, anilist_id, mal_id, exclude_season_id=None):
+    """R1.23: AniList/MAL ids are season level. `exclude_season_id`: an
+    individual season being joined to a show isn't its own match (8.8)."""
+    skip = exclude_season_id or ""
     for service, value in (("anilist", anilist_id), ("mal", mal_id)):
         if value is None:
             continue
         row = conn.execute(
             "SELECT z.id, z.show_id FROM season z JOIN season_external_id x ON x.season_id = z.id"
-            " WHERE x.service = ? AND x.external_id = ?",
-            (service, str(value)),
+            " WHERE x.service = ? AND x.external_id = ? AND z.id != ?",
+            (service, str(value), skip),
         ).fetchone()
         if row is None:
             col = "anilist_id" if service == "anilist" else "mal_id"
             row = conn.execute(
-                f"SELECT id, show_id FROM season WHERE {col} = ?", (int(value),)
+                f"SELECT id, show_id FROM season WHERE {col} = ? AND id != ?", (int(value), skip)
             ).fetchone()
         if row is not None:
             return row
@@ -117,8 +119,8 @@ def _fribb_entries(dataset, anilist_id, mal_id) -> list[dict]:
     return []
 
 
-def classify(conn, c: Candidate, dataset: list[dict]) -> Decision:
-    existing = _season_by_list_id(conn, c.anilist_id, c.mal_id)
+def classify(conn, c: Candidate, dataset: list[dict], *, exclude_season_id=None) -> Decision:
+    existing = _season_by_list_id(conn, c.anilist_id, c.mal_id, exclude_season_id)
     if existing is not None:
         return Decision("already_tracked", existing["show_id"], existing["id"])
 

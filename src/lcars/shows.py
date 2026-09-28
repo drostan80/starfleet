@@ -110,6 +110,19 @@ class IndividualSeasonAdded(ShowInputError):
         super().__init__(f"individual_season:{payload}")
 
 
+class TvdbCheckNeeded(ShowInputError):
+    """PLAN-CODE 8.8: a TVDB link nothing confirmed, on an add with no
+    AniList/MAL id to hold an individual season — the page shows the
+    evidence and asks (retry with the id as yours, plus the tick when the
+    evidence mismatches). Carried as `tvdb_check:{json}`."""
+
+    def __init__(self, evidence: dict):
+        import json
+
+        self.evidence = evidence
+        super().__init__("tvdb_check:" + json.dumps(evidence, separators=(",", ":")))
+
+
 class LaterSeasonError(ShowInputError):
     """Raised when the add flow detects that the requested show is S2+
     of a show (TVDB id) where *no* season is tracked yet.  Carries S1's info
@@ -666,8 +679,12 @@ def add_checked(conn, input: dict, *, add_to_sonarr: bool = True) -> str:
     of a show you track → added to it (returns that show); something you must
     settle → an error with the proposal; a new show → created. No TVDB id yet
     → an individual season (`IndividualSeasonAdded`), never a show."""
-    from lcars import add_check  # deferred: add_check imports this module lazily
+    from lcars import (
+        add_check,  # deferred: add_check imports this module lazily
+        tvdb_vetting,
+    )
 
+    input = tvdb_vetting.vet(conn, input)  # PLAN-CODE 8.8: before anything is written
     if input.get("skip_sequel_check") or input.get("media_shape") == "movie":
         return create_show(conn, input)
     title_keys = ("title_english", "title_romaji", "title_native")
@@ -1525,6 +1542,9 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
     matched_title/matched_tvdb_id/matched_tmdb_id for the resolver to
     build AddShowResult from. See this module's own B.21 section
     docstring above for the full ordering rationale."""
+    from lcars import tvdb_vetting
+
+    input = tvdb_vetting.vet(conn, input)  # PLAN-CODE 8.8: before Sonarr is touched
     primary = input["primary_title"]
     title_field = f"title_{primary}"
     if not input.get(title_field):

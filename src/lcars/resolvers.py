@@ -4502,6 +4502,12 @@ def resolve_resolve_review_choice(_, info, id, choice, note=None):
         reviews.resolve_choice(conn, id, choice, client, note)
     except (reviews.ReviewError, shows.ShowInputError, ValueError) as e:
         conn.rollback()
+        reopen = getattr(e, "reopen", None)
+        if reopen:  # the review keeps the new candidate's evidence (8.8)
+            from lcars import tvdb_vetting
+
+            tvdb_vetting.open_link_review(conn, reopen["season_id"], reopen)
+            conn.commit()
         raise GraphQLError(str(e)) from None
     return _get_pending_review(conn, id)
 
