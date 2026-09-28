@@ -52,7 +52,8 @@ import json
 import sqlite3
 from dataclasses import asdict, dataclass, field
 
-from lcars import anidb, util
+from lcars import anidb, fribb, util
+from lcars import ids as ids_module
 
 FILM_MINUTES = 60
 FULL_LENGTH_MINUTES = 15
@@ -402,10 +403,83 @@ def apply_plan(conn: sqlite3.Connection, plan: Plan) -> dict:
             "UPDATE season SET abs_start = ?, abs_end = ?, updated_at = ? WHERE id = ?",
             (min(a for a, _ in spans), max(b for _, b in spans), now, row[0]),
         )
+    _apply_level_spans(conn, plan, now)
     conn.execute(
         "UPDATE show SET absolute_numbering_source = ? WHERE id = ?", (plan.source, plan.show_id)
     )
     return {"changed": changed, "missing_seasons": missing_seasons}
+
+
+def _anilist_ids_for_anidb(anidb_id: int) -> set[int]:
+    try:
+        dataset = fribb.load_dataset()
+    except Exception:  # no dataset: those levels wait for the next pass
+        return set()
+    return {e["anilist_id"] for e in fribb.build_anidb_index(dataset).get(anidb_id, [])
+            if e.get("anilist_id") not in (None, "")}
+
+
+def _write_spans(conn, season_id: str, spans, now: str) -> None:
+    conn.execute("DELETE FROM season_span WHERE season_id = ?", (season_id,))
+    conn.executemany(
+        "INSERT INTO season_span (season_id, abs_from, abs_to) VALUES (?, ?, ?)",
+        [(season_id, a, b) for a, b in spans],
+    )
+    conn.execute(
+        "UPDATE season SET abs_start = ?, abs_end = ?, updated_at = ? WHERE id = ?",
+        (min(a for a, _ in spans), max(b for _, b in spans), now, season_id),
+    )
+
+
+def _apply_level_spans(conn, plan: Plan, now: str) -> None:
+    """Spans of the other levels: a part (an AniList/MAL cour) and a season-0
+    piece with its own id get theirs by their AniDB entry (via Fribb); the
+    side piece between two TVDB seasons (R1.8d, R1.9a) is its decimal season,
+    created here when missing (one side piece → N.5)."""
+    from lcars import status_rules
+
+    for key, spans in plan.level_spans.items():
+        if not spans:
+            continue
+        kind, *rest = key.split(":")
+        if kind in ("part", "anidb"):
+            ids = _anilist_ids_for_anidb(int(rest[-1]))
+            if not ids:
+                continue
+            marks = ",".join("?" * len(ids))
+            level = "part" if kind == "part" else "special"
+            row = conn.execute(
+                f"SELECT id FROM season WHERE show_id = ? AND kind = ? AND anilist_id IN ({marks})",
+                (plan.show_id, level, *ids),
+            ).fetchone()
+            if row is not None:
+                _write_spans(conn, row[0], spans, now)
+        elif kind == "side":
+            after = int(rest[0])
+            row = conn.execute(
+                "SELECT id FROM season WHERE show_id = ? AND kind = 'special' AND parent_id IS NULL"
+                " AND anilist_id IS NULL AND decimal_season_number > ?"
+                " AND decimal_season_number < ?",
+                (plan.show_id, after, after + 1),
+            ).fetchone()
+            if row is None:
+                before = conn.execute(
+                    "SELECT status FROM season WHERE show_id = ? AND kind = 'tvdb_season'"
+                    " AND season_number = ?",
+                    (plan.show_id, after),
+                ).fetchone()
+                status = ("skipped" if before is not None
+                          and before[0] in status_rules.STOP_FOLLOWING else "planned")
+                season_id = ids_module.generate_id(conn, "z")
+                conn.execute(
+                    "INSERT INTO season (id, show_id, season_number, kind, decimal_season_number,"
+                    " label, source, status, list_sync, created_at, updated_at)"
+                    " VALUES (?, ?, NULL, 'special', ?, ?, 'auto', ?, 0, ?, ?)",
+                    (season_id, plan.show_id, after + 0.5, f"Side piece after season {after}",
+                     status, now, now),
+                )
+                row = (season_id,)
+            _write_spans(conn, row[0], spans, now)
 
 
 def renumber_show(conn: sqlite3.Connection, show_id: str) -> Plan:

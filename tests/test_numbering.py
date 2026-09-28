@@ -268,3 +268,28 @@ def test_writer_sets_numbers_spans_and_source_and_logs_reconciliations(conn):
     assert changes == 5  # the new special + S2's four episodes
     numbering.renumber_show(conn, "s-test01")
     assert conn.execute("SELECT COUNT(*) FROM absolute_number_change").fetchone()[0] == changes
+
+
+def test_writer_creates_the_side_piece_between_seasons(conn):
+    # R1.8d / R1.9a: minis between S1 and S2 sit in their decimal season S1.5.
+    for n, day in ((3, 5), (4, 6)):
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc,"
+            " runtime_minutes, created_at, updated_at)"
+            " VALUES (?, 's-test01', 0, ?, 'special', ?, 2, ?, ?)",
+            (f"e-mini{n:02d}", n, f"2020-01-{day:02d}T12:00:00Z", NOW, NOW),
+        )
+    numbering.renumber_show(conn, "s-test01")
+    side = conn.execute(
+        "SELECT id, decimal_season_number, season_number, status FROM season"
+        " WHERE show_id = 's-test01' AND kind = 'special'"
+    ).fetchall()
+    assert [(r[1], r[2]) for r in side] == [(1.5, None)]
+    spans = conn.execute(
+        "SELECT abs_from, abs_to FROM season_span WHERE season_id = ?", (side[0][0],)
+    ).fetchall()
+    assert spans == [(2.1, 2.2)]
+    numbering.renumber_show(conn, "s-test01")  # idempotent: no second side piece
+    assert conn.execute(
+        "SELECT COUNT(*) FROM season WHERE show_id = 's-test01' AND kind = 'special'"
+    ).fetchone()[0] == 1
