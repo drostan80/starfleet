@@ -466,6 +466,27 @@ lcars-dev.db — Frieren, Mushoku Tensei, reviews, List; not yet seen by the use
 - **Not changed:** the header's "N total" episodes is the show's own count (AniList's
   S1 count for anime), not the levels' — pre-existing.
 
+### 8.8 TVDB links you didn't really check (R3.7) — APPROVED 2026-09-28
+
+Browse sent Sonarr's title-search hit as your own TVDB id, so a guess passed as
+verified (the Maria Mercedes failure). Approved plan, in this order:
+
+- **8.8.1 A guess is a candidate** (`tvdbCandidateId` on the add inputs): LCARS confirms
+  it itself — Fribb/anime-lists, or the series already in Sonarr with matching titles;
+  Fribb wins over the guess.
+- **8.8.2 Unconfirmed → individual season + review** "which TVDB show?": link this
+  candidate / link another TVDB id (your note; re-checked, never linked blind) / keep
+  individual. Linking joins the season to the show (R3.6d) keeping its id, status and
+  history — *added after approval: the join itself, `PendingReview.payload`*.
+- **8.8.4 Hard stops** on every link Fribb didn't confirm (yours, a guess, or a
+  Sonarr-library match): anime vs a TVDB show that isn't animation / Japanese-Chinese-
+  Korean; first-air year more than a year off (new show only); episode count where
+  comparable. A mismatch needs a separate "link despite" choice, checked by the server;
+  never bulk-resolvable.
+- **After cutover:** 8.8.3 side-by-side evidence page (posters, years, counts,
+  language, network); 8.8.5 every link keeps its provenance and is re-checked when a real
+  source (Fribb) later has data — disagreement opens a review.
+
 ## Phase 9 — Dry run and cutover
 
 - Run everything on the rebuilt DB copy with external writes **captured, not
