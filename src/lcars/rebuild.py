@@ -405,8 +405,254 @@ def stage_structure(run: Run) -> None:
         outcome = "applied" if m["show"] in merged else "skipped"
         run.record("merge", m["key"], outcome,
                    "" if outcome == "applied" else "no longer shares its TVDB id")
-
+    conn.commit()
+    _structure_adds(run, conn, d)
     run.record("stage", "structure", "applied", "")
+
+
+# ── stage 3, part 2: adds (through the one add check, 8.8 included) ───────
+
+LIST_STATUS = {"CURRENT": "watching", "PLANNING": "planned", "COMPLETED": "completed",
+               "PAUSED": "paused", "DROPPED": "dropped", "REPEATING": "watching"}
+
+
+def _anilist_entries(run: Run) -> dict:
+    raw = json.load(open(run.inputs / "anilist_list.json"))
+    return {e["mediaId"]: e for lst in raw["data"]["MediaListCollection"]["lists"]
+            for e in lst["entries"]}
+
+
+def _live(run: Run):
+    live = sqlite3.connect(f"file:{run.live}?mode=ro", uri=True)
+    live.row_factory = sqlite3.Row
+    return live
+
+
+def _live_input(live, show_id: str) -> dict | None:
+    row = live.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone()
+    if row is None:
+        return None
+    ids = dict(live.execute("SELECT service, external_id FROM show_external_id"
+                            " WHERE show_id = ?", (show_id,)).fetchall())
+    first = live.execute("SELECT anilist_id, mal_id FROM season WHERE show_id = ? AND"
+                         " (anilist_id IS NOT NULL OR mal_id IS NOT NULL)"
+                         " ORDER BY season_number LIMIT 1", (show_id,)).fetchone()
+    inp = {"media_shape": row["media_shape"], "tracking_space": row["tracking_space"],
+           "title_english": row["title_english"], "title_romaji": row["title_romaji"],
+           "title_native": row["title_native"], "primary_title": row["primary_title"]}
+    for service, key, cast in (("anilist", "anilist_id", int), ("mal", "mal_id", int),
+                               ("tvdb", "tvdb_id", int), ("tmdb", "tmdb_id", int),
+                               ("imdb", "imdb_id", str)):
+        value = ids.get(service)
+        if value is None and first is not None and service in ("anilist", "mal"):
+            value = first[f"{service}_id"]
+        if value not in (None, "", "-1"):
+            inp[key] = cast(value)
+    if not inp.get(f"title_{inp['primary_title']}"):
+        inp["primary_title"] = next(t for t in ("romaji", "english", "native")
+                                    if inp.get(f"title_{t}"))
+    return inp
+
+
+def _add(run: Run, conn, kind: str, key: str, inp: dict, status: str | None = None):
+    """One add through `shows.add_checked` (vetting, add check, Sonarr add —
+    captured). Returns the new level's id; outcomes that need the user go to
+    the ledger as `review` (shown in 9.2), not a failure."""
+    from lcars import add_check, shows, status_rules
+
+    try:
+        target = shows.add_checked(conn, dict(inp))
+        level = conn.execute("SELECT id FROM season WHERE show_id = ? AND kind = 'tvdb_season'"
+                             " ORDER BY season_number DESC LIMIT 1", (target,)).fetchone()
+        level_id = level[0] if level else None
+        run.record(kind, key, "applied", f"show {target}")
+    except shows.SequelDetectedError as e:
+        c = add_check.Candidate(add_check.USER, anilist_id=inp.get("anilist_id"),
+                                mal_id=inp.get("mal_id"), tvdb_id=inp.get("tvdb_id"),
+                                titles=[inp[k] for k in ("title_english", "title_romaji")
+                                        if inp.get(k)])
+        existing = conn.execute("SELECT id FROM season WHERE show_id = ? AND season_number = ?"
+                                " AND kind = 'tvdb_season'",
+                                (e.parent_show_id, e.next_season)).fetchone()
+        d = add_check.Decision("link_season" if existing else "new_season", e.parent_show_id,
+                               existing[0] if existing else None, season_number=e.next_season)
+        level_id = add_check.apply_decision(conn, d, c)
+        run.record(kind, key, "applied",
+                   f"season {e.next_season} of {e.parent_show_id} ({e.parent_title})")
+    except shows.IndividualSeasonAdded as e:
+        level_id = e.season_id
+        run.record(kind, key, "applied", f"individual season {e.season_id}")
+    except shows.ShowInputError as e:
+        conn.rollback()
+        if inp.get("user_tvdb_decision") and "Fribb says" in str(e):
+            # The user settled this TVDB id on TVDB itself (PLAN-DATA "TVDB
+            # decisions"): their decision is the second source (R3.7a).
+            target = shows.create_show(conn, {**inp, "skip_sequel_check": True})
+            shows._add_new_show_to_sonarr(conn, target, inp)
+            level = conn.execute("SELECT id FROM season WHERE show_id = ? AND"
+                                 " kind = 'tvdb_season' ORDER BY season_number DESC LIMIT 1",
+                                 (target,)).fetchone()
+            level_id = level[0] if level else None
+            run.record(kind, key, "applied",
+                       f"show {target}: {inp['user_tvdb_decision']} over Fribb ({e})"[:500])
+        else:
+            run.record(kind, key, "review", str(e)[:500])
+            return None
+    if status and level_id:
+        try:
+            status_rules.set_level_status(conn, level_id, status, "rebuild", confirmed=True,
+                                          manual=True)
+        except status_rules.NeedsConfirmation:
+            _mine(conn, level_id, status)
+        conn.execute("UPDATE season SET status_set_manually = 1 WHERE id = ?", (level_id,))
+    conn.commit()
+    return level_id
+
+
+def _tracked_parent_for(conn, anilist_id: int):
+    """A season-0 piece's show: its Fribb TVDB show, else the show of its
+    AniList parent/prequel (AniList relations, read)."""
+    from lcars import add_check, anilist_client, fribb
+
+    for e in fribb.load_dataset():
+        if e.get("anilist_id") == anilist_id and e.get("tvdb_id"):
+            show = add_check._tracked_show_for_tvdb(conn, e["tvdb_id"])
+            if show is not None:
+                return show["id"]
+    try:
+        media = anilist_client.fetch_media(anilist_id) or {}
+    except anilist_client.AniListError:
+        return None
+    for edge in (media.get("relations") or {}).get("edges") or []:
+        if edge["relationType"] in ("PARENT", "PREQUEL", "SOURCE", "SIDE_STORY"):
+            row = conn.execute("SELECT show_id FROM season WHERE anilist_id = ? AND"
+                               " show_id IS NOT NULL", (edge["node"]["id"],)).fetchone()
+            if row:
+                return row[0]
+    return None
+
+
+def _pending(run: Run, kind: str, item: dict) -> None:
+    """Work a later stage does (list deletes are written in stage 9)."""
+    with open(run.dir / "pending.jsonl", "a") as f:
+        f.write(json.dumps({"stage": run.stage, "kind": kind, **item}) + "\n")
+
+
+def _structure_adds(run: Run, conn, d: dict) -> None:
+    from lcars import add_check, shows
+
+    live = _live(run)
+    entries = _anilist_entries(run)
+    tvdb_by_anilist = {t["anilist"]: t for t in d["tvdb"] if t["anilist"]}
+
+    # New shows since 09-06 (77), as reviewed.
+    for n in d["new_shows"]:
+        inp = _live_input(live, n["show"])
+        if inp is None:
+            raise RebuildError(f"{n['key']}: not in the live copy")
+        t = tvdb_by_anilist.get(inp.get("anilist_id"))
+        if t and t["action"] == "series":
+            inp["tvdb_id"] = t["value"]
+            inp["user_tvdb_decision"] = t["key"]
+            run.record("tvdb", t["key"], "applied", f"series {t['value']} on the new show")
+        elif t and t["action"] == "keep":
+            inp["user_tvdb_decision"] = t["key"]
+            run.record("tvdb", t["key"], "applied", "keep today's id on the new show")
+        if n["action"] == "keep_skipped_no_arr":
+            if inp["media_shape"] == "movie" and "Urusei Yatsura" in (n["title"] or ""):
+                _pending(run, "urusei_film", {"key": n["key"], "title": n["title"],
+                                              "tmdb": inp.get("tmdb_id")})
+                run.record("new_show", n["key"], "deferred",
+                           "film placed in Urusei Yatsura by numbering, then skipped (stage 6)")
+                continue
+            sid = shows.create_show(conn, {**inp, "skip_sequel_check": True})
+            conn.execute("UPDATE show SET status = 'skipped' WHERE id = ?", (sid,))
+            conn.execute("UPDATE season SET status = 'skipped', status_set_manually = 1"
+                         " WHERE show_id = ?", (sid,))
+            conn.commit()
+            run.record("new_show", n["key"], "applied", f"show {sid}, skipped, no Sonarr/Radarr")
+            continue
+        _add(run, conn, "new_show", n["key"], inp,
+             "watching" if n["action"] == "add_watching" else None)
+
+    # Phase 5: the 22 entries from your AniList list.
+    for a in d["phase5"]["adds"]:
+        e = entries.get(a["anilist"]) or {}
+        media = e.get("media") or {}
+        title = media.get("title") or {}
+        inp = {"media_shape": "movie" if media.get("format") == "MOVIE" else "episodic",
+               "tracking_space": "anime", "title_romaji": title.get("romaji"),
+               "title_english": title.get("english"), "primary_title": "romaji",
+               "anilist_id": a["anilist"], "mal_id": media.get("idMal")}
+        status = LIST_STATUS.get(e.get("status"))
+        c = add_check.Candidate(add_check.USER, anilist_id=a["anilist"], mal_id=media.get("idMal"),
+                                titles=[x for x in (title.get("english"), title.get("romaji"))
+                                        if x],
+                                media_type=media.get("format"), status=e.get("status"))
+        action = a["action"]
+        if action in ("special", "attach_anilist_parent"):
+            if add_check._season_by_list_id(conn, c.anilist_id, c.mal_id) is not None:
+                run.record("phase5_add", a["key"], "applied", "already tracked")
+                continue
+            if action == "special":
+                parent = _tracked_parent_for(conn, a["anilist"])
+            else:
+                row = conn.execute("SELECT show_id FROM season WHERE anilist_id = ? AND"
+                                   " show_id IS NOT NULL", (a["value"],)).fetchone()
+                parent = row[0] if row else None
+            if parent is None:
+                run.record("phase5_add", a["key"], "review", "no tracked show to attach it to")
+                continue
+            lvl = add_check.apply_decision(
+                conn, add_check.Decision("special", parent, season_number=0), c)
+            if action == "special":
+                _mine(conn, lvl, "completed" if a["value"] else "planned")
+            elif status:
+                _mine(conn, lvl, status)
+            run.record("phase5_add", a["key"], "applied", f"level {lvl} of {parent}")
+        elif action == "individual":
+            lvl = add_check.create_individual_season(conn, c, status)
+            conn.execute("UPDATE season SET status_set_manually = 1 WHERE id = ?", (lvl,))
+            run.record("phase5_add", a["key"], "applied", f"individual season {lvl}")
+        elif action == "part":
+            _add(run, conn, "phase5_add", a["key"], inp, status)
+        elif action == "tvdb":
+            _add(run, conn, "phase5_add", a["key"], {**inp, "tvdb_id": a["value"]}, status)
+        elif action == "skip_and_list_delete":
+            lvl = _add(run, conn, "phase5_add", a["key"], inp, None)
+            if lvl:
+                _mine(conn, lvl, "skipped")
+            _pending(run, "list_delete", {"anilist": a["anilist"], "mal": media.get("idMal"),
+                                          "why": a["key"]})
+        elif action == "remove_list_skip_tvdb":
+            shows.skip_show(conn, {**inp, "tvdb_id": a["value"]})
+            _pending(run, "list_delete", {"anilist": a["anilist"], "mal": media.get("idMal"),
+                                          "why": a["key"]})
+            run.record("phase5_add", a["key"], "applied",
+                       f"not added; TVDB {a['value']} on the skip list; list delete queued")
+        conn.commit()
+
+    # Magical Girl Raising Project: restart — not followed, on the skip list.
+    shows.skip_show(conn, {"media_shape": "episodic", "tracking_space": "anime",
+                           "title_romaji": "Mahou Shoujo Ikusei Keikaku: restart",
+                           "primary_title": "romaji", "anilist_id": 160803})
+    _pending(run, "list_delete", {"anilist": 160803, "why": "tvmaho"})
+    run.record("tvdb", "tvmaho", "applied", "skip list + list delete queued")
+
+    # Books Bought with Tax (live action), planned — the user's own new add.
+    for x in d["extra_adds"]:
+        _add(run, conn, "extra_add", x["key"],
+             {"media_shape": "episodic", "tracking_space": "tv", "title_english": x["title"],
+              "primary_title": "english", "tvdb_id": x["tvdb"]}, x["status"])
+
+    # The 178 skipped (the user's own skip list).
+    for k in d["skipped"]:
+        inp = _live_input(live, k["show"])
+        if inp is None:
+            raise RebuildError(f"{k['key']}: not in the live copy")
+        run.record("skipped", k["key"], "applied", shows.skip_show(conn, inp))
+    conn.commit()
+    live.close()
 
 
 STAGE_FUNCS = {"base": stage_base, "sources": stage_sources, "structure": stage_structure}
@@ -434,6 +680,12 @@ def main(argv=None) -> int:
     run.dir.mkdir(parents=True, exist_ok=True)
     if args.from_stage > 1:
         _backup(run.checkpoint(args.from_stage - 1), run.work())
+    for name in ("pending.jsonl",):  # later-stage work a re-run recomputes
+        f = run.dir / name
+        if f.exists():
+            keep = [line for line in f.read_text().splitlines()
+                    if STAGES.index(json.loads(line)["stage"]) < args.from_stage - 1]
+            f.write_text("".join(line + "\n" for line in keep))
     ledger = run.dir / "ledger.jsonl"
     if ledger.exists():  # a re-run replaces what those stages recorded before
         keep = [line for line in ledger.read_text().splitlines()
