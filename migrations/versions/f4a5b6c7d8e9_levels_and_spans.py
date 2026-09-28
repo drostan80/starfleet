@@ -17,7 +17,8 @@ columns go in one step before cutover.
   TVDB's number for TVDB seasons and their parts, N.5 / N.1, N.2… for side
   pieces between TVDB seasons (R1.9a). `season_number` stays TVDB's whole
   number and is NULL for side pieces.
-- `season.show_id` nullable: an individual season has no show yet (R3.6c).
+- `season.show_id` nullable: an individual season (kind `individual_season`,
+  R3.6d) has no show yet (R3.6c); it becomes a `tvdb_season` when it joins one.
 - The unique key gains `kind`, so a TVDB season and its part 1 can share
   (show, season number, part number); old code only makes TVDB seasons.
 - `show.status_before_pause` dropped (PLAN-CODE 2.6, user 2026-09-28).
@@ -131,11 +132,13 @@ def upgrade() -> None:
             season_number       INTEGER,
             part_number         INTEGER NOT NULL DEFAULT 1,{_SEASON_COMMON}
             kind                TEXT NOT NULL DEFAULT 'tvdb_season'
-                                CHECK (kind IN ('tvdb_season', 'part', 'special')),
+                                CHECK (kind IN ('tvdb_season', 'part', 'special', 'individual_season')),
             parent_id           TEXT REFERENCES season (id),
             decimal_season_number REAL,
             CHECK (kind <> 'part' OR parent_id IS NOT NULL),
-            CHECK (kind <> 'tvdb_season' OR parent_id IS NULL),
+            CHECK (kind <> 'tvdb_season'
+                   OR (parent_id IS NULL AND show_id IS NOT NULL AND season_number IS NOT NULL)),
+            CHECK (kind <> 'individual_season' OR (parent_id IS NULL AND show_id IS NULL)),
             UNIQUE (show_id, season_number, part_number, kind)
         )
         """

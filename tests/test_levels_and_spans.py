@@ -99,8 +99,13 @@ def test_part_needs_a_parent_and_a_tvdb_season_has_none(conn):
 
 def test_individual_season_has_no_show(conn):
     # R3.6c: a new planned season TVDB doesn't have yet.
-    _season(conn, "z-aaaaa1", None, show_id=None, status="planned")
+    _season(conn, "z-aaaaa1", None, show_id=None, status="planned", kind="individual_season")
     assert conn.execute("SELECT show_id FROM season WHERE id = 'z-aaaaa1'").fetchone() == (None,)
+    # R3.6d: a TVDB season always has its show and number; an individual one never a show.
+    with pytest.raises(sqlite3.IntegrityError):
+        _season(conn, "z-aaaaa2", None, show_id=None, status="planned")
+    with pytest.raises(sqlite3.IntegrityError):
+        _season(conn, "z-aaaaa3", 4, kind="individual_season")
 
 
 def test_status_before_pause_is_gone(conn):
