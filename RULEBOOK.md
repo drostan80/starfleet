@@ -144,6 +144,10 @@ show X
   R1.8), then further divided and mapped to align and reconcile the other sources.
 - **R1.18** Absolute-numbering source of truth: **anime** — AniDB + Fribb…;
 - **R1.19** **TV** — TVmaze.
+- **R1.2d No authoritative data yet** `[clarified 2026-09-28, Q-T]`: TVDB order +
+  air date may be used, carefully — the numbering still follows every rule above
+  (season 0 episodes get their numbers too, R1.8). It is **reconciled once the
+  authoritative source (AniDB / TVmaze) has the data**.
 - **R1.2c Memory Alpha is the authority that sets every episode's absolute
   number** (season 0 included), from AniDB + Fribb (anime) and TVmaze with
   specials (TV), air date deciding conflicts. Sonarr/TVDB/AniDB/AniList numbers
@@ -545,7 +549,7 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
   `tvdb_season` without a show, which clashes with its name. Give it its own kind
   (`individual_season`)? It would become `tvdb_season` when it joins a show.
 
-- **Q-T (R1.0, R1.2, R1.18–19)** A show whose absolute-numbering source has no **[OPEN]**
+- **Q-T (R1.0, R1.2, R1.18–19)** A show whose absolute-numbering source has no **[ANSWERED → R1.2d]**
   data (AniDB doesn't list its episodes yet, no TVmaze entry): R1.0 says every
   episode has a number, R1.2 names the sources. May Memory Alpha number it from
   TVDB order + air date and put it on a list for you, or leave it unnumbered and
@@ -573,3 +577,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — Q-R (film/mini inside a season window: under the season or beside it?) and Q-S (kind for individual seasons) asked.
 - 2026-09-28 — Q-R answered → R1.13a (own level, shown in air order, own art); Q-S answered → R3.6d (kind `individual_season`).
 - 2026-09-28 — Q-T asked (numbering fallback when AniDB/TVmaze have no data).
+- 2026-09-28 — Q-T answered → R1.2d (TVDB-order fallback following all rules, reconciled when the source appears).
