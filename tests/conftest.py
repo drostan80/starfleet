@@ -55,3 +55,10 @@ def _automation_unfrozen_by_default(monkeypatch):
     production; the existing suite tests the unfrozen behaviour. Tests of
     the freeze itself set LCARS_AUTOMATION_FROZEN back to "1"."""
     monkeypatch.setenv("LCARS_AUTOMATION_FROZEN", "0")
+
+
+@pytest.fixture(autouse=True)
+def _external_writes_sent_by_default(monkeypatch):
+    """External writes are captured by default (PLAN-CODE 9.0); the suite
+    tests the sending behaviour against mocks. Capture tests set it back."""
+    monkeypatch.setenv("LCARS_EXTERNAL_WRITES", "send")

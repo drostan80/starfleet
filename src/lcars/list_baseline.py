@@ -16,7 +16,7 @@ record only what they wrote, and never record on failure — so a failed push is
 on the next reconcile instead of being overwritten by the list's old value.
 """
 
-from lcars import anilist_client, mal_client, util
+from lcars import anilist_client, external_writes, mal_client, util
 
 ANILIST_TO_STATUS = {
     "CURRENT": "watching",
@@ -96,6 +96,8 @@ def anilist_save(conn, token: str, anilist_id: int, **fields) -> dict:
     recording it here would make LCARS look changed and push the old
     status straight back."""
     saved = anilist_client.save_media_list_entry(token, anilist_id, **fields) or {}
+    if external_writes.capturing():
+        return saved  # recorded for review, not sent: nothing is agreed yet (9.0)
     kw = {}
     if fields.get("status") in ANILIST_TO_STATUS:
         kw["status"] = ANILIST_TO_STATUS[fields["status"]]
@@ -111,6 +113,8 @@ def mal_save(conn, token: str, mal_id: int, **fields) -> dict:
     """`mal_client.update_my_list_status` + record what was agreed (same
     only-what-was-written rule as `anilist_save`)."""
     saved = mal_client.update_my_list_status(token, mal_id, **fields) or {}
+    if external_writes.capturing():
+        return saved  # recorded for review, not sent: nothing is agreed yet (9.0)
     kw = {}
     if fields.get("status") in MAL_TO_STATUS:
         kw["status"] = MAL_TO_STATUS[fields["status"]]

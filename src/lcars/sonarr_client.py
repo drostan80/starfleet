@@ -68,6 +68,10 @@ class SonarrClient:
         body: a 400 on a bad add (duplicate series, bad root folder path,
         etc.) comes back as a JSON array of `{propertyName, errorMessage}`
         objects, not a single message — worth surfacing directly."""
+        from lcars import external_writes
+
+        if external_writes.capturing():  # PLAN-CODE 9.0: recorded, not sent
+            return external_writes.arr_write("sonarr", "POST", path, json, None)
         try:
             response = self._client.post(path, json=json)
             response.raise_for_status()
@@ -101,6 +105,10 @@ class SonarrClient:
         does, so no detail-extraction here (matches Data's own real
         client, which doesn't do it for `_put` either) — a real 400 still
         surfaces as `Sonarr returned an error: HTTP 400`, not lost."""
+        from lcars import external_writes
+
+        if external_writes.capturing():  # PLAN-CODE 9.0: recorded, not sent
+            return external_writes.arr_write("sonarr", "PUT", path, json, None)
         try:
             response = self._client.put(path, json=json)
             response.raise_for_status()
@@ -173,6 +181,10 @@ class SonarrClient:
     def _delete(self, path: str, params: dict | None = None) -> None:
         """DELETE request — Sonarr's delete endpoints return 200 with no
         body on success. Same error shape as `_get`."""
+        from lcars import external_writes
+
+        if external_writes.capturing():  # PLAN-CODE 9.0: recorded, not sent
+            return external_writes.arr_write("sonarr", "DELETE", path, None, params)
         try:
             response = self._client.delete(path, params=params)
             response.raise_for_status()

@@ -32,9 +32,9 @@ This file is everything needed to run **phase 9** safely. Read it in full, then
   200 requests/day from one IP** (`ANIDB_DAILY_CAP=200` in `anidb.py`). Never rotate IPs or
   VPN exits to dodge AniDB bans (flood-protection circumvention; risks the `memalpha`
   client). Bans came at ~250 requests per IP regardless of pacing.
-- **Never use Test Shuttle (`./dev.sh`) on this branch**: it reads the prod `lcars.ini`, and
-  since phase 7 every status click/watch pushes to the real AniList/MAL and changes Sonarr
-  on tiny. Use the safe UI server instead (§6).
+- **Test Shuttle (`./dev.sh`) reads the prod `lcars.ini`.** Since 9.0 it captures (the
+  default) unless that file says `external_writes = send` — which it will after cutover.
+  Prefer the safe UI server (§6) anyway.
 
 ## 1. Where things are
 
@@ -93,7 +93,14 @@ the exact write list, then deploy once and send the writes in capped batches.
 
 Two pieces do not exist yet and come first. **Both are code → explain + get a yes.**
 
-### 9.0 Capture switch (build first — the safety net for everything after)
+### 9.0 Capture switch — DONE 2026-09-28 (see PLAN-CODE "9.0 done")
+
+Default is **capture**: nothing reaches AniList/MAL/Sonarr/Radarr unless `send` is set
+(`lcars.ini` `external_writes = send`, or `LCARS_EXTERNAL_WRITES=send`). Queue:
+`lcars captured <db> list` / `send --limit N`. Prod's `lcars.ini` gets `send` only when the
+user approves the write list (9.2). Test Shuttle is safe again on this branch (it captures).
+The original design notes follow for reference.
+
 
 Today **nothing stops external writes**: `list_sync.push`, `delete_if_auto_skipped`, the
 reconcile's "missing on the list → add", `sonarr_sync.apply`, and the add paths write

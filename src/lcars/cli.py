@@ -167,6 +167,12 @@ def _cmd_consolidation(args: argparse.Namespace) -> None:
     raise SystemExit(consolidation.main(args.rest))
 
 
+def _cmd_captured(args: argparse.Namespace) -> None:
+    from lcars import external_writes
+
+    raise SystemExit(external_writes.main(args.rest))
+
+
 def _cmd_numbering(args: argparse.Namespace) -> None:
     from lcars import numbering
 
@@ -222,6 +228,12 @@ def main() -> None:
     )
     consolidation_cmd.add_argument("rest", nargs=argparse.REMAINDER)
     consolidation_cmd.set_defaults(func=_cmd_consolidation)
+
+    captured_cmd = subparsers.add_parser(
+        "captured", help="external writes captured instead of sent: list, or send in batches"
+    )
+    captured_cmd.add_argument("rest", nargs=argparse.REMAINDER)
+    captured_cmd.set_defaults(func=_cmd_captured)
 
     # No subcommand at all ("lcars" alone, e.g. the Dockerfile's CMD) still
     # means "serve", with serve's own --host/--port defaults — argparse

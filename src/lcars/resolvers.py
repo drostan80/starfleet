@@ -3543,7 +3543,8 @@ def _delete_from_anilist_before_purge(conn, show_id: str) -> None:
                 cfg.anilist_access_token, season["anilist_id"]
             )
             if entry_id is not None:
-                anilist_client.delete_media_list_entry(cfg.anilist_access_token, entry_id)
+                anilist_client.delete_media_list_entry(cfg.anilist_access_token, entry_id,
+                                                       anilist_id=season["anilist_id"])
         except anilist_client.AniListError as e:
             raise GraphQLError(
                 f"couldn't remove season {season['id']} (anilist {season['anilist_id']}) from"

@@ -79,6 +79,10 @@ class RadarrClient:
         """B.21 — mirrors sonarr_client.py's own `_post` exactly (see
         this module's own docstring for the "not independently verified"
         caveat on the validation-error body shape specifically)."""
+        from lcars import external_writes
+
+        if external_writes.capturing():  # PLAN-CODE 9.0: recorded, not sent
+            return external_writes.arr_write("radarr", "POST", path, json, None)
         try:
             response = self._client.post(path, json=json)
             response.raise_for_status()
@@ -107,6 +111,10 @@ class RadarrClient:
         return response.json()
 
     def _put(self, path: str, json: dict) -> object:
+        from lcars import external_writes
+
+        if external_writes.capturing():  # PLAN-CODE 9.0: recorded, not sent
+            return external_writes.arr_write("radarr", "PUT", path, json, None)
         try:
             response = self._client.put(path, json=json)
             response.raise_for_status()
@@ -151,6 +159,10 @@ class RadarrClient:
     def _delete(self, path: str, params: dict | None = None) -> None:
         """DELETE request — Radarr's delete endpoints return 200 with no
         body on success. Same error shape as `_get`."""
+        from lcars import external_writes
+
+        if external_writes.capturing():  # PLAN-CODE 9.0: recorded, not sent
+            return external_writes.arr_write("radarr", "DELETE", path, None, params)
         try:
             response = self._client.delete(path, params=params)
             response.raise_for_status()

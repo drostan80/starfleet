@@ -12,7 +12,14 @@ Best effort: a failed write opens a review and is retried by the reconcile.
 
 from __future__ import annotations
 
-from lcars import anilist_client, config, list_baseline, mal_client, pending_review
+from lcars import (
+    anilist_client,
+    config,
+    external_writes,
+    list_baseline,
+    mal_client,
+    pending_review,
+)
 
 STATUS_TO_ANILIST = {
     "watching": "CURRENT", "planned": "PLANNING", "paused": "PAUSED",
@@ -140,13 +147,16 @@ def delete_if_auto_skipped(conn, season_id: str, old_status: str | None) -> None
             entry_id = anilist_client.fetch_my_list_entry_id(cfg.anilist_access_token,
                                                              ids["anilist"])
             if entry_id is not None:
-                anilist_client.delete_media_list_entry(cfg.anilist_access_token, entry_id)
-            conn.execute("DELETE FROM list_baseline WHERE service = 'anilist'"
-                         " AND external_id = ?", (ids["anilist"],))
+                anilist_client.delete_media_list_entry(cfg.anilist_access_token, entry_id,
+                                                       anilist_id=ids["anilist"])
+            if not external_writes.capturing():  # a captured delete hasn't happened (9.0)
+                conn.execute("DELETE FROM list_baseline WHERE service = 'anilist'"
+                             " AND external_id = ?", (ids["anilist"],))
         if ids.get("mal") and cfg.mal_access_token:
             mal_client.delete_my_list_status(cfg.mal_access_token, ids["mal"])
-            conn.execute("DELETE FROM list_baseline WHERE service = 'mal'"
-                         " AND external_id = ?", (ids["mal"],))
+            if not external_writes.capturing():
+                conn.execute("DELETE FROM list_baseline WHERE service = 'mal'"
+                             " AND external_id = ?", (ids["mal"],))
     except (anilist_client.AniListError, mal_client.MALError) as e:
         pending_review.open_or_extend(
             conn, "season", season_id, "list_delete", "lcars", None, str(e)

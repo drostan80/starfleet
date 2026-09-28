@@ -166,6 +166,12 @@ def refresh_access_token(
     whatever the response actually contains, falling back to the one
     just used if the response omits it (module docstring's own note on
     MAL's ambiguous rotation behavior — correct under either reading)."""
+    from lcars import external_writes
+
+    if external_writes.capturing():
+        # A refresh rotates the refresh token: the copy anywhere else (tiny)
+        # would stop working. Never while writes are captured (PLAN-CODE 9.0).
+        raise MALError("MAL token refresh is blocked while external writes are captured")
     data = {
         "client_id": client_id,
         "grant_type": "refresh_token",
@@ -369,6 +375,14 @@ def update_my_list_status(
     `num_watched_episodes` added 2026-08-26 (MAL bidirectional sync) —
     same omit-unless-given shape; MAL's own field name for episode
     progress, the counterpart to AniList's `progress`."""
+    from lcars import external_writes
+
+    if external_writes.capturing():  # PLAN-CODE 9.0: recorded, not sent
+        given = {k: v for k, v in (("status", status), ("score", score),
+                                    ("num_watched_episodes", num_watched_episodes))
+                 if v is not None}
+        external_writes.capture("mal", "save", mal_id, {"mal_id": mal_id, **given})
+        return {}
     data: dict[str, object] = {}
     if status is not None:
         data["status"] = status
@@ -417,6 +431,11 @@ def delete_my_list_status(token: str, mal_id: int, client: httpx.Client | None =
     """Phase 7 (RULEBOOK R2.10): removes the entry from your MAL list —
     `DELETE /v2/anime/{mal_id}/my_list_status`. Already absent (404) is
     success, not an error."""
+    from lcars import external_writes
+
+    if external_writes.capturing():
+        external_writes.capture("mal", "delete", mal_id, {"mal_id": mal_id})
+        return
     owns_client = client is None
     client = client or httpx.Client(timeout=10.0)
     try:

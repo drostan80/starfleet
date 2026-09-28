@@ -741,6 +741,15 @@ def save_media_list_entry(
     no caller relies on it for delete lookups: a delete can't assume a
     save happened earlier in the same process, so it always looks the
     id up fresh instead."""
+    from lcars import external_writes
+
+    if external_writes.capturing():  # PLAN-CODE 9.0: recorded, not sent
+        given = {k: v for k, v in (("status", status), ("score", score), ("progress", progress),
+                                    ("repeat", repeat), ("started_at", started_at),
+                                    ("completed_at", completed_at)) if v is not None}
+        external_writes.capture("anilist", "save", anilist_id, {"anilist_id": anilist_id, **given})
+        return {"id": None, **{k: v for k, v in given.items()
+                               if k in ("status", "score", "progress", "repeat")}}
     fields = []
     variables: dict[str, object] = {"mediaId": anilist_id}
     if status is not None:
@@ -826,10 +835,19 @@ mutation ($id: Int!) {
 """
 
 
-def delete_media_list_entry(token: str, entry_id: int, client: httpx.Client | None = None) -> bool:
+def delete_media_list_entry(
+    token: str, entry_id: int, client: httpx.Client | None = None, anilist_id: int | None = None,
+) -> bool:
     """§6.11's mirror counterpart — confirmHardDelete's own guarded
     purge, extended to AniList. Takes the list *entry's* id
-    (fetch_my_list_entry_id above), not a media id."""
+    (fetch_my_list_entry_id above), not a media id; `anilist_id` only
+    labels a captured delete (PLAN-CODE 9.0)."""
+    from lcars import external_writes
+
+    if external_writes.capturing():
+        external_writes.capture("anilist", "delete", entry_id,
+                                {"entry_id": entry_id, "anilist_id": anilist_id})
+        return True
     data = _graphql_request(
         _DELETE_MEDIA_LIST_ENTRY_MUTATION, {"id": entry_id}, token=token, client=client
     )

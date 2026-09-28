@@ -85,7 +85,7 @@ def test_auto_planned_then_skipped_is_deleted_from_both_lists(conn, monkeypatch)
     deleted = []
     monkeypatch.setattr(anilist_client, "fetch_my_list_entry_id", lambda token, aid: 9000 + aid)
     monkeypatch.setattr(anilist_client, "delete_media_list_entry",
-                        lambda token, entry: deleted.append(("anilist", entry)))
+                        lambda token, entry, **kw: deleted.append(("anilist", entry)))
     monkeypatch.setattr(mal_client, "delete_my_list_status",
                         lambda token, mid: deleted.append(("mal", mid)))
     conn.execute("UPDATE season SET status = 'skipped', mal_id = 555 WHERE id = 'z-list02'")

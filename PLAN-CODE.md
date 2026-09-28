@@ -499,6 +499,20 @@ verified (the Maria Mercedes failure). Approved plan, in this order:
 
 ## Phase 9 — Dry run and cutover
 
+**9.0 done 2026-09-28** (approved: capture by default). `external_writes = capture | send`
+(`lcars.ini` or `LCARS_EXTERNAL_WRITES`, env wins; **default `capture`**). Checked inside
+the client functions: AniList mutations (save/delete list entry), MAL save/delete, MAL
+**token refresh** (blocked: it rotates the refresh token), Sonarr/Radarr `_post`/`_put`/
+`_delete`. Captured → `captured_write` (migration `a1b2c3d4e5f7`; tokens never stored;
+a pending write with the same key merges into the earlier line; episode monitoring is
+never merged). A captured write is not agreed: no `list_baseline` record, no baseline
+delete, a captured Sonarr/Radarr add returns no id/titleSlug (no link to an entry that
+doesn't exist). `lcars captured <db> list [--json]` / `send --limit N` (in capture order,
+each committed alone, errors kept on the row; a sent add writes its Sonarr link). Tests:
+the suite runs with `send` (conftest); `tests/test_external_writes.py` covers capture.
+**Cutover:** prod `lcars.ini` must get `external_writes = send` when the user approves
+the write list — until then a deploy of this code captures instead of pushing.
+
 - Run everything on the rebuilt DB copy with external writes **captured, not
   sent**: full list of AniList/MAL writes/deletes and Sonarr monitor changes.
 - You review that list; rulecheck must pass; then one deploy, then the captured

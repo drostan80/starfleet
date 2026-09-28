@@ -172,6 +172,10 @@ class Config:
     # doesn't track are added through the add check. Off until the phase 9
     # dry run shows you the list first.
     list_adds_enabled: bool = False
+    # PLAN-CODE 9.0: `capture` records every AniList/MAL/Sonarr/Radarr write
+    # (and blocks the MAL token refresh) instead of sending it; `send` sends.
+    # Capture unless `send` is set explicitly (external_writes.py).
+    external_writes: str = "capture"
     mal_client_id: str | None = None
     mal_client_secret: str | None = None
     mal_access_token: str | None = None
@@ -262,6 +266,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.tmdb_api_key = parser["lcars"].get("tmdb_api_key", fallback=None)
             cfg.tvdb_api_key = parser["lcars"].get("tvdb_api_key", fallback=None)
             cfg.list_adds_enabled = parser["lcars"].getboolean("list_adds_enabled", fallback=False)
+            cfg.external_writes = parser["lcars"].get("external_writes", fallback="capture")
             cfg.mal_client_id = parser["lcars"].get("mal_client_id", fallback=None)
             cfg.mal_client_secret = parser["lcars"].get("mal_client_secret", fallback=None)
             cfg.mal_access_token = parser["lcars"].get("mal_access_token", fallback=None)
@@ -311,6 +316,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
         cfg.anilist_access_token, "LCARS_ANILIST_ACCESS_TOKEN"
     )
     cfg.home_timezone = os.environ.get("LCARS_HOME_TIMEZONE", cfg.home_timezone)  # not a secret
+    cfg.external_writes = os.environ.get("LCARS_EXTERNAL_WRITES", cfg.external_writes)
     cfg.tmdb_api_key = _resolve_secret(cfg.tmdb_api_key, "LCARS_TMDB_API_KEY")
     cfg.tvdb_api_key = _resolve_secret(cfg.tvdb_api_key, "LCARS_TVDB_API_KEY")
     cfg.mal_client_id = _resolve_secret(cfg.mal_client_id, "LCARS_MAL_CLIENT_ID")

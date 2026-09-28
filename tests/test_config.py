@@ -9,8 +9,10 @@ from lcars.config import Config, load_config, save_bearer_token, save_mal_tokens
 def test_defaults_when_no_file_and_no_env(tmp_path, monkeypatch):
     monkeypatch.delenv("LCARS_BEARER_TOKEN", raising=False)
     monkeypatch.delenv("LCARS_DB_PATH", raising=False)
+    monkeypatch.delenv("LCARS_EXTERNAL_WRITES", raising=False)
     cfg = load_config(config_path=tmp_path / "does-not-exist.ini")
     assert cfg == Config()
+    assert cfg.external_writes == "capture"  # PLAN-CODE 9.0: nothing leaves unless `send`
 
 
 def test_save_then_load_round_trips(tmp_path, monkeypatch):
