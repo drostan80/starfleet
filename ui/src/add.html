@@ -968,7 +968,7 @@ import { initSearch } from './js/search.js?v=6';
 import { withConfirmation } from './js/status-picker.js?v=2';
 import {
   initBrowse, teardownBrowse, setBrowseType,
-  parseSequelError, confirmSequelAttach, attachSequel,
+  parseSequelError, parseIndividualSeason, confirmSequelAttach, attachSequel,
   parseLaterSeasonError, confirmAddSeason1,
   pickCorrectParent, attachSequelToChosenParent,
 } from './js/browse.js?v=16';
@@ -1190,6 +1190,18 @@ function renderCandidates(cands) {
  *                `err` as a real failure.
  */
 async function handleSequelOrLaterSeason(err, card, status) {
+  // PLAN-CODE 8.4: no TVDB id yet → saved as an individual season.
+  const indiv = parseIndividualSeason(err.message);
+  if (indiv) {
+    if (status !== 'PLANNED') {
+      await withConfirmation((c) => setSeasonStatus(indiv.seasonId, status, c));
+    }
+    card.dataset.seasonId = indiv.seasonId;
+    setCardTracked(card, '', status);
+    card.classList.add('tracked');
+    showBanner("Added as an individual season — TVDB doesn't have it yet", 'ok');
+    return 'handled';
+  }
   const sequel = parseSequelError(err.message);
   if (sequel) {
     const choice = await confirmSequelAttach(sequel);
@@ -1256,6 +1268,22 @@ async function onChipClick(card, cand, status) {
   // Already tracked: clicking the active chip → soft-delete confirm
   if (trackedShowId && currentStatus === status) {
     showDeleteConfirm(card, cand, trackedShowId);
+    return;
+  }
+
+  // An individual season added from this card: its status is the season's.
+  if (!trackedShowId && card.dataset.seasonId) {
+    card.classList.add('loading');
+    try {
+      await withConfirmation((c) => setSeasonStatus(card.dataset.seasonId, status, c));
+      setCardTracked(card, '', status);
+      card.classList.add('tracked');
+      showBanner(`Status → ${STATUS_LABELS[status]}`, 'ok');
+    } catch (err) {
+      showBanner(`Status change failed: ${err.message}`, 'error');
+    } finally {
+      card.classList.remove('loading');
+    }
     return;
   }
 

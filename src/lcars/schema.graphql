@@ -1484,6 +1484,8 @@ type Query {
   shows(first: Int, after: String, last: Int, before: String): ShowConnection!
   "§8 — shows by status. A list of statuses (not singular) so e.g. WATCHING+PAUSED can be queried together without becoming generic pass-through filtering."
   showsByStatus(statuses: [ShowStatus!]!, first: Int, after: String, last: Int, before: String): ShowConnection!
+  "RULEBOOK R3.6c/d: seasons with no TVDB show yet (kind individual_season), newest first — they belong to no show, so no show page lists them."
+  individualSeasons: [Season!]!
 
   episode(id: ID!): Episode
   "B.17 — a single season by id, added so a generic pending_review consumer (Data's own review screen) can resolve a season-entity review's `entityId` to a real show/season-number label without needing a second, wider query. Mirrors show(id:)/episode(id:) — no equivalent existed before this, since every other season access went through Show.seasons."

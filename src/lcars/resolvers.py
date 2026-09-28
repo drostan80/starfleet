@@ -794,6 +794,14 @@ def _require_filter_preset(conn, preset_id: str) -> dict:
 # --- Query -------------------------------------------------------------
 
 
+@query.field("individualSeasons")
+def resolve_individual_seasons(*_):
+    rows = db.get_connection().execute(
+        "SELECT * FROM season WHERE kind = 'individual_season' ORDER BY created_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 @query.field("show")
 def resolve_show(_, info, id):
     return _get_show(db.get_connection(), id)

@@ -95,6 +95,20 @@ class SequelDetectedError(ShowInputError):
         super().__init__(f"sequel_of:{payload}")
 
 
+class IndividualSeasonAdded(ShowInputError):
+    """Not a failure: your add had no TVDB id yet, so it became an
+    individual season (RULEBOOK R3.2, R3.6, R3.6c) — already saved. Carried
+    as `individual_season:{json}` (like `sequel_of:`) because `addShow`
+    returns a Show and an individual season has none (PLAN-CODE 8.4)."""
+
+    def __init__(self, season_id: str, title: str | None):
+        import json
+
+        self.season_id = season_id
+        payload = json.dumps({"seasonId": season_id, "title": title}, separators=(",", ":"))
+        super().__init__(f"individual_season:{payload}")
+
+
 class LaterSeasonError(ShowInputError):
     """Raised when the add flow detects that the requested show is S2+
     of a show (TVDB id) where *no* season is tracked yet.  Carries S1's info
@@ -650,7 +664,7 @@ def add_checked(conn, input: dict, *, add_to_sonarr: bool = True) -> str:
     season N?" dialog (SequelDetectedError); another cour or a season-0 piece
     of a show you track → added to it (returns that show); something you must
     settle → an error with the proposal; a new show → created. No TVDB id yet
-    keeps today's path until individual seasons land."""
+    → an individual season (`IndividualSeasonAdded`), never a show."""
     from lcars import add_check  # deferred: add_check imports this module lazily
 
     if input.get("skip_sequel_check") or input.get("media_shape") == "movie":
@@ -687,10 +701,17 @@ def add_checked(conn, input: dict, *, add_to_sonarr: bool = True) -> str:
         if add_to_sonarr:
             _add_new_show_to_sonarr(conn, show_id, {**input, "tvdb_id": d.tvdb_id})
         return show_id
-    # No TVDB id yet: R3.6c makes it an individual season, but browse can't
-    # show those until the UI goes per level (phase 8) — until then your add
-    # stays a show, flagged for its TVDB link. Cutover blocker (PLAN-CODE).
-    return create_show(conn, input)
+    if d.kind == "individual_season":
+        # No TVDB id yet (R3.2, R3.6c): never a show without one.
+        from lcars import list_sync
+
+        if candidate.anilist_id is None and candidate.mal_id is None:
+            raise ShowInputError("no TVDB id — find the show on TVDB first (R3.2)")
+        season_id = add_check.create_individual_season(conn, candidate)
+        list_sync.push(conn, season_id)  # mirrored like any season (R3.6b)
+        conn.commit()
+        raise IndividualSeasonAdded(season_id, candidate.titles[0] if candidate.titles else None)
+    raise ShowInputError(d.reason or f"not added ({d.kind})")
 
 
 def create_show(conn, input: dict) -> str:

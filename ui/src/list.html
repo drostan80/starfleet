@@ -95,6 +95,16 @@
       --art-h:  255px;
     }
 
+    /* PLAN-CODE 8.4: individual seasons (no TVDB show yet, R3.6c) */
+    .indiv { margin: 0 0 16px; padding: 12px 16px; border: 1px solid var(--border);
+             border-radius: 10px; background: var(--surface); }
+    .indiv h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--muted);
+                text-transform: uppercase; letter-spacing: .04em; }
+    .indiv-row { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+    .indiv-row .indiv-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .indiv-row a { color: var(--accent); font-size: 12px; }
+    .indiv-row .status-btn-wrap { position: relative; bottom: auto; right: auto; flex: none; }
+
     /* empty / loading state */
     .list-empty {
       flex: 1;
@@ -204,6 +214,7 @@
 </div>
 
 <!-- ── Show grid ─────────────────────────────────────────── -->
+<section class="indiv" id="individual-seasons" hidden></section>
 <div class="calendar" id="list-grid">
   <div class="list-empty"><span class="spinner" style="width:18px;height:18px;border-width:2.5px;margin-right:10px"></span>Loading…</div>
 </div>
@@ -211,7 +222,7 @@
 <script type="module">
   import { bootstrapConfig, getConfig, applyAppName } from './js/config.js?v=5';
   import { initSearch } from './js/search.js?v=3';
-  import { fetchAllShows } from './js/api.js?v=23';
+  import { fetchAllShows, gql, setSeasonStatus } from './js/api.js?v=23';
   import {
     buildSvcStrip,
     fetchTmdbPoster,
@@ -219,7 +230,9 @@
     showBanner,
     hideBanner,
   } from './js/calendar.js?v=46';
-  import { buildStatusBtn } from './js/status-picker.js?v=2';
+  import {
+    buildStatusBtn, refreshStatusBtn, withConfirmation, STATUSES_6, STATUS_LABELS,
+  } from './js/status-picker.js?v=2';
   import { buildWatchedToggle } from './js/watched-toggle.js?v=1';
 
   applyAppName();
@@ -473,7 +486,54 @@
     }
   }
 
+  /* ── Individual seasons (R3.6c: no TVDB show yet — no show page lists them) ── */
+  async function loadIndividualSeasons() {
+    const box = document.getElementById('individual-seasons');
+    try {
+      const { individualSeasons } = await gql(
+        '{ individualSeasons { id label status anilistId malId } }');
+      box.replaceChildren();
+      box.hidden = !individualSeasons.length;
+      if (!individualSeasons.length) return;
+      const h = document.createElement('h3');
+      h.textContent = `Individual seasons — waiting for TVDB (${individualSeasons.length})`;
+      box.appendChild(h);
+      for (const s of individualSeasons) {
+        const row = document.createElement('div');
+        row.className = 'indiv-row';
+        const status = s.status || 'PLANNED';
+        row.appendChild(buildStatusBtn({
+          id: s.id, currentStatus: status, statuses: STATUSES_6,
+          onPick: async (wrap, id, next) => {
+            try {
+              await withConfirmation((c) => setSeasonStatus(s.id, next, c));
+              refreshStatusBtn(wrap, next, STATUSES_6);
+              showBanner(`${s.label || 'Season'} → ${STATUS_LABELS[next]}`, 'ok');
+            } catch (err) {
+              showBanner(`Status error: ${err.message}`, 'error');
+            }
+          },
+        }));
+        const title = document.createElement('span');
+        title.className = 'indiv-title';
+        title.textContent = s.label || `AniList ${s.anilistId ?? '?'}`;
+        row.appendChild(title);
+        if (s.anilistId) {
+          const a = document.createElement('a');
+          a.href = `https://anilist.co/anime/${s.anilistId}`;
+          a.target = '_blank'; a.rel = 'noopener';
+          a.textContent = `AniList ${s.anilistId}`;
+          row.appendChild(a);
+        }
+        box.appendChild(row);
+      }
+    } catch (err) {
+      console.warn('Individual seasons failed to load:', err);
+    }
+  }
+
   load();
+  loadIndividualSeasons();
 </script>
 
 </body>

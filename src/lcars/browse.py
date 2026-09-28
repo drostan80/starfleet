@@ -117,9 +117,9 @@ def _cross_reference(
     season_rows = conn.execute(
         f"SELECT s.id AS season_id, s.anilist_id, s.show_id, s.status AS season_status,"
         f" s.source AS season_source, s.matched AS season_matched,"
-        f" sh.status AS show_status, sh.tracked"
+        f" sh.status AS show_status, COALESCE(sh.tracked, 1) AS tracked"
         f" FROM season s"
-        f" JOIN show sh ON sh.id = s.show_id"
+        f" LEFT JOIN show sh ON sh.id = s.show_id"  # an individual season has no show (R3.6)
         f" WHERE s.anilist_id IN ({placeholders})",
         anilist_ids,
     ).fetchall()
@@ -142,10 +142,10 @@ def _cross_reference(
     sei_rows = conn.execute(
         f"SELECT se.external_id, se.season_id, s.show_id, s.status AS season_status,"
         f" s.source AS season_source, s.matched AS season_matched,"
-        f" sh.status AS show_status, sh.tracked"
+        f" sh.status AS show_status, COALESCE(sh.tracked, 1) AS tracked"
         f" FROM season_external_id se"
         f" JOIN season s ON s.id = se.season_id"
-        f" JOIN show sh ON sh.id = s.show_id"
+        f" LEFT JOIN show sh ON sh.id = s.show_id"  # an individual season has no show (R3.6)
         f" WHERE se.service = 'anilist' AND se.external_id IN ({placeholders})",
         str_ids,
     ).fetchall()
@@ -221,10 +221,10 @@ def _cross_reference_by_mal(
     # 2. season_external_id — MAL IDs at season level
     season_rows = conn.execute(
         f"SELECT se.external_id, se.season_id, s.show_id, s.status AS season_status,"
-        f" sh.status AS show_status, sh.tracked"
+        f" sh.status AS show_status, COALESCE(sh.tracked, 1) AS tracked"
         f" FROM season_external_id se"
         f" JOIN season s ON s.id = se.season_id"
-        f" JOIN show sh ON sh.id = s.show_id"
+        f" LEFT JOIN show sh ON sh.id = s.show_id"  # an individual season has no show (R3.6)
         f" WHERE se.service = 'mal' AND se.external_id IN ({placeholders})",
         str_ids,
     ).fetchall()

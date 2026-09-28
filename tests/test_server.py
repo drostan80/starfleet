@@ -4,6 +4,7 @@ BUILD_PLAN.md A.3's vertical slice — Show/Episode/WatchEvent + their
 core mutations, plus the bearer-token/X-LCARS-Client plumbing.
 """
 
+import itertools
 import json
 import os
 import subprocess
@@ -129,14 +130,22 @@ async def gql(client: httpx.AsyncClient, query: str, variables: dict | None = No
     return body["data"]
 
 
+_next_tvdb_id = itertools.count(7_000_001)
+
+
 async def add_show(client, **overrides) -> dict:
+    # RULEBOOK R3.2: every show has a TVDB id — an add without one becomes an
+    # individual season (PLAN-CODE 8.4). Pass tvdbId=None to add without one.
     input_ = {
         "mediaShape": "EPISODIC",
         "trackingSpace": "ANIME",
         "titleRomaji": "Konosuba",
         "primaryTitle": "ROMAJI",
+        "tvdbId": next(_next_tvdb_id),
         **overrides,
     }
+    if input_["tvdbId"] is None:
+        del input_["tvdbId"]
     data = await gql(
         client,
         """
@@ -150,6 +159,18 @@ async def add_show(client, **overrides) -> dict:
         headers=auth_headers(),
     )
     return data["addShow"]
+
+
+async def add_show_without_tvdb(client, **overrides) -> dict:
+    """A show with no TVDB link — only a historical one can be like this
+    (R3.3); a new add without a TVDB id becomes an individual season."""
+    show = await add_show(client, **overrides)
+    conn = db.get_connection()
+    conn.execute(
+        "DELETE FROM show_external_id WHERE show_id = ? AND service = 'tvdb'", (show["id"],)
+    )
+    conn.commit()
+    return show
 
 
 # --- auth --------------------------------------------------------------
@@ -1408,6 +1429,7 @@ async def test_add_show_with_arr_no_title_slug_writes_no_sonarr_link(client, mon
                 "trackingSpace": "ANIME",
                 "titleRomaji": "Shangri-La Frontier",
                 "primaryTitle": "ROMAJI",
+                "tvdbId": 421855,
             }
         },
         headers=auth_headers(),
@@ -1447,7 +1469,7 @@ async def test_external_ids_add_link_falls_back_to_a_title_search_without_a_know
     # an edge case. Falls back to Sonarr's/Radarr's own free-text
     # search (?term=<title>) instead of a guessed id.
     config.set_current(_sonarr_configured_config())
-    show = await add_show(client, titleRomaji="Akame ga Kill!")  # no tvdbId given
+    show = await add_show_without_tvdb(client, titleRomaji="Akame ga Kill!")
     url = await _external_id_url(client, show["id"], "sonarr:add")
     assert url == "http://sonarr.public.test/add/new?term=Akame%20ga%20Kill%21"
 
@@ -1754,6 +1776,7 @@ async def test_add_show_with_arr_not_configured_falls_through_to_plain_local_cre
                 "trackingSpace": "ANIME",
                 "titleRomaji": "No Sonarr Configured",
                 "primaryTitle": "ROMAJI",
+                "tvdbId": 421856,
             }
         },
         headers=auth_headers(),
@@ -3975,7 +3998,7 @@ async def test_tmdb_url_depends_on_media_shape(client, media_shape, expected_url
     """Audit-pass fix: a single tmdb URL template would have produced a
     wrong link for whichever media_shape it wasn't written for — §5.4
     itself notes both movies and episodic shows can carry a TMDB id."""
-    show = await add_show(client, mediaShape=media_shape, tmdbId=555)
+    show = await add_show_without_tvdb(client, mediaShape=media_shape, tmdbId=555)
     data = await gql(
         client,
         "query($id: ID!) { show(id: $id) { externalIds { edges { node { url } } } } }",
@@ -7075,7 +7098,7 @@ async def test_set_tracked_false_unmonitor_failure_is_best_effort(client, monkey
 
 async def test_set_tracked_false_no_arr_call_when_not_linked(client, monkeypatch):
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
-    show = await add_show(client)  # no tvdb link at all
+    show = await add_show_without_tvdb(client)
     called = []
     monkeypatch.setattr(
         sonarr_client, "SonarrClient", lambda *a, **kw: called.append(True) or _FakeSonarrClient()
@@ -7760,7 +7783,7 @@ LINK_SHOW_EXTERNAL_ID_TVDB = """
 
 
 async def test_link_and_unlink_show_external_id(client):
-    show = await add_show(client)
+    show = await add_show_without_tvdb(client)
 
     linked = await gql(
         client,
@@ -9567,7 +9590,7 @@ async def test_backfill_tvdb_ids_returns_zero_with_no_candidates(client):
 async def test_backfill_tvdb_ids_writes_a_real_link_end_to_end(client, monkeypatch):
     from lcars import fribb
 
-    show = await add_show(client, titleRomaji="Akame ga Kill!", anilistId=20613)
+    show = await add_show_without_tvdb(client, titleRomaji="Akame ga Kill!", anilistId=20613)
     monkeypatch.setattr(
         fribb, "load_dataset", lambda: [{"anilist_id": 20613, "tvdb_id": 279328}]
     )
@@ -10011,8 +10034,8 @@ async def test_poll_show_merges_opens_a_review_rather_than_merging(client, migra
     # ever ran against production (see show_merge.py's own module
     # docstring): pollShowMerges no longer merges anything itself, only
     # opens a pending_review entry for a human to act on separately.
-    winner = await add_show(client, titleRomaji="Mebius Dust", trackingSpace="ANIME")
-    loser = await add_show(
+    winner = await add_show_without_tvdb(client, titleRomaji="Mebius Dust", trackingSpace="ANIME")
+    loser = await add_show_without_tvdb(
         client, titleRomaji="Mebius Dust", trackingSpace="TV", mediaShape="EPISODIC"
     )
     conn = db.get_connection()
@@ -10049,8 +10072,8 @@ async def test_poll_show_merges_opens_a_review_rather_than_merging(client, migra
 
 
 async def test_apply_show_merge_requires_a_resolving_client(client, migrated_db):
-    winner = await add_show(client, titleRomaji="Apply Auth", trackingSpace="ANIME")
-    loser = await add_show(
+    winner = await add_show_without_tvdb(client, titleRomaji="Apply Auth", trackingSpace="ANIME")
+    loser = await add_show_without_tvdb(
         client, titleRomaji="Apply Auth", trackingSpace="TV", mediaShape="EPISODIC"
     )
     resp = await client.post(
@@ -10076,8 +10099,8 @@ async def test_apply_show_merge_requires_a_resolving_client(client, migrated_db)
 async def test_apply_show_merge_performs_the_merge_and_resolves_the_review_through_real_graphql(
     client, migrated_db
 ):
-    winner = await add_show(client, titleRomaji="Mebius Dust", trackingSpace="ANIME")
-    loser = await add_show(
+    winner = await add_show_without_tvdb(client, titleRomaji="Mebius Dust", trackingSpace="ANIME")
+    loser = await add_show_without_tvdb(
         client, titleRomaji="Mebius Dust", trackingSpace="TV", mediaShape="EPISODIC"
     )
     conn = db.get_connection()
@@ -10134,11 +10157,11 @@ async def test_apply_show_merge_succeeds_when_winner_already_absorbed_a_differen
 ):
     """merge_shows handles service overlap by skipping duplicates, so
     absorbing a second loser with the same service works."""
-    winner = await add_show(client, titleRomaji="Twice Claimed", trackingSpace="ANIME")
-    loser_a = await add_show(
+    winner = await add_show_without_tvdb(client, titleRomaji="Twice Claimed", trackingSpace="ANIME")
+    loser_a = await add_show_without_tvdb(
         client, titleRomaji="Twice Claimed", trackingSpace="TV", mediaShape="EPISODIC"
     )
-    loser_b = await add_show(
+    loser_b = await add_show_without_tvdb(
         client, titleRomaji="Twice Claimed Too", trackingSpace="TV", mediaShape="EPISODIC"
     )
     conn = db.get_connection()
@@ -10182,8 +10205,8 @@ async def test_apply_show_merge_succeeds_when_winner_already_absorbed_a_differen
 
 
 async def test_reverse_show_merge_requires_a_client_header(client, migrated_db):
-    winner = await add_show(client, titleRomaji="Reverse Me", trackingSpace="ANIME")
-    loser = await add_show(
+    winner = await add_show_without_tvdb(client, titleRomaji="Reverse Me", trackingSpace="ANIME")
+    loser = await add_show_without_tvdb(
         client, titleRomaji="Reverse Me", trackingSpace="TV", mediaShape="EPISODIC"
     )
     from lcars import show_merge
@@ -10218,8 +10241,8 @@ async def test_reverse_show_merge_rejects_an_unknown_id(client):
 
 
 async def test_reverse_show_merge_restores_the_loser_through_real_graphql(client, migrated_db):
-    winner = await add_show(client, titleRomaji="Restore Me", trackingSpace="ANIME")
-    loser = await add_show(
+    winner = await add_show_without_tvdb(client, titleRomaji="Restore Me", trackingSpace="ANIME")
+    loser = await add_show_without_tvdb(
         client, titleRomaji="Restore Me", trackingSpace="TV", mediaShape="EPISODIC"
     )
     from lcars import show_merge
@@ -11641,8 +11664,9 @@ async def test_ops_tier_due_tracks_completion(client):
 async def test_add_show_with_arr_never_guesses_a_sonarr_series_by_title(client, monkeypatch):
     """2026-09-23 — with no tvdbId and nothing in the ID crosswalk, the add
     must not take Sonarr's first title-search hit (that's how "Kaketa Tsuki
-    no Mercedes" got linked to the telenovela Maria Mercedes). The show is
-    added unlinked, nothing touches Sonarr, and a review asks for a link."""
+    no Mercedes" got linked to the telenovela Maria Mercedes). PLAN-CODE 8.4
+    (R3.2): with no AniList/MAL id either, nothing is added at all and
+    nothing touches Sonarr."""
     config.set_current(_sonarr_configured_config())
     _patch_fribb_dataset(monkeypatch, [])
     fake = _FakeSonarrClient(
@@ -11653,26 +11677,36 @@ async def test_add_show_with_arr_never_guesses_a_sonarr_series_by_title(client, 
         add_series_result={"id": 9, "tvdbId": 276151, "title": "Maria Mercedes"},
     )
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
-    data = await gql(
-        client,
-        ADD_SHOW_WITH_ARR,
-        {"input": {"mediaShape": "EPISODIC", "trackingSpace": "ANIME",
-                   "titleRomaji": "Kaketa Tsuki no Mercedes", "primaryTitle": "ROMAJI"}},
-        headers=auth_headers(),
-    )
-    result = data["addShowWithArr"]
-    assert result["sonarrSeriesCreated"] is False and result["matchedTvdbId"] is None
+    resp = await client.post("/", json={"query": ADD_SHOW_WITH_ARR, "variables": {
+        "input": {"mediaShape": "EPISODIC", "trackingSpace": "ANIME",
+                  "titleRomaji": "Kaketa Tsuki no Mercedes", "primaryTitle": "ROMAJI"}}},
+        headers=auth_headers())
+    assert "no TVDB id" in resp.json()["errors"][0]["message"]
     assert [c for c in fake.calls if c[0] in ("lookup_series", "add_series")] == []
+    assert db.get_connection().execute("SELECT COUNT(*) FROM show").fetchone()[0] == 0
+
+
+async def test_add_without_a_tvdb_id_becomes_an_individual_season(client, monkeypatch):
+    """PLAN-CODE 8.4, R3.2/R3.6c: an AniList entry TVDB doesn't have yet is
+    added as an individual season — never a show without a TVDB id."""
+    _patch_fribb_dataset(monkeypatch, [])
+    resp = await client.post("/", json={"query": ADD_SHOW_WITH_ARR, "variables": {
+        "input": {"mediaShape": "EPISODIC", "trackingSpace": "ANIME", "anilistId": 190001,
+                  "titleRomaji": "Brand New Anime", "primaryTitle": "ROMAJI"}}},
+        headers=auth_headers())
+    message = resp.json()["errors"][0]["message"]
+    assert message.startswith("individual_season:")
+    season_id = json.loads(message[len("individual_season:"):])["seasonId"]
     conn = db.get_connection()
-    show_id = result["show"]["id"]
-    assert conn.execute(
-        "SELECT COUNT(*) FROM show_external_id WHERE show_id = ? AND service IN ('tvdb','sonarr')",
-        (show_id,),
-    ).fetchone()[0] == 0
-    assert conn.execute(
-        "SELECT COUNT(*) FROM pending_review WHERE entity_id = ? AND field = 'tvdb_link'"
-        " AND resolved_at IS NULL", (show_id,),
-    ).fetchone()[0] == 1
+    row = conn.execute("SELECT kind, show_id, status FROM season WHERE id = ?",
+                       (season_id,)).fetchone()
+    assert tuple(row) == ("individual_season", None, "planned")
+    assert conn.execute("SELECT COUNT(*) FROM show").fetchone()[0] == 0
+    listed = await gql(client, "{ individualSeasons { id label status anilistId show { id } } }",
+                       headers=auth_headers())
+    assert listed["individualSeasons"] == [{"id": season_id, "label": "Brand New Anime",
+                                            "status": "PLANNED", "anilistId": 190001,
+                                            "show": None}]
 
 
 async def test_add_show_with_arr_resolves_tvdb_through_the_crosswalk(client, monkeypatch):

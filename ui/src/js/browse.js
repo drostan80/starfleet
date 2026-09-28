@@ -146,6 +146,17 @@ function bestMatchingCandidate(query, candidates) {
  * Parse a "sequel_of:{json}" error from the server into structured data.
  * Returns null if the error isn't a sequel detection.
  */
+/** PLAN-CODE 8.4: an add with no TVDB id came back as an individual season
+ * (already saved, R3.2/R3.6c). Returns {seasonId, title} or null. */
+export function parseIndividualSeason(msg) {
+  if (!msg?.startsWith('individual_season:')) return null;
+  try {
+    return JSON.parse(msg.slice('individual_season:'.length));
+  } catch {
+    return null;
+  }
+}
+
 export function parseSequelError(msg) {
   if (!msg.startsWith('sequel_of:')) return null;
   try {
@@ -1207,6 +1218,19 @@ async function onAnimeChipClick(card, item, status) {
  * false if the error should be re-thrown.
  */
 async function handleAddError(err, card, item, input, status) {
+  // No TVDB id yet → saved as an individual season: a success.
+  const indiv = parseIndividualSeason(err.message);
+  if (indiv) {
+    if (status !== 'PLANNED') {
+      await withConfirmation((c) => setSeasonStatus(indiv.seasonId, status, c));
+    }
+    item.lcarsSeasonId = indiv.seasonId;
+    item.lcarsSeasonStatus = status;
+    refreshCard(card, item);
+    showBanner('Added as an individual season — TVDB doesn\'t have it yet', 'ok');
+    card.classList.remove('loading');
+    return true;
+  }
   // Already tracked — not an error, just inform.
   const tracked = err.message.match(/already tracked \(show ([^)]+)\)/);
   if (tracked) {

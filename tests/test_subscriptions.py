@@ -111,6 +111,7 @@ def _add_show(client, **overrides) -> dict:
         "trackingSpace": "ANIME",
         "titleRomaji": "Konosuba",
         "primaryTitle": "ROMAJI",
+        "tvdbId": 7_100_001,  # R3.2: every show has a TVDB id
         **overrides,
     }
     data = _gql(
