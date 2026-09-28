@@ -438,6 +438,19 @@ def delete_my_list_status(token: str, mal_id: int, client: httpx.Client | None =
             client.close()
 
 
+def _iso_utc(value: str | None) -> str | None:
+    """MAL's `updated_at` (e.g. 2026-09-27T21:15:04+00:00) as LCARS's UTC form."""
+    if not value:
+        return None
+    import datetime
+
+    try:
+        moment = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def fetch_my_list(token: str, client: httpx.Client | None = None) -> list[dict]:
     """The authenticated user's entire MAL anime list — the read side of
     the MAL bidirectional sync (2026-08-26), counterpart to
@@ -484,6 +497,8 @@ def fetch_my_list(token: str, client: httpx.Client | None = None) -> list[dict]:
                         "status": status_obj.get("status"),
                         "score": status_obj.get("score"),
                         "num_watched_episodes": status_obj.get("num_episodes_watched") or 0,
+                        # Phase 7 (R4.10): when the entry last changed (ISO 8601).
+                        "updated_at": _iso_utc(status_obj.get("updated_at")),
                     }
                 )
             url = (payload.get("paging") or {}).get("next")

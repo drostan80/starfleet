@@ -405,6 +405,19 @@ added.
 - **7.6** AniList ↔ MAL mirror everywhere possible (R4.4): entry on one, missing on
   the other → added there.
 
+**7a/7c done 2026-09-28** (7.1–7.4, 7.6): `lcars/list_sync.py` pushes per level
+(status + progress over the level's own episodes; skipped and status-less seasons
+never pushed; auto-planned → skipped deleted from both lists). `watch_reconcile` /
+`mal_reconcile` rewritten per level: remote changes go through the status engine
+(cascades, Sonarr follow); both changed → later timestamp wins (list `updatedAt`
+vs LCARS's last `season_status_change`); no baseline yet → the list's value is the
+edit; a season missing on the list is added (capped per run). R4.8a: remote
+completed marks every aired episode watched; future-dated episodes → actionable
+`remote_completed` review. A remote pause/drop over later seasons you planned →
+`later_planned` review. **Replaces** the 4.1 "kept" guard (remote COMPLETED over
+aired, unwatched episodes read as watching). **7.5 not built:** the AniList and MAL
+polls still run as separate triggers, not one ordered loop.
+
 ## Phase 8 — UI (web + Data where affected)
 
 Sub-seasons under TVDB seasons (R1.10), specials/films as their own items,

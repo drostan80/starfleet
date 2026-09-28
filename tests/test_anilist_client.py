@@ -211,6 +211,7 @@ def test_fetch_my_anime_list_flattens_every_list_into_one():
             "status": "COMPLETED",
             "progress": 12,
             "score": 85,
+            "updated_at": None,
             "title": "A",
         },
         {
@@ -219,6 +220,7 @@ def test_fetch_my_anime_list_flattens_every_list_into_one():
             "status": "CURRENT",
             "progress": 0,
             "score": 0,
+            "updated_at": None,
             "title": "B",
         },
     ]

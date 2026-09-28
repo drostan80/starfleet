@@ -51,7 +51,6 @@ from lcars import (
     config,
     ids,
     list_baseline,
-    mal_client,
     pending_review,
     season_status_log,
     util,
@@ -137,116 +136,81 @@ _STATUS_TO_MAL = {
 }
 
 
-def _season_progress(conn, show_id: str, season_number: int) -> int:
-    """This season's episode-watched high-water mark — the same value
-    `resolvers._compute_season_episode_progress` computes (MAX watched/
-    skipped episode number), duplicated here to keep the onward push free
-    of a resolvers import (which would be circular)."""
-    row = conn.execute(
-        "SELECT MAX(episode) AS furthest FROM episode"
-        " WHERE show_id = ? AND season = ? AND state IN ('watched', 'skipped')",
-        (show_id, season_number),
-    ).fetchone()
-    return row["furthest"] or 0
-
-
-def _push_progress_onward(conn, service: str, season_id: str) -> None:
-    """Push a just-reconciled episode-progress change (this season's new
-    high-water mark) to a service. Best-effort, same shape as
-    `_push_season_status_onward`."""
-    cfg = config.get_current()
-    # S3: read ext_id from season_external_id (same source as _apply_remote_list).
-    season = conn.execute(
-        "SELECT s.id, s.show_id, s.season_number, s.list_sync,"
-        " CAST(sei.external_id AS INTEGER) AS ext_id"
-        " FROM season s LEFT JOIN season_external_id sei"
-        " ON sei.season_id = s.id AND sei.service = ?"
-        " WHERE s.id = ?",
-        (service, season_id),
-    ).fetchone()
-    if season is None or season["ext_id"] is None or not season["list_sync"]:
-        return
-    token = cfg.anilist_access_token if service == "anilist" else cfg.mal_access_token
-    if not token:
-        return
-    progress = _season_progress(conn, season["show_id"], season["season_number"])
-    try:
-        if service == "anilist":
-            list_baseline.anilist_save(conn, token, season["ext_id"], progress=progress)
-        else:
-            list_baseline.mal_save(
-                conn, token, season["ext_id"], num_watched_episodes=progress
-            )
-    except (anilist_client.AniListError, mal_client.MALError) as e:
-        pending_review.open_or_extend(
-            conn, "season", season["id"], f"{service}_push", service, None, str(e)
-        )
-
-
-def _push_season_status_onward(conn, service: str, season_id: str, lcars_status: str) -> None:
-    """Push one season's status to `service` (the hub's onward push, or a
-    retry of an LCARS change that list hasn't taken). Best-effort; records
-    the baseline via list_baseline on success, opens a review on failure."""
-    cfg = config.get_current()
-    if service == "anilist":
-        token, remote_status = cfg.anilist_access_token, _STATUS_TO_ANILIST.get(lcars_status)
-    else:
-        token, remote_status = cfg.mal_access_token, _STATUS_TO_MAL.get(lcars_status)
-    if not token or remote_status is None:
-        return
-    season = conn.execute(
-        "SELECT s.id, s.list_sync, CAST(sei.external_id AS INTEGER) AS ext_id"
-        " FROM season s JOIN season_external_id sei"
-        " ON sei.season_id = s.id AND sei.service = ?"
-        " WHERE s.id = ?",
-        (service, season_id),
-    ).fetchone()
-    if season is None or not season["list_sync"]:
-        return
-    try:
-        if service == "anilist":
-            list_baseline.anilist_save(conn, token, season["ext_id"], status=remote_status)
-        else:
-            list_baseline.mal_save(conn, token, season["ext_id"], status=remote_status)
-    except (anilist_client.AniListError, mal_client.MALError) as e:
-        pending_review.open_or_extend(
-            conn, "season", season["id"], f"{service}_push", service, None, str(e)
-        )
-
-
 MAX_PUSHES_PER_RUN = 25
 
 
+def _last_lcars_change(conn, season_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT MAX(changed_at) FROM season_status_change WHERE season_id = ?", (season_id,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _apply_remote_status(conn, season, status, service, source, fx_all, unaired) -> bool:
+    """Your change on a list, taken by LCARS through the status engine (R4.8):
+    its cascades apply. A COMPLETED that would mark unaired episodes watched
+    becomes a review instead (R4.8a). Returns whether LCARS took it."""
+    from lcars import list_sync, reviews, status_rules
+
+    other = "mal" if service == "anilist" else "anilist"
+    if status == "completed" and unaired:
+        reviews.open_review(
+            conn, "season", season["id"], "remote_completed", source,
+            f"{service} says completed, but {len(unaired)} episode(s) haven't aired",
+            ["accept_completed", "revert_watching"],
+            {"season_id": season["id"], "service": service},
+            show_id=season["show_id"],
+        )
+        return False
+    try:
+        fx = status_rules.set_level_status(
+            conn, season["id"], status, source, confirmed=(status == "completed"), manual=True
+        )
+    except status_rules.NeedsConfirmation as e:
+        # Later seasons you set planned would be skipped: take the status
+        # itself, ask about the rest (Q-J4's warning, as a review).
+        season_status_log.set_status(conn, season["id"], status, source)
+        conn.execute("UPDATE season SET status_set_manually = 1 WHERE id = ?", (season["id"],))
+        fx = status_rules.Effects(seasons=[(season["id"], season["status"], status)])
+        reviews.open_review(
+            conn, "season", season["id"], "later_planned", source, str(e),
+            ["skip_later", "keep_later"], {"season_id": season["id"], "status": status},
+            show_id=season["show_id"],
+        )
+    for season_id, old, new in fx.seasons:
+        if season_id == season["id"]:
+            list_sync.push(conn, season_id, progress=False, services=(other,))
+        elif new == "skipped":
+            list_sync.delete_if_auto_skipped(conn, season_id, old)
+        else:
+            list_sync.push(conn, season_id, progress=False)
+    if fx.watched:
+        list_sync.push_progress_for_show(conn, season["show_id"])
+    fx_all.extend(fx.seasons)
+    return True
+
+
 def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
-    """The shared reconcile core for AniList and MAL, as a hub with LCARS
-    the source of truth (user rule, 2026-09-25; see list_baseline.py).
+    """The reconcile hub for one list (phase 7; RULEBOOK R4.2–R4.10), LCARS
+    the source of truth, per level (AniList/MAL entries are season level).
 
     Per list entry, against the last state LCARS and that list agreed on
     (`list_baseline`):
-      - the list's status changed  -> LCARS takes it; the caller pushes it
-                                      on to the other list
-      - only LCARS's status changed -> pushed to this list again (a push
-                                      that failed or lagged is retried,
-                                      never overwritten by the old value)
-      - progress only ever moves LCARS forward from a list, except when
-        LCARS itself went back (an unwatch) — then LCARS is pushed.
+      - the list changed, LCARS didn't → LCARS takes it through the status
+        engine and pushes it on to the other list (R4.8);
+      - both changed → the later change wins (R4.10: the list's `updatedAt`
+        against LCARS's last status change for that level);
+      - only LCARS changed → pushed to the list again (a failed or lagging
+        push is retried; skipped is never pushed, R4.6);
+      - a season LCARS mirrors that the list doesn't have → added (R4.4, R4.5).
+    Progress moves LCARS forward over the level's own episodes (a cour's
+    progress is the cour's), never marking an unaired one; an unwatch in
+    LCARS is pushed back. First run for a list writes nothing: the list's
+    values become the baseline. Pushes per run are capped.
 
-    Only seasons of tracked shows take part: untracked relation stubs
-    reused real seasons' ids and turned every one into a conflict or a
-    loop (Haruhi, 09-25). An id claimed by more than one tracked season is
-    excluded and flagged — never pushed from either.
+    Returns `(stats, changed_status, changed_progress_season_ids)`."""
+    from lcars import list_sync, sonarr_sync
 
-    First run for a service (no baseline yet) writes nothing to the list:
-    the list's values become the baseline, so where LCARS differs it wins
-    on later runs, at most MAX_PUSHES_PER_RUN pushes per run.
-
-    The unaired guard (Bookworm, 08-19) is kept: a list saying
-    completed while an episode hasn't aired gives `watching`, and no
-    unaired episode is ever marked watched.
-
-    Returns `(stats, changed_status, changed_progress_season_ids)` —
-    `changed_status` maps season_id -> the status LCARS took from the list,
-    for the caller's onward push to the other service."""
     stats = {
         "seasons_checked": 0,
         "not_matched_remotely": 0,
@@ -254,15 +218,14 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
         "episodes_backfilled": 0,
         "ambiguous_id_conflicts": 0,
         "lcars_pushed": 0,
+        "added_remotely": 0,
     }
     seeded = list_baseline.is_seeded(conn, service)
     seasons = conn.execute(
-        "SELECT s.id, s.show_id, s.season_number, s.list_sync,"
-        " COALESCE(s.status, sh.status) AS status,"
-        " CAST(sei.external_id AS INTEGER) AS ext_id"
+        "SELECT s.*, CAST(sei.external_id AS INTEGER) AS ext_id"
         " FROM season_external_id sei JOIN season s ON s.id = sei.season_id"
-        " JOIN show sh ON sh.id = s.show_id"
-        " WHERE sei.service = ? AND sh.tracked = 1",
+        " LEFT JOIN show sh ON sh.id = s.show_id"
+        " WHERE sei.service = ? AND (sh.tracked = 1 OR s.show_id IS NULL)",
         (service,),
     ).fetchall()
 
@@ -275,7 +238,7 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
             continue
         for season in dupes:
             conflicted_season_ids.add(season["id"])
-            others = [d["show_id"] + " S" + str(d["season_number"])
+            others = [str(d["show_id"]) + " S" + str(d["season_number"])
                       for d in dupes if d["id"] != season["id"]]
             pending_review.open_or_extend(
                 conn, "season", season["id"], f"{service}_id_conflict", source, None,
@@ -286,9 +249,8 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     changed_status: dict[str, str] = {}
     changed_progress_season_ids: set[str] = set()
     touched_shows: set[str] = set()
-    # LCARS -> list pushes per run are capped: a backlog (first days after
-    # seeding, a long outage) drains over several runs instead of holding
-    # LCARS's write lock for minutes in one request.
+    fx_all: list = []
+    show_before: dict[str, str | None] = {}
     pushes_left = MAX_PUSHES_PER_RUN
 
     for season in seasons:
@@ -297,145 +259,109 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
         ext_id = season["ext_id"]
         entry = entries_by_ext_id.get(ext_id)
         if entry is None:
-            if season["list_sync"]:
-                stats["not_matched_remotely"] += 1
+            stats["not_matched_remotely"] += 1
+            if seeded and pushes_left > 0 and list_sync.pushable(conn, season):
+                list_sync.push(conn, season["id"], services=(service,))  # R4.4/R4.5
+                pushes_left -= 1
+                stats["added_remotely"] += 1
             continue
-        if not season["list_sync"]:
-            # The user put this season on the list themselves: mirror it.
-            conn.execute("UPDATE season SET list_sync = 1 WHERE id = ?", (season["id"],))
         stats["seasons_checked"] += 1
-
         show_id = season["show_id"]
-        season_number = season["season_number"]
-        base = list_baseline.get(conn, service, ext_id) or {"status": None, "progress": None}
-
-        unaired_episodes = {
-            row["episode"]
-            for row in conn.execute(
-                "SELECT episode FROM episode"
-                " WHERE show_id = ? AND season = ? AND air_date_utc IS NOT NULL"
-                "   AND air_date_utc > ?",
-                (show_id, season_number, now),
-            ).fetchall()
+        base = list_baseline.get(conn, service, ext_id) or {
+            "status": None, "progress": None, "lcars_progress": None
         }
-        # A season that hasn't started (no episode with a past air date)
-        # has nothing aired: its undated episodes — Sonarr "TBA"
-        # placeholders — are unaired too. Kaiju No. 8 S3E1 was marked
-        # watched this way on 09-23 from a stray progress=1 on AniList.
-        # Undated episodes of a season that has started stay eligible
-        # (old TV seasons often lack dates for real, watched episodes).
-        # Kept separate from `unaired_episodes`: it only blocks the
-        # progress backfill, never the completed -> watching downgrade
-        # (an old, fully undated OVA season is genuinely completed).
-        unstarted_undated: set[int] = set()
-        season_started = conn.execute(
-            "SELECT 1 FROM episode WHERE show_id = ? AND season = ?"
-            " AND air_date_utc IS NOT NULL AND air_date_utc <= ? LIMIT 1",
-            (show_id, season_number, now),
-        ).fetchone()
-        if season_started is None:
-            unstarted_undated = {
-                row["episode"]
-                for row in conn.execute(
-                    "SELECT episode FROM episode"
-                    " WHERE show_id = ? AND season = ? AND air_date_utc IS NULL",
-                    (show_id, season_number),
-                ).fetchall()
-            }
+        level_eps = list_sync.level_episodes_ordered(conn, season) if show_id else []
+        air = {r[0]: r[1] for r in conn.execute(
+            "SELECT id, air_date_utc FROM episode WHERE show_id = ?", (show_id,))}
+        started = any(air.get(e["id"]) and air[e["id"]] <= now for e in level_eps)
+        # Dated in the future: never marked, and a remote COMPLETED over
+        # them is a review (R4.8a). Undated in a season that hasn't started
+        # only holds back the progress backfill (an old undated OVA can
+        # still be completed).
+        unaired = [e for e in level_eps if air.get(e["id"]) and air[e["id"]] > now]
+        unaired_ids = {e["id"] for e in unaired} | {
+            e["id"] for e in level_eps if not air.get(e["id"]) and not started
+        }
 
         # --- status -----------------------------------------------------
         remote_status = entry["lcars_status"]
-        lcars_status = season["status"]  # the season's own, else its show's
+        lcars_status = season["status"]
         if remote_status is not None:
-            effective = remote_status
-            if effective == "completed" and unaired_episodes:
-                effective = "watching"
-            if effective == "completed" and conn.execute(
-                "SELECT 1 FROM episode WHERE show_id = ? AND season = ? AND state = 'unwatched'"
-                " AND air_date_utc IS NOT NULL AND air_date_utc <= ? LIMIT 1",
-                (show_id, season_number, now),
-            ).fetchone():
-                # A list flipping a season to COMPLETED by itself while LCARS
-                # has aired, unwatched episodes (live 09-20): the show now
-                # follows its last season (R2.13), so the season must not
-                # take it. Phase 7 settles remote changes (R2.7, R4.8, R4.10).
-                effective = "watching"
             if not seeded:
-                # First run writes nothing. Agreement is recorded; for a
-                # disagreement the list's value becomes the baseline, so
-                # LCARS's differing value goes out on later runs
-                # (throttled) — LCARS is the source of truth.
                 list_baseline.record(conn, service, ext_id, status=remote_status)
             elif remote_status != base["status"]:
-                # Edited on the list (or AniList moved it itself): LCARS takes it.
-                if lcars_status != effective:
-                    season_status_log.set_status(conn, season["id"], effective, source)
-                    # Your own edit on the list (phase 4: R2.16 tells it apart
-                    # from automation). Its cascades are phase 7's (R4.8).
-                    conn.execute(
-                        "UPDATE season SET status_set_manually = 1 WHERE id = ?", (season["id"],)
-                    )
-                    changed_status[season["id"]] = effective
-                    touched_shows.add(show_id)
-                list_baseline.record(conn, service, ext_id, status=remote_status)
+                # No baseline yet: the list's value is the edit (steady state).
+                lcars_changed = (base["status"] is not None and lcars_status is not None
+                                 and lcars_status != base["status"])
+                last_lcars = _last_lcars_change(conn, season["id"])
+                remote_later = (entry.get("updated_at") or "") > (last_lcars or "")
+                if lcars_status == remote_status:
+                    list_baseline.record(conn, service, ext_id, status=remote_status)
+                elif lcars_changed and not remote_later:
+                    # Both changed; LCARS's is later (R4.10): LCARS goes out.
+                    if pushes_left > 0 and list_sync.pushable(conn, season):
+                        list_sync.push(conn, season["id"], progress=False, services=(service,))
+                        pushes_left -= 1
+                        stats["lcars_pushed"] += 1
+                else:
+                    if show_id and show_id not in show_before:
+                        show_before[show_id] = conn.execute(
+                            "SELECT status FROM show WHERE id = ?", (show_id,)
+                        ).fetchone()["status"]
+                    if _apply_remote_status(conn, season, remote_status, service, source,
+                                            fx_all, unaired):
+                        changed_status[season["id"]] = remote_status
+                        if show_id:
+                            touched_shows.add(show_id)
+                    list_baseline.record(conn, service, ext_id, status=remote_status)
             elif lcars_status is not None and lcars_status != remote_status:
-                # Only LCARS changed: push it (retries a failed/lagging push).
-                if pushes_left > 0:
-                    _push_season_status_onward(conn, service, season["id"], lcars_status)
+                # Only LCARS changed: push it again (never skipped, R4.6).
+                if pushes_left > 0 and list_sync.pushable(conn, season):
+                    list_sync.push(conn, season["id"], progress=False, services=(service,))
                     pushes_left -= 1
                     stats["lcars_pushed"] += 1
 
-        # --- progress ---------------------------------------------------
+        if not show_id:
+            continue  # an individual season has no episodes yet (phase 8)
+
+        # --- progress (the level's own episodes) ------------------------
         progress = entry["progress"] or 0
-        lcars_progress = _season_progress(conn, show_id, season_number)
+        season_now = conn.execute("SELECT * FROM season WHERE id = ?", (season["id"],)).fetchone()
+        lcars_progress = list_sync.level_progress(conn, season_now)
         if (
             seeded and progress == base["progress"]
             and base["lcars_progress"] is not None
             and lcars_progress < base["lcars_progress"]
         ):
             # LCARS went back (an unwatch) and the list hasn't taken it.
-            # Compared with LCARS's own count at the last agreement, not
-            # the list's: many seasons have list progress but no episodes.
             if pushes_left > 0:
-                _push_progress_onward(conn, service, season["id"])
+                list_sync.push(conn, season["id"], status=False, services=(service,))
                 pushes_left -= 1
                 stats["lcars_pushed"] += 1
             continue
         if progress > 0:
-            unwatched = conn.execute(
-                "SELECT episode FROM episode"
-                " WHERE show_id = ? AND season = ? AND episode <= ? AND state = 'unwatched'",
-                (show_id, season_number, progress),
-            ).fetchall()
-            unwatched = [
-                row for row in unwatched
-                if row["episode"] not in unaired_episodes
-                and row["episode"] not in unstarted_undated
-            ]
-            for ep_row in unwatched:
+            if show_id not in show_before:
+                show_before[show_id] = conn.execute(
+                    "SELECT status FROM show WHERE id = ?", (show_id,)
+                ).fetchone()["status"]
+            for e in level_eps[:progress]:
+                if e["state"] in ("watched", "skipped") or e["id"] in unaired_ids:
+                    continue
                 conn.execute(
                     "INSERT INTO watch_event"
                     " (id, show_id, season, episode, watched_at, platform, created_at)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        ids.generate_id(conn, "w"),
-                        show_id,
-                        season_number,
-                        ep_row["episode"],
-                        now,
-                        None,
-                        now,
-                    ),
+                    (ids.generate_id(conn, "w"), show_id, e["season"], e["episode"], now,
+                     None, now),
                 )
                 conn.execute(
-                    "UPDATE episode SET state = 'watched', updated_at = ?"
-                    " WHERE show_id = ? AND season = ? AND episode = ?",
-                    (now, show_id, season_number, ep_row["episode"]),
+                    "UPDATE episode SET state = 'watched', updated_at = ? WHERE id = ?",
+                    (now, e["id"]),
                 )
                 stats["episodes_backfilled"] += 1
                 changed_progress_season_ids.add(season["id"])
-            if unwatched:
-                lcars_progress = _season_progress(conn, show_id, season_number)
+                touched_shows.add(show_id)
+            lcars_progress = list_sync.level_progress(conn, season_now)
         if base["progress"] != progress or base["lcars_progress"] != lcars_progress:
             list_baseline.record(
                 conn, service, ext_id, progress=progress, lcars_progress=lcars_progress
@@ -444,18 +370,16 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     if not seeded:
         list_baseline.mark_seeded(conn, service)
 
-    # show.status has a single authority (_recompute_show_status); the
-    # season statuses above are its input. _skip_push: the onward push is
-    # per season, by the caller — never back to the list it came from.
     # Deferred import: resolvers.py imports this module at load time.
     from lcars import resolvers
 
     for show_id in touched_shows:
-        before = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
-        resolvers._recompute_show_status(conn, show_id, source, _skip_push=True)
+        fx = resolvers._recompute_show_status(conn, show_id, source, _skip_push=True)
+        fx_all.extend(fx.seasons)
         after = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
-        if before is not None and after is not None and before["status"] != after["status"]:
+        if after is not None and show_before.get(show_id) != after["status"]:
             stats["shows_status_updated"] += 1
+    sonarr_sync.apply(conn, fx_all)  # R5.6-R5.8 follow the seasons LCARS took
 
     return stats, changed_status, changed_progress_season_ids
 
@@ -525,6 +449,7 @@ def reconcile_watch_progress(conn) -> dict:
         entry["anilist_id"]: {
             "lcars_status": _ANILIST_TO_STATUS.get(entry["status"]),
             "progress": entry.get("progress") or 0,
+            "updated_at": entry.get("updated_at"),
         }
         for entry in my_list
     }
@@ -535,10 +460,10 @@ def reconcile_watch_progress(conn) -> dict:
     # Hub model: an AniList change has now landed in LCARS -> mirror it
     # onward to MAL (never back to AniList). Only the seasons/shows that
     # actually changed, never a per-season-walked push.
-    for season_id, new_status in changed_status.items():
-        _push_season_status_onward(conn, "mal", season_id, new_status)
+    from lcars import list_sync
+
     for season_id in changed_progress_season_ids:
-        _push_progress_onward(conn, "mal", season_id)
+        list_sync.push(conn, season_id, status=False, services=("mal",))
     conn.commit()
 
     result["seasons_checked"] = stats["seasons_checked"]

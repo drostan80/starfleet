@@ -47,8 +47,8 @@ def list_ids(conn, season_id: str) -> dict[str, int]:
 def pushable(conn, season) -> bool:
     """Mirrored unless skipped (R4.6); a season of an untracked show (the
     skip list) never is."""
-    if season is None or season["status"] == "skipped":
-        return False
+    if season is None or season["status"] in (None, "skipped"):
+        return False  # skipped never (R4.6); no status yet (a §2.2 gap) — nothing to say
     if season["show_id"] is None:
         return True  # an individual season (R3.6b)
     show = conn.execute("SELECT tracked FROM show WHERE id = ?", (season["show_id"],)).fetchone()

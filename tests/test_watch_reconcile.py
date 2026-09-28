@@ -555,18 +555,9 @@ def test_reconcile_writes_the_seasons_own_status_not_just_shows(conn, monkeypatc
     assert show["status"] == "watching"
 
 
-def test_remote_completed_season_never_promotes_show_status_over_a_real_gap(conn, monkeypatch):
-    """The live bug, reproduced: AniList reports the highest season as
-    COMPLETED, but LCARS has a real, already-aired, unwatched episode for
-    that exact season (both platforms can flip a currently-airing entry's
-    own status as their episode-count metadata catches up — this isn't
-    hypothetical, it reproduced for two real shows in production, flipping
-    status.status back and forth for over a month). The show must not
-    follow the remote into 'completed', and must not fabricate a
-    watch_event via the resulting auto-complete bulk-mark
-    (_bulk_mark_all_aired_episodes_watched). The season's own status still
-    mirrors the remote faithfully — only the show-level derivation, which
-    every other real caller in the codebase already trusts, is protected."""
+def test_remote_completed_over_aired_unwatched_episodes_marks_them_watched(conn, monkeypatch):
+    # R4.8a: you completed it on the list -> LCARS takes completed and every
+    # aired episode of the level is marked watched (no review: nothing unaired).
     _show(conn, "s-gap001", status="watching")
     _season(conn, "z-gap001", "s-gap001", 1, anilist_id=100)
     conn.execute(
@@ -578,22 +569,46 @@ def test_remote_completed_season_never_promotes_show_status_over_a_real_gap(conn
     conn.commit()
     _configure_anilist(monkeypatch, [_entry(100, status="COMPLETED", progress=0)])
 
-    result = watch_reconcile.reconcile_watch_progress(conn)
+    watch_reconcile.reconcile_watch_progress(conn)
 
-    # Phase 4: the show follows its last season (R2.13), so the guard sits
-    # on the season — a remote COMPLETED over an aired, unwatched episode
-    # is read as watching.
     season = conn.execute("SELECT status FROM season WHERE id = 'z-gap001'").fetchone()
-    assert season["status"] != "completed"
-    # Show status must NOT follow it — a real gap exists.
-    show = conn.execute("SELECT status FROM show WHERE id = 's-gap001'").fetchone()
-    assert show["status"] == "watching"
-    assert result["shows_status_updated"] == 0
-    # No fabricated watch event for the still-unwatched episode.
-    assert (
-        conn.execute("SELECT * FROM watch_event WHERE show_id = 's-gap001'").fetchone() is None
-    )
+    assert season["status"] == "completed"
     ep = conn.execute("SELECT state FROM episode WHERE id = 'e-gap001'").fetchone()
+    assert ep["state"] == "watched"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM pending_review WHERE field = 'remote_completed'"
+    ).fetchone()[0] == 0
+
+
+def test_remote_completed_over_unaired_episodes_opens_an_actionable_review(conn, monkeypatch):
+    # R4.8a + R4.8b: unaired episodes involved -> a review with choices,
+    # nothing marked, the season keeps its status.
+    _show(conn, "s-gap002", status="watching")
+    _season(conn, "z-gap002", "s-gap002", 1, anilist_id=101)
+    conn.execute("UPDATE season SET status = 'watching' WHERE id = 'z-gap002'")
+    conn.execute(
+        "INSERT INTO episode"
+        " (id, show_id, season, episode, kind, state, air_date_utc, created_at, updated_at)"
+        " VALUES ('e-gap002', 's-gap002', 1, 1, 'regular', 'unwatched',"
+        " '2999-01-01T00:00:00Z', 'x', 'x')"
+    )
+    from lcars import list_baseline
+
+    list_baseline.record(conn, "anilist", 101, status="watching")  # last agreed
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(101, status="COMPLETED", progress=0)])
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    season = conn.execute("SELECT status FROM season WHERE id = 'z-gap002'").fetchone()
+    assert season["status"] == "watching"
+    review = conn.execute(
+        "SELECT choices, show_id FROM pending_review WHERE field = 'remote_completed'"
+        " AND resolved_at IS NULL"
+    ).fetchone()
+    assert review is not None and review["show_id"] == "s-gap002"
+    assert "accept_completed" in review["choices"] and "revert_watching" in review["choices"]
+    ep = conn.execute("SELECT state FROM episode WHERE id = 'e-gap002'").fetchone()
     assert ep["state"] == "unwatched"
 
 
@@ -638,7 +653,8 @@ def test_anilist_reconcile_no_change_pushes_nothing_to_mal(conn, monkeypatch):
 
     _show(conn, "s-hubma2", status="watching")
     _season(conn, "z-hubma2", "s-hubma2", 1, anilist_id=101)
-    conn.execute("UPDATE season SET mal_id = 556 WHERE id = 'z-hubma2'")
+    # Status is season level (R1.23): the season itself reads watching.
+    conn.execute("UPDATE season SET mal_id = 556, status = 'watching' WHERE id = 'z-hubma2'")
     conn.execute(
         "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
         " VALUES ('z-hubma2', 'mal', 556, 'x')"
@@ -752,3 +768,80 @@ def test_fully_undated_completed_season_keeps_its_completed_status(conn, monkeyp
 
     status = conn.execute("SELECT status FROM season WHERE id = 'z-ova001'").fetchone()[0]
     assert status == "completed"
+
+
+def _timed(entry, updated_at):
+    return {**entry, "updated_at": updated_at}
+
+
+def test_both_changed_the_later_change_wins(conn, monkeypatch):
+    # R4.10: LCARS paused the season after the list's change -> LCARS goes out.
+    from lcars import list_baseline, season_status_log
+
+    _show(conn, "s-tie001", status="watching")
+    _season(conn, "z-tie001", "s-tie001", 1, anilist_id=102)
+    conn.execute("UPDATE season SET status = 'watching' WHERE id = 'z-tie001'")
+    list_baseline.record(conn, "anilist", 102, status="watching")
+    season_status_log.set_status(conn, "z-tie001", "paused", "web")
+    conn.execute(
+        "UPDATE season_status_change SET changed_at = '2026-09-28T12:00:00Z'"
+        " WHERE season_id = 'z-tie001'"
+    )
+    conn.commit()
+    _configure_anilist(monkeypatch, [
+        _timed(_entry(102, status="DROPPED"), "2026-09-28T10:00:00Z")
+    ])
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    status = conn.execute("SELECT status FROM season WHERE id = 'z-tie001'").fetchone()[0]
+    assert status == "paused"
+
+
+def test_both_changed_a_later_remote_change_is_taken(conn, monkeypatch):
+    from lcars import list_baseline, season_status_log
+
+    _show(conn, "s-tie002", status="watching")
+    _season(conn, "z-tie002", "s-tie002", 1, anilist_id=103)
+    conn.execute("UPDATE season SET status = 'watching' WHERE id = 'z-tie002'")
+    list_baseline.record(conn, "anilist", 103, status="watching")
+    season_status_log.set_status(conn, "z-tie002", "paused", "web")
+    conn.execute(
+        "UPDATE season_status_change SET changed_at = '2026-09-28T10:00:00Z'"
+        " WHERE season_id = 'z-tie002'"
+    )
+    conn.commit()
+    _configure_anilist(monkeypatch, [
+        _timed(_entry(103, status="DROPPED"), "2026-09-28T12:00:00Z")
+    ])
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    status = conn.execute("SELECT status FROM season WHERE id = 'z-tie002'").fetchone()[0]
+    assert status == "dropped"
+
+
+def test_remote_drop_with_later_seasons_you_planned_asks_before_skipping_them(conn, monkeypatch):
+    # Q-J4: the drop is taken; the later season you planned yourself stays
+    # planned and a review asks whether to skip it too.
+    from lcars import list_baseline
+
+    _show(conn, "s-lpl001", status="watching")
+    _season(conn, "z-lpl001", "s-lpl001", 1, anilist_id=104)
+    _season(conn, "z-lpl002", "s-lpl001", 2, anilist_id=None)
+    conn.execute("UPDATE season SET status = 'watching' WHERE id = 'z-lpl001'")
+    conn.execute(
+        "UPDATE season SET status = 'planned', status_set_manually = 1 WHERE id = 'z-lpl002'"
+    )
+    list_baseline.record(conn, "anilist", 104, status="watching")
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(104, status="DROPPED")])
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    rows = dict(conn.execute("SELECT id, status FROM season WHERE show_id = 's-lpl001'"))
+    assert rows == {"z-lpl001": "dropped", "z-lpl002": "planned"}
+    review = conn.execute(
+        "SELECT choices FROM pending_review WHERE field = 'later_planned' AND resolved_at IS NULL"
+    ).fetchone()
+    assert review is not None and "skip_later" in review["choices"]

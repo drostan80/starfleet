@@ -184,6 +184,8 @@ def test_no_status_change_when_already_matching_and_no_onward_push(conn, monkeyp
     # nothing pushed onward (loop-prevention: only real diffs propagate).
     _add_show(conn, "s-000005", status="watching")
     _add_season(conn, "z-000005", "s-000005", 1, mal_id=105, anilist_id=205)
+    # Status is season level (R1.23): the season itself reads watching.
+    conn.execute("UPDATE season SET status = 'watching' WHERE id = 'z-000005'")
     _add_episode(conn, "e-0000x1", "s-000005", 1, 1, state="watched")
     conn.commit()
     _mal_list(monkeypatch, [{"mal_id": 105, "status": "watching", "num_watched_episodes": 1}])

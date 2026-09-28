@@ -433,6 +433,7 @@ query ($userId: Int) {
         status
         progress
         score
+        updatedAt
         media { id format title { romaji } }
       }
     }
@@ -457,6 +458,16 @@ def fetch_score_format(token: str, client: httpx.Client | None = None) -> str:
     silently return 8.7 where the importer expects 87."""
     data = _graphql_request(_SCORE_FORMAT_QUERY, {}, token=token, client=client)
     return data["Viewer"]["mediaListOptions"]["scoreFormat"]
+
+
+def _unix_to_iso(seconds) -> str | None:
+    if not seconds:
+        return None
+    import datetime
+
+    return datetime.datetime.fromtimestamp(int(seconds), datetime.UTC).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
 
 
 def fetch_my_anime_list(token: str, client: httpx.Client | None = None) -> list[dict]:
@@ -497,6 +508,8 @@ def fetch_my_anime_list(token: str, client: httpx.Client | None = None) -> list[
                 "status": entry["status"],
                 "progress": entry.get("progress") or 0,
                 "score": entry.get("score"),  # POINT_100; 0 means unscored, see docstring
+                # Phase 7 (R4.10): when the entry last changed, for conflicts.
+                "updated_at": _unix_to_iso(entry.get("updatedAt")),
                 "title": media["title"]["romaji"],
             }
     return list(by_id.values())

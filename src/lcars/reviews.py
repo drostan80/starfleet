@@ -8,7 +8,11 @@ Kinds with choices:
 - `add_check:needs_user` — add to the proposed show (a cour of the season it
   follows) / make it an individual season until TVDB has it / don't add;
 - `same_tvdb_show` — merge the shows (R1.14) / they aren't the same show (your
-  note says which TVDB id is wrong).
+  note says which TVDB id is wrong);
+- `remote_completed` — a list said completed over unaired episodes (R4.8a):
+  accept (every episode watched) / revert to watching;
+- `later_planned` — a remote pause/drop would skip seasons you planned (Q-J4):
+  skip them too / keep them planned.
 """
 
 from __future__ import annotations
@@ -23,6 +27,10 @@ LABELS = {
     "dont_add": "Don't add",
     "merge": "Merge into one show",
     "not_same": "Not the same show",
+    "accept_completed": "Accept: completed, every episode watched",
+    "revert_watching": "Revert to watching, don't mark the episodes",
+    "skip_later": "Skip the later seasons too",
+    "keep_later": "Keep the later seasons planned",
 }
 
 
@@ -75,6 +83,33 @@ def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | N
             ), candidate)
         elif choice == "individual":
             add_check.create_individual_season(conn, candidate, payload.get("status"))
+    elif field == "remote_completed":
+        # R4.8a: you completed it on the list.
+        from lcars import list_sync, status_rules
+
+        season_id = payload["season_id"]
+        if choice == "accept_completed":
+            fx = status_rules.set_level_status(
+                conn, season_id, "completed", client, confirmed=True
+            )
+        else:
+            fx = status_rules.set_level_status(conn, season_id, "watching", client)
+        for sid in {season_id, *(sid for sid, _o, _n in fx.seasons)}:
+            list_sync.push(conn, sid)  # both lists follow what you chose
+        row_show = conn.execute(
+            "SELECT show_id FROM season WHERE id = ?", (season_id,)
+        ).fetchone()
+        if row_show and row_show[0]:
+            list_sync.push_progress_for_show(conn, row_show[0])
+    elif field == "later_planned" and choice == "skip_later":
+        from lcars import list_sync, status_rules
+
+        fx = status_rules.set_level_status(
+            conn, payload["season_id"], payload["status"], client, confirmed=True
+        )
+        for sid, old, new in fx.seasons:
+            if new == "skipped":
+                list_sync.delete_if_auto_skipped(conn, sid, old)
     elif field == "same_tvdb_show" and choice == "merge":
         result = consolidation.apply_group(conn, payload["tvdb_id"], fribb.load_dataset())
         if not result.get("merged"):

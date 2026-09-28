@@ -254,8 +254,10 @@ def test_fetch_my_list_maps_fields():
     fake = _SequencedGetClient([_FakeResponse(payload=payload)])
     result = mal_client.fetch_my_list("tok", client=fake)
     assert result == [
-        {"mal_id": 1, "status": "watching", "score": 7, "num_watched_episodes": 5},
-        {"mal_id": 2, "status": "completed", "score": 0, "num_watched_episodes": 24},
+        {"mal_id": 1, "status": "watching", "score": 7, "num_watched_episodes": 5,
+         "updated_at": None},
+        {"mal_id": 2, "status": "completed", "score": 0, "num_watched_episodes": 24,
+         "updated_at": None},
     ]
 
 

@@ -65,6 +65,7 @@ def reconcile_mal_progress(conn) -> dict:
         entry["mal_id"]: {
             "lcars_status": watch_reconcile._MAL_TO_STATUS.get(entry["status"]),
             "progress": entry.get("num_watched_episodes") or 0,
+            "updated_at": entry.get("updated_at"),
         }
         for entry in my_list
     }
@@ -75,10 +76,10 @@ def reconcile_mal_progress(conn) -> dict:
     # Hub model: a MAL change has now landed in LCARS -> mirror it onward
     # to AniList (never back to MAL). Only the seasons/shows that actually
     # changed, never a per-season-walked push.
-    for season_id, new_status in changed_status.items():
-        watch_reconcile._push_season_status_onward(conn, "anilist", season_id, new_status)
+    from lcars import list_sync
+
     for season_id in changed_progress_season_ids:
-        watch_reconcile._push_progress_onward(conn, "anilist", season_id)
+        list_sync.push(conn, season_id, status=False, services=("anilist",))
     conn.commit()
 
     result["seasons_checked"] = stats["seasons_checked"]
