@@ -119,6 +119,7 @@ checked.
 import logging
 
 from lcars import (
+    add_check,
     events,
     pending_review,
     radarr_client,
@@ -455,8 +456,6 @@ def _handle_sonarr_series_add(conn, payload: dict) -> None:
     if series is None or series.get("tvdbId") is None:
         return
     tvdb_id = series["tvdbId"]
-    if _show_ids_for_tvdb(conn, tvdb_id):
-        return
     title = series.get("title")
     if not title:
         return
@@ -466,13 +465,8 @@ def _handle_sonarr_series_add(conn, payload: dict) -> None:
         tracking_space = "tv"
         if cfg.sonarr_anime_root_folder and root.startswith(cfg.sonarr_anime_root_folder):
             tracking_space = "anime"
-        new_show_id = shows.create_show(conn, {
-            "media_shape": "episodic",
-            "tracking_space": tracking_space,
-            "primary_title": "english",
-            "title_english": title,
-            "tvdb_id": str(tvdb_id),
-        })
+        # Phase 5: through the add check (R3.1, R5.1-R5.3).
+        add_check.add_sonarr_series(conn, tvdb_id, title, tracking_space, "webhook")
     except Exception:
         logger.exception(
             "SeriesAdd webhook: failed to create LCARS show (tvdb_id=%s, title=%r)", tvdb_id, title
@@ -487,14 +481,6 @@ def _handle_sonarr_series_add(conn, payload: dict) -> None:
             logger.exception(
                 "SeriesAdd webhook: failed to open fallback review (tvdb_id=%s)", tvdb_id
             )
-        return
-    try:
-        shows.flag_possible_sequel(conn, new_show_id)
-    except Exception:
-        logger.exception(
-            "SeriesAdd webhook: sequel check failed for new show %s (tvdb_id=%s)",
-            new_show_id, tvdb_id,
-        )
 
 
 def _handle_sonarr_series_delete(conn, payload: dict) -> None:

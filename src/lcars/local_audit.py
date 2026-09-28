@@ -47,6 +47,7 @@ import os
 import re
 
 from lcars import (
+    add_check,
     pending_review,
     radarr_client,
     service_health,
@@ -708,8 +709,29 @@ def _create_from_untracked_entry(
         return
     key = "tvdb_id" if media_shape == "episodic" else "tmdb_id"
     external_id = entry["external_id"]
+    if media_shape == "episodic":
+        # Phase 5: through the add check (R3.1, R5.1-R5.3).
+        try:
+            kind, _show_id = add_check.add_sonarr_series(
+                conn, int(external_id), title, tracking_space, "reconcile"
+            )
+        except shows.ShowInputError as e:
+            logger.exception("reconcile_arr_state: failed to create show for tvdb %s", external_id)
+            pending_review.open_or_extend(
+                conn, "show", f"{entry['service']}:{external_id}", "reconcile_create",
+                "reconcile", None,
+                f"{entry['service']} has an untracked show LCARS couldn't create: {title} ({e})",
+            )
+            conn.commit()
+            result["create_failures"].append({"title": title, "error": str(e)})
+            return
+        if kind == "new_show":
+            result["shows_created"] += 1
+        elif kind != "already_tracked":
+            result["create_failures"].append({"title": title, "error": f"add check: {kind}"})
+        return
     try:
-        new_show_id = shows.create_show(conn, {
+        shows.create_show(conn, {
             "media_shape": media_shape,
             "tracking_space": tracking_space,
             "primary_title": "english",
@@ -729,13 +751,6 @@ def _create_from_untracked_entry(
         conn.commit()
         result["create_failures"].append({"title": title, "error": str(e)})
         return
-    try:
-        shows.flag_possible_sequel(conn, new_show_id)
-    except Exception:
-        logger.exception(
-            "reconcile_arr_state: sequel check failed for new show %s (%s external_id=%s)",
-            new_show_id, entry["service"], external_id,
-        )
 
 
 def reconcile_arr_state(conn) -> dict:

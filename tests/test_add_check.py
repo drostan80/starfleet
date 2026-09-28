@@ -125,3 +125,19 @@ def test_sonarr_series_with_a_different_name_goes_to_you(conn):
     assert add_check.classify(conn, c, DATASET).kind == "needs_user"
     c = _c(SONARR, tvdb_id=777, tvdb_name="Some Anime", titles=["Some Anime"])
     assert add_check.classify(conn, c, DATASET).kind == "new_show"
+
+
+def test_sonarr_add_latest_season_planned_earlier_skipped(conn):
+    # R5.3: none tracked yet → latest planned, every earlier one skipped.
+    add_check.apply_sonarr_initial_statuses(conn, "s-mush01")
+    statuses = [r[0] for r in conn.execute(
+        "SELECT status FROM season WHERE show_id = 's-mush01' ORDER BY season_number")]
+    assert statuses == ["skipped", "skipped", "planned"]
+    show = conn.execute("SELECT status FROM show WHERE id = 's-mush01'").fetchone()[0]
+    assert show == "planned"
+
+
+def test_sonarr_series_of_a_tracked_show_is_left_alone(conn):
+    assert add_check.add_sonarr_series(conn, TVDB, "Mushoku Tensei", "anime", "webhook") == (
+        "already_tracked", "s-mush01"
+    )

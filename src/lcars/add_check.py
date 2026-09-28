@@ -209,3 +209,68 @@ def classify(conn, c: Candidate, dataset: list[dict]) -> Decision:
                         reason=f"another cour of TVDB season {n} (R1.10)")
     return Decision("new_season", show["id"], tvdb_id=tvdb_id, season_number=n,
                     reason=f"TVDB season {n} of a tracked show")
+
+
+# ── Applying: a series added in Sonarr (R5.1–R5.3) ─────────────────────
+
+
+def review(conn, key: str, decision: Decision, source: str) -> None:
+    """A decision you must take (R3.7a) or a candidate the rules don't add,
+    kept for you as a review (R4.8b: the choices are in `proposal`)."""
+    from lcars import pending_review  # deferred: pending_review is a leaf, kept lazy
+
+    pending_review.open_or_extend(
+        conn, "show", key, f"add_check:{decision.kind}", source, None,
+        f"{decision.reason} — {decision.proposal}" if decision.proposal else decision.reason,
+    )
+
+
+def apply_sonarr_initial_statuses(conn, show_id: str) -> None:
+    """R5.3: a show added from Sonarr with several seasons, none tracked yet:
+    the latest season planned, every earlier one skipped (episodes still
+    fetched for numbering, R2.19); the show is then planned (R2.13)."""
+    from lcars import status_rules
+
+    seasons = conn.execute(
+        "SELECT id FROM season WHERE show_id = ? AND kind = 'tvdb_season' AND season_number > 0"
+        " ORDER BY season_number",
+        (show_id,),
+    ).fetchall()
+    for i, row in enumerate(seasons):
+        season = conn.execute("SELECT * FROM season WHERE id = ?", (row["id"],)).fetchone()
+        want = "planned" if i == len(seasons) - 1 else "skipped"
+        status_rules._set(conn, season, want, "sonarr", False, status_rules.Effects())
+    status_rules.recompute_show(conn, show_id, "sonarr")
+
+
+def add_sonarr_series(
+    conn, tvdb_id: int, title: str, tracking_space: str, source: str
+) -> tuple[str, str | None]:
+    """A series in Sonarr that LCARS doesn't track (webhook or catalog sweep):
+    through the add check; a new show is created planned, R5.3 statuses.
+    Returns (decision kind, show id or None)."""
+    from lcars import fribb as _fribb
+    from lcars import shows
+
+    tracked = _tracked_show_for_tvdb(conn, int(tvdb_id))
+    if tracked is not None:
+        return "already_tracked", tracked["id"]
+    decision = classify(
+        conn, Candidate(SONARR, tvdb_id=int(tvdb_id), tvdb_name=title, titles=[title]),
+        _fribb.load_dataset(),
+    )
+    if decision.kind != "new_show":
+        review(conn, f"tvdb:{tvdb_id}", decision, source)
+        conn.commit()
+        return decision.kind, None
+    show_id = shows.create_show(conn, {
+        "media_shape": "episodic",
+        "tracking_space": tracking_space,
+        "primary_title": "english",
+        "title_english": title,
+        "tvdb_id": str(tvdb_id),
+        "skip_sequel_check": True,  # R1.14: its own TVDB id makes it its own show
+    })
+    apply_sonarr_initial_statuses(conn, show_id)
+    conn.commit()
+    return "new_show", show_id
