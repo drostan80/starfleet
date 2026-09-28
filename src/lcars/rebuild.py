@@ -702,7 +702,7 @@ def stage_sonarr(run: Run) -> None:
     episodes at TVDB season/episode, `tvdb_absolute`, files — `_fetch_sonarr`
     alone (no AniList, art or synopsis fetch). Shows not in Sonarr keep the
     episodes the 09-06 base has."""
-    from lcars import metadata, sonarr_client
+    from lcars import anidb, metadata, sonarr_client
 
     conn = _connect(run.work())
     rows = conn.execute(
@@ -729,6 +729,46 @@ def stage_sonarr(run: Run) -> None:
         conn.commit()
     if failed:
         raise RebuildError(f"{failed} Sonarr reads failed — see the ledger")
+    # Every episode's TVDB season has its season row (R1.13b): shows Sonarr
+    # doesn't hold (the Trakt import, finished shows) never got theirs.
+    created = 0
+    for show in conn.execute("SELECT id FROM show WHERE tracked = 1 AND"
+                             " media_shape = 'episodic'").fetchall():
+        numbers = {r[0] for r in conn.execute(
+            "SELECT DISTINCT season FROM episode WHERE show_id = ?", (show[0],))}
+        have = {r[0] for r in conn.execute(
+            "SELECT season_number FROM season WHERE show_id = ? AND kind = 'tvdb_season'",
+            (show[0],))}
+        missing = {n for n in numbers if n and n > 0} - have
+        if not missing:
+            continue
+        rows = metadata._ensure_seasons(conn, show[0], missing)
+        for n, season_id in rows.items():
+            conn.execute("UPDATE episode SET season_id = ? WHERE show_id = ? AND season = ?",
+                         (season_id, show[0], n))
+        created += len(missing)
+        conn.commit()
+    run.record("seasons_from_episodes", "all shows", "applied",
+               f"{created} TVDB season rows created for episodes that had none")
+    # Air dates for episodes that have none (the Trakt import, shows never in
+    # Sonarr): TVmaze by TVDB season/episode, then AniDB — numbering orders by
+    # them (R1.2) and "last aired season" needs them. NULL-only.
+    tvmaze = conn.execute(
+        """UPDATE episode SET
+             air_date_utc = COALESCE(te.airstamp, te.airdate || 'T00:00:00Z'),
+             air_date_source = 'tvmaze'
+           FROM show_external_id tm, tvmaze_episode te
+           WHERE tm.show_id = episode.show_id AND tm.service = 'tvmaze'
+             AND te.tvmaze_show_id = CAST(tm.external_id AS INTEGER)
+             AND te.season = COALESCE(episode.sonarr_season, episode.season)
+             AND te.episode = COALESCE(episode.sonarr_episode, episode.episode)
+             AND episode.air_date_utc IS NULL AND episode.kind = 'regular'
+             AND (te.airstamp IS NOT NULL OR (te.airdate IS NOT NULL AND te.airdate != ''))"""
+    ).rowcount
+    anidb_filled = anidb.fill_airdate_gaps_anidb(conn)
+    conn.commit()
+    run.record("air_dates", "all shows", "applied",
+               f"{tvmaze} from TVmaze, {anidb_filled} from AniDB")
     run.record("stage", "sonarr", "applied",
                f"{read} shows read from Sonarr, {absent} not in the Sonarr library")
 
@@ -759,8 +799,201 @@ def stage_numbering(run: Run) -> None:
                f"{len(shows)} shows by source {dict(by_source)}; flags {dict(flags)}")
 
 
+# ── stage 6: statuses (the rules, the user's decisions, the pieces) ─────────
+
+
+def _facts(run: Run, anilist_id: int) -> dict:
+    """AniList facts, cached in the run dir (re-runs don't re-read)."""
+    from lcars import anilist_client
+
+    path = run.dir / "anilist_facts.json"
+    cache = json.loads(path.read_text()) if path.exists() else {}
+    key = str(anilist_id)
+    if key not in cache:
+        try:
+            cache[key] = anilist_client.fetch_media_facts(anilist_id) or {}
+        except anilist_client.AniListError:
+            return {}
+        path.write_text(json.dumps(cache))
+    return cache[key]
+
+
+def _link_list_levels(run: Run, conn) -> None:
+    """A level holding an AniList/MAL id but no span (a folded film/OVA, a
+    phase-5 special, a merged piece) and Memory Alpha's level for the same
+    episodes become one: the list ids, status and history move onto the
+    level with the span (R1.13b, R1.22). Matched by the AniList start date
+    against the level's first air date (±3 days); anything unmatched is
+    left for the review."""
+    from datetime import date
+
+    from lcars import tvdb_vetting
+
+    linked = unmatched = 0
+    for lvl in conn.execute(
+            "SELECT z.* FROM season z JOIN show sh ON sh.id = z.show_id WHERE sh.tracked = 1"
+            " AND z.kind IN ('special', 'part') AND (z.anilist_id IS NOT NULL OR"
+            " z.mal_id IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM season_span p"
+            " WHERE p.season_id = z.id)").fetchall():
+        start = _iso_date(_facts(run, lvl["anilist_id"]).get("startDate")) \
+            if lvl["anilist_id"] else None
+        candidates = []
+        if start:
+            for c in conn.execute(
+                    "SELECT z.id, MIN(e.air_date_utc) first FROM season z"
+                    " JOIN season_span p ON p.season_id = z.id"
+                    " JOIN episode e ON e.show_id = z.show_id"
+                    "  AND e.absolute_number BETWEEN p.abs_from AND p.abs_to"
+                    " WHERE z.show_id = ? AND z.id != ? AND z.anilist_id IS NULL"
+                    "  AND z.mal_id IS NULL AND z.kind = ? GROUP BY z.id",
+                    (lvl["show_id"], lvl["id"], lvl["kind"])).fetchall():
+                if c["first"] and abs((date.fromisoformat(c["first"][:10])
+                                       - date.fromisoformat(start)).days) <= 3:
+                    candidates.append(c["id"])
+        if len(candidates) == 1:
+            target = candidates[0]
+            src = conn.execute("SELECT * FROM season WHERE id = ?", (lvl["id"],)).fetchone()
+            conn.execute("UPDATE season SET anilist_id = ?, mal_id = ?, label = COALESCE(label, ?)"
+                         " WHERE id = ?", (src["anilist_id"], src["mal_id"], src["label"], target))
+            conn.execute("UPDATE season_external_id SET season_id = ? WHERE season_id = ?",
+                         (target, lvl["id"]))
+            tvdb_vetting._merge_into(conn, lvl["id"], target)
+            linked += 1
+            run.record("level_link", lvl["id"], "applied", f"→ {target} (starts {start})")
+        else:
+            unmatched += 1
+            run.record("level_link", lvl["id"], "review",
+                       f"{len(candidates)} Memory Alpha levels start near {start}"
+                       f" (AniList {lvl['anilist_id']}) — placed by the user in 9.2")
+    conn.commit()
+    run.record("level_links", "all", "applied", f"{linked} linked, {unmatched} to review")
+
+
+def _last_aired_season(conn, show_id: str):
+    now = util.now_utc_iso()
+    return conn.execute(
+        "SELECT z.* FROM season z WHERE z.show_id = ? AND z.kind = 'tvdb_season'"
+        " AND z.season_number > 0 AND EXISTS (SELECT 1 FROM episode e WHERE e.show_id = z.show_id"
+        " AND e.season = z.season_number AND e.air_date_utc <= ?)"
+        " ORDER BY z.season_number DESC LIMIT 1", (show_id, now)).fetchone()
+
+
+def _complete_aired(conn, show_id: str) -> str:
+    """"Completed (unless a later season exists → that season planned)" — the
+    user's recurring gap rule: every fully aired season completed (episodes
+    watched, R2.7), a season still to air planned."""
+    from lcars import status_rules
+
+    now = util.now_utc_iso()
+    done = []
+    for z in conn.execute("SELECT * FROM season WHERE show_id = ? AND kind = 'tvdb_season'"
+                          " AND season_number > 0 ORDER BY season_number",
+                          (show_id,)).fetchall():
+        eps = conn.execute("SELECT air_date_utc FROM episode WHERE show_id = ? AND season = ?",
+                           (show_id, z["season_number"])).fetchall()
+        aired = eps and all(e[0] and e[0] <= now for e in eps)
+        status = "completed" if aired else "planned"
+        status_rules.set_level_status(conn, z["id"], status, "rebuild", confirmed=True,
+                                      manual=True)
+        done.append(f"S{z['season_number']} {status}")
+    return ", ".join(done)
+
+
+def _show_by_title(conn, title: str):
+    return conn.execute(
+        "SELECT * FROM show WHERE tracked = 1 AND (title_english = ? OR title_romaji = ?"
+        " OR display_title_override = ?)", (title, title, title)).fetchone()
+
+
+def stage_statuses(run: Run) -> None:
+    from lcars import status_rules
+
+    conn = _connect(run.work())
+    d = decisions(run)
+    _link_list_levels(run, conn)
+
+    # R2.7 on the statuses you decided: a completed season has its episodes watched.
+    marked = 0
+    for z in conn.execute("SELECT * FROM season WHERE status = 'completed' AND"
+                          " status_set_manually = 1").fetchall():
+        eps = status_rules.level_episodes(conn, z)
+        if any(e["state"] != "watched" for e in eps):
+            status_rules._mark_watched(conn, z["show_id"], eps, status_rules.Effects())
+            marked += 1
+    run.record("r2_7", "your completed seasons", "applied", f"{marked} seasons' episodes marked")
+    conn.commit()
+
+    # The 216 Trakt drops: on the last season that has aired (decision 1).
+    live = _live(run)
+    trakt = [r[0] for r in live.execute(
+        "SELECT sh.id FROM show sh WHERE sh.tracked = 1 AND sh.status = 'dropped'"
+        " AND NOT EXISTS (SELECT 1 FROM season z WHERE z.show_id = sh.id AND z.status = 'dropped')"
+        " AND (SELECT changed_by FROM status_change c WHERE c.show_id = sh.id"
+        "      ORDER BY changed_at DESC LIMIT 1) = 'trakt_import'")]
+    live.close()
+    for sid in trakt:
+        last = _last_aired_season(conn, sid)
+        if last is None:
+            run.record("trakt_drop", sid, "review", "no season with an aired episode")
+            continue
+        status_rules.set_level_status(conn, last["id"], "dropped", "rebuild", confirmed=True,
+                                      manual=True)
+        run.record("trakt_drop", sid, "applied", f"S{last['season_number']} dropped")
+    conn.commit()
+
+    # Snapshot and activity follow-ups (PLAN-DATA "Your review decisions").
+    for x in d["snapshot"]:
+        if x["action"] in ("keep", "evidence"):
+            run.record("snapshot", x["key"], "applied", x["action"])
+            continue
+        show = conn.execute("SELECT * FROM show WHERE id = ?", (x["key"].split(":", 1)[1],)
+                            ).fetchone() if x["key"].startswith(("sa:", "su:")) else None
+        show = show or _show_by_title(conn, x["title"])
+        if show is None:
+            run.record("snapshot", x["key"], "review", f"{x['title']}: show not found")
+            continue
+        if x["action"] == "complete_aired":
+            detail = _complete_aired(conn, show["id"])
+        elif x["action"] == "sakamoto_dropped":
+            last = _last_aired_season(conn, show["id"])
+            status_rules.set_level_status(conn, last["id"], "dropped", "rebuild",
+                                          confirmed=True, manual=True)
+            detail = f"S{last['season_number']} dropped"
+        elif x["action"] == "drop_duplicate_show":
+            detail = "duplicate show merged away in stage 3 (R1.14)"
+        else:  # slime / kaiju: season level by the rules, after the replay
+            detail = "season statuses by the rules and the replayed watches"
+        run.record("snapshot", x["key"], "applied", detail)
+    conn.commit()
+
+    # Urusei Yatsura films: the level holding each film is skipped (answer a).
+    pending = [json.loads(line) for line in (run.dir / "pending.jsonl").read_text().splitlines()
+               if json.loads(line)["kind"] == "urusei_film"]
+    uy = _show_by_title(conn, "Urusei Yatsura")
+    for f in pending:
+        name = f["title"].split(": ", 1)[-1]
+        lvl = conn.execute(
+            "SELECT z.id FROM season z JOIN season_span p ON p.season_id = z.id"
+            " JOIN episode e ON e.show_id = z.show_id AND e.absolute_number"
+            "  BETWEEN p.abs_from AND p.abs_to WHERE z.show_id = ? AND z.kind = 'special'"
+            "  AND e.title LIKE ? LIMIT 1", (uy["id"] if uy else "", f"%{name}%")).fetchone()
+        if lvl is None:
+            run.record("new_show", f["key"], "review", f"no level for {f['title']} in the show")
+            continue
+        _mine(conn, lvl[0], "skipped")
+        run.record("new_show", f["key"], "applied", f"level {lvl[0]} skipped")
+    conn.commit()
+
+    # R2.14/R2.15/R2.18 per level, R2.13 per show, for every tracked show.
+    for sid in [r[0] for r in conn.execute("SELECT id FROM show WHERE tracked = 1")]:
+        status_rules.after_episodes_changed(conn, sid, "rebuild")
+    conn.commit()
+    run.record("stage", "statuses", "applied", "")
+
+
 STAGE_FUNCS = {"base": stage_base, "sources": stage_sources, "structure": stage_structure,
-               "sonarr": stage_sonarr, "numbering": stage_numbering}
+               "sonarr": stage_sonarr, "numbering": stage_numbering,
+               "statuses": stage_statuses}
 
 
 def main(argv=None) -> int:
