@@ -644,6 +644,14 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
   watch a skipped season: all later seasons, including ones skipped after a drop
   (R2.16)?
 
+- **Q-X (R2.13b)** Skipped picked on a show where S1 is completed and S2, S3 are **[OPEN]**
+  planned: are **both** S2 and S3 skipped (every planned season after the last
+  watched one), and the show reads dropped? (Built that way; asked 09-28.)
+- **Q-Y (R4.8a)** A list flips a season to completed while LCARS has **aired but **[OPEN]**
+  unwatched** episodes (the 09-20 flip-flop: AniList/MAL flip an airing entry as
+  their episode count catches up). Today those episodes are marked watched with no
+  review (only unaired ones raise one). Review there too, or is marking them right?
+
 ## 10. Changelog
 
 - 2026-09-27 — created from the user's rule text.

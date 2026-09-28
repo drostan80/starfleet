@@ -424,6 +424,29 @@ Sub-seasons under TVDB seasons (R1.10), specials/films as their own items,
 individual seasons list, skipped hidden from airing/add/browse, confirmation
 warnings (4.3), no episode "skip" action.
 
+**APPROVED 2026-09-28** (scope as listed in the phase 7 report). Steps:
+
+- **8.0 Dev safety (no code):** Test Shuttle runs with the AniList/MAL tokens and
+  the Sonarr/Radarr URLs blanked by env, so no UI test can write to the real lists
+  or Sonarr. (Phase 7's pushes are **not** switched off in code: they fire whenever
+  a token is configured. Phase 9 decides how prod turns them on.)
+- **8.1 API** *(added after approval: read-only fields the page needs)*:
+  `Season.episodeIds` from the level's spans (R1.11), so the page shows exactly the
+  engine's membership instead of guessing splits from absolute numbers.
+- **8.2 Show page:** rendered from `Show.levels` in number/air order (decimal side
+  pieces, films and specials in place, R1.13a), parts and mini sub-seasons nested
+  under their TVDB season (R1.10, R1.13b); art and status picker per level. The old
+  client-side split/interleave guessing goes.
+- **8.3 Reviews page:** a button per choice (`resolveReviewChoice`) and a link to the
+  show page (R4.8b).
+- **8.4 Browse/add:** skipped filter (R2.10 — skipped appears only here); individual
+  seasons listed; an add with no TVDB id → individual season or a review, never a
+  new show (cutover blocker).
+- **8.5 Warnings:** every status change that the engine asks to confirm shows the
+  warning and retries with `confirmed` (show and season pickers).
+- **8.6 Placeholder numbers:** 5000+ shown as **x** everywhere (R1.0a).
+- **8.7 Data TUI:** nullable `seasonNumber`/`Season.show` handled; x display.
+
 ## Phase 9 — Dry run and cutover
 
 - Run everything on the rebuilt DB copy with external writes **captured, not
