@@ -212,6 +212,12 @@ class SonarrClient:
         auto-unmonitor-on-drop path (resolvers.py)."""
         return self._put(f"series/{series['id']}", json=series)
 
+    def monitor_episodes(self, episode_ids: list[int], monitored: bool) -> object:
+        """Phase 6 (R2.12): per-episode monitoring — `PUT /episode/monitor`."""
+        return self._put(
+            "episode/monitor", {"episodeIds": episode_ids, "monitored": monitored}
+        )
+
     def history_page(self, page: int, page_size: int = 250) -> dict:
         """§5.2/§6.7, B.3 — one page of Sonarr's own grab/import event
         log, newest first. `includeEpisode`/`includeSeries` embed the

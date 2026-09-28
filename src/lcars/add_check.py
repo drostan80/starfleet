@@ -277,11 +277,15 @@ def apply_sonarr_initial_statuses(conn, show_id: str) -> None:
         " ORDER BY season_number",
         (show_id,),
     ).fetchall()
+    fx = status_rules.Effects()
     for i, row in enumerate(seasons):
         season = conn.execute("SELECT * FROM season WHERE id = ?", (row["id"],)).fetchone()
         want = "planned" if i == len(seasons) - 1 else "skipped"
-        status_rules._set(conn, season, want, "sonarr", False, status_rules.Effects())
+        status_rules._set(conn, season, want, "sonarr", False, fx)
     status_rules.recompute_show(conn, show_id, "sonarr")
+    from lcars import sonarr_sync
+
+    sonarr_sync.apply(conn, fx.seasons)  # skipped → unmonitored, latest → future (R5.6/R5.8)
 
 
 def add_sonarr_series(
@@ -392,6 +396,10 @@ def apply_decision(conn, d: Decision, c: Candidate) -> str | None:
         season_id = _insert_level(conn, d.show_id, None, 1, "special", None, c,
                                   _status_after(last["status"] if last else None))
     status_rules.recompute_show(conn, d.show_id, status_rules.AUTO)  # R2.17, not pushed
+    from lcars import sonarr_sync
+
+    row = conn.execute("SELECT status FROM season WHERE id = ?", (season_id,)).fetchone()
+    sonarr_sync.apply(conn, [(season_id, None, row[0])])  # R5.6/R5.8 for that season
     return season_id
 
 

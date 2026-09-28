@@ -624,7 +624,26 @@ def _link_list_ids_to_season(conn, show_id: str, input: dict) -> None:
     )
 
 
-def add_checked(conn, input: dict) -> str:
+def _add_new_show_to_sonarr(conn, show_id: str, input: dict) -> None:
+    """R5.5 (phase 6): a show new to LCARS with a TVDB id goes into Sonarr,
+    monitored, future episodes only, nothing searched. Best effort: the show
+    is already in LCARS; a failure is a review, never an error."""
+    cfg = config.get_current()
+    if not (cfg.sonarr_url and cfg.sonarr_api_key) or not input.get("tvdb_id"):
+        return
+    try:
+        candidates = _lookup_arr(conn, "episodic", f"tvdb:{input['tvdb_id']}")
+        if not candidates:
+            return
+        result = _ensure_in_arr(conn, {**input, "media_shape": "episodic"}, candidates[0])
+        if result.get("title_slug"):
+            write_arr_external_id(conn, show_id, "episodic", result["title_slug"])
+    except Exception as e:  # best effort: never blocks the add itself
+        pending_review.open_or_extend(conn, "show", show_id, "sonarr_add", "sonarr", None, str(e))
+    conn.commit()
+
+
+def add_checked(conn, input: dict, *, add_to_sonarr: bool = True) -> str:
     """Your own add (browse/add, addShowWithArr) through the one add check
     (phase 5, R3.1), mapped onto what the clients handle until phase 8:
     a new TVDB season, or the season's missing AniList id → the "add as
@@ -664,7 +683,10 @@ def add_checked(conn, input: dict) -> str:
     if d.kind == "needs_user":
         raise ShowInputError(f"{d.reason} — {d.proposal}" if d.proposal else d.reason)
     if d.kind == "new_show":
-        return create_show(conn, {**input, "skip_sequel_check": True})
+        show_id = create_show(conn, {**input, "skip_sequel_check": True})
+        if add_to_sonarr:
+            _add_new_show_to_sonarr(conn, show_id, {**input, "tvdb_id": d.tvdb_id})
+        return show_id
     # No TVDB id yet: R3.6c makes it an individual season, but browse can't
     # show those until the UI goes per level (phase 8) — until then your add
     # stays a show, flagged for its TVDB link. Cutover blocker (PLAN-CODE).
@@ -1110,7 +1132,8 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
                     "seasonFolder": True,
                     "addOptions": {
                         "monitor": "future",
-                        "searchForMissingEpisodes": not input.get("unmonitored", False),
+                        # R5.5: future episodes only — nothing already aired is searched.
+                        "searchForMissingEpisodes": False,
                     },
                 }
                 created = client.add_series(payload)
@@ -1167,138 +1190,6 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
         "tmdb_id": created["tmdbId"],
         "title_slug": created.get("titleSlug"),
     }
-
-
-def ensure_arr_monitored(conn, show_id: str) -> dict | None:
-    """Ensure a show's Sonarr/Radarr entry exists and is monitored.
-
-    Used by the sequel-attach flow: when a new season is added to an
-    existing show, the arr instance must be monitoring that series so it
-    actually grabs future episodes.
-
-    Returns a dict describing what happened, or None if Sonarr/Radarr
-    isn't configured for this show's media shape. Raises ShowInputError
-    on genuine service failures (same as _ensure_in_arr)."""
-    show = conn.execute(
-        "SELECT media_shape, tracking_space FROM show WHERE id = ?",
-        (show_id,),
-    ).fetchone()
-    if show is None:
-        return None
-
-    cfg = config.get_current()
-    media_shape = show["media_shape"]
-    tracking_space = show["tracking_space"]
-
-    if media_shape == "episodic":
-        if not (cfg.sonarr_url and cfg.sonarr_api_key):
-            return None
-        tvdb_row = conn.execute(
-            "SELECT external_id FROM show_external_id"
-            " WHERE show_id = ? AND service = 'tvdb'",
-            (show_id,),
-        ).fetchone()
-        if tvdb_row is None:
-            return None
-        tvdb_id = int(tvdb_row["external_id"])
-        try:
-            with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
-                existing = client.series_by_tvdb_id(tvdb_id)
-                if existing is not None:
-                    # Already in Sonarr — ensure it's monitored.
-                    if not existing.get("monitored", True):
-                        existing["monitored"] = True
-                        client.update_series(existing)
-                    service_health.record_success(conn, "sonarr")
-                    return {"action": "already_in_sonarr", "monitored": True}
-                # Not in Sonarr — look up and add it.
-                results = client.lookup_series(f"tvdb:{tvdb_id}")
-                if not results:
-                    return {"action": "not_found_in_sonarr"}
-                candidate = results[0]
-                is_anime = tracking_space == "anime"
-                root_folder = (
-                    cfg.sonarr_anime_root_folder if is_anime else cfg.sonarr_tv_root_folder
-                )
-                quality_profile_id = (
-                    cfg.sonarr_anime_quality_profile_id
-                    if is_anime
-                    else cfg.sonarr_tv_quality_profile_id
-                )
-                if not (root_folder and quality_profile_id):
-                    return {"action": "sonarr_not_configured"}
-                payload = {
-                    "title": candidate["title"],
-                    "tvdbId": candidate["tvdbId"],
-                    "qualityProfileId": quality_profile_id,
-                    "titleSlug": candidate.get("titleSlug"),
-                    "images": candidate.get("images", []),
-                    "seasons": candidate.get("seasons", []),
-                    "rootFolderPath": root_folder,
-                    "monitored": True,
-                    "seasonFolder": True,
-                    "addOptions": {
-                        "monitor": "future",
-                        "searchForMissingEpisodes": True,
-                    },
-                }
-                created = client.add_series(payload)
-                title_slug = created.get("titleSlug")
-                if title_slug:
-                    write_arr_external_id(conn, show_id, media_shape, title_slug)
-            service_health.record_success(conn, "sonarr")
-            return {"action": "added_to_sonarr", "monitored": True}
-        except sonarr_client.SonarrError as e:
-            service_health.record_failure(conn, "sonarr", str(e))
-            raise ShowInputError(f"Sonarr monitoring failed: {e}") from e
-
-    else:
-        # Movie → Radarr
-        if not (cfg.radarr_url and cfg.radarr_api_key):
-            return None
-        tmdb_row = conn.execute(
-            "SELECT external_id FROM show_external_id"
-            " WHERE show_id = ? AND service = 'tmdb'",
-            (show_id,),
-        ).fetchone()
-        if tmdb_row is None:
-            return None
-        tmdb_id = int(tmdb_row["external_id"])
-        try:
-            with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
-                existing = client.movie_by_tmdb_id(tmdb_id)
-                if existing is not None:
-                    if not existing.get("monitored", True):
-                        existing["monitored"] = True
-                        client.update_movie(existing)
-                    service_health.record_success(conn, "radarr")
-                    return {"action": "already_in_radarr", "monitored": True}
-                results = client.lookup_movie(f"tmdb:{tmdb_id}")
-                if not results:
-                    return {"action": "not_found_in_radarr"}
-                candidate = results[0]
-                if not (cfg.radarr_root_folder and cfg.radarr_quality_profile_id):
-                    return {"action": "radarr_not_configured"}
-                payload = {
-                    "title": candidate["title"],
-                    "tmdbId": candidate["tmdbId"],
-                    "qualityProfileId": cfg.radarr_quality_profile_id,
-                    "titleSlug": candidate.get("titleSlug"),
-                    "images": candidate.get("images", []),
-                    "rootFolderPath": cfg.radarr_root_folder,
-                    "monitored": True,
-                    "minimumAvailability": candidate.get("minimumAvailability") or "released",
-                    "addOptions": {"searchForMovie": True},
-                }
-                created = client.add_movie(payload)
-                title_slug = created.get("titleSlug")
-                if title_slug:
-                    write_arr_external_id(conn, show_id, media_shape, title_slug)
-            service_health.record_success(conn, "radarr")
-            return {"action": "added_to_radarr", "monitored": True}
-        except radarr_client.RadarrError as e:
-            service_health.record_failure(conn, "radarr", str(e))
-            raise ShowInputError(f"Radarr monitoring failed: {e}") from e
 
 
 def write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str) -> None:
@@ -1700,7 +1591,7 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
             )
         show_id = _promote_stub(conn, existing_show_id, resolved_input)
     else:
-        show_id = add_checked(conn, resolved_input)
+        show_id = add_checked(conn, resolved_input, add_to_sonarr=False)  # added above
     if title_slug:
         write_arr_external_id(conn, show_id, input["media_shape"], title_slug)
     if arr_result.pop("needs_tvdb_link", False):

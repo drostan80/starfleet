@@ -61,6 +61,7 @@ from lcars import (
     show_merge,
     shows,
     sonarr_client,
+    sonarr_sync,
     status_rules,
     tvdb_backfill,
     untracked_sweep,
@@ -537,6 +538,8 @@ def _apply_status_effects(
         if push and new and new != "skipped":
             _push_season_status(conn, season, new)
             _push_mal_season_status(conn, season, new)
+    if push:
+        sonarr_sync.apply(conn, fx.seasons)  # phase 6: Sonarr per season (R5.6–R5.8)
     for season_number in sorted({s for s, _ in fx.watched}):
         _stamp_season_started_at(conn, show_id, season_number, now, push=False)
         if push:
@@ -3102,14 +3105,18 @@ def _apply_status_change(
     # season; the show's own status is then derived from it (R2.13).
     fx = status_rules.set_show_status(conn, show_id, status, changed_by, confirmed=confirmed)
     _apply_status_effects(conn, show_id, fx)
-    now_paused = conn.execute(
-        "SELECT status FROM show WHERE id = ?", (show_id,)
-    ).fetchone()["status"] in ("paused", "dropped")
+    shown = conn.execute(
+        "SELECT status, media_shape FROM show WHERE id = ?", (show_id,)
+    ).fetchone()
+    now_paused = shown["status"] in ("paused", "dropped")
     conn.commit()
-    if now_paused and not was_paused:
-        _unmonitor_in_arr_on_drop(conn, show_id)
-    elif not now_paused and was_paused:
-        _remonitor_in_arr_on_resume(conn, show_id)
+    # Episodic shows: Sonarr follows each season (phase 6, in
+    # _apply_status_effects). A movie has no seasons: Radarr follows the show.
+    if shown["media_shape"] == "movie":
+        if now_paused and not was_paused:
+            _unmonitor_in_arr_on_drop(conn, show_id)
+        elif not now_paused and was_paused:
+            _remonitor_in_arr_on_resume(conn, show_id)
     return _get_show(conn, show_id)
 
 
@@ -4244,22 +4251,9 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
         # watching" (user's own rule); only this one of the five real
         # season-INSERT call sites.
         _recompute_show_status(conn, show_id, client)  # R2.17: a new season
-        # Ensure Sonarr/Radarr is monitoring this series so the new
-        # season's episodes actually get grabbed. If already monitored
-        # this is a no-op; if unmonitored it flips monitoring on; if
-        # not in Sonarr/Radarr at all it adds the series.
-        try:
-            shows.ensure_arr_monitored(conn, show_id)
-        except shows.ShowInputError:
-            # Sonarr/Radarr failure shouldn't block the season mapping
-            # itself — the season row is the critical data; monitoring
-            # can be retried. Log but don't raise.
-            import logging
-            logging.getLogger(__name__).warning(
-                "ensure_arr_monitored failed for %s — season %d created"
-                " but arr monitoring may need manual check",
-                show_id, season_number,
-            )
+        # Phase 6 (R5.6, R5.9): the new season's status drives Sonarr for
+        # that season only, and only if the show is already in Sonarr.
+        sonarr_sync.apply(conn, [(season_id, None, status)])
     # S2 dual-write (see season_ranges.py)
     season_ranges.upsert_season_external_id(conn, season_id, anilist_id, mal_id, now)
     conn.execute(

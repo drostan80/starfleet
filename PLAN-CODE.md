@@ -376,6 +376,17 @@ Progress (2026-09-28):
 - **Consequence:** existing Sonarr monitoring is corrected to these rules only
   through the phase 9 dry run.
 
+**APPROVED and done 2026-09-28** (see commit): `lcars/sonarr_sync.py` — every season
+status change (status engine effects, new seasons from the add check, R5.3 statuses,
+setSeasonMapping) drives Sonarr for that TVDB season: planned/watching → future
+episodes monitored, aired ones not (`PUT episode/monitor`); paused/dropped/skipped →
+that season and later ones unmonitored; completed → nothing; a season set
+planned/watching in the same change wins over a stop (R5.3). Only shows already in
+Sonarr are touched (R5.9: `ensure_arr_monitored` and its series-add removed). A new show
+added from browse with a TVDB id is added to Sonarr, future episodes, no search (R5.5);
+"add with Sonarr" no longer searches missing episodes either. Movies keep Radarr
+monitoring by the show's status. Failures → `sonarr_monitor` / `sonarr_add` reviews.
+
 ## Phase 7 — AniList/MAL mirroring (R4.x; C3, C10, E1–E3)
 
 - **7.1** Push every non-skipped season's status (drop `list_sync = 0`) (C3).

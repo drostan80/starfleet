@@ -6928,8 +6928,11 @@ async def test_soft_delete_show_unmonitors_in_sonarr(client, monkeypatch):
 
 @pytest.mark.parametrize("status", ["PAUSED", "DROPPED"])
 async def test_set_status_paused_or_dropped_unmonitors_in_sonarr(client, monkeypatch, status):
+    """Phase 6 (R5.8): the status goes on the last season (R2.13a), which is
+    unmonitored in Sonarr with every later one — not the whole series."""
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     show = await add_show(client)
+    await _create_season(client, show["id"], 1)
     await gql(
         client,
         LINK_SHOW_EXTERNAL_ID_TVDB,
@@ -6949,7 +6952,6 @@ async def test_set_status_paused_or_dropped_unmonitors_in_sonarr(client, monkeyp
     assert data["setStatus"]["status"] == status
     update_calls = [c for c in fake.calls if c[0] == "update_series"]
     assert len(update_calls) == 1
-    assert update_calls[0][1]["monitored"] is False
     assert all(s["monitored"] is False for s in update_calls[0][1]["seasons"])
 
 
@@ -9658,13 +9660,11 @@ async def test_reconcile_arr_state_wiring_returns_zero_with_nothing_configured(c
 
 
 async def test_reconcile_arr_state_pause_then_resume_remonitors_in_sonarr(client, monkeypatch):
-    # NEXT_UP.md follow-up (2026-09-19) — the load-bearing oscillation
-    # fix: resuming a show that reconcile (or a user) paused must
-    # re-monitor it in Sonarr, or the very next reconcile tick would
-    # silently flip it right back to paused. Exercises the real
-    # setStatus -> _apply_status_change -> ensure_arr_monitored path
-    # end to end, through the real GraphQL mutation.
+    # Phase 6 (R5.6, R5.8): pausing unmonitors the show's last season in
+    # Sonarr; resuming (watching) monitors that season's future episodes
+    # again — per season, through the real setStatus mutation.
     show = await add_show(client, titleRomaji="Reconcile Test")
+    await _create_season(client, show["id"], 1)
     await gql(
         client,
         'mutation($id: ID!) { linkShowExternalId(showId: $id, service: "tvdb",'
@@ -9693,7 +9693,14 @@ async def test_reconcile_arr_state_pause_then_resume_remonitors_in_sonarr(client
             pass
 
         def series_by_tvdb_id(self, tvdb_id):
-            return {"id": 1, "tvdbId": 457078, "monitored": False, "seasons": []}
+            return {"id": 1, "tvdbId": 457078, "monitored": True,
+                    "seasons": [{"seasonNumber": 1, "monitored": True}]}
+
+        def episodes(self, series_id):
+            return []
+
+        def monitor_episodes(self, ids, monitored):
+            pass
 
         def update_series(self, series):
             updates.append(dict(series))
@@ -9708,7 +9715,7 @@ async def test_reconcile_arr_state_pause_then_resume_remonitors_in_sonarr(client
         headers=auth_headers(),
     )
     assert data["setStatus"]["status"] == "PAUSED"
-    assert updates[-1]["monitored"] is False
+    assert updates[-1]["seasons"][0]["monitored"] is False
 
     # Resume — reconcile-style: back to WATCHING, must re-monitor in Sonarr.
     data = await gql(
@@ -9718,7 +9725,7 @@ async def test_reconcile_arr_state_pause_then_resume_remonitors_in_sonarr(client
         headers=auth_headers(),
     )
     assert data["setStatus"]["status"] == "WATCHING"
-    assert updates[-1]["monitored"] is True
+    assert updates[-1]["seasons"][0]["monitored"] is True
 
 
 RECENT_GRABS = """
