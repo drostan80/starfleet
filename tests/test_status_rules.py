@@ -165,7 +165,7 @@ def test_show_status_goes_on_the_last_non_skipped_season(conn):
     _season(conn, "z-s10000", 1, "completed")
     _season(conn, "z-s20000", 2, "watching")
     _season(conn, "z-s30000", 3, "skipped")
-    status_rules.set_show_status(conn, "s-stat01", "paused", "web")
+    status_rules.set_show_status(conn, "s-stat01", "paused", "web", confirmed=True)  # R2.13b (1)
     # R2.13a
     assert (_status(conn, "z-s10000"), _status(conn, "z-s20000")) == ("completed", "paused")
     assert _show(conn) == "paused"
@@ -215,3 +215,66 @@ def test_episodes_of_a_skipped_season_are_not_followed(conn):
     assert followed == [1]
     assert status_rules.episode_followed(conn, "e-100001")
     assert not status_rules.episode_followed(conn, "e-200001")
+
+
+# ── R2.13b: skipped picked on the show ─────────────────────────────────
+
+
+def test_skipping_a_show_never_watched_makes_it_skipped(conn):
+    _season(conn, "z-s10000", 1, "planned")
+    status_rules.set_show_status(conn, "s-stat01", "skipped", "web")
+    assert _status(conn, "z-s10000") == "skipped"
+    assert _show(conn) == "skipped"
+
+
+def test_skipping_after_a_completed_season_reads_dropped(conn):
+    _season(conn, "z-s10000", 1, "completed")
+    _season(conn, "z-s20000", 2, "planned")
+    _season(conn, "z-s30000", 3, "planned")
+    status_rules.set_show_status(conn, "s-stat01", "skipped", "web")
+    statuses = [_status(conn, z) for z in ("z-s10000", "z-s20000", "z-s30000")]
+    assert statuses == ["completed", "skipped", "skipped"]
+    assert _show(conn) == "dropped"  # the one exception to R2.13
+
+
+def test_skipping_with_a_season_in_progress_warns_then_drops_it(conn):
+    _season(conn, "z-s10000", 1, "completed")
+    _season(conn, "z-s20000", 2, "watching")
+    _season(conn, "z-s30000", 3, "planned")
+    with pytest.raises(status_rules.NeedsConfirmation, match="in progress"):
+        status_rules.set_show_status(conn, "s-stat01", "skipped", "web")
+    status_rules.set_show_status(conn, "s-stat01", "skipped", "web", confirmed=True)
+    assert (_status(conn, "z-s20000"), _status(conn, "z-s30000")) == ("dropped", "skipped")
+    assert _show(conn) == "dropped"
+
+
+def test_a_pick_on_a_show_with_skipped_seasons_warns_and_goes_to_the_last_season(conn):
+    _season(conn, "z-s10000", 1, "completed")
+    _season(conn, "z-s20000", 2, "planned")
+    status_rules.set_show_status(conn, "s-stat01", "skipped", "web")
+    with pytest.raises(status_rules.NeedsConfirmation, match="skipped seasons"):
+        status_rules.set_show_status(conn, "s-stat01", "planned", "web")
+    status_rules.set_show_status(conn, "s-stat01", "planned", "web", confirmed=True)
+    assert _status(conn, "z-s20000") == "planned"  # (b): planned goes on the last season
+    assert _show(conn) == "planned"  # (c): the exception ended
+
+
+def test_paused_on_a_show_with_skipped_seasons_goes_on_the_last_non_skipped(conn):
+    _season(conn, "z-s10000", 1, "watching")
+    _season(conn, "z-s20000", 2, "skipped")
+    status_rules.set_show_status(conn, "s-stat01", "paused", "web", confirmed=True)
+    assert (_status(conn, "z-s10000"), _status(conn, "z-s20000")) == ("paused", "skipped")
+
+
+def test_watching_an_episode_of_a_skipped_season_makes_it_watching(conn):
+    _season(conn, "z-s10000", 1, "skipped")
+    _season(conn, "z-s20000", 2, "skipped")
+    _season(conn, "z-s30000", 3, "skipped")
+    _eps(conn, 2, 3)
+    conn.execute("UPDATE show SET skip_picked = 1")
+    _watch(conn, 2, 1)
+    status_rules.watched_in_skipped_season(conn, "s-stat01", 2, "web")
+    status_rules.after_episodes_changed(conn, "s-stat01")
+    statuses = [_status(conn, z) for z in ("z-s10000", "z-s20000", "z-s30000")]
+    assert statuses == ["skipped", "watching", "skipped"]  # (d): later stays skipped
+    assert _show(conn) == "watching"

@@ -279,6 +279,9 @@ def check_show_status_derived(conn):
     for r in rows:
         seasons = conn.execute(
             "SELECT status FROM season WHERE show_id = ? AND season_number > 0"
+            " AND kind = 'tvdb_season' ORDER BY season_number"
+            if _has(conn, "season", "kind")
+            else "SELECT status FROM season WHERE show_id = ? AND season_number > 0"
             " ORDER BY season_number, part_number"
             if _has(conn, "season", "part_number")
             else "SELECT status FROM season WHERE show_id = ? AND season_number > 0"
@@ -288,6 +291,15 @@ def check_show_status_derived(conn):
         statuses = [s["status"] for s in seasons]
         live = [s for s in statuses if s != "skipped"]
         expected = live[-1] if live else "skipped"
+        if _has(conn, "show", "skip_picked") and conn.execute(
+            "SELECT skip_picked FROM show WHERE id = ?", (r["id"],)
+        ).fetchone()[0]:
+            # R2.13b: skipped picked on the show.
+            watched = {"watching", "completed", "paused", "dropped"}
+            if not live or not watched & set(statuses):
+                expected = "skipped"
+            elif expected == "completed":
+                expected = "dropped"
         if expected is not None and r["status"] != expected:
             bad.append(f"{r['show']}: show {r['status']}, last non-skipped season {expected}")
     return Finding(

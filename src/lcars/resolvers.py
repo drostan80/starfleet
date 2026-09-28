@@ -497,13 +497,15 @@ def _push_season_completed_at(
 
 
 def _recompute_show_status(
-    conn, show_id: str, changed_by: str, *, _skip_push: bool = False, at: str | None = None
+    conn, show_id: str, changed_by: str, *, _skip_push: bool = False, at: str | None = None,
+    watched_season: int | None = None,
 ):
     """Runs the status engine after episodes changed (RULEBOOK R2.13–R2.15,
     R2.18 — `status_rules.after_episodes_changed`) and applies the effects.
     _skip_push: watch_reconcile's own remote-sourced changes (2026-09-20) —
     that caller pushes onward itself, never back to where it came from."""
-    fx = status_rules.after_episodes_changed(conn, show_id, changed_by)
+    fx = status_rules.watched_in_skipped_season(conn, show_id, watched_season, changed_by)
+    fx.merge(status_rules.after_episodes_changed(conn, show_id, changed_by))
     _apply_status_effects(conn, show_id, fx, push=not _skip_push, at=at)
     return fx
 
@@ -3705,7 +3707,9 @@ def resolve_add_watch_event(
         )
     _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
     if season is not None:
-        _recompute_show_status(conn, show_id, "auto_complete", at=watched_at)  # phase 4
+        _recompute_show_status(
+            conn, show_id, "auto_complete", at=watched_at, watched_season=season
+        )  # phase 4, R2.13b
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
@@ -3794,7 +3798,9 @@ def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
             (now, show_id, season, now),
         )
         _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
-        _recompute_show_status(conn, show_id, "auto_complete", at=watched_at)  # phase 4
+        _recompute_show_status(
+            conn, show_id, "auto_complete", at=watched_at, watched_season=season
+        )  # phase 4, R2.13b
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
@@ -3832,7 +3838,9 @@ def resolve_mark_episode_range_watched(
         (now, show_id, season, from_episode, to_episode),
     )
     _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
-    _recompute_show_status(conn, show_id, "auto_complete", at=watched_at)  # phase 4
+    _recompute_show_status(
+        conn, show_id, "auto_complete", at=watched_at, watched_season=season
+    )  # phase 4, R2.13b
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror

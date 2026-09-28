@@ -138,14 +138,32 @@ def new_season_status(conn, show_id: str, season_number: int) -> str:
 # ── R2.13: show status ─────────────────────────────────────────────────
 
 
+WATCHED_STATUSES = ("watching", "completed", "paused", "dropped")
+
+
 def derive_show_status(conn, show_id: str) -> str | None:
     seasons = _tvdb_seasons(conn, show_id)
     if not seasons:
         return None
     last = last_season(conn, show_id)
+    picked = conn.execute(
+        "SELECT skip_picked FROM show WHERE id = ?", (show_id,)
+    ).fetchone()
+    if picked is not None and picked["skip_picked"]:
+        # R2.13b: skipped picked on the show — skipped if no season was ever
+        # watched; else its last non-skipped season, completed reading dropped.
+        if last is None or not any(s["status"] in WATCHED_STATUSES for s in seasons):
+            return "skipped"
+        return "dropped" if last["status"] == "completed" else last["status"]
     if last is None:
         return "skipped"
     return last["status"]  # a season without a status (§2.2 gap) changes nothing
+
+
+def _clear_skip_picked(conn, show_id: str | None) -> None:
+    """R2.13b (c): your next status pick (not skipped) ends the exception."""
+    if show_id:
+        conn.execute("UPDATE show SET skip_picked = 0 WHERE id = ?", (show_id,))
 
 
 def recompute_show(conn, show_id: str, changed_by: str) -> Effects:
@@ -268,6 +286,8 @@ def set_level_status(
             )
 
     _set(conn, season, status, changed_by, manual, fx)
+    if manual and status != "skipped":
+        _clear_skip_picked(conn, show_id)
     if status == "completed":
         _mark_watched(conn, show_id, level_episodes(conn, season), fx)  # R2.7
     # R2.18: cascade to parts, a completed part stays completed.
@@ -289,16 +309,49 @@ def set_level_status(
     return fx
 
 
+def watched_in_skipped_season(conn, show_id: str, season_number: int | None,
+                              changed_by: str) -> Effects:
+    """R2.13b: watching an episode of a skipped season makes it watching
+    (R2.14 extended); earlier and later skipped seasons stay skipped (d); the
+    show-level exception ends (c). Called by the watch mutations, before
+    `after_episodes_changed`."""
+    fx = Effects()
+    if season_number is None:
+        return fx
+    season = conn.execute(
+        "SELECT * FROM season WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
+        (show_id, season_number),
+    ).fetchone()
+    if season is not None and season["status"] == "skipped":
+        _set(conn, season, "watching", changed_by, False, fx)
+        _clear_skip_picked(conn, show_id)
+    return fx
+
+
 def set_show_status(
     conn, show_id: str, status: str, changed_by: str, *, confirmed: bool = False
 ) -> Effects:
     """R2.13a: a status picked on the show applies to its last non-skipped
-    season; the show is then derived. A show with no season takes it as is."""
+    season; the show is then derived. R2.13b for skipped, and for any pick on a
+    show with skipped seasons. A show with no season takes it as is."""
+    seasons = _tvdb_seasons(conn, show_id)
+    has_skipped = any(s["status"] == "skipped" for s in seasons)
+    if status == "skipped" and seasons:
+        return _skip_show(conn, show_id, changed_by, confirmed=confirmed)
+    if has_skipped and not confirmed:
+        raise NeedsConfirmation(
+            "this show has skipped seasons — pass confirmed: true to proceed"
+        )  # R2.13b (1)
+    if has_skipped and status in ("completed", "watching", "planned"):
+        # R2.13b (2)/(b): these go on the show's last season, skipped or not.
+        _clear_skip_picked(conn, show_id)
+        return set_level_status(conn, seasons[-1]["id"], status, changed_by, confirmed=True)
+    _clear_skip_picked(conn, show_id)
     last = last_season(conn, show_id)
     if last is not None:
         return set_level_status(conn, last["id"], status, changed_by, confirmed=confirmed)
     fx = Effects()
-    if not _tvdb_seasons(conn, show_id):
+    if not seasons:
         show = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
         if show is not None and show["status"] != status:
             now = util.now_utc_iso()
@@ -314,6 +367,34 @@ def set_show_status(
             fx.show = (show["status"], status)
         return fx
     # Every season skipped: the picked status goes on the last one (R2.13a).
-    return set_level_status(
-        conn, _tvdb_seasons(conn, show_id)[-1]["id"], status, changed_by, confirmed=confirmed
-    )
+    return set_level_status(conn, seasons[-1]["id"], status, changed_by, confirmed=confirmed)
+
+
+def _skip_show(conn, show_id: str, changed_by: str, *, confirmed: bool) -> Effects:
+    """R2.13b: the last non-skipped season is skipped — or, when a season is in
+    progress (watching), that one is dropped after a warning (a) — later
+    seasons are skipped; the show reads dropped (skipped if nothing was ever
+    watched)."""
+    fx = Effects()
+    in_progress = [s for s in _tvdb_seasons(conn, show_id) if s["status"] == "watching"]
+    if in_progress and not confirmed:
+        raise NeedsConfirmation(
+            f"season {in_progress[-1]['season_number']} is in progress; proceeding switches it"
+            " to dropped — pass confirmed: true to proceed"
+        )
+    seasons = _tvdb_seasons(conn, show_id)
+    if in_progress:
+        target = in_progress[-1]
+        _set(conn, target, "dropped", changed_by, True, fx)
+        after = target["season_number"]
+    else:
+        # Every planned season after the last one you watched is skipped;
+        # the watched ones don't change (R2.13b).
+        watched = [s for s in seasons if s["status"] in WATCHED_STATUSES]
+        after = watched[-1]["season_number"] if watched else 0
+    for later in seasons:
+        if later["season_number"] > after and later["status"] in ("planned", None):
+            _set(conn, later, "skipped", changed_by if not in_progress else AUTO,
+                 not in_progress, fx)
+    conn.execute("UPDATE show SET skip_picked = 1 WHERE id = ?", (show_id,))
+    return fx.merge(after_episodes_changed(conn, show_id, changed_by))
