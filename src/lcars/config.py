@@ -168,6 +168,10 @@ class Config:
     # LCARS's own, minted via `lcars mal-login` (cli.py) and kept fresh by
     # refreshMalTokenIfDue (resolvers.py). mal_token_refreshed_at gates
     # that job — a plain ISO timestamp, not validated/parsed here.
+    # RULEBOOK R4.7 (phase 5.4): entries on your AniList/MAL lists that LCARS
+    # doesn't track are added through the add check. Off until the phase 9
+    # dry run shows you the list first.
+    list_adds_enabled: bool = False
     mal_client_id: str | None = None
     mal_client_secret: str | None = None
     mal_access_token: str | None = None
@@ -257,6 +261,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.home_timezone = parser["lcars"].get("home_timezone", fallback=cfg.home_timezone)
             cfg.tmdb_api_key = parser["lcars"].get("tmdb_api_key", fallback=None)
             cfg.tvdb_api_key = parser["lcars"].get("tvdb_api_key", fallback=None)
+            cfg.list_adds_enabled = parser["lcars"].getboolean("list_adds_enabled", fallback=False)
             cfg.mal_client_id = parser["lcars"].get("mal_client_id", fallback=None)
             cfg.mal_client_secret = parser["lcars"].get("mal_client_secret", fallback=None)
             cfg.mal_access_token = parser["lcars"].get("mal_access_token", fallback=None)

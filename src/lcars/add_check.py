@@ -361,3 +361,50 @@ def apply_decision(conn, d: Decision, c: Candidate) -> str | None:
                                   _status_after(last["status"] if last else None))
     status_rules.recompute_show(conn, d.show_id, status_rules.AUTO)  # R2.17, not pushed
     return season_id
+
+
+# ── Your AniList/MAL list entries (R4.7, phase 5.4) ────────────────────
+
+
+def add_list_entry(conn, c: Candidate, dataset: list[dict]) -> Decision:
+    """An entry on your list that LCARS doesn't track goes through the add
+    check (R4.7: as a season). Writes nothing unless `list_adds_enabled`
+    (off until the phase 9 dry run) — the decision is returned either way."""
+    from lcars import config, shows, status_rules
+
+    d = classify(conn, c, dataset)
+    if not config.get_current().list_adds_enabled:
+        return d
+    season_id = None
+    if d.kind in AUTOMATIC:
+        season_id = apply_decision(conn, d, c)
+    elif d.kind == "needs_user":
+        review(conn, f"anilist:{c.anilist_id}", d, "list")
+    elif d.kind in ("new_show", "individual_season"):
+        title = c.titles[0] if c.titles else str(c.anilist_id)
+        show_id = shows.create_show(conn, {
+            "media_shape": "movie" if (c.media_type or "").upper() == "MOVIE" else "episodic",
+            "tracking_space": "anime", "primary_title": "romaji", "title_romaji": title,
+            "anilist_id": c.anilist_id, "mal_id": c.mal_id, "tvdb_id": d.tvdb_id,
+            "skip_sequel_check": True,
+        })  # individual seasons: today's path until they land (phase 5)
+        found = _season_by_list_id(conn, c.anilist_id, c.mal_id)
+        season_id = found["id"] if found is not None else None
+        if season_id is None:
+            status = LIST_STATUS.get((c.status or "").upper())
+            if status:
+                status_rules.set_show_status(conn, show_id, status, "list", confirmed=True)
+    status = LIST_STATUS.get((c.status or "").upper())
+    if season_id is not None and status:
+        # R4.7: added with the status you set on your list.
+        status_rules.set_level_status(conn, season_id, status, "list", confirmed=True)
+    conn.commit()
+    return d
+
+
+# AniList/MAL list status → LCARS (R4.6a: rewatching is watching for now).
+LIST_STATUS = {
+    "CURRENT": "watching", "WATCHING": "watching", "REPEATING": "watching",
+    "PLANNING": "planned", "PLAN_TO_WATCH": "planned",
+    "COMPLETED": "completed", "PAUSED": "paused", "ON_HOLD": "paused", "DROPPED": "dropped",
+}

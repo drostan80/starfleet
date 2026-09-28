@@ -504,8 +504,10 @@ def test_backfill_creates_a_show_per_untracked_item(conn, monkeypatch):
     assert len(result["created"]) == 2
     assert result["failed"] == []
 
-    rows = conn.execute("SELECT title_romaji, tracking_space, status FROM show").fetchall()
-    by_title = {r["title_romaji"]: r for r in rows}
+    rows = conn.execute(
+        "SELECT COALESCE(title_english, title_romaji) AS title, tracking_space, status FROM show"
+    ).fetchall()
+    by_title = {r["title"]: r for r in rows}
     assert by_title["Show A"]["tracking_space"] == "tv"
     assert by_title["Show B"]["tracking_space"] == "anime"
     # No AniList token configured — status seed no-ops, stays at the
@@ -526,10 +528,19 @@ def test_backfill_creates_an_anilist_sweep_show_with_known_status(conn, monkeypa
         lambda *a, **kw: fetch_status_calls.append(1) or "SHOULD_NOT_BE_CALLED",
     )
 
+    # R4.7 list adds are off until the phase 9 dry run: proposed only.
     result = show_backfill.backfill_untracked_shows(conn)
-    assert len(result["created"]) == 1
+    assert result["created"] == []
+    assert [p["decision"] for p in result["proposed"]] == ["individual_season"]
+    assert conn.execute("SELECT COUNT(*) FROM show").fetchone()[0] == 0
+
+    config.get_current().list_adds_enabled = True
+    try:
+        show_backfill.backfill_untracked_shows(conn)
+    finally:
+        config.get_current().list_adds_enabled = False
     row = conn.execute("SELECT status FROM show WHERE title_romaji = 'AniList Only'").fetchone()
-    assert row["status"] == "completed"
+    assert row["status"] == "completed"  # the status on your list
     # The sweep already knew the status from MediaListCollection — no
     # extra live fetch_my_list_status() read needed.
     assert fetch_status_calls == []
@@ -596,9 +607,10 @@ def test_backfill_related_show_with_its_own_tvdb_id_is_its_own_show(conn, monkey
     assert result["promoted"] == []
 
     rows = conn.execute(
-        "SELECT id, title_romaji, tracked FROM show ORDER BY title_romaji"
+        "SELECT id, COALESCE(title_english, title_romaji) AS title, tracked FROM show"
+        " ORDER BY title"
     ).fetchall()
-    assert [r["title_romaji"] for r in rows] == ["Show A", "Show B"]  # not three rows
+    assert [r["title"] for r in rows] == ["Show A", "Show B"]  # not three rows
     assert [r["tracked"] for r in rows] == [1, 1]
 
     anilist_links = conn.execute(
