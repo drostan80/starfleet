@@ -746,6 +746,16 @@ def stage_sonarr(run: Run) -> None:
         for n, season_id in rows.items():
             conn.execute("UPDATE episode SET season_id = ? WHERE show_id = ? AND season = ?",
                          (season_id, show[0], n))
+            if n not in missing:
+                continue
+            # A season of your own history, not a newly found one: its status
+            # comes from what you watched (the rules apply on top in stage 6).
+            total, watched = conn.execute(
+                "SELECT COUNT(*), SUM(state = 'watched') FROM episode WHERE show_id = ?"
+                " AND season = ?", (show[0], n)).fetchone()
+            status = ("completed" if watched and watched == total
+                      else "watching" if watched else "planned")
+            conn.execute("UPDATE season SET status = ? WHERE id = ?", (status, season_id))
         created += len(missing)
         conn.commit()
     run.record("seasons_from_episodes", "all shows", "applied",
@@ -869,6 +879,54 @@ def _link_list_levels(run: Run, conn) -> None:
     run.record("level_links", "all", "applied", f"{linked} linked, {unmatched} to review")
 
 
+def _part_spans(run: Run, conn) -> None:
+    """Parts (cours) divide their TVDB season (R1.10, R1.11): each part's
+    span runs from its first episode — Fribb's episode offset within the TVDB
+    season, else the earlier cours' AniList episode counts added up — to the
+    next part's start. Spans in absolute numbers, from the season's episodes."""
+    from lcars import consolidation, fribb
+
+    index = fribb.build_anilist_index(fribb.load_dataset())
+    done = review = 0
+    for parent in conn.execute(
+            "SELECT DISTINCT p.* FROM season p JOIN season c ON c.parent_id = p.id"
+            " AND c.kind = 'part' JOIN show sh ON sh.id = p.show_id AND sh.tracked = 1"
+            " WHERE p.kind = 'tvdb_season'").fetchall():
+        eps = [r[0] for r in conn.execute(
+            "SELECT absolute_number FROM episode WHERE show_id = ? AND season = ?"
+            " AND absolute_number IS NOT NULL ORDER BY episode",
+            (parent["show_id"], parent["season_number"]))]
+        parts = conn.execute("SELECT * FROM season WHERE parent_id = ? AND kind = 'part'"
+                             " ORDER BY part_number", (parent["id"],)).fetchall()
+        starts, running, ok = [], 0, bool(eps)
+        for part in parts:
+            n, offset = consolidation._fribb_place(index, part["anilist_id"])
+            if n == parent["season_number"] and offset is not None:
+                start = offset
+            else:
+                start = running
+            count = (_facts(run, part["anilist_id"]).get("episodes")
+                     if part["anilist_id"] else None)
+            starts.append(start)
+            running = start + (count or 0)
+            ok = ok and (count or n == parent["season_number"])
+        if not ok or starts != sorted(starts) or len(set(starts)) != len(starts):
+            review += 1
+            run.record("part_spans", parent["id"], "review",
+                       f"cour starts {starts} for {len(eps)} episodes — placed by the user")
+            continue
+        for i, part in enumerate(parts):
+            end = starts[i + 1] if i + 1 < len(starts) else len(eps)
+            nums = eps[starts[i]:end]
+            conn.execute("DELETE FROM season_span WHERE season_id = ?", (part["id"],))
+            if nums:
+                conn.execute("INSERT INTO season_span (season_id, abs_from, abs_to)"
+                             " VALUES (?, ?, ?)", (part["id"], nums[0], nums[-1]))
+        done += 1
+    conn.commit()
+    run.record("part_spans", "all", "applied", f"{done} seasons divided, {review} to review")
+
+
 def _last_aired_season(conn, show_id: str):
     now = util.now_utc_iso()
     return conn.execute(
@@ -910,6 +968,7 @@ def stage_statuses(run: Run) -> None:
 
     conn = _connect(run.work())
     d = decisions(run)
+    _part_spans(run, conn)
     _link_list_levels(run, conn)
 
     # R2.7 on the statuses you decided: a completed season has its episodes watched.

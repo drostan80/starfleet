@@ -132,15 +132,16 @@ Grep for any other outbound write before trusting it (`httpx.post`, `.patch(`, `
   `~/starfleet-review-2026-09-27/decisions-final/`; `normalize_decisions.py` turns them into
   `rebuild-inputs/decisions.json` (explicit actions; PLAN-DATA transcription wins over
   ambiguous notes — 2 differences flagged).
-- `src/lcars/rebuild.py` (`lcars rebuild`): stages base + sources done and run
-  (`~/starfleet-rebuild/run1/01-base.db`, `02-sources.db`). Stage 3 (structure) written, part 1:
-  1,700 statuses by 09-06 id, today's TVDB ids from live (97 gained), 101 TVDB decisions,
-  19 films folded (before merges), merges with a placement override for 17 new groups
-  (20 seasons Fribb can't place: no list id → own number, piece → special, sequel → next
-  season; each in the ledger for the 9.2 review). **Last run stopped at the merge of TVDB
-  422090 — rerun stage 3 now that the override exists** (`--from-stage 3 --until-stage 3`,
-  env `LCARS_SONARR_URL`/`LCARS_RADARR_URL` for later stages). Stage 3 part 2 (adds: phase 5,
-  77 new shows, extra add, 178 skipped) and stages 4–9 not written yet.
+- `src/lcars/rebuild.py` (`lcars rebuild`): **stages 1–6 run** on the real copies
+  (`~/starfleet-rebuild/run1/01…06-*.db`, `ledger.jsonl`, `pending.jsonl`,
+  `anilist_facts.json` cache). Run with `LCARS_SONARR_URL=http://192.168.1.77:8989
+  LCARS_RADARR_URL=http://192.168.1.77:7878`. Stage 3 ~5 min, 4 ~2 min, 6 ~5 min.
+  Rulecheck after 6: R2.x clean (R2.15 2, R2.7 1); open: R1.11 1,133 / R1.8 90 (shows
+  never in Sonarr have no or incomplete episodes — 835 shows none; question to the user:
+  fetch episode lists from TVDB?), R1.23 1,329 show-level list ids and R3.5 1,335 stubs
+  (cleanup not written), R3.2 59, R1.22 25, R1.12 9, R1.10 1; 129 AniList levels unlinked
+  and 21 cour splits unresolved (both mostly the missing episodes).
+  **Not written yet: stage 7 replay, 8 checks, 9 writes.**
 - Findings to report: local lcars.ini has tiny's old IP (use env overrides
   `LCARS_SONARR_URL=http://192.168.1.77:8989`, `LCARS_RADARR_URL=http://192.168.1.77:7878`);
   freeze ON by default (rebuild lifts it on its copy; prod at cutover = user's call);
