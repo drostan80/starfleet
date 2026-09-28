@@ -151,3 +151,91 @@ def main(argv=None) -> int:
     print(json.dumps(plan(conn, fribb.load_dataset(), sonarr_episodes), ensure_ascii=False,
                      indent=1))
     return 0
+
+
+# ── Applying one group, on your yes (review choice "merge") ────────────
+
+
+def apply_group(conn, tvdb_id: str, dataset: list[dict]) -> dict:
+    """Folds every show sharing `tvdb_id` into its winner: each of their
+    seasons first becomes the level the plan names (a cour → part of the TVDB
+    season, the TVDB season's missing AniList/MAL id → linked, a new TVDB
+    season, a season-0 piece), keeping its status; then the show merges
+    (`show_merge.merge_shows`: episodes, watches, links). A season Fribb
+    can't place stops the group — nothing is written for it."""
+    from lcars import show_merge, util
+
+    show_ids = _groups(conn).get(str(tvdb_id))
+    if not show_ids:
+        return {"merged": [], "reason": "no longer shared"}
+    anilist_index = fribb.build_anilist_index(dataset)
+    places = {
+        sid: _fribb_place(anilist_index, season_ranges.show_list_id(conn, sid, "anilist"))
+        for sid in show_ids
+    }
+    winner = next((sid for sid in show_ids if places[sid][0] == 1), show_ids[0])
+    now = util.now_utc_iso()
+    losers = [sid for sid in show_ids if sid != winner]
+    for sid in losers:
+        for z in conn.execute(
+            "SELECT id, anilist_id, mal_id FROM season WHERE show_id = ? AND kind = 'tvdb_season'",
+            (sid,),
+        ).fetchall():
+            n, _offset = _fribb_place(anilist_index, z[1])
+            if n is None:
+                return {"merged": [], "reason": f"season {z[0]} has no TVDB place (Fribb)"}
+    merged = []
+    for sid in losers:
+        for zid, anilist_id, mal_id in conn.execute(
+            "SELECT id, anilist_id, mal_id FROM season WHERE show_id = ? AND kind = 'tvdb_season'",
+            (sid,),
+        ).fetchall():
+            n, _offset = _fribb_place(anilist_index, anilist_id)
+            if n == 0:
+                conn.execute(
+                    "UPDATE season SET kind = 'special', season_number = NULL,"
+                    " decimal_season_number = NULL, updated_at = ? WHERE id = ?", (now, zid))
+                continue
+            target = conn.execute(
+                "SELECT id, anilist_id, mal_id, status FROM season WHERE show_id = ?"
+                " AND season_number = ? AND kind = 'tvdb_season'", (winner, n)).fetchone()
+            if target is None:
+                conn.execute("UPDATE season SET season_number = ?, updated_at = ? WHERE id = ?",
+                             (n, now, zid))
+                continue
+            if target[1] is None and target[2] is None:
+                # The TVDB season's own AniList/MAL id: linked, the duplicate goes.
+                conn.execute(
+                    "UPDATE season SET anilist_id = ?, mal_id = ?, updated_at = ? WHERE id = ?",
+                    (anilist_id, mal_id, now, target[0]))
+                season_ranges.upsert_season_external_id(conn, target[0], anilist_id, mal_id, now)
+                conn.execute("UPDATE season SET season_number = ? WHERE id = ?", (n, zid))
+                continue
+            parts = conn.execute(
+                "SELECT COUNT(*) FROM season WHERE parent_id = ? AND kind = 'part'", (target[0],)
+            ).fetchone()[0]
+            if parts == 0:
+                # The TVDB season's first cour becomes part 1 (R1.22).
+                from lcars import ids
+                first = ids.generate_id(conn, "z")
+                conn.execute(
+                    "INSERT INTO season (id, show_id, season_number, part_number, kind, parent_id,"
+                    " anilist_id, mal_id, source, status, created_at, updated_at)"
+                    " VALUES (?, ?, ?, 1, 'part', ?, ?, ?, 'auto', ?, ?, ?)",
+                    (first, winner, n, target[0], target[1], target[2], target[3], now, now))
+                season_ranges.upsert_season_external_id(conn, first, target[1], target[2], now)
+                conn.execute(
+                    "UPDATE season SET anilist_id = NULL, mal_id = NULL, updated_at = ?"
+                    " WHERE id = ?",
+                    (now, target[0]))
+                conn.execute("DELETE FROM season_external_id WHERE season_id = ?"
+                             " AND service IN ('anilist', 'mal')", (target[0],))
+                parts = 1
+            conn.execute(
+                "UPDATE season SET kind = 'part', parent_id = ?, season_number = ?,"
+                " part_number = ?, updated_at = ? WHERE id = ?",
+                (target[0], n, parts + 1, now, zid))
+        show_merge.merge_shows(conn, winner, sid, f"same TVDB {tvdb_id} (R1.14)")
+        merged.append(sid)
+    conn.commit()
+    return {"merged": merged, "winner": winner}

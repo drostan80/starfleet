@@ -233,18 +233,21 @@ def merge_shows(conn, winner_id: str, loser_id: str, matched_on: str) -> str:
     # keeps the winner's own season row; any loser episode for that season
     # gets repointed onto it below rather than left dangling at its old
     # (now-orphaned-on-the-loser) season_id.
+    # Only TVDB seasons can collide by number (phase 5): a part, a special
+    # or a mini sub-season moves across as the level it already is.
     winner_seasons = {
         r["season_number"]: r["id"]
         for r in conn.execute(
-            "SELECT id, season_number FROM season WHERE show_id = ?", (winner_id,)
+            "SELECT id, season_number FROM season WHERE show_id = ? AND kind = 'tvdb_season'",
+            (winner_id,),
         ).fetchall()
     }
     moved_seasons = []
     season_repoint: dict[int, str] = {}
     for row in conn.execute(
-        "SELECT id, season_number FROM season WHERE show_id = ?", (loser_id,)
+        "SELECT id, season_number, kind FROM season WHERE show_id = ?", (loser_id,)
     ).fetchall():
-        if row["season_number"] in winner_seasons:
+        if row["kind"] == "tvdb_season" and row["season_number"] in winner_seasons:
             skipped.append(
                 f"season[{row['season_number']}]: winner already has this season,"
                 f" left on loser as {row['id']}"

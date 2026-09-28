@@ -31,6 +31,7 @@ def conn(tmp_path):
         check=True, capture_output=True,
     )
     c = sqlite3.connect(path)
+    c.row_factory = sqlite3.Row  # as lcars.db.connect does
     for sid, shape, anilist, created in (
         ("s-main01", "episodic", 1, "2026-01-01"), ("s-cour02", "episodic", 2, "2026-01-02"),
         ("s-seas02", "episodic", 3, "2026-01-03"), ("s-ova001", "episodic", 4, "2026-01-04"),
@@ -69,3 +70,22 @@ def test_plan_lists_each_show_as_the_level_it_becomes(conn):
     ]
     # Read-only: nothing changed.
     assert conn.execute("SELECT COUNT(*) FROM show").fetchone()[0] == 5
+
+
+def test_apply_group_folds_every_show_into_the_winner(conn):
+    conn.execute("UPDATE season SET status = 'completed' WHERE id = 'z-cour02'")
+    conn.commit()
+    result = consolidation.apply_group(conn, "500", DATASET)
+    assert result["winner"] == "s-main01"
+    assert sorted(result["merged"]) == ["s-cour02", "s-ova001", "s-seas02"]
+    levels = [tuple(r) for r in conn.execute(
+        "SELECT kind, season_number, part_number, anilist_id, status FROM season"
+        " WHERE show_id = 's-main01' ORDER BY kind, season_number, part_number"
+    ).fetchall()]
+    assert ("part", 1, 1, 1, "planned") in levels  # the first cour, moved off S1
+    assert ("part", 1, 2, 2, "completed") in levels  # the merged cour keeps its status
+    assert ("tvdb_season", 2, 1, 3, "planned") in levels
+    assert ("special", None, 1, 4, "planned") in levels
+    assert conn.execute(
+        "SELECT anilist_id FROM season WHERE id = 'z-main01'").fetchone()[0] is None
+    assert conn.execute("SELECT COUNT(*) FROM show WHERE tracked = 1").fetchone()[0] == 2
