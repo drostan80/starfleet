@@ -1193,13 +1193,14 @@ async function handleSequelOrLaterSeason(err, card, status) {
   // PLAN-CODE 8.4: no TVDB id yet → saved as an individual season.
   const indiv = parseIndividualSeason(err.message);
   if (indiv) {
-    if (status !== 'PLANNED') {
+    if (status !== 'PLANNED' || indiv.existing) {
       await withConfirmation((c) => setSeasonStatus(indiv.seasonId, status, c));
     }
     card.dataset.seasonId = indiv.seasonId;
     setCardTracked(card, '', status);
     card.classList.add('tracked');
-    showBanner("Added as an individual season — TVDB doesn't have it yet", 'ok');
+    showBanner(indiv.existing ? 'Already an individual season'
+      : "Added as an individual season — TVDB doesn't have it yet", 'ok');
     return 'handled';
   }
   const sequel = parseSequelError(err.message);

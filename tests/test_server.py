@@ -11702,6 +11702,12 @@ async def test_add_without_a_tvdb_id_becomes_an_individual_season(client, monkey
                        (season_id,)).fetchone()
     assert tuple(row) == ("individual_season", None, "planned")
     assert conn.execute("SELECT COUNT(*) FROM show").fetchone()[0] == 0
+    again = await client.post("/", json={"query": ADD_SHOW_WITH_ARR, "variables": {
+        "input": {"mediaShape": "EPISODIC", "trackingSpace": "ANIME", "anilistId": 190001,
+                  "titleRomaji": "Brand New Anime", "primaryTitle": "ROMAJI"}}},
+        headers=auth_headers())
+    payload = json.loads(again.json()["errors"][0]["message"][len("individual_season:"):])
+    assert payload == {"seasonId": season_id, "title": None, "existing": True}
     listed = await gql(client, "{ individualSeasons { id label status anilistId show { id } } }",
                        headers=auth_headers())
     assert listed["individualSeasons"] == [{"id": season_id, "label": "Brand New Anime",

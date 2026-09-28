@@ -1221,13 +1221,14 @@ async function handleAddError(err, card, item, input, status) {
   // No TVDB id yet → saved as an individual season: a success.
   const indiv = parseIndividualSeason(err.message);
   if (indiv) {
-    if (status !== 'PLANNED') {
+    if (status !== 'PLANNED' || indiv.existing) {
       await withConfirmation((c) => setSeasonStatus(indiv.seasonId, status, c));
     }
     item.lcarsSeasonId = indiv.seasonId;
     item.lcarsSeasonStatus = status;
     refreshCard(card, item);
-    showBanner('Added as an individual season — TVDB doesn\'t have it yet', 'ok');
+    showBanner(indiv.existing ? 'Already an individual season'
+      : 'Added as an individual season — TVDB doesn\'t have it yet', 'ok');
     card.classList.remove('loading');
     return true;
   }

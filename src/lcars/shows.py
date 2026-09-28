@@ -101,11 +101,12 @@ class IndividualSeasonAdded(ShowInputError):
     as `individual_season:{json}` (like `sequel_of:`) because `addShow`
     returns a Show and an individual season has none (PLAN-CODE 8.4)."""
 
-    def __init__(self, season_id: str, title: str | None):
+    def __init__(self, season_id: str, title: str | None, existing: bool = False):
         import json
 
         self.season_id = season_id
-        payload = json.dumps({"seasonId": season_id, "title": title}, separators=(",", ":"))
+        payload = json.dumps({"seasonId": season_id, "title": title, "existing": existing},
+                             separators=(",", ":"))
         super().__init__(f"individual_season:{payload}")
 
 
@@ -679,6 +680,8 @@ def add_checked(conn, input: dict, *, add_to_sonarr: bool = True) -> str:
     )
     dataset = _try_load_fribb_dataset() or []
     d = add_check.classify(conn, candidate, dataset)
+    if d.kind == "already_tracked" and d.show_id is None:
+        raise IndividualSeasonAdded(d.season_id, None, existing=True)  # added before
     if d.kind == "already_tracked":
         raise ShowInputError(
             f"this season is already tracked (show {d.show_id}) — refusing to add it twice"
