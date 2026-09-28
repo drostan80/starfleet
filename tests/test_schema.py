@@ -45,7 +45,6 @@ def test_mutations_are_dedicated_field_specific_not_generic_update():
         "setStatus",
         "setScore",
         "addWatchEvent",
-        "markEpisodeSkipped",
         "markSeasonWatched",
     ):
         assert field in mutation_fields

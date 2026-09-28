@@ -492,6 +492,8 @@ type Season {
   id: ID!
   show: Show!
   seasonNumber: Int!
+  "RULEBOOK R1.9a — the season number as shown and sorted: TVDB's number for a TVDB season and its parts; N.5, or N.1, N.2… in air-date order, for a side piece between TVDB seasons N and N+1 (seasonNumber is TVDB's whole number and will be null for those once they exist, PLAN-CODE phase 8)."
+  decimalSeasonNumber: Float
   "Subdivision within a broadcast season (default 1). When a source splits one broadcast season into parts (e.g. 'Season 3 Part 1' and 'Season 3 Part 2'), each part gets its own season row sharing the same seasonNumber but with partNumber 1 and 2."
   partNumber: Int!
   "Source-provided label for this subdivision (e.g. 'Part 2', 'Wano Country Arc'). Null for unsplit seasons."
@@ -1974,7 +1976,6 @@ type Mutation {
   addWatchEvent(showId: ID!, season: Int, episode: Int, watchedAt: DateTime, platform: String): WatchEvent!
   "Hard-deletable (§5.3) — the one deliberate exception to soft-delete-by-default."
   deleteWatchEvent(watchEventId: ID!): Boolean!
-  markEpisodeSkipped(episodeId: ID!): Episode!
   "Bulk mutation (§5.3) — one watch_event row per episode in the season, single call. Only marks episodes that have actually aired (2026-08-16) — an episode with no known air date, or a future one, is silently skipped, never marked watched. addWatchEvent/markEpisodeRangeWatched keep no such guard (explicit, single/range episode choices, unlike this bulk one)."
   markSeasonWatched(showId: ID!, season: Int!, watchedAt: DateTime): [WatchEvent!]!
   markEpisodeRangeWatched(showId: ID!, season: Int!, fromEpisode: Int!, toEpisode: Int!, watchedAt: DateTime): [WatchEvent!]!

@@ -400,6 +400,13 @@ cutover, so this and any later watch is picked up then.
 Most structural counts (R1.x, R3.x) are fixed by the rebuild engines, not by hand;
 status counts (R2.x) by the status engine + the review decisions.
 
+After phase 2 (09-06 snapshot, upgraded, 2026-09-28): everything above unchanged except
+R1.8, now checked against spans instead of the season link: **16,188** (every episode
+not inside a span; only 310 of 1,917 seasons have one until the rebuild sets them).
+R1.12 is now level-aware (siblings don't overlap) — 0; new R1.10 (parts inside their
+TVDB season) — 0 (no parts exist yet). The migration changed none of the user's data
+(season/show/episode/watch/external-id tables identical on the old columns).
+
 ## TVDB alignment (2026-09-27, read-only checks; for confirmation)
 
 **Rule:** the **show-level TVDB id** of every season comes from today's data (the

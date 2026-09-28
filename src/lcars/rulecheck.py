@@ -132,10 +132,27 @@ def check_seasons_have_spans(conn):
 
 def check_spans_do_not_overlap(conn):
     if _has(conn, "season_span"):
-        return _not_yet(
+        # Level-aware: a part sits inside its TVDB season (checked by
+        # R1.10 below); levels side by side — same show, same parent, or
+        # both without one — must not share an absolute number.
+        return _finding(
+            conn,
             "R1.12",
             "Spans of one level don't overlap",
-            "level-aware overlap check comes with phase 2 (parts sit inside their season)",
+            "violation",
+            f"SELECT {_TITLE} AS show, a.decimal_season_number AS a_n, sa.abs_from AS a0,"
+            " sa.abs_to AS a1, b.decimal_season_number AS b_n, sb.abs_from AS b0,"
+            " sb.abs_to AS b1"
+            " FROM season a JOIN season b ON b.show_id = a.show_id AND a.id < b.id"
+            "  AND b.parent_id IS a.parent_id"
+            " JOIN season_span sa ON sa.season_id = a.id"
+            " JOIN season_span sb ON sb.season_id = b.id"
+            " JOIN show sh ON sh.id = a.show_id"
+            " WHERE sh.tracked = 1 AND sa.abs_from <= sb.abs_to AND sb.abs_from <= sa.abs_to",
+            fmt=lambda r: (
+                f"{r['show']} S{r['a_n']:g} ({r['a0']:g}–{r['a1']:g})"
+                f" × S{r['b_n']:g} ({r['b0']:g}–{r['b1']:g})"
+            ),
         )
     return _finding(
         conn,
@@ -151,6 +168,29 @@ def check_spans_do_not_overlap(conn):
         "  AND a.abs_start <= b.abs_end AND b.abs_start <= a.abs_end",
         fmt=lambda r: (
             f"{r['show']} S{r['a_sn']} ({r['a0']}–{r['a1']}) × S{r['b_sn']} ({r['b0']}–{r['b1']})"
+        ),
+    )
+
+
+def check_parts_inside_their_season(conn):
+    if not _has(conn, "season", "parent_id"):
+        return _not_yet("R1.10", "Parts sit inside their TVDB season", "no levels yet")
+    return _finding(
+        conn,
+        "R1.10",
+        "Parts sit inside their TVDB season",
+        "violation",
+        f"SELECT {_TITLE} AS show, p.decimal_season_number AS n, c.label,"
+        " sc.abs_from, sc.abs_to FROM season c"
+        " JOIN season p ON p.id = c.parent_id"
+        " JOIN season_span sc ON sc.season_id = c.id"
+        " LEFT JOIN show sh ON sh.id = p.show_id"
+        " WHERE COALESCE(sh.tracked, 1) = 1 AND NOT EXISTS ("
+        "  SELECT 1 FROM season_span sp WHERE sp.season_id = p.id"
+        "  AND sc.abs_from >= sp.abs_from AND sc.abs_to <= sp.abs_to)",
+        fmt=lambda r: (
+            f"{r['show']} S{r['n']:g} part {r['label'] or '?'}"
+            f" ({r['abs_from']:g}–{r['abs_to']:g}) outside its season"
         ),
     )
 
@@ -374,6 +414,7 @@ CHECKS: list[Callable[[sqlite3.Connection], Finding]] = [
     check_season_zero_redistributed,
     check_seasons_have_spans,
     check_spans_do_not_overlap,
+    check_parts_inside_their_season,
     check_one_show_per_tvdb_id,
     check_list_ids_on_one_season,
     check_list_ids_season_level,

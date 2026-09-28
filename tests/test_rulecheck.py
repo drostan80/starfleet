@@ -113,3 +113,43 @@ def test_cli_exit_code(db_path, capsys):
     _show(db_path, "s-eeeeee", "Stub", status="planned", tracked=0, tvdb=None)
     assert rulecheck.main([str(db_path)]) == 1
     assert "R3.5" in capsys.readouterr().out
+
+
+def _level(path, zid, sid, n, spans, kind="tvdb_season", parent=None, part=1):
+    _write(
+        path,
+        "INSERT INTO season (id, show_id, season_number, part_number, source, status, kind,"
+        " parent_id, decimal_season_number, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, 'manual', 'planned', ?, ?, ?, ?, ?)",
+        (zid, sid, None if kind == "special" else int(n), part, kind, parent, n, NOW, NOW),
+    )
+    for a, b in spans:
+        _write(
+            path,
+            "INSERT INTO season_span (season_id, abs_from, abs_to) VALUES (?, ?, ?)",
+            (zid, a, b),
+        )
+
+
+def test_levels_parts_inside_their_season_are_not_overlaps(db_path):
+    # R1.12 worked example: film abs 13 between S1 and S2; S2 = part 1 + part 2.
+    _show(db_path, "s-ffffff", "Levels", status="planned")
+    _level(db_path, "z-fffff1", "s-ffffff", 1, [(1, 12)])
+    _level(db_path, "z-fffff2", "s-ffffff", 1.5, [(13, 13)], kind="special")
+    _level(db_path, "z-fffff3", "s-ffffff", 2, [(14, 30)])
+    _level(db_path, "z-fffff4", "s-ffffff", 2, [(14, 26)], kind="part", parent="z-fffff3")
+    _level(db_path, "z-fffff5", "s-ffffff", 2, [(27, 30)], "part", "z-fffff3", part=2)
+    found = _by_rule(db_path)
+    assert found["R1.12"].count == 0
+    assert found["R1.10"].count == 0
+
+
+def test_levels_overlaps_and_stray_parts_are_found(db_path):
+    _show(db_path, "s-gggggg", "Broken Levels", status="planned")
+    _level(db_path, "z-ggggg1", "s-gggggg", 1, [(1, 12)])
+    _level(db_path, "z-ggggg2", "s-gggggg", 2, [(12, 24)])  # shares abs 12 with S1
+    _level(db_path, "z-ggggg3", "s-gggggg", 2, [(13, 18)], kind="part", parent="z-ggggg2")
+    _level(db_path, "z-ggggg4", "s-gggggg", 2, [(17, 26)], "part", "z-ggggg2", part=2)
+    found = _by_rule(db_path)
+    assert found["R1.12"].count == 2  # S1 × S2, part 1 × part 2
+    assert found["R1.10"].count == 1  # part 2 runs past S2's end

@@ -40,6 +40,9 @@ from lcars import (
 _EXTERNAL_ID_URL_TEMPLATES = {
     "anilist": "https://anilist.co/anime/{id}",
     "tvdb": "https://thetvdb.com/dereferrer/series/{id}",
+    # PLAN-CODE 2.4b: a film's TVDB *movie* id (Your Name. = movie 197),
+    # never read as a series id — `tvdb` stays the show's series id.
+    "tvdb_movie": "https://thetvdb.com/dereferrer/movie/{id}",
     "imdb": "https://www.imdb.com/title/{id}/",
     "mal": "https://myanimelist.net/anime/{id}",
 }

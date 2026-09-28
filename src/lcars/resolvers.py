@@ -966,9 +966,9 @@ def _push_season_progress(conn, season: dict) -> None:
 def _push_show_episode_progress(conn, show_id: str, season_number: int) -> None:
     """Looks up the one season row for this show+season_number and
     pushes its recomputed progress — the shared entry point every
-    watch/unwatch/skip mutation below calls (addWatchEvent,
-    deleteWatchEvent, markSeasonWatched, markEpisodeRangeWatched,
-    markEpisodeSkipped): "episode watched"/"episode un-watched" are the
+    watch/unwatch mutation below calls (addWatchEvent,
+    deleteWatchEvent, markSeasonWatched, markEpisodeRangeWatched):
+    "episode watched"/"episode un-watched" are the
     same push operation, not two, since progress is always recomputed
     fresh from current episode.state rather than incremented/
     decremented (todo.md's write-mirror enumeration originally listed
@@ -2587,12 +2587,8 @@ def resolve_reconcile_arr_state(_, info):
             log.exception("reconcileArrState: failed to pause %s", show_id)
     resumed_ids: list[str] = []
     for show_id in raw["to_resume"]:
-        row = conn.execute(
-            "SELECT status_before_pause FROM show WHERE id = ?", (show_id,)
-        ).fetchone()
-        target = (row["status_before_pause"] if row else None) or "watching"
         try:
-            _apply_status_change(conn, show_id, target, "reconcile")
+            _apply_status_change(conn, show_id, "watching", "reconcile")
             resumed_ids.append(show_id)
         except GraphQLError:
             log.exception("reconcileArrState: failed to resume %s", show_id)
@@ -3376,14 +3372,6 @@ def _apply_status_change(conn, show_id: str, status: str, changed_by: str):
     a caller with no GraphQL `info` (the reconcile path) has already
     decided `status` is correct by the time it gets here.
 
-    `status_before_pause` (migration 038b4fbb1ec7): captured on entering
-    paused/dropped from an active status, so a later resume — whether
-    the user manually or the reconcile pass restoring from Sonarr's own
-    `monitored` flag flipping back to true — knows what to resume *to*
-    rather than guessing WATCHING. Cleared on any transition away from
-    paused/dropped, manual or automatic — the status actually being set
-    now always wins over whatever was remembered.
-
     Arr monitor sync, both directions: entering paused/dropped
     unmonitors in Sonarr/Radarr (`_unmonitor_in_arr_on_drop`, existing);
     leaving it re-monitors (`_remonitor_in_arr_on_resume`, new here
@@ -3396,7 +3384,7 @@ def _apply_status_change(conn, show_id: str, status: str, changed_by: str):
     very next reconcile tick would silently flip the show right back to
     paused."""
     row = conn.execute(
-        "SELECT status, status_before_pause FROM show WHERE id = ?", (show_id,)
+        "SELECT status FROM show WHERE id = ?", (show_id,)
     ).fetchone()
     if row is None:
         raise GraphQLError(f"no such show: {show_id}")
@@ -3429,15 +3417,9 @@ def _apply_status_change(conn, show_id: str, status: str, changed_by: str):
         (show_id, show_id),
     ).fetchall():
         season_status_log.set_status(conn, last_season["id"], status, changed_by)
-    status_before_pause = row["status_before_pause"]
-    if now_paused and not was_paused:
-        status_before_pause = previous_status
-    elif not now_paused and was_paused:
-        status_before_pause = None
     # Write show.status directly (this is the explicit-set path, not derived)
     conn.execute(
-        "UPDATE show SET status = ?, status_before_pause = ?, updated_at = ? WHERE id = ?",
-        (status, status_before_pause, now, show_id),
+        "UPDATE show SET status = ?, updated_at = ? WHERE id = ?", (status, now, show_id)
     )
     conn.execute(
         "INSERT INTO status_change"
@@ -4218,31 +4200,6 @@ def resolve_mark_episode_range_watched(
         dict(conn.execute("SELECT rowid, * FROM watch_event WHERE id = ?", (wid,)).fetchone())
         for wid in created_ids
     ]
-
-
-@mutation.field("markEpisodeSkipped")
-def resolve_mark_episode_skipped(_, info, episode_id):
-    conn = db.get_connection()
-    now = util.now_utc_iso()
-    row = conn.execute(
-        "SELECT show_id, season FROM episode WHERE id = ?", (episode_id,)
-    ).fetchone()
-    if row is None:
-        raise GraphQLError(f"no such episode: {episode_id}")
-    conn.execute(
-        "UPDATE episode SET state = 'skipped', updated_at = ? WHERE id = ?", (now, episode_id)
-    )
-    # auto-sync, todo.md — a skip counts as done for completion purposes
-    # (rule #1: stays 'skipped' in the DB, never rewritten to 'watched').
-    _try_complete_season(conn, row["show_id"], row["season"], now)
-    _recompute_show_status(conn, row["show_id"], "auto_complete")  # derived status, 2.1c
-    conn.commit()
-    # write-mirror gap #2, todo.md — a skip can complete a previously-gapped
-    # contiguous run (_compute_season_episode_progress counts skipped as
-    # passed), so this needs the same push every real watch mutation gets.
-    _push_show_episode_progress(conn, row["show_id"], row["season"])
-    _push_mal_show_episode_progress(conn, row["show_id"], row["season"])  # MAL mirror
-    return _get_episode(conn, episode_id)
 
 
 # -- 5.2 episode field overrides -------------------------------------------

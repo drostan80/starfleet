@@ -146,6 +146,39 @@ R2.13a applies it to the last non-skipped season.
 - **Question for you (data):** nothing needs keeping from it? (It only remembered
   what to resume to.)
 
+### Phase 2 — done 2026-09-28 (migration `f4a5b6c7d8e9`)
+
+Additive, as agreed: the old columns (`abs_start/abs_end`, `part_number`, show-level
+AniList/MAL rows) stay and are filled alongside; they go in one step before cutover.
+- `season_span` (ON DELETE CASCADE); one span per season that had `abs_start/abs_end`
+  (310 in the 09-06 snapshot).
+- `season.kind` (default `tvdb_season`), `parent_id` (containment only: a part's TVDB
+  season; CHECK: a part has a parent, a TVDB season has none), `show_id` and
+  `season_number` nullable.
+- **Decimal season number (user, 2026-09-28, proposed option):** `season_number` stays
+  TVDB's whole number (NULL for side pieces); new `season.decimal_season_number` REAL
+  (2, 2.5, 2.1…), GraphQL `Season.decimalSeasonNumber: Float`. A side piece's place is
+  its decimal number (2.5 = after S2); no separate anchor column. `seasonNumber: Int!`
+  stays until phase 8 moves every client; no side-piece row may exist before that.
+- Unique key is now `(show_id, season_number, part_number, kind)` so a TVDB season and
+  its part 1 can coexist; old code only makes TVDB seasons, so nothing changes for it.
+- Transition triggers (`season_span_from_abs_*`, `season_decimal_number_*`) copy old
+  writers' `abs_start/abs_end` and `season_number` into the new columns; dropped with
+  the old columns.
+- The migration stops if any `part_number <> 1` row exists (none do) rather than invent
+  a parent.
+- 2.4b: `tvdb_movie` service + URL template. No row uses it yet: the rebuild applies the
+  TVDB decisions. Every TVDB reader asks for `tvdb` exactly, so it's ignored elsewhere.
+- 2.5: `markEpisodeSkipped` removed (no client called it). The `episode.state` CHECK
+  still allows `skipped` (table has a generated column; goes with the final step).
+- 2.6: `show.status_before_pause` dropped (user: nothing to keep). Its only reader was
+  the Sonarr resume path, which has been dead since 09-26 (Sonarr never changes LCARS).
+- rulecheck: R1.12 level-aware, new R1.10 (parts inside their TVDB season).
+- **Deferred to phase 5:** `episode.show_id` is still NOT NULL, so an individual season
+  can't hold episodes yet; phase 5 (the add check) rebuilds `episode` for it.
+- **Open for later (naming, §7):** an individual season has `kind = 'tvdb_season'` with
+  no show — ask the user whether it needs its own kind when phase 5 builds them.
+
 ## Phase 3 — Numbering: LCARS absolute numbers (R1.0, R1.2, R1.2a–b, R1.3–R1.5, R1.8, R1.18–19; A1–A5, G3, G4)
 
 **3.1 Memory Alpha numbering engine** (R1.2c: Memory Alpha is the authority) (`lcars/numbering.py`, replaces

@@ -929,9 +929,7 @@ def test_reconcile_never_pauses_a_show_unmonitored_in_sonarr(conn, monkeypatch):
 def test_reconcile_never_resumes_a_show_remonitored_in_sonarr(conn, monkeypatch):
     _configure_sonarr()
     _add_show(conn, "s-rec002", tvdb_id=457078)
-    conn.execute(
-        "UPDATE show SET status = 'paused', status_before_pause = 'watching' WHERE id = 's-rec002'"
-    )
+    conn.execute("UPDATE show SET status = 'paused' WHERE id = 's-rec002'")
     conn.commit()
     series = [{
         "id": 1, "tvdbId": 457078, "title": "Test", "path": "/data/show",
@@ -972,16 +970,12 @@ def test_reconcile_never_pauses_a_completed_unmonitored_show(conn, monkeypatch, 
 
 
 def test_reconcile_never_auto_resumes_a_show_with_no_recorded_pause_reason(conn, monkeypatch):
-    # Real bug caught in review: a show dropped/paused before this feature
-    # existed (or whose pause wasn't recorded by _apply_status_change for
-    # any other reason) has status_before_pause = NULL. Without this guard,
-    # every such show where Sonarr still happens to report monitored=true
-    # (never unmonitored, a push that failed, re-added later) would get
-    # silently reactivated — including a real AniList/MAL push — on the
-    # very first reconcile tick. This must never fire for that show.
+    # Real bug caught in review: a dropped show where Sonarr still happens
+    # to report monitored=true (never unmonitored, a push that failed,
+    # re-added later) must never be silently reactivated — including a
+    # real AniList/MAL push — on a reconcile tick.
     _configure_sonarr()
     _add_show(conn, "s-rec006", tvdb_id=457078)
-    # status_before_pause stays NULL — never set by anything here
     conn.execute("UPDATE show SET status = 'dropped' WHERE id = 's-rec006'")
     conn.commit()
     series = [{

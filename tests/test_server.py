@@ -47,7 +47,6 @@ def migrated_db(tmp_path) -> Path:
     return db_path
 
 
-
 def _seed_list_baselines():
     """2026-09-25 — the AniList/MAL reconcilers compare against a baseline
     (list_baseline.py); on a first run they only seed it. Tests about
@@ -325,7 +324,9 @@ SHOW_METADATA_QUERY = """
     query($id: ID!) {
       show(id: $id) {
         posterUrl bannerUrl synopsis genresRaw totalEpisodes durationMinutes
-        seasons { edges { node { seasonNumber anilistId malId source manualOverride } } }
+        seasons { edges { node {
+          seasonNumber decimalSeasonNumber anilistId malId source manualOverride
+        } } }
         cast { edges { node { roleType characterName person { name } } } }
         studioCredits { edges { node { roleType studio { name } } } }
       }
@@ -495,6 +496,7 @@ async def test_add_show_anilist_fetch_populates_metadata_season_and_cast(client,
     assert len(seasons) == 1
     season = seasons[0]["node"]
     assert season["seasonNumber"] == 1
+    assert season["decimalSeasonNumber"] == 1.0  # R1.9a, filled alongside (phase 2)
     assert season["anilistId"] == 12345
     assert season["malId"] == 99999
     assert season["source"] == "MANUAL"
@@ -6719,32 +6721,6 @@ async def test_auto_complete_does_not_fire_while_still_airing(client, migrated_d
     assert (await _show_status(client, show["id"])) == "PLANNED"
 
 
-async def test_skipped_episode_counts_toward_auto_completion_but_stays_skipped(client, migrated_db):
-    show = await add_show(client)
-    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
-    season_id = await _create_season(client, show["id"], 1)
-    await gql(
-        client,
-        "mutation($id: ID!, $t: DateTime!) {"
-        " addWatchEvent(showId: $id, season: 1, episode: 1, watchedAt: $t) { id } }",
-        {"id": show["id"], "t": "2026-08-16T09:00:00Z"},
-        headers=auth_headers(),
-    )
-    data = await gql(
-        client,
-        "mutation($id: ID!) { markEpisodeSkipped(episodeId: $id) { state } }",
-        {"id": "e-s1e002"},
-        headers=auth_headers(),
-    )
-    assert data["markEpisodeSkipped"]["state"] == "SKIPPED"
-    assert (await _season_dates(client, season_id))["completedAt"] is not None
-    assert (await _show_status(client, show["id"])) == "COMPLETED"
-    ep2 = db.get_connection().execute(
-        "SELECT state FROM episode WHERE id = 'e-s1e002'"
-    ).fetchone()
-    assert ep2["state"] == "skipped"  # never rewritten to 'watched'
-
-
 async def test_multi_season_show_only_completes_once_every_season_is_done(client, migrated_db):
     show = await add_show(client)
     await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
@@ -6898,30 +6874,6 @@ async def test_bulk_mark_all_aired_stamps_started_at_locally_but_does_not_push_i
     # ...but completed_at genuinely is pushed for both (own docstring above).
     completed_at_ids = {c[0] for c in calls if "completed_at" in c[1]}
     assert completed_at_ids == {111, 222}
-
-
-async def test_set_status_completed_confirmed_never_overwrites_a_skipped_episode(
-    client, migrated_db
-):
-    show = await add_show(client)
-    await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 2))
-    await gql(
-        client,
-        "mutation($id: ID!) { markEpisodeSkipped(episodeId: $id) { state } }",
-        {"id": "e-s1e001"},
-        headers=auth_headers(),
-    )
-    await gql(
-        client,
-        "mutation($id: ID!) {"
-        " setStatus(showId: $id, status: COMPLETED, confirmed: true) { status } }",
-        {"id": show["id"]},
-        headers=auth_headers(),
-    )
-    state = db.get_connection().execute(
-        "SELECT state FROM episode WHERE id = 'e-s1e001'"
-    ).fetchone()
-    assert state["state"] == "skipped"
 
 
 async def test_set_season_mapping_new_season_reopens_a_completed_show(client, migrated_db):
@@ -7516,7 +7468,7 @@ async def test_score_history_includes_show(client):
     assert entries[0]["node"]["show"]["id"] == show["id"]
 
 
-# --- addWatchEvent / markEpisodeSkipped ------------------------------------
+# --- addWatchEvent ---------------------------------------------------
 
 
 async def _insert_episode(
@@ -7574,18 +7526,6 @@ async def test_add_watch_event_for_movie_has_null_season_episode(client):
     )
     assert data["addWatchEvent"]["season"] is None
     assert data["addWatchEvent"]["episode"] is None
-
-
-async def test_mark_episode_skipped(client, migrated_db):
-    show = await add_show(client)
-    episode_id = await _insert_episode(migrated_db, show["id"])
-    data = await gql(
-        client,
-        "mutation($id: ID!) { markEpisodeSkipped(episodeId: $id) { state } }",
-        {"id": episode_id},
-        headers=auth_headers(),
-    )
-    assert data["markEpisodeSkipped"]["state"] == "SKIPPED"
 
 
 async def _insert_episode_range(migrated_db: Path, show_id: str, season: int, episodes: range):
@@ -7865,32 +7805,6 @@ async def test_mark_episode_range_watched_pushes_progress(client, migrated_db, m
     # dedicated coverage above) — filtered out, this test is progress-only.
     progress_calls = [c for c in calls if "progress" in c[1]]
     assert progress_calls == [(111, {"progress": 3})]
-
-
-async def test_mark_episode_skipped_counts_toward_progress(client, migrated_db, monkeypatch):
-    """A skip counts as passed for progress purposes even though it never
-    creates a watch_event or flips episode.state to 'watched' — same
-    "not the same thing as never watched" distinction watch_reconcile.py's
-    own read side already draws."""
-    config.set_current(_authenticated_config())
-    calls = []
-    monkeypatch.setattr(
-        anilist_client,
-        "save_media_list_entry",
-        lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
-    )
-    show = await add_show(client)
-    await _insert_episode_range(migrated_db, show["id"], season=1, episodes=range(1, 3))
-    await _link_season_anilist(client, show["id"], 1, 111)
-    calls.clear()
-
-    await gql(
-        client,
-        "mutation($id: ID!) { markEpisodeSkipped(episodeId: $id) { state } }",
-        {"id": "e-s1e001"},
-        headers=auth_headers(),
-    )
-    assert calls == [(111, {"progress": 1})]
 
 
 async def test_add_watch_event_no_push_for_unlinked_season(client, migrated_db, monkeypatch):
@@ -10119,7 +10033,7 @@ async def test_reconcile_arr_state_pause_then_resume_remonitors_in_sonarr(client
 
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: _FakeSonarrClient())
 
-    # Pause — captures status_before_pause and unmonitors in Sonarr.
+    # Pause — unmonitors in Sonarr.
     data = await gql(
         client,
         "mutation($id: ID!) { setStatus(showId: $id, status: PAUSED) { status } }",
@@ -12048,7 +11962,6 @@ async def test_ops_tier_due_tracks_completion(client):
     assert (await gql(client, due, headers=auth_headers()))["opsTierDue"] is False
     zero = 'query { opsTierDue(tier: "other", intervalSeconds: 0) }'
     assert (await gql(client, zero, headers=auth_headers()))["opsTierDue"] is True
-
 
 
 async def test_add_show_with_arr_never_guesses_a_sonarr_series_by_title(client, monkeypatch):
