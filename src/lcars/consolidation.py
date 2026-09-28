@@ -204,12 +204,25 @@ def apply_group(conn, tvdb_id: str, dataset: list[dict]) -> dict:
                              (n, now, zid))
                 continue
             if target[1] is None and target[2] is None:
-                # The TVDB season's own AniList/MAL id: linked, the duplicate goes.
+                # The TVDB season's own AniList/MAL id: linked, the duplicate goes —
+                # with its status and history, which are the season's (PLAN-CODE 9.1:
+                # a reviewed status must survive the merge).
+                src = conn.execute(
+                    "SELECT status, status_set_manually, score, started_at, completed_at"
+                    " FROM season WHERE id = ?", (zid,)).fetchone()
                 conn.execute(
-                    "UPDATE season SET anilist_id = ?, mal_id = ?, updated_at = ? WHERE id = ?",
-                    (anilist_id, mal_id, now, target[0]))
+                    "UPDATE season SET anilist_id = ?, mal_id = ?, status = ?,"
+                    " status_set_manually = ?, score = COALESCE(?, score),"
+                    " started_at = COALESCE(?, started_at),"
+                    " completed_at = COALESCE(?, completed_at), updated_at = ? WHERE id = ?",
+                    (anilist_id, mal_id, src[0], src[1], src[2], src[3], src[4], now, target[0]))
                 season_ranges.upsert_season_external_id(conn, target[0], anilist_id, mal_id, now)
-                conn.execute("UPDATE season SET season_number = ? WHERE id = ?", (n, zid))
+                conn.execute("UPDATE season_status_change SET season_id = ?, show_id = ?"
+                             " WHERE season_id = ?", (target[0], winner, zid))
+                conn.execute("UPDATE season SET anilist_id = NULL, mal_id = NULL,"
+                             " season_number = ? WHERE id = ?", (n, zid))
+                conn.execute("DELETE FROM season_external_id WHERE season_id = ?"
+                             " AND service IN ('anilist', 'mal')", (zid,))
                 continue
             parts = conn.execute(
                 "SELECT COUNT(*) FROM season WHERE parent_id = ? AND kind = 'part'", (target[0],)

@@ -89,3 +89,20 @@ def test_apply_group_folds_every_show_into_the_winner(conn):
     assert conn.execute(
         "SELECT anilist_id FROM season WHERE id = 'z-main01'").fetchone()[0] is None
     assert conn.execute("SELECT COUNT(*) FROM show WHERE tracked = 1").fetchone()[0] == 2
+
+
+def test_linking_onto_the_winners_empty_season_keeps_the_losers_status(conn):
+    # The winner already has TVDB season 2 with no AniList id; the loser holding
+    # AniList 3 (TVDB S2) is linked onto it: its reviewed status comes along,
+    # and no row keeps AniList 3 twice (PLAN-CODE 9.1).
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, source, status, created_at, updated_at)"
+        " VALUES ('z-empty2', 's-main01', 2, 'manual', 'planned', ?, ?)", (NOW, NOW))
+    conn.execute("UPDATE season SET status = 'dropped', status_set_manually = 1"
+                 " WHERE id = 'z-seas02'")
+    conn.commit()
+    consolidation.apply_group(conn, "500", DATASET)
+    row = conn.execute("SELECT anilist_id, status, status_set_manually FROM season"
+                       " WHERE id = 'z-empty2'").fetchone()
+    assert tuple(row) == (3, "dropped", 1)
+    assert conn.execute("SELECT COUNT(*) FROM season WHERE anilist_id = 3").fetchone()[0] == 1
