@@ -30,7 +30,7 @@ rule applies to TV series, ask — do not assume.
 - **R1.0 Every episode has an absolute number**, set per these rules — this
   was always the rule. `[clarified 2026-09-27]` No episode may be left without
   one; if some are, it was set up wrong before.
-- **R1.0a No air date yet** : an episode without an air date
+- **R1.0a No air date yet** `[clarified 2026-09-28]`: an episode without an air date
   still gets a number — a placeholder shown as **x** until its air date arrives (the
   field is numeric, so it's stored as a placeholder and marked); if that isn't
   possible, 0.1.
@@ -108,12 +108,12 @@ rule applies to TV series, ask — do not assume.
   film being abs 17.
 - **R1.13** Minis can be set as sub-seasons interlocking with the main season,
   which lets them have their own cover art.
-- **R1.13b Every episode belongs to a level, so every cover can be set**
-  : a series of minis inside a season's run is grouped as
+- **R1.13b Every episode belongs to a level, so every cover can be set**:
+  a series of minis inside a season's run is grouped as
   that season's mini sub-season (one cover for the group); a single special or
   full-length piece is a level of its own (its own cover); minis between seasons are
   their decimal season (R1.8d). Art can be set per level, individually or for the
-  decimal group.
+  decimal group. `[clarified 2026-09-28]`
 - **R1.13a Film/mini inside a season's air window** `[clarified 2026-09-28, Q-R]`
   (e.g. S2 = abs 13–16 and 18–24, film abs 17): its **own level**. Sub-season or
   separate level are both acceptable technically; what matters is that it **appears
@@ -397,10 +397,10 @@ An episode can be unaired but watched (pre-air showing, leak…).
   from a title search alone is never accepted automatically; any disagreement
   goes to the user.
 - **R3.7b** TVDB matching also searches the **original (Japanese) title** — e.g. Bless
-  was found by ブレス. 
+  was found by ブレス. `[clarified 2026-09-28]`
 - **R3.7c** An entry that will **never be on TVDB** but is a piece of a show you track
   (e.g. a special of an AniList-only show) is attached to that show as one of its
-  levels, when you confirm it. 
+  levels, when you confirm it. `[clarified 2026-09-28]`
 - **R3.7a** A TVDB id that LCARS derived but no other source confirms is shown in
   **browse** (and the add confirmation) for the user to confirm: the user is then
   the second independent source. `[clarified 2026-09-27]`
