@@ -476,7 +476,7 @@ verified (the Maria Mercedes failure). Approved plan, in this order:
   Fribb wins over the guess.
 - **8.8.2 Unconfirmed → individual season + review** "which TVDB show?": link this
   candidate / link another TVDB id (your note; re-checked, never linked blind) / keep
-  individual. Linking joins the season to the show (R3.6d) keeping its id, status and
+  individual. Linking joins the season to the show (R3.6d): a new level takes its status and
   history — *added after approval: the join itself, `PendingReview.payload`*.
 - **8.8.4 Hard stops** on every link Fribb didn't confirm (yours, a guess, or a
   Sonarr-library match): anime vs a TVDB show that isn't animation / Japanese-Chinese-
