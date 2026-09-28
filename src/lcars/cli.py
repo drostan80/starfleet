@@ -167,6 +167,12 @@ def _cmd_consolidation(args: argparse.Namespace) -> None:
     raise SystemExit(consolidation.main(args.rest))
 
 
+def _cmd_rebuild(args: argparse.Namespace) -> None:
+    from lcars import rebuild
+
+    raise SystemExit(rebuild.main(args.rest))
+
+
 def _cmd_captured(args: argparse.Namespace) -> None:
     from lcars import external_writes
 
@@ -234,6 +240,12 @@ def main() -> None:
     )
     captured_cmd.add_argument("rest", nargs=argparse.REMAINDER)
     captured_cmd.set_defaults(func=_cmd_captured)
+
+    rebuild_cmd = subparsers.add_parser(
+        "rebuild", help="PLAN-CODE 9.1: build the new database from the 09-06 snapshot (copies)"
+    )
+    rebuild_cmd.add_argument("rest", nargs=argparse.REMAINDER)
+    rebuild_cmd.set_defaults(func=_cmd_rebuild)
 
     # No subcommand at all ("lcars" alone, e.g. the Dockerfile's CMD) still
     # means "serve", with serve's own --host/--port defaults — argparse
