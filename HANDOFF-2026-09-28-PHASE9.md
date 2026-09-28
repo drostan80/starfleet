@@ -122,6 +122,24 @@ caller can bypass it:
 Grep for any other outbound write before trusting it (`httpx.post`, `.patch(`, `.put(`,
 `.delete(` across `src/lcars`).
 
+### 9.1 progress (2026-09-28, in progress)
+
+- User answers: PLAN-DATA "Phase 9.1 decisions" (216 Trakt drops → last *aired* season;
+  "mine" = everything reviewed since step 0; two runs; labelled snapshots; no watching
+  until live).
+- Inputs frozen in `~/starfleet-rebuild/`: `snapshot-20260906-0853Z.db`,
+  `live-20260928T1951Z.db` (both read-only). Review decisions exported from both pages to
+  `~/starfleet-review-2026-09-27/decisions-final/`; `normalize_decisions.py` turns them into
+  `rebuild-inputs/decisions.json` (explicit actions; PLAN-DATA transcription wins over
+  ambiguous notes — 2 differences flagged).
+- `src/lcars/rebuild.py` (`lcars rebuild`): stages base + sources done and run
+  (`~/starfleet-rebuild/run1/01-base.db`, `02-sources.db`). Next: stage 3 structure.
+- Findings to report: local lcars.ini has tiny's old IP (use env overrides
+  `LCARS_SONARR_URL=http://192.168.1.77:8989`, `LCARS_RADARR_URL=http://192.168.1.77:7878`);
+  freeze ON by default (rebuild lifts it on its copy; prod at cutover = user's call);
+  consolidation link-status bug fixed; reconcile progress backfill ignores the baseline
+  (fix needs a yes before cutover; until then list polls stay off after cutover).
+
 ### 9.1 Rebuild script (the judgment-heavy part)
 
 Write it as a repeatable script (e.g. `lcars rebuild <snapshot> <out> [--sources …]`), run
