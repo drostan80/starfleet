@@ -411,7 +411,42 @@ def stage_structure(run: Run) -> None:
                    "" if outcome == "applied" else "no longer shares its TVDB id")
     conn.commit()
     _structure_adds(run, conn, d)
+    _source_ids_from_live(run, conn)
     run.record("stage", "structure", "applied", "")
+
+
+SOURCE_ID_SERVICES = ("tvmaze", "anidb", "syoboi")
+
+
+def _source_ids_from_live(run: Run, conn) -> None:
+    """TVmaze/AniDB/Syoboi show links are source data (Memory Alpha's cross-id
+    propagation since 09-06), not the user's decisions: taken from live for
+    each tracked show — by TVDB id (the show's identity after the merges),
+    else by show id. Never overwrites a link the show already has."""
+    live = _live(run)
+    by_tvdb: dict = {}
+    by_show: dict = {}
+    for sid, service, ext in live.execute(
+            "SELECT show_id, service, external_id FROM show_external_id WHERE service IN"
+            f" ({', '.join('?' * len(SOURCE_ID_SERVICES))})", SOURCE_ID_SERVICES):
+        by_show.setdefault(sid, {})[service] = ext
+    for sid, tvdb in live.execute(
+            "SELECT show_id, external_id FROM show_external_id WHERE service = 'tvdb'"):
+        for service, ext in by_show.get(sid, {}).items():
+            by_tvdb.setdefault(tvdb, {}).setdefault(service, ext)
+    live.close()
+    added = 0
+    for show in conn.execute("SELECT id FROM show WHERE tracked = 1").fetchall():
+        tvdb = conn.execute("SELECT external_id FROM show_external_id WHERE show_id = ? AND"
+                            " service = 'tvdb'", (show[0],)).fetchone()
+        links = (by_tvdb.get(tvdb[0]) if tvdb else None) or by_show.get(show[0]) or {}
+        for service, ext in links.items():
+            if conn.execute("SELECT 1 FROM show_external_id WHERE show_id = ? AND service = ?",
+                            (show[0], service)).fetchone() is None and ext not in ("-1", ""):
+                _set_link(conn, show[0], service, ext)
+                added += 1
+    conn.commit()
+    run.record("source_ids", "tvmaze/anidb/syoboi", "applied", f"{added} links from live")
 
 
 # ── stage 3, part 2: adds (through the one add check, 8.8 included) ───────
@@ -698,8 +733,34 @@ def stage_sonarr(run: Run) -> None:
                f"{read} shows read from Sonarr, {absent} not in the Sonarr library")
 
 
+# ── stage 5: numbering (Memory Alpha: numbers, levels, spans) ─────────────
+
+
+def stage_numbering(run: Run) -> None:
+    import collections
+
+    from lcars import numbering
+
+    conn = _connect(run.work())
+    by_source: collections.Counter = collections.Counter()
+    flags: collections.Counter = collections.Counter()
+    shows = [r[0] for r in conn.execute("SELECT id FROM show WHERE tracked = 1 ORDER BY id")]
+    for show_id in shows:
+        items, source, main_ids = numbering.load_show(conn, show_id)
+        plan = numbering.plan_show(show_id, items, source, main_anidb_ids=main_ids)
+        numbering.apply_plan(conn, plan)
+        by_source[plan.source] += 1
+        for f in plan.flags:
+            flags[f["kind"]] += 1
+            run.record("numbering_flag", f"{show_id}:{f['kind']}", "applied",
+                       json.dumps(f, ensure_ascii=False, default=str)[:400])
+        conn.commit()
+    run.record("stage", "numbering", "applied",
+               f"{len(shows)} shows by source {dict(by_source)}; flags {dict(flags)}")
+
+
 STAGE_FUNCS = {"base": stage_base, "sources": stage_sources, "structure": stage_structure,
-               "sonarr": stage_sonarr}
+               "sonarr": stage_sonarr, "numbering": stage_numbering}
 
 
 def main(argv=None) -> int:
