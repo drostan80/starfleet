@@ -160,6 +160,11 @@ show X
   R1.8), then further divided and mapped to align and reconcile the other sources.
 - **R1.18** Absolute-numbering source of truth: **anime** — AniDB + Fribb…;
 - **R1.19** **TV** — TVmaze.
+- **R1.2e Where TVDB episodes come from** `[clarified 2026-09-28]`: Sonarr is only a
+  TVDB proxy. Reading episodes through Sonarr is the practical path for shows Sonarr
+  follows, but it isn't a rule: episode lists may be read **straight from TVDB** — e.g.
+  every show that isn't (or no longer is) in Sonarr. AniDB (the drip) then reconciles
+  the numbering for anime (R1.2d); it doesn't replace the TVDB episode list.
 - **R1.2d No authoritative data yet** `[clarified 2026-09-28, Q-T]`: TVDB order +
   air date may be used, carefully — the numbering still follows every rule above
   (season 0 episodes get their numbers too, R1.8). It is **reconciled once the
@@ -671,6 +676,7 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-27 — R1.9a: one side piece N.5, several N.1, N.2…
 - 2026-09-27 — naming must follow rulebook terms (§7).
 - 2026-09-27 — R1.2c: Memory Alpha sets every absolute number (confirmed).
+- 2026-09-28 — R1.2e: TVDB episodes may be read straight from TVDB (Sonarr is a proxy, not the rule).
 - 2026-09-28 — Q-X (R2.13b: every planned season after the last watched one is skipped, show dropped) and Q-Y (R4.8a: aired-unwatched episodes marked watched, no review) confirmed.
 - 2026-09-28 — Q-R (film/mini inside a season window: under the season or beside it?) and Q-S (kind for individual seasons) asked.
 - 2026-09-28 — Q-R answered → R1.13a (own level, shown in air order, own art); Q-S answered → R3.6d (kind `individual_season`).

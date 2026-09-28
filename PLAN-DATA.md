@@ -597,6 +597,12 @@ Read back from the page's `decisions` collection (228 entries).
 4. **Freeze** (user, 2026-09-28): lift it at cutover (`LCARS_AUTOMATION_FROZEN=0`) — the
    issues that triggered it are fixed by the rebuild code.
 
+5. **Missing episodes** (user, 2026-09-28): 835 tracked shows have no episodes and many
+   lack specials (never in Sonarr). **Option A: read their episode lists straight from
+   TVDB** (R1.2e) in the rebuild — stopgap and base; the AniDB drip reconciles anime
+   later. Consequence accepted with the choice: completed seasons get their episodes
+   marked watched (R2.7).
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
