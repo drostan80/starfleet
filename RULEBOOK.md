@@ -31,9 +31,9 @@ rule applies to TV series, ask — do not assume.
   was always the rule. `[clarified 2026-09-27]` No episode may be left without
   one; if some are, it was set up wrong before.
 - **R1.0a No air date yet** `[clarified 2026-09-28]`: an episode without an air date
-  still gets a number — a placeholder shown as **x** until its air date arrives (the
-  field is numeric, so it's stored as a placeholder and marked); if that isn't
-  possible, 0.1.
+  still gets a number — a placeholder shown as **x** until its air date arrives; the
+  number stored is **5000.1, 5000.2…** (higher than any real episode number, so it
+  sorts as not aired yet; any number from 5000 up is a placeholder).
 - **R1.2** Episodes are ordered by **absolute episode number**, derived from AniDB,
   Fribb and other sources. On disagreement, or where disambiguation is needed,
   order by **air date-time**.
@@ -675,3 +675,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — R2.13b detailed by the user; Q-W2 asked (gaps).
 - 2026-09-28 — Q-W2 answered → R2.13b (a)–(d).
 - 2026-09-28 — R1.0a (no air date → placeholder shown as x), R1.13b (every episode in a level; mini sub-seasons; art per level), R3.7b (match on the Japanese title), R3.7c (pieces never on TVDB attach to their show).
+- 2026-09-28 — R1.0a: placeholder stored as 5000.1, 5000.2… (shown as x).

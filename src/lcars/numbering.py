@@ -30,7 +30,8 @@ The rules, in the order the engine applies them:
      last episode, in that gap's side piece (decimal season, R1.8d, R1.9a:
      Frieren's minis 28.01…28.10, S2 still starts at 29). A full-length one
      there (R1.3: "may take a whole number") is listed for confirmation.
-   Without an air date it can't be placed: left unnumbered and listed.
+   Without an air date it can't be placed: a placeholder 5000.1, 5000.2… (shown
+   as x, R1.0a) until the date arrives, and listed.
 3. **Numbers**: whole numbers run 1, 2, 3… over main episodes and whole
    side items. Decimals in one gap: one item → `.5`, several → `.1, .2…`
    in air order (R1.2b); ten or more → `.01, .02…`, listed.
@@ -57,6 +58,7 @@ from lcars import ids as ids_module
 
 FILM_MINUTES = 60
 FULL_LENGTH_MINUTES = 15
+PLACEHOLDER = 5000  # R1.0a: numbers from here up are "no air date yet" (shown as x)
 
 
 @dataclass
@@ -170,6 +172,7 @@ def plan_show(
     before_first: list[Item] = []
     after: dict[int, list[tuple[Item, bool]]] = {}  # main index → [(item, whole)]
     between: dict[str, int | None] = {}  # side item → the season it follows (R1.8d)
+    undated: list[Item] = []  # no air date: placeholder numbers (R1.0a)
     for it in sorted(side, key=lambda s: (s.air or "", s.tvdb_season, s.tvdb_episode)):
         if it.tvdb_season > 0 and not it.air:
             # AniDB special inside a TVDB season, no date: stays after its TVDB predecessor.
@@ -184,7 +187,7 @@ def plan_show(
                 after.setdefault(prev, []).append((it, False))
             continue
         if not it.air:
-            plan.numbers[it.id] = None
+            undated.append(it)
             _flag(plan, "no_air_date", it)
             continue
         prev = None
@@ -235,6 +238,10 @@ def plan_show(
             else:
                 pending.append(it)
         emit_decimals(pending)
+    # R1.0a: no air date yet → 5000.1, 5000.2… (shown as x; sorts as not aired).
+    step = 0.1 if len(undated) <= 9 else 0.01
+    for i, it in enumerate(undated):
+        plan.numbers[it.id] = round(PLACEHOLDER + step * (i + 1), 4)
 
     # 4. Spans: runs of each level's own items in the numbered order.
     def runs(member) -> list[tuple[float, float]]:

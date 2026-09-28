@@ -123,9 +123,10 @@ def test_tv_christmas_special_between_seasons_is_a_listed_decimal():
     assert "full_length_between_seasons" in _kinds(plan)
 
 
-def test_special_without_air_date_is_left_unnumbered_and_listed():
-    plan = _plan(_two_seasons([Item("n1", 0, 1, None)]))
-    assert plan.numbers["n1"] is None
+def test_special_without_air_date_gets_a_placeholder_and_is_listed():
+    # R1.0a: 5000.1, 5000.2… (shown as x) until the air date arrives.
+    plan = _plan(_two_seasons([Item("n1", 0, 1, None), Item("n2", 0, 2, None)]))
+    assert (plan.numbers["n1"], plan.numbers["n2"]) == (5000.1, 5000.2)
     assert "no_air_date" in _kinds(plan)
 
 
