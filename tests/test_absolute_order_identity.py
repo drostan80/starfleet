@@ -183,11 +183,22 @@ def test_sonarr_episode_matches_by_absolute_order_not_season_number(conn):
     assert (row["sonarr_season"], row["sonarr_episode"]) == (3, 1)
 
 
-def test_new_sonarr_season_routes_past_the_subdivision_offset(conn):
+def test_new_sonarr_episode_keeps_tvdb_season_numbers(conn):
+    # RULEBOOK R1.9a (phase 3.1): season numbers follow TVDB; LCARS no
+    # longer renumbers seasons, so a new episode is filed where TVDB has it.
     _capture_all(conn)
-    # Sonarr's next season (S05, absolute 9 — beyond every range) lands on
-    # LCARS S6, not on top of LCARS S5.
-    assert sonarr_match.route_new_episode(conn, SHOW, _sonarr_ep(5, 1, 9)) == (6, 1)
+    assert sonarr_match.route_new_episode(conn, SHOW, _sonarr_ep(5, 1, 9)) == (5, 1)
+
+
+def test_sonarr_episode_matches_by_tvdb_absolute_mapping(conn):
+    # R1.2a: TVDB's absolute number is a mapping, not LCARS's number.
+    conn.execute(
+        "UPDATE episode SET absolute_number = 50, tvdb_absolute = 5"
+        " WHERE show_id = ? AND season = 4 AND episode = 1",
+        (SHOW,),
+    )
+    match = sonarr_match.find_episode(conn, [SHOW], _sonarr_ep(3, 1, 5))
+    assert (match["season"], match["episode"]) == (4, 1)
 
 
 def test_local_audit_puts_sonarr_files_on_the_absolute_match(conn):

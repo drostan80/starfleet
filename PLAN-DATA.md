@@ -246,6 +246,23 @@ The gap is re-derived at cutover time, not frozen now.
    the exact list of external writes.
 7. Apply; external writes last, in capped batches.
 
+### Rebuild order constraints (phase 3, 2026-09-28)
+
+- **Source data first.** The 09-06 snapshot has no AniDB episode / anime-lists /
+  TVmaze data: copy those source tables (`anidb_*`, `anime_list_*`, `tvmaze_*`,
+  `syoboi_*`) from live (`sources-20260928.db`, plus the AniDB fetch of 09-28 and a
+  TVmaze-with-specials fetch) and recompute everything derived from them
+  (`episode_anidb_mapping`, …). User: "adding all those sources is essential".
+- **Same-TVDB consolidation before any Sonarr read or numbering.** After phase 3.1 a
+  TVDB id held by several shows gets no Sonarr episodes and no availability (R1.14).
+  The 09-06 snapshot has **126** such ids (live: 0). Consolidation must also move the
+  merged episodes onto TVDB's season/episode — the siblings' own numbering restarted
+  at 1, which is why **923** episodes (280 with files) have no Sonarr coordinates
+  stored. Only 1 show has LCARS seasons that differ from Sonarr's, and none of its
+  episodes lack coordinates.
+- **Then a Sonarr read (captures TVDB season/episode and `tvdb_absolute`), then the
+  numbering engine.**
+
 ## Access so far
 
 On tiny, read-only: copied four snapshot files, and made a temporary

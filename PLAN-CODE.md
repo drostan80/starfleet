@@ -191,6 +191,14 @@ episode fetch from intermediate snapshots/live DB; source tables (anidb_*,
 anime_list_*, tvmaze_*, …) carried from live into the rebuild ("essential — part of
 what works now"); reads of prod allowed; Sonarr multi-show routing deleted, not ported.
 
+### 3.0 done: `individual_season` kind (R3.6d) in the phase 2 migration.
+### 3.1 done 2026-09-28: `episode.tvdb_absolute` (TVDB's absolute number, a mapping,
+captured on every Sonarr read); Sonarr matching = captured TVDB season/episode →
+`tvdb_absolute` → (until 3.2) LCARS absolute number → TVDB season/episode; new episodes
+keep TVDB's season/episode (R1.9a; the "subdivision offset" routing is gone); multi-show
+routing deleted (metadata + availability): a TVDB id held by several shows gets nothing
+filed (R1.14). Tests for the deleted routing replaced.
+
 #### Phase 3 — Numbering: LCARS absolute numbers (R1.0, R1.2, R1.2a–b, R1.3–R1.5, R1.8, R1.18–19; A1–A5, G3, G4)
 
 **3.1 Memory Alpha numbering engine** (R1.2c: Memory Alpha is the authority) (`lcars/numbering.py`, replaces

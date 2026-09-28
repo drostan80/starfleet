@@ -11,28 +11,13 @@ needed to match a history event straight to LCARS's own
 `show_external_id` crosswalk (§5.4) — no separate correlation-id
 column needed, confirmed live rather than assumed.
 
-**One tvdb id, more than one LCARS show — 2026-08-24, real live bug
-user-caught (Ascendance of a Bookworm).** `show_external_id` doesn't
-enforce one show per tvdb id — a franchise TVDB tracks as one flat
-series can back several LCARS shows, one per AniList-side part
-(metadata.py's `_fetch_sonarr_multi_show` docstring has the full
-Bookworm case). That function already knew to route by
-`absoluteEpisodeNumber` rather than Sonarr's raw season/episode, which
-only means anything within Sonarr's own numbering, not any one
-sibling's own restarted-at-1 numbering — but it only ever fills a row
-once (`available_checked_at IS NULL`), by design, deferring every
-later update to this module as "more authoritative." This module's own
-`_poll_sonarr`/`apply_sonarr_webhook` had no equivalent routing, so
-that later update could in fact never land for a shared-tvdb show:
-their season/episode match could never succeed against a sibling's own
-restarted numbering, silently no-oping forever the moment an episode's
-first fetch had already set `available_checked_at` — exactly what left
-a real, already-imported episode reading `UNAVAILABLE` days after
-Sonarr had the file. `_show_ids_for_tvdb`/`_route_episode_availability`/
-`_apply_episode_availability_multi_show` below are this module's own
-counterpart to that same routing, for the exact case
-`_apply_episode_availability`'s single-show docstring says doesn't
-apply to it.
+**One show per TVDB id (RULEBOOK R1.14), phase 3.1 (2026-09-28).** A Sonarr
+episode is matched to its LCARS row only through `sonarr_match.find_episode`
+(TVDB season/episode captured on the row, then TVDB's absolute number as a
+mapping) — never through LCARS's own absolute number, which Memory Alpha sets.
+The old routing of one Sonarr series into several LCARS shows (Ascendance of
+a Bookworm, 2026-08-24) is gone: a TVDB id held by several shows is a
+rulecheck violation to consolidate, and nothing is filed until then.
 
 Availability is 3-state (`unavailable | downloading | available`), not
 boolean — a file grabbed but not yet imported is a real, distinct,
@@ -231,13 +216,6 @@ def _fetch_new_records(history_page_fn, checkpoint: str | None) -> list[dict]:
 
 
 def _show_ids_for_tvdb(conn, tvdb_id: int) -> list[str]:
-    """Plural on purpose, 2026-08-24 — a franchise TVDB tracks as one flat
-    series can back more than one LCARS show (metadata.py's own
-    `_fetch_sonarr_multi_show` docstring has the full Bookworm case this
-    was built for). A caller with exactly one result can still use the
-    single-show `_apply_episode_availability` path unchanged below; more
-    than one routes through `_apply_episode_availability_multi_show`
-    instead."""
     return sonarr_match.sibling_show_ids_for_tvdb(conn, tvdb_id)
 
 
@@ -250,12 +228,6 @@ def _apply_episode_availability(
     no matching row exists yet (episode not fetched into LCARS yet — not
     an error, same "not yet, not wrong" treatment `_poll_sonarr` already
     gave this case before this was extracted).
-
-    Single-show only — matches by Sonarr's own raw season/episode
-    numbers, which is exactly this show's own numbering only when it
-    isn't sharing its tvdb id with any sibling (§5.1's overwhelmingly
-    common case). See `_apply_episode_availability_multi_show` for the
-    shared-tvdb-id case, where that equivalence doesn't hold.
 
     Publishes `episode_availability_changed` (events.py, 2026-08-25)
     only when `status` genuinely differs from what was already stored —
@@ -300,144 +272,23 @@ def _apply_episode_availability(
     return row["id"]
 
 
-def _apply_episode_availability_multi_show(
-    conn, show_ids: list[str], absolute_episode_number, status: str, path: str | None
-) -> str | None:
-    """2026-08-24, real live bug user-caught: Ascendance of a Bookworm
-    ("Adopted Daughter of an Archduke" episode 19 showed `UNAVAILABLE`
-    days after Sonarr had already imported it). Root cause: this
-    function's single-show sibling, `_apply_episode_availability`,
-    matches by Sonarr's own raw season/episode numbers — correct only
-    when a show isn't sharing its tvdb id with any other LCARS show.
-    Bookworm's parts do share one (tvdb 366263, one flat Sonarr series,
-    metadata.py's own `_fetch_sonarr_multi_show` is the fetch-side fix
-    for the exact same sharing) — Sonarr's raw "episode 55" there is
-    this one sibling's own "episode 19", a translation only
-    `absolute_number` survives, each sibling's season/episode numbering
-    restarting at 1 independently. `_fetch_sonarr_multi_show` already
-    knew this (and both DB tables agree it's the same key: this
-    function's own `WHERE ... AND absolute_number = ?` is copied
-    straight from that function's own existing-row lookup) — but the
-    *ongoing* sync paths (`_poll_sonarr`/`apply_sonarr_webhook`) never
-    got the equivalent fix, so any episode whose `available_checked_at`
-    was already set (i.e. every episode past its own first-ever fetch)
-    could never be updated again for a shared-tvdb show: the raw
-    season/episode match below in `_apply_episode_availability` can
-    never succeed against a sibling's own restarted-at-1 numbering, so
-    it silently no-ops (`row is None`) forever. This is that fetch-side
-    fix's ongoing-sync counterpart — same matching key, same "episode
-    without one is left alone" scope boundary metadata.py's own
-    docstring already documents for specials/no-absolute-number
-    episodes.
-
-    Same `episode_availability_changed` publish-on-genuine-change-only
-    behavior as `_apply_episode_availability` above — see its own
-    docstring."""
-    placeholders = ",".join("?" for _ in show_ids)
-    row = conn.execute(
-        f"SELECT id, available_via_sonarr FROM episode WHERE show_id IN ({placeholders})"
-        f" AND absolute_number = ?",
-        (*show_ids, absolute_episode_number),
-    ).fetchone()
-    if row is None:
-        return None
-    conn.execute(
-        "UPDATE episode SET available_via_sonarr = ?, file_path_sonarr = ?,"
-        " available_checked_at = ? WHERE id = ?",
-        (status, path, util.now_utc_iso(), row["id"]),
-    )
-    if row["available_via_sonarr"] != status:
-        events.publish("episode_availability_changed", row["id"])
-    return row["id"]
-
-
-def _apply_episode_availability_by_abs_range(
-    conn, show_ids: list[str], absolute_episode_number: float, status: str, path: str | None
-) -> str | None:
-    """Range-based routing via `season.abs_start`/`abs_end` — S4a (2026-08-27).
-
-    Finds the season whose abs_start..abs_end range contains
-    `absolute_episode_number`, computes the relative per-season episode
-    number as `abs_number − abs_start + 1`, and delegates to
-    `_apply_episode_availability` for the actual UPDATE and event publish.
-
-    Works identically for both the pre-S4b shape (multiple sibling show
-    rows, one season each, each with its own abs range) and the post-S4b
-    collapsed shape (one show, multiple seasons with abs ranges) — the
-    range lookup spans whatever shows are in `show_ids`, and the ranges
-    are non-overlapping by construction.
-
-    Returns None when no season range matches `absolute_episode_number`
-    (season_number=0 specials have NULL abs ranges by design — left to
-    the absolute-number-scan fallback in `_route_episode_availability`)."""
-    if not show_ids:
-        return None
-    placeholders = ",".join("?" for _ in show_ids)
-    season_row = conn.execute(
-        f"SELECT show_id, season_number, abs_start"
-        f" FROM season"
-        f" WHERE show_id IN ({placeholders})"
-        f"   AND abs_start IS NOT NULL AND abs_end IS NOT NULL"
-        f"   AND abs_start <= ? AND abs_end >= ?"
-        f"   AND season_number > 0",
-        (*show_ids, absolute_episode_number, absolute_episode_number),
-    ).fetchone()
-    if season_row is None:
-        return None
-    rel_episode = int(absolute_episode_number) - season_row["abs_start"] + 1
-    return _apply_episode_availability(
-        conn, season_row["show_id"], season_row["season_number"], rel_episode, status, path
-    )
-
-
 def _route_episode_availability(
     conn, show_ids: list[str], episode: dict, status: str, path: str | None
 ) -> str | None:
-    """Shared by `_poll_sonarr` and `apply_sonarr_webhook`.
-
-    Routing order (S4a, 2026-08-27):
-
-    1. **Range routing** — whenever `absoluteEpisodeNumber` is present,
-       try `_apply_episode_availability_by_abs_range` first. This handles
-       both multi-sibling shows (Bookworm pre-S4b) and a single collapsed
-       show with multiple ranged seasons (post-S4b) uniformly, because the
-       ranges are stored on season rows regardless of show count.
-
-    2. **Single-show raw routing** — if no range matched (season has no
-       abs_start/abs_end, overwhelmingly common for regular shows with an
-       unshared tvdb id): fall back to Sonarr's own season/episode numbers,
-       which genuinely are this show's own numbering in that case.
-
-    3. **Multi-show absolute-number scan** — last resort for multi-show
-       shows whose season rows lack abs ranges (e.g. untracked specials
-       where season_number=0 and abs ranges are intentionally NULL). Scans
-       all sibling episode rows by `absolute_number`."""
-    abs_number = episode.get("absoluteEpisodeNumber")
-
-    # 1. Range routing — attempt first whenever abs_number is available.
-    if abs_number is not None:
-        result = _apply_episode_availability_by_abs_range(
-            conn, show_ids, float(abs_number), status, path
-        )
-        if result is not None:
-            return result
-
-    # 2. Single-show raw routing — no range matched; use Sonarr's own numbers.
-    if len(show_ids) == 1:
-        # 2026-09-23 — through sonarr_match (captured raw coordinates,
-        # then display numbering only where nothing shows divergence),
-        # never Sonarr's raw numbers straight against LCARS's display ones.
-        match = sonarr_match.find_episode(conn, show_ids, episode)
-        if match is None:
-            return None
-        return _apply_episode_availability(
-            conn, show_ids[0], match["season"], match["episode"], status, path
-        )
-
-    # 3. Multi-show fallback (specials or shows without abs ranges).
-    if abs_number is None:
+    """Shared by `_poll_sonarr` and `apply_sonarr_webhook`: the one LCARS
+    row this Sonarr episode is (`sonarr_match.find_episode`), or None."""
+    if len(show_ids) != 1:
+        if show_ids:
+            logger.warning(
+                "tvdb id held by %d shows (R1.14) — availability not filed", len(show_ids)
+            )
         return None
-    return _apply_episode_availability_multi_show(conn, show_ids, float(abs_number), status, path)
+    match = sonarr_match.find_episode(conn, show_ids, episode)
+    if match is None:
+        return None
+    return _apply_episode_availability(
+        conn, show_ids[0], match["season"], match["episode"], status, path
+    )
 
 
 def _apply_show_availability_radarr(conn, show_id: str, status: str, path: str | None) -> None:

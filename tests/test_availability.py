@@ -252,7 +252,9 @@ def test_poll_sonarr_skips_an_unfetched_episode(conn, monkeypatch):
 # already routes by.
 
 
-def test_poll_sonarr_multi_show_routes_by_absolute_episode_number(conn, monkeypatch):
+def test_poll_sonarr_files_nothing_when_a_tvdb_id_is_held_by_two_shows(conn, monkeypatch):
+    # RULEBOOK R1.14, phase 3.1: one show per TVDB id — the old routing of one
+    # Sonarr series into several LCARS shows is gone; nothing is guessed.
     _configure_sonarr()
     _add_show(conn, "s-mshowa", tvdb_id=457099)
     _add_show(conn, "s-mshowb", tvdb_id=457099)
@@ -277,16 +279,11 @@ def test_poll_sonarr_multi_show_routes_by_absolute_episode_number(conn, monkeypa
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
 
     count = availability._poll_sonarr(conn, backfill=True)
-    assert count == 1
-    a = conn.execute(
-        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-mshoa1'"
-    ).fetchone()
-    b = conn.execute(
-        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-mshob1'"
-    ).fetchone()
-    assert a["available_via_sonarr"] == "unavailable"  # untouched — the event was about B
-    assert b["available_via_sonarr"] == "available"
-    assert b["file_path_sonarr"] == "/data/b1.mkv"
+    assert count == 0
+    states = conn.execute(
+        "SELECT available_via_sonarr FROM episode WHERE id IN ('e-mshoa1', 'e-mshob1')"
+    ).fetchall()
+    assert [r["available_via_sonarr"] for r in states] == ["unavailable", "unavailable"]
 
 
 def test_poll_sonarr_multi_show_skips_event_with_no_absolute_episode_number(conn, monkeypatch):
@@ -423,47 +420,6 @@ def test_range_routing_single_show_multiple_seasons(conn, monkeypatch):
         " WHERE show_id = 's-rng001' AND id <> 'e-rng005'"
     ).fetchall()
     assert all(r["available_via_sonarr"] == "unavailable" for r in others)
-
-
-def test_range_routing_multi_show_siblings_pre_collapse(conn, monkeypatch):
-    """Pre-S4b shape: two sibling show rows, each with one ranged season.
-    Same range lookup — routes to sibling B's season when absolute number
-    falls in its range."""
-    _configure_sonarr()
-    _add_show(conn, "s-rng002", tvdb_id=457901)
-    _add_show(conn, "s-rng003", tvdb_id=457901)
-    _add_season(conn, "z-rng003", "s-rng002", season_number=1, abs_start=1, abs_end=3)
-    _add_season(conn, "z-rng004", "s-rng003", season_number=1, abs_start=4, abs_end=6)
-    _add_episode(conn, "e-rng007", "s-rng002", season=1, episode=1, absolute_number=1)
-    _add_episode(conn, "e-rng008", "s-rng003", season=1, episode=1, absolute_number=4)
-
-    fake = _FakeHistoryClient(
-        [
-            # absolute 4 → sibling B's season 1, episode 1 (4 − 4 + 1 = 1)
-            _sonarr_record(
-                "downloadFolderImported",
-                "2026-08-27T11:00:00Z",
-                tvdb_id=457901,
-                season=1,
-                episode=4,
-                imported_path="/data/sib.mkv",
-                absolute_episode_number=4,
-            )
-        ]
-    )
-    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
-
-    count = availability._poll_sonarr(conn, backfill=True)
-    assert count == 1
-    a = conn.execute(
-        "SELECT available_via_sonarr FROM episode WHERE id = 'e-rng007'"
-    ).fetchone()
-    b = conn.execute(
-        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-rng008'"
-    ).fetchone()
-    assert a["available_via_sonarr"] == "unavailable"
-    assert b["available_via_sonarr"] == "available"
-    assert b["file_path_sonarr"] == "/data/sib.mkv"
 
 
 def test_range_routing_falls_through_for_no_abs_range(conn, monkeypatch):
@@ -608,39 +564,6 @@ def test_sonarr_webhook_multi_episode_payload_updates_every_episode(conn):
         "SELECT available_via_sonarr FROM episode WHERE show_id = 's-whk003'"
     ).fetchall()
     assert all(r["available_via_sonarr"] == "downloading" for r in rows)
-
-
-def test_sonarr_webhook_multi_show_routes_by_absolute_episode_number(conn):
-    _add_show(conn, "s-whkma1", tvdb_id=457199)
-    _add_show(conn, "s-whkmb1", tvdb_id=457199)
-    _add_episode(conn, "e-whkma1", "s-whkma1", season=1, episode=1, absolute_number=1)
-    _add_episode(conn, "e-whkmb1", "s-whkmb1", season=1, episode=1, absolute_number=3)
-    result = availability.apply_sonarr_webhook(
-        conn,
-        _sonarr_webhook(
-            "Download",
-            tvdb_id=457199,
-            episodes=[
-                {
-                    "id": 1,
-                    "seasonNumber": 1,
-                    "episodeNumber": 3,  # Sonarr's own raw number — matches neither sibling's own
-                    "absoluteEpisodeNumber": 3,
-                }
-            ],
-            imported_path="/data/b1.mkv",
-        ),
-    )
-    assert result == {"episodes_updated": 1}
-    a = conn.execute(
-        "SELECT available_via_sonarr FROM episode WHERE id = 'e-whkma1'"
-    ).fetchone()
-    b = conn.execute(
-        "SELECT available_via_sonarr, file_path_sonarr FROM episode WHERE id = 'e-whkmb1'"
-    ).fetchone()
-    assert a["available_via_sonarr"] == "unavailable"
-    assert b["available_via_sonarr"] == "available"
-    assert b["file_path_sonarr"] == "/data/b1.mkv"
 
 
 def test_sonarr_webhook_multi_show_skips_episode_with_no_absolute_episode_number(conn):

@@ -555,6 +555,10 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
   TVDB order + air date and put it on a list for you, or leave it unnumbered and
   listed until the source has it?
 
+- **Q-U (R1.2b, R1.5, R1.9a)** **One** special alone in a gap (e.g. a single OVA **[OPEN]**
+  between ep 5 and ep 6): does it take **5.1** (R1.2b's `.1, .2…`) or **5.5**
+  (like Frieren's 0.5 and the N.5 season numbers)? Two or more stay 5.1, 5.2….
+
 ## 10. Changelog
 
 - 2026-09-27 — created from the user's rule text.
@@ -578,3 +582,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — Q-R answered → R1.13a (own level, shown in air order, own art); Q-S answered → R3.6d (kind `individual_season`).
 - 2026-09-28 — Q-T asked (numbering fallback when AniDB/TVmaze have no data).
 - 2026-09-28 — Q-T answered → R1.2d (TVDB-order fallback following all rules, reconciled when the source appears).
+- 2026-09-28 — Q-U asked (single special in a gap: .1 or .5).

@@ -15,12 +15,16 @@ episode is matched to an LCARS episode row, in that order:
 
 1. Sonarr's own raw coordinates already captured on the row
    (`sonarr_season`/`sonarr_episode`) — immutable once captured.
-2. `absoluteEpisodeNumber` against `episode.absolute_number` — the spine.
-3. LCARS display season/episode — only for a row never captured, and
-   only when absolute order can't decide it (season 0 specials, or a
-   show/episode with no absolute numbers) and no captured row shows this
-   show's numbering has diverged from Sonarr's. Never guesses across a
-   known divergence.
+2. `absoluteEpisodeNumber` against the row's `tvdb_absolute` (TVDB's own
+   absolute number, a mapping — phase 3.1), then, until Memory Alpha sets
+   LCARS's numbers (phase 3.2), against `episode.absolute_number`.
+3. LCARS season/episode — only for a row never captured, and only when
+   absolute order can't decide it (season 0 specials, or a show/episode
+   with no absolute numbers) and no captured row shows this show's
+   numbering has diverged from Sonarr's. Never guesses across a known
+   divergence. Season numbers follow TVDB (RULEBOOK R1.9a).
+
+One show per TVDB id (R1.14): a Sonarr series maps to one LCARS show.
 
 A match through 2 or 3 captures the Sonarr coordinates onto the row, so
 every later lookup (and Memory Alpha's TVDB-keyed resolution) uses the
@@ -89,6 +93,16 @@ def find_episode(conn, show_ids: list[str], ep: dict) -> dict | None:
         return dict(row)
 
     abs_number = ep.get("absoluteEpisodeNumber")
+    if abs_number is not None:
+        rows = conn.execute(
+            f"SELECT {cols} FROM episode WHERE show_id IN ({placeholders})"
+            "   AND tvdb_absolute = ? AND sonarr_season IS NULL",
+            (*show_ids, int(abs_number)),
+        ).fetchall()
+        if len(rows) == 1:
+            return _capture(conn, dict(rows[0]), season_number, episode_number)
+        if len(rows) > 1:
+            return None  # ambiguous — never guess
     if abs_number is not None and season_number != 0:
         rows = conn.execute(
             f"SELECT {cols} FROM episode WHERE show_id IN ({placeholders})"
@@ -129,38 +143,8 @@ def _capture(conn, row: dict, sonarr_season: int, sonarr_episode: int) -> dict:
 
 
 def route_new_episode(conn, show_id: str, ep: dict) -> tuple[int, int]:
-    """LCARS (season, episode) for a Sonarr episode with no LCARS row yet.
-
-    Absolute order first: a season whose `abs_start..abs_end` range holds
-    the episode's absolute number owns it (relative episode number from
-    the range start). Otherwise the show's established LCARS-vs-Sonarr
-    season offset (from the latest captured regular episode) carries a
-    brand-new Sonarr season onto the right LCARS number — e.g. Slime's
-    Sonarr S05 would land on LCARS S6, not collide with LCARS S5. No
-    captured evidence at all: Sonarr's raw numbering, the unchanged
-    behavior for every ordinary show."""
-    season_number = ep["seasonNumber"]
-    episode_number = ep["episodeNumber"]
-    if season_number == 0:
-        return season_number, episode_number
-    abs_number = ep.get("absoluteEpisodeNumber")
-    if abs_number is not None:
-        season_row = conn.execute(
-            "SELECT season_number, abs_start FROM season"
-            " WHERE show_id = ? AND season_number > 0"
-            "   AND abs_start IS NOT NULL AND abs_end IS NOT NULL"
-            "   AND abs_start <= ? AND abs_end >= ?",
-            (show_id, float(abs_number), float(abs_number)),
-        ).fetchone()
-        if season_row is not None:
-            return season_row["season_number"], int(abs_number) - season_row["abs_start"] + 1
-    latest = conn.execute(
-        "SELECT season, sonarr_season FROM episode"
-        " WHERE show_id = ? AND sonarr_season IS NOT NULL AND sonarr_season > 0"
-        "   AND season > 0"
-        " ORDER BY sonarr_season DESC, sonarr_episode DESC LIMIT 1",
-        (show_id,),
-    ).fetchone()
-    if latest is not None and season_number > latest["sonarr_season"]:
-        return season_number + (latest["season"] - latest["sonarr_season"]), episode_number
-    return season_number, episode_number
+    """LCARS (season, episode) for a Sonarr episode with no LCARS row yet:
+    TVDB's own, since season numbers follow TVDB (RULEBOOK R1.9a, phase
+    3.1). Where the episode belongs among levels is decided by its absolute
+    number and the spans (Memory Alpha), never by renumbering seasons."""
+    return ep["seasonNumber"], ep["episodeNumber"]
