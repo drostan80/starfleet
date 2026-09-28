@@ -30,6 +30,10 @@ rule applies to TV series, ask — do not assume.
 - **R1.0 Every episode has an absolute number**, set per these rules — this
   was always the rule. `[clarified 2026-09-27]` No episode may be left without
   one; if some are, it was set up wrong before.
+- **R1.0a No air date yet** : an episode without an air date
+  still gets a number — a placeholder shown as **x** until its air date arrives (the
+  field is numeric, so it's stored as a placeholder and marked); if that isn't
+  possible, 0.1.
 - **R1.2** Episodes are ordered by **absolute episode number**, derived from AniDB,
   Fribb and other sources. On disagreement, or where disambiguation is needed,
   order by **air date-time**.
@@ -104,6 +108,12 @@ rule applies to TV series, ask — do not assume.
   film being abs 17.
 - **R1.13** Minis can be set as sub-seasons interlocking with the main season,
   which lets them have their own cover art.
+- **R1.13b Every episode belongs to a level, so every cover can be set**
+  : a series of minis inside a season's run is grouped as
+  that season's mini sub-season (one cover for the group); a single special or
+  full-length piece is a level of its own (its own cover); minis between seasons are
+  their decimal season (R1.8d). Art can be set per level, individually or for the
+  decimal group.
 - **R1.13a Film/mini inside a season's air window** `[clarified 2026-09-28, Q-R]`
   (e.g. S2 = abs 13–16 and 18–24, film abs 17): its **own level**. Sub-season or
   separate level are both acceptable technically; what matters is that it **appears
@@ -386,6 +396,11 @@ An episode can be unaired but watched (pre-air showing, leak…).
   for that TVDB id) **and** the TVDB name matches the season's titles. A link
   from a title search alone is never accepted automatically; any disagreement
   goes to the user.
+- **R3.7b** TVDB matching also searches the **original (Japanese) title** — e.g. Bless
+  was found by ブレス. 
+- **R3.7c** An entry that will **never be on TVDB** but is a piece of a show you track
+  (e.g. a special of an AniList-only show) is attached to that show as one of its
+  levels, when you confirm it. 
 - **R3.7a** A TVDB id that LCARS derived but no other source confirms is shown in
   **browse** (and the add confirmation) for the user to confirm: the user is then
   the second independent source. `[clarified 2026-09-27]`
@@ -659,3 +674,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — R2.10 (skipped appears in browse/add only, filterable), R2.13b (Q-W: skipped on a show → last season skipped, show dropped), R4.8a (remote completed mirrors R2.7, review for unaired), R4.8b (reviews actionable, link to show page).
 - 2026-09-28 — R2.13b detailed by the user; Q-W2 asked (gaps).
 - 2026-09-28 — Q-W2 answered → R2.13b (a)–(d).
+- 2026-09-28 — R1.0a (no air date → placeholder shown as x), R1.13b (every episode in a level; mini sub-seasons; art per level), R3.7b (match on the Japanese title), R3.7c (pieces never on TVDB attach to their show).

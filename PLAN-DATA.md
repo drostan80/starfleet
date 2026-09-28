@@ -532,6 +532,52 @@ its own show, planned (normal add path).
 
 → No individual seasons remain from existing data (Narumi goes to Kaiju No. 8).
 
+## Phase 5 review — your decisions (2026-09-28, review page 3gXa5fHHeScXr66SvCLKJF)
+
+Read back from the page's `decisions` collection (228 entries).
+
+- **Numbering, 6 shows:** all OK. Solo Leveling note: an episode with no air date must
+  still get a number — placeholder shown as **x** (stored with a placeholder marker since
+  the field is numeric), else 0.1 → RULEBOOK R1.0a.
+- **Merges, 181 shows (126 TVDB ids):** all OK (no click = OK). Notes: s-2f6eth and
+  s-xt01q8 are the second cour of the show above them (→ part, as planned).
+- **Films, 19:** all fold in.
+- **From your AniList list, 22:**
+
+| AniList | Title | Add check | Your decision | Your note |
+|---|---|---|---|---|
+| 1549 | 1000-nen Joou: Queen Millennia | special | ok | fold in mark watched |
+| 4901 | BLACK LAGOON: Roberta's Blood Trail | special | ok | fold in mark watched |
+| 7311 | Suzumiya Haruhi no Shoushitsu | special | ok | fold in mark watched |
+| 10893 | Kyousougiga | special | ok | fold in mark watched |
+| 18753 | Yahari Ore no Seishun Love Come wa Machigatteiru.: Kochira to Shite mo Karera Kanojora no Yukusue ni Sachi Ookaran Koto wo Negawazaru wo Enai. | special | ok | fold in mark watched |
+| 20021 | Sword Art Online: Extra Edition | special | ok | fold in mark watched |
+| 20728 | Nisekoi OVA | special | ok | just fold in mark unwatched |
+| 21660 | Dungeon ni Deai wo Motomeru no wa Machigatteiru Darou ka: Dungeon ni Onsen wo Motomeru no wa Machigatteiru Darou ka | special | ok | just fold in mark unwatched |
+| 100268 | Natsume Yuujinchou: Utsusemi ni Musubu | special | ok | fold in mark watched |
+| 100643 | Made in Abyss: Fukaki Tamashii no Reimei | special | ok | fold in mark watched |
+| 113811 | Honzuki no Gekokujou: Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen OVA | special | ok | fold in mark watched |
+| 142876 | Dr. STONE: Ryuusui | special | ok | fold in mark watched |
+| 164193 | Kien Romance | individual_season | ok | part of https://anilist.co/anime/150957/Otaku-Elf/ will never be in tvdb  |
+| 165066 | Shayou (Music) | individual_season | ok | part off https://anilist.co/anime/153152/The-Dangers-in-My-Heart/ will never be in tvdb |
+| 173807 | Chocolat Cadabra | individual_season | ok | music video not even linked to a show but made by a studio so... an edge case |
+| 177406 | Gif ni Ted | individual_season | ok | part of https://anilist.co/anime/166828/A-Salad-Bowl-of-Eccentrics/ will never be in tvdb |
+| 185657 | Skip to Loafer 2nd Season | needs_user | part |  |
+| 204363 | SAKAMOTO DAYS 2nd Season | individual_season | no | correct but show is dropped this season should be deleted from anilist and set to skip here |
+| 208766 | Bless | individual_season | ok | tvdbid 475021  |
+| 209224 | Game Sekai Tensei <Dankatsu>: Gamer wa [Dungeon Shuukatsu no Susume] wo <Hajime kara> Play Suru | individual_season | ok |  |
+| 213658 | Diamond no Ace act II: Second Season Part 2 | individual_season | no | remove from anilist too fyi tvdb is 273005 and should be skipped on opur end |
+| 217434 | Mushoku Tensei III: Isekai Ittara Honki Dasu Part 2 | needs_user | part |  |
+
+  Rebuild actions from the notes: "fold in, mark watched/unwatched" = add as the
+  season-0 piece with episodes watched / unwatched; 164193, 165066, 177406 will never be on
+  TVDB → attach to their AniList parent show (150957 Otaku Elf, 153152 The Dangers in My
+  Heart, 166828 A Salad Bowl of Eccentrics) as a level of that show; 173807 music video →
+  individual season (edge case); 204363 → skipped here, deleted from AniList (its show is
+  dropped); 213658 → not added, removed from AniList, TVDB 273005 on the skip list;
+  208766 → TVDB 475021; 185657 and 217434 → add to the proposed show (Skip and Loafer,
+  Mushoku Tensei).
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
