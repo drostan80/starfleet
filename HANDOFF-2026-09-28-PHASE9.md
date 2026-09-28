@@ -147,9 +147,10 @@ only on copies. Order (PLAN-DATA "Rebuild order constraints" — they exist for 
    user-originated changes; automated adds R3.5 rejects are not replayed. Rule of thumb
    (user): since 09-06 they only watched airing shows; changes to *older* shows since 09-06
    are discarded (PLAN-DATA §2.0).
-   - **216 live shows are `dropped` with no season carrying it** (set on the show only):
-     replay each through R2.13a onto the show's last non-skipped season **before**
-     deriving, or they silently turn `planned`.
+   - **216 shows are `dropped` with no season carrying it** — *corrected:* all are TV
+     shows from the **08-18 Trakt import** (in the 09-06 base, not the gap; not in the
+     season review). Handling is a 9.1 question to the user; deriving without it would
+     silently turn them `planned`.
    - Include every watch in PLAN-DATA's "Watches during the rebuild" table (Mushoku S3
      finale + AniList 217434, Overgeared ep 1, Last Week Tonight S13E24, Animal Control
      S05E01 …) and anything the user adds before cutover.

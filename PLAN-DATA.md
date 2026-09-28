@@ -269,8 +269,9 @@ The gap is re-derived at cutover time, not frozen now.
   skipped → removed from AniList/MAL) would treat your own planned seasons as
   auto-added.
 - **Show-level status changes replayed through R2.13a before deriving.** On live, 216
-  shows are `dropped` with no season carrying it (the drop was set on the show only,
-  after 09-06). The replay must put each such change on the show's last non-skipped
+  shows are `dropped` with no season carrying it. *Corrected 2026-09-28:* all 216 are TV
+  shows from the **08-18 Trakt import** (last status change `trakt_import`, 08-18) — so
+  they are in the 09-06 base, not gap changes, and none was in the accepted season review. The replay must put each such change on the show's last non-skipped
   season; deriving first would silently turn them `planned`. (09-06 base: engine and
   rulecheck agree, 16 shows differ — 10 of them "last season planned → show planned".)
 - **AniDB:** every entry for watching and planned shows is fetched (09-28, 506 raw
