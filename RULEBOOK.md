@@ -74,6 +74,11 @@ rule applies to TV series, ask — do not assume.
     take a **whole** number;
   - **R1.8c** exceptions are dictated only by other sources' numbering (AniDB for
     anime), and the user may confirm them.
+  - **R1.8d Minis between seasons take decimals** `[clarified 2026-09-28, Q-V]`:
+    they are not full-blown episodes but are still tracked in place, within their
+    decimal season (side piece, R1.9a), numbered as decimals after the last
+    episode of the season before (Frieren: 28.1, 28.2 … — hundredths when ten or
+    more, 28.01 … 28.10); the next season keeps its number (Frieren S2 starts at 29).
 - **R1.9 Season naming** (apart from season 0) follows the TVDB main numbering
   `S00E00` (the numbering, not the id).
 - **R1.9a Season numbers follow TVDB first** `[clarified 2026-09-27]`: TVDB's
@@ -567,6 +572,9 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
   between ep 5 and ep 6): does it take **5.1** (R1.2b's `.1, .2…`) or **5.5**
   (like Frieren's 0.5 and the N.5 season numbers)? Two or more stay 5.1, 5.2….
 
+- **Q-V (R1.8b)** Frieren's ten 1–2 min minis between S1 and S2: whole numbers **[ANSWERED → R1.8d]**
+  (S2 starts at 39) or decimals?
+
 ## 10. Changelog
 
 - 2026-09-27 — created from the user's rule text.
@@ -592,3 +600,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — Q-T answered → R1.2d (TVDB-order fallback following all rules, reconciled when the source appears).
 - 2026-09-28 — Q-U asked (single special in a gap: .1 or .5).
 - 2026-09-28 — R1.2d build model (TVDB-order first, reconcile with AniDB; ship before AniDB is complete; AniDB fetch priority); Q-U answered → R1.2b (single item → .5).
+- 2026-09-28 — Q-V answered → R1.8d (minis between seasons take decimals, in their decimal season; next season keeps its number).

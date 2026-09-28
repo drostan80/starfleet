@@ -72,12 +72,32 @@ def test_several_specials_in_one_gap_are_point_1_point_2_in_air_order():
     assert (plan.numbers["x1"], plan.numbers["x2"]) == (1.1, 1.2)
 
 
-def test_ova_between_seasons_takes_a_whole_number_and_shifts_later_ones():
-    ova = _ep("o1", 0, 1, 5)
+def test_minis_between_seasons_are_decimals_in_their_side_piece():
+    # R1.8d (Frieren): minis between S1 and S2 are 2.1, 2.2…; S2 keeps its start.
+    minis = [_ep("o1", 0, 1, 5), _ep("o2", 0, 2, 6)]
+    plan = _plan(_two_seasons(minis))
+    assert (plan.numbers["o1"], plan.numbers["o2"]) == (2.1, 2.2)
+    assert plan.numbers["b1"] == 3
+    assert plan.season_spans == {1: [(1, 2)], 2: [(3, 6)]}
+    assert plan.level_spans["side:1"] == [(2.1, 2.2)]
+    assert "no_level" not in _kinds(plan)
+
+
+def test_ten_minis_between_seasons_use_hundredths():
+    # Frieren: 28.01 … 28.10, S2 still starts right after S1.
+    minis = [_ep(f"m{i}", 0, i + 1, 5) for i in range(10)]
+    for i, m in enumerate(minis):
+        m.air = f"2020-01-05T{10 + i:02d}:00:00Z"
+    plan = _plan(_two_seasons(minis))
+    assert plan.numbers["m0"] == 2.01 and plan.numbers["m9"] == 2.1
+    assert plan.numbers["b1"] == 3
+
+
+def test_full_length_special_between_seasons_is_listed():
+    ova = _ep("o1", 0, 1, 5, runtime=24)
     plan = _plan(_two_seasons([ova]))
-    assert plan.numbers["o1"] == 3  # R1.8b
-    assert plan.numbers["b1"] == 4
-    assert plan.season_spans == {1: [(1, 2)], 2: [(4, 7)]}
+    assert plan.numbers["o1"] == 2.5
+    assert "full_length_between_seasons" in _kinds(plan)
 
 
 def test_item_before_episode_1_is_zero_point_5():
@@ -89,16 +109,18 @@ def test_item_before_episode_1_is_zero_point_5():
     assert "film_placement" in _kinds(plan)
 
 
-def test_special_after_the_last_episode_takes_a_whole_number():
+def test_special_after_the_last_episode_is_a_decimal():
     sp = _ep("z1", 0, 1, 20)
     plan = _plan(_two_seasons([sp]))
-    assert plan.numbers["z1"] == 7
+    assert plan.numbers["z1"] == 6.5
+    assert plan.level_spans["side:2"] == [(6.5, 6.5)]
 
 
-def test_tv_christmas_special_between_seasons_is_whole():
+def test_tv_christmas_special_between_seasons_is_a_listed_decimal():
     xmas = Item("c1", 0, 1, "2020-01-05T20:00:00Z", runtime=45)
     plan = _plan(_two_seasons([xmas]), source="tvmaze")
-    assert plan.numbers["c1"] == 3
+    assert plan.numbers["c1"] == 2.5
+    assert "full_length_between_seasons" in _kinds(plan)
 
 
 def test_special_without_air_date_is_left_unnumbered_and_listed():
@@ -151,9 +173,10 @@ def test_parts_of_a_tvdb_season_get_their_own_spans():
 
 
 def test_side_item_with_its_own_anidb_entry_is_a_level():
-    ova = _ep("o1", 0, 1, 5, anidb=(900, 1, 1))
+    ova = _ep("o1", 0, 1, 1, anidb=(900, 1, 1))
+    ova.air = "2020-01-01T20:00:00Z"
     plan = _plan(_two_seasons([ova]), source="anidb")
-    assert plan.level_spans["anidb:900"] == [(3, 3)]
+    assert plan.level_spans["anidb:900"] == [(1.5, 1.5)]
     assert "no_level" not in _kinds(plan)
 
 
@@ -230,12 +253,15 @@ def test_writer_sets_numbers_spans_and_source_and_logs_reconciliations(conn):
     # First numbering is not a reconciliation: nothing logged.
     assert conn.execute("SELECT COUNT(*) FROM absolute_number_change").fetchone() == (0,)
 
-    # A special found later between the seasons shifts S2: logged for review.
+    # A film found later between the seasons shifts S2: logged for review.
     conn.execute(
         "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc,"
         " created_at, updated_at)"
         " VALUES ('e-late01', 's-test01', 0, 2, 'special', '2020-01-05T12:00:00Z', ?, ?)",
         (NOW, NOW),
+    )
+    conn.execute(
+        "UPDATE episode SET runtime_minutes = 110 WHERE id = 'e-late01'"
     )
     numbering.renumber_show(conn, "s-test01")
     changes = conn.execute("SELECT COUNT(*) FROM absolute_number_change").fetchone()[0]

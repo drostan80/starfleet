@@ -9519,9 +9519,9 @@ async def test_backlog_include_planned_excludes_a_planning_show_with_nothing_ava
 # --- absolute_number synthesis (§5.2, A.25) ---------------------------------
 
 
-async def test_numbering_gives_specials_between_seasons_whole_numbers(client, monkeypatch):
-    """RULEBOOK R1.8b (phase 3.2): specials airing between two seasons take
-    whole numbers, shifting the next season."""
+async def test_numbering_gives_specials_between_seasons_decimals(client, monkeypatch):
+    """RULEBOOK R1.8d (phase 3.2): specials airing between two seasons take
+    decimals after the season before; the next season keeps its number."""
     config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
     _patch_fribb_dataset(monkeypatch, dataset=[])
     eps = [
@@ -9571,9 +9571,9 @@ async def test_numbering_gives_specials_between_seasons_whole_numbers(client, mo
         for e in data["show"]["episodes"]["edges"]
     }
     assert got[(1, 12)] == 1  # LCARS's own numbering (R1.2a)
-    assert got[(0, 1)] == 2
-    assert got[(0, 2)] == 3
-    assert got[(2, 1)] == 4
+    assert got[(0, 1)] == 1.1
+    assert got[(0, 2)] == 1.2
+    assert got[(2, 1)] == 2
 
 
 async def test_numbering_recomputes_when_a_special_is_inserted(client, monkeypatch):
@@ -9631,8 +9631,8 @@ async def test_numbering_recomputes_when_a_special_is_inserted(client, monkeypat
         for e in data["show"]["episodes"]["edges"]
     }
     assert got[(1, 1)] == 1
-    assert got[(0, 8)] == 2  # after the last season: whole numbers (R1.8b)
-    assert got[(0, 9)] == 3  # the pre-existing one renumbered behind it
+    assert got[(0, 8)] == 1.1  # the earlier-airing special takes the first slot
+    assert got[(0, 9)] == 1.2  # the pre-existing one renumbered behind it
 
 
 # --- file availability polling (§5.2/§6.7, B.3) — GraphQL wiring only; the ---

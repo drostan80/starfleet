@@ -26,7 +26,10 @@ The rules, in the order the engine applies them:
      special-version films take a decimal — the user marks those);
    - inside a TVDB season's air window → decimal after the preceding
      episode (R1.8a);
-   - between seasons, or after the last one → whole number (R1.8b).
+   - between seasons, or after the last one → decimal after the season's
+     last episode, in that gap's side piece (decimal season, R1.8d, R1.9a:
+     Frieren's minis 28.01…28.10, S2 still starts at 29). A full-length one
+     there (R1.3: "may take a whole number") is listed for confirmation.
    Without an air date it can't be placed: left unnumbered and listed.
 3. **Numbers**: whole numbers run 1, 2, 3… over main episodes and whole
    side items. Decimals in one gap: one item → `.5`, several → `.1, .2…`
@@ -52,6 +55,7 @@ from dataclasses import asdict, dataclass, field
 from lcars import anidb, util
 
 FILM_MINUTES = 60
+FULL_LENGTH_MINUTES = 15
 
 
 @dataclass
@@ -162,6 +166,7 @@ def plan_show(
     # 2. Place side items by air date against the main order.
     before_first: list[Item] = []
     after: dict[int, list[tuple[Item, bool]]] = {}  # main index → [(item, whole)]
+    between: dict[str, int | None] = {}  # side item → the season it follows (R1.8d)
     for it in sorted(side, key=lambda s: (s.air or "", s.tvdb_season, s.tvdb_episode)):
         if it.tvdb_season > 0 and not it.air:
             # AniDB special inside a TVDB season, no date: stays after its TVDB predecessor.
@@ -192,10 +197,12 @@ def plan_show(
         if _is_film(it):
             whole = True
             _flag(plan, "film_placement", it, placed="whole number")
-        elif nxt is None:
-            whole = True
         else:
-            whole = season_of(main_order[prev]) != season_of(nxt)
+            whole = False
+            if nxt is None or season_of(main_order[prev]) != season_of(nxt):
+                between[it.id] = season_of(main_order[prev])
+                if (it.runtime or 0) >= FULL_LENGTH_MINUTES:
+                    _flag(plan, "full_length_between_seasons", it)
         after.setdefault(prev, []).append((it, whole))
 
     # 3. Numbers.
@@ -254,8 +261,13 @@ def plan_show(
                     lambda it, s=s, aid=aid: it.id in main_set and season_of(it) == s
                     and it.anidb is not None and it.anidb[0] == aid
                 )
+    for season in sorted({s for s in between.values() if s is not None}):
+        # The side piece after this season: its decimal season (R1.8d, R1.9a).
+        plan.level_spans[f"side:{season}"] = runs(
+            lambda x, season=season: between.get(x.id) == season
+        )
     for it in side:
-        if plan.numbers.get(it.id) is None:
+        if plan.numbers.get(it.id) is None or it.id in between:
             continue
         if it.anidb and it.anidb[0] not in main_ids:
             key = f"anidb:{it.anidb[0]}"
