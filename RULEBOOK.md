@@ -644,10 +644,10 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
   watch a skipped season: all later seasons, including ones skipped after a drop
   (R2.16)?
 
-- **Q-X (R2.13b)** Skipped picked on a show where S1 is completed and S2, S3 are **[OPEN]**
+- **Q-X (R2.13b)** Skipped picked on a show where S1 is completed and S2, S3 are **[ANSWERED 2026-09-28: yes, both skipped, show dropped]**
   planned: are **both** S2 and S3 skipped (every planned season after the last
   watched one), and the show reads dropped? (Built that way; asked 09-28.)
-- **Q-Y (R4.8a)** A list flips a season to completed while LCARS has **aired but **[OPEN]**
+- **Q-Y (R4.8a)** A list flips a season to completed while LCARS has **aired but **[ANSWERED 2026-09-28: no review — correct per R4.8a; flip-flop is for the other mechanisms (baseline, later change wins) to prevent]**
   unwatched** episodes (the 09-20 flip-flop: AniList/MAL flip an airing entry as
   their episode count catches up). Today those episodes are marked watched with no
   review (only unaired ones raise one). Review there too, or is marking them right?
@@ -671,6 +671,7 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-27 — R1.9a: one side piece N.5, several N.1, N.2…
 - 2026-09-27 — naming must follow rulebook terms (§7).
 - 2026-09-27 — R1.2c: Memory Alpha sets every absolute number (confirmed).
+- 2026-09-28 — Q-X (R2.13b: every planned season after the last watched one is skipped, show dropped) and Q-Y (R4.8a: aired-unwatched episodes marked watched, no review) confirmed.
 - 2026-09-28 — Q-R (film/mini inside a season window: under the season or beside it?) and Q-S (kind for individual seasons) asked.
 - 2026-09-28 — Q-R answered → R1.13a (own level, shown in air order, own art); Q-S answered → R3.6d (kind `individual_season`).
 - 2026-09-28 — Q-T asked (numbering fallback when AniDB/TVmaze have no data).
