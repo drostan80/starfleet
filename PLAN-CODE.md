@@ -295,6 +295,17 @@ The UI showing it is phase 8.
 effect (e.g. "this will mark 4 unaired episodes watched", "this show has later
 seasons planned — skip all?"); UI shows it.
 
+**Not done in phase 4 (moved):** browse/add still show skipped seasons (greyed, hidden
+only by a filter) — R2.10 says they don't appear there: **phase 8** (UI).
+`inherit_season_status` / `is_users_own_season` still decide the status of the season a
+show is added for, so Sonarr-added shows don't follow R5.3 yet: **phase 5**.
+**Phase 7 depends on** `status_set_manually` being set by the rebuild (PLAN-DATA §3)
+before the R2.10 delete-from-AniList/MAL runs; and on the watch_reconcile guard above
+(remote COMPLETED over aired, unwatched episodes → watching) being settled against
+R2.7/R4.8/R4.10.
+**AniDB fetching in prod after cutover** must use a per-IP daily cap well under ~250
+requests (two bans at ~250, at 3.5 s and 5 s pacing) — proposed 200/day, user to confirm.
+
 ## Phase 5 — Adding (R3.x, R4.7, R5.2–R5.3; B6, D1–D5, G5)
 
 **5.1 One normal check (R3.1)** used by every entry point: browse/add, Sonarr

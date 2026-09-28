@@ -262,6 +262,19 @@ The gap is re-derived at cutover time, not frozen now.
   episodes lack coordinates.
 - **Then a Sonarr read (captures TVDB season/episode and `tvdb_absolute`), then the
   numbering engine.**
+- **`season.status_set_manually` from your own decisions** (phase 4): every row is 0
+  after the migration. Set it to 1 for every season status that is yours (the accepted
+  season-status review, your AniList activity, your LCARS changes in the gap). Without
+  it the R2.16 warning never fires, and phase 7's R2.10 delete (auto-added planned →
+  skipped → removed from AniList/MAL) would treat your own planned seasons as
+  auto-added.
+- **Show-level status changes replayed through R2.13a before deriving.** On live, 216
+  shows are `dropped` with no season carrying it (the drop was set on the show only,
+  after 09-06). The replay must put each such change on the show's last non-skipped
+  season; deriving first would silently turn them `planned`. (09-06 base: engine and
+  rulecheck agree, 16 shows differ — 10 of them "last season planned → show planned".)
+- **AniDB:** every entry for watching and planned shows is fetched (09-28, 506 raw
+  answers in `anidb_xml/`); 1,081 remain for other shows — see RULEBOOK R1.2d.
 
 ## Access so far
 

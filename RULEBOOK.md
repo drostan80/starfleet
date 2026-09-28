@@ -575,6 +575,11 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - **Q-V (R1.8b)** Frieren's ten 1–2 min minis between S1 and S2: whole numbers **[ANSWERED → R1.8d]**
   (S2 starts at 39) or decimals?
 
+- **Q-W (R2.13a, R2.10)** Picking **skipped on a show**: R2.13a puts it on the last **[OPEN]**
+  non-skipped season only; the show is then derived from the season before it, so the
+  show would read e.g. *completed*, not skipped. Should picking skipped on a show skip
+  **every** season (the show then reads skipped), or follow R2.13a literally?
+
 ## 10. Changelog
 
 - 2026-09-27 — created from the user's rule text.
@@ -601,3 +606,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — Q-U asked (single special in a gap: .1 or .5).
 - 2026-09-28 — R1.2d build model (TVDB-order first, reconcile with AniDB; ship before AniDB is complete; AniDB fetch priority); Q-U answered → R1.2b (single item → .5).
 - 2026-09-28 — Q-V answered → R1.8d (minis between seasons take decimals, in their decimal season; next season keeps its number).
+- 2026-09-28 — Q-W asked (skipped picked on a show).
