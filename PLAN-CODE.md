@@ -447,6 +447,25 @@ warnings (4.3), no episode "skip" action.
 - **8.6 Placeholder numbers:** 5000+ shown as **x** everywhere (R1.0a).
 - **8.7 Data TUI:** nullable `seasonNumber`/`Season.show` handled; x display.
 
+**Done 2026-09-28** (checked in headless Firefox against a migrated, numbered copy of
+lcars-dev.db — Frieren, Mushoku Tensei, reviews, List; not yet seen by the user):
+- 8.1 `Season.episodeIds`; **found:** `SeasonSource` lacked `AUTO`, so any show with an
+  engine-made level failed to load at all — fixed.
+- 8.2 show page per level; a single piece inside a season splits the season card at
+  its air-order place (Mushoku S3 around "Guardian Fitz"); mini groups nested; status
+  picker per level with skipped, no more "(inherited)".
+- 8.3 review choice buttons (no plain Dismiss on a review with choices) + show link.
+- 8.4 no-TVDB add → individual season (with no AniList/MAL id either → refused);
+  browse matches individual seasons; List page section. Browse already had the
+  Skipped filter pill.
+- 8.5 every status change (show, season, browse, add, calendar) shows the engine's
+  warning and retries confirmed.
+- 8.6 x for 5000+ on the show page and episode badges; Data shows no absolute numbers.
+- 8.7 Data: review labels for levels without a show / TVDB number (data 0258d2c,
+  branch rulebook-rebuild).
+- **Not changed:** the header's "N total" episodes is the show's own count (AniList's
+  S1 count for anime), not the levels' — pre-existing.
+
 ## Phase 9 — Dry run and cutover
 
 - Run everything on the rebuilt DB copy with external writes **captured, not
