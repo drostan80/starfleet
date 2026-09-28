@@ -1276,6 +1276,7 @@ ANIDB_API_URL = "http://api.anidb.net:9001/httpapi"
 ANIDB_CLIENT = "memalpha"
 ANIDB_CLIENT_VER = 1
 ANIDB_RATE_LIMIT_SECONDS = 2.1  # slightly above 2s to stay safe
+ANIDB_DAILY_CAP = 200  # anime per UTC day (user, 2026-09-28)
 
 # Module-level timestamp for rate limiting across calls within one tick.
 _last_api_call: float = 0.0
@@ -1485,6 +1486,15 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     stats = {"fetched": 0, "episodes_stored": 0, "skipped": 0,
              "banned": False}
+    # AniDB bans an IP after ~250 requests (2026-09-28, twice): at most
+    # ANIDB_DAILY_CAP anime per UTC day, counted from what was stored today.
+    fetched_today = conn.execute(
+        "SELECT COUNT(DISTINCT anidb_anime_id) FROM anidb_episode WHERE fetched_at >= ?",
+        (now[:10],),
+    ).fetchone()[0]
+    limit = min(limit, max(0, ANIDB_DAILY_CAP - fetched_today))
+    if limit == 0:
+        return stats
 
     # Find AniDB anime IDs that have episode mappings but no episode data
     rows = conn.execute(
@@ -1771,18 +1781,28 @@ def poll_memory_alpha(conn) -> dict:
     except Exception:
         log.exception("Numbering pass failed")
 
-    # ── 2g. Same-TVDB show consolidation ──
-    # After cross-IDs are propagated and season rows exist, detect shows
-    # that share a TVDB ID and auto-merge the child into the parent as a
-    # new season.  Records pending_review for user confirmation.
+    # ── 2g. Same-TVDB shows: to review, never merged automatically ──
+    # Phase 5.3 (R1.14): one show per TVDB id. Shows sharing one are listed
+    # for you (the merge itself is resolveTvdbConsolidation, on your yes).
     try:
         with db.undo_on_error(conn):
-            from lcars import show_merge as _sm
-            collision_result = _sm.consolidate_same_tvdb_shows(conn)
-            result["same_tvdb_duplicates_found"] = collision_result["collisions_found"]
-            result["same_tvdb_consolidations_performed"] = collision_result["merges_performed"]
+            from lcars import pending_review as _pr
+            groups = conn.execute(
+                "SELECT x.external_id AS tvdb_id, GROUP_CONCAT(x.show_id) AS show_ids"
+                " FROM show_external_id x JOIN show sh ON sh.id = x.show_id"
+                " WHERE x.service = 'tvdb' AND sh.tracked = 1"
+                " GROUP BY x.external_id HAVING COUNT(*) > 1"
+            ).fetchall()
+            for group in groups:
+                value = f"shows {group['show_ids']} share TVDB {group['tvdb_id']} — merge?"
+                key = f"tvdb:{group['tvdb_id']}"
+                if not _pr.already_resolved_with(conn, "show", key, "same_tvdb_show", value):
+                    _pr.open_or_extend(conn, "show", key, "same_tvdb_show", "memory_alpha",
+                                       None, value)
+            result["same_tvdb_duplicates_found"] = len(groups)
+            conn.commit()
     except Exception:
-        log.exception("Same-TVDB show consolidation failed")
+        log.exception("Same-TVDB show check failed")
 
     # ── 3. Drip-fetch episode data from AniDB API ──
     drip = drip_fetch_episodes(conn, limit=5)

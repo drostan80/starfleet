@@ -167,3 +167,19 @@ def test_a_related_new_tvdb_season_is_added_with_r2_16_status(conn):
     row = conn.execute("SELECT season_number, status FROM season WHERE id = ?",
                        (season_id,)).fetchone()
     assert (row["season_number"], row["status"]) == (3, "skipped")  # after a dropped season
+
+
+def test_anidb_drip_stops_at_the_daily_cap(conn, monkeypatch):
+    # 2026-09-28: AniDB bans an IP after ~250 requests; prod keeps to 200/day.
+    from lcars import anidb, util
+
+    today = util.now_utc_iso()
+    conn.executemany(
+        "INSERT INTO anidb_episode (anidb_anime_id, anidb_season, anidb_epno, fetched_at)"
+        " VALUES (?, 1, 1, ?)",
+        [(i, today) for i in range(1, anidb.ANIDB_DAILY_CAP + 1)],
+    )
+    called = []
+    monkeypatch.setattr(anidb, "fetch_anime_episodes", lambda *a, **kw: called.append(a))
+    stats = anidb.drip_fetch_episodes(conn, limit=5)
+    assert (stats["fetched"], called) == (0, [])
