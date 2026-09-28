@@ -256,6 +256,10 @@ class TestFillAirdateGaps:
         conn.row_factory = sqlite3.Row
         conn.executescript("""
             CREATE TABLE show (id TEXT PRIMARY KEY);
+            CREATE TABLE season (
+                id TEXT PRIMARY KEY, show_id TEXT, season_number INTEGER,
+                kind TEXT, status TEXT
+            );
             CREATE TABLE show_external_id (
                 show_id TEXT, service TEXT, external_id TEXT,
                 url TEXT, created_at TEXT
@@ -355,6 +359,10 @@ class TestFillAirdateGaps:
         conn.row_factory = sqlite3.Row
         conn.executescript("""
             CREATE TABLE show (id TEXT PRIMARY KEY);
+            CREATE TABLE season (
+                id TEXT PRIMARY KEY, show_id TEXT, season_number INTEGER,
+                kind TEXT, status TEXT
+            );
             CREATE TABLE show_external_id (
                 show_id TEXT, service TEXT, external_id TEXT,
                 url TEXT, created_at TEXT
@@ -417,6 +425,10 @@ class TestFillAirdateGaps:
         conn.row_factory = sqlite3.Row
         conn.executescript("""
             CREATE TABLE show (id TEXT PRIMARY KEY);
+            CREATE TABLE season (
+                id TEXT PRIMARY KEY, show_id TEXT, season_number INTEGER,
+                kind TEXT, status TEXT
+            );
             CREATE TABLE show_external_id (
                 show_id TEXT, service TEXT, external_id TEXT,
                 url TEXT, created_at TEXT
@@ -500,6 +512,10 @@ class TestRewireAirdates:
         conn.row_factory = sqlite3.Row
         conn.executescript("""
             CREATE TABLE show (id TEXT PRIMARY KEY);
+            CREATE TABLE season (
+                id TEXT PRIMARY KEY, show_id TEXT, season_number INTEGER,
+                kind TEXT, status TEXT
+            );
             CREATE TABLE show_external_id (
                 show_id TEXT, service TEXT, external_id TEXT,
                 url TEXT, created_at TEXT

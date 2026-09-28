@@ -202,3 +202,16 @@ def test_a_season_without_a_status_changes_nothing(conn):
     _season(conn, "z-s10000", 1, None)
     status_rules.recompute_show(conn, "s-stat01", "test")
     assert _show(conn) == "watching"
+
+
+def test_episodes_of_a_skipped_season_are_not_followed(conn):
+    # R2.10: no calendar/next-up/backlog, availability or air-date updates.
+    _season(conn, "z-s10000", 1, "watching")
+    _season(conn, "z-s20000", 2, "skipped")
+    _eps(conn, 1, 1)
+    _eps(conn, 2, 1)
+    followed = [r[0] for r in conn.execute(
+        f"SELECT season FROM episode WHERE {status_rules.followed_sql()}")]
+    assert followed == [1]
+    assert status_rules.episode_followed(conn, "e-100001")
+    assert not status_rules.episode_followed(conn, "e-200001")

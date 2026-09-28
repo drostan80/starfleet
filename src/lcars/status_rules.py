@@ -103,6 +103,25 @@ def last_season(conn, show_id: str):
     return None
 
 
+# ── R2.10: skipped = not followed ──────────────────────────────────────
+
+
+def followed_sql(alias: str = "episode") -> str:
+    """SQL condition: the episode's TVDB season isn't skipped (R2.10) — for
+    lists (calendar, next-up, backlog), availability and air-date updates."""
+    return (
+        f"NOT EXISTS (SELECT 1 FROM season z WHERE z.show_id = {alias}.show_id"
+        f" AND z.kind = 'tvdb_season' AND z.season_number = {alias}.season"
+        " AND z.status = 'skipped')"
+    )
+
+
+def episode_followed(conn, episode_id: str) -> bool:
+    return conn.execute(
+        f"SELECT 1 FROM episode WHERE id = ? AND {followed_sql()}", (episode_id,)
+    ).fetchone() is not None
+
+
 # ── R2.16 / R2.19: a season LCARS creates on its own ────────────────────
 
 

@@ -81,6 +81,7 @@ from lcars import (
     fuzzy,
     pending_review,
     service_health,
+    status_rules,
     util,
 )
 
@@ -196,6 +197,8 @@ def _apply_or_flag(conn, show_id: str, item: dict) -> str:
         )
 
     episode_row = matches[0]
+    if not status_rules.episode_followed(conn, episode_row["id"]):
+        return "unchanged"  # R2.10: a skipped season isn't followed
     if not airdate_priority.should_apply(
         "animeschedule",
         item["air_date_utc"],

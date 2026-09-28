@@ -764,7 +764,7 @@ def _reconcile_air_dates(conn, show: dict) -> None:
 
             if not airdate_priority.should_apply(
                 "anilist", new_air_date, current_source, current_date
-            ):
+            ) or not status_rules.episode_followed(conn, episode_row["id"]):  # R2.10
                 continue  # see airdate_priority.py: same-source updates, else earliest wins
 
             conn.execute(

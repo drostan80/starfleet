@@ -30,6 +30,8 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 
+from lcars import status_rules
+
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://cal.syoboi.jp/db.php"
@@ -392,6 +394,7 @@ def _rewire_condition() -> str:
     checks this SQL fragment's behavior against `should_apply()`
     directly so the two can't silently disagree again."""
     return (
+        f"{status_rules.followed_sql()} AND "  # R2.10: skipped seasons aren't followed
         "episode.air_date_source != 'manual'"
         " AND episode.air_date_utc != sp_min.earliest_utc"
         " AND (episode.air_date_source IN ('syoboi', 'sonarr')"

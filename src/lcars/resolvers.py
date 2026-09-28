@@ -901,7 +901,8 @@ def resolve_episodes_airing_soon(_, info, days, **page_args):
     return pagination.paginate(
         db.get_connection(),
         "episode",
-        "air_date_utc IS NOT NULL AND air_date_utc >= ? AND air_date_utc <= ?",
+        "air_date_utc IS NOT NULL AND air_date_utc >= ? AND air_date_utc <= ?"
+        f" AND {status_rules.followed_sql()}",
         (now, until),
         **page_args,
     )
@@ -920,7 +921,8 @@ def resolve_episodes_in_range(_, info, start, end, **page_args):
     return pagination.paginate(
         db.get_connection(),
         "episode",
-        "air_date_utc IS NOT NULL AND air_date_utc >= ? AND air_date_utc < ?",
+        "air_date_utc IS NOT NULL AND air_date_utc >= ? AND air_date_utc < ?"
+        f" AND {status_rules.followed_sql()}",
         (start, end),
         **page_args,
     )
@@ -955,7 +957,8 @@ def resolve_backlog(_, info, include_planned=False, **page_args):
         conn,
         "episode",
         "state = 'unwatched' AND available_locally = 1"
-        f" AND show_id IN (SELECT id FROM show WHERE {show_filter})",
+        f" AND show_id IN (SELECT id FROM show WHERE {show_filter})"
+        f" AND {status_rules.followed_sql()}",
         (),
         **page_args,
     )
@@ -1013,6 +1016,7 @@ def resolve_next_up(_, info, **page_args):
         episode = conn.execute(
             "SELECT * FROM episode"
             " WHERE show_id = ? AND state = 'unwatched' AND available_locally = 1"
+            f" AND {status_rules.followed_sql()}"
             " ORDER BY air_date_utc IS NULL, air_date_utc ASC, season ASC, episode ASC"
             " LIMIT 1",
             (show["id"],),

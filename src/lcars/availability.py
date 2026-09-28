@@ -126,6 +126,7 @@ from lcars import (
     shows,
     sonarr_client,
     sonarr_match,
+    status_rules,
     util,
 )
 from lcars.config import get_current
@@ -257,7 +258,7 @@ def _apply_episode_availability(
     for how rare a mid-batch failure here actually is."""
     row = conn.execute(
         "SELECT id, available_via_sonarr FROM episode WHERE show_id = ? AND season = ?"
-        " AND episode = ?",
+        f" AND episode = ? AND {status_rules.followed_sql()}",  # R2.10: skipped isn't followed
         (show_id, season, episode),
     ).fetchone()
     if row is None:

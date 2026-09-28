@@ -280,6 +280,17 @@ metadata/episode fetch (except R2.19 numbering fetch), availability, calendar,
 next-up, backlog, airing lists, browse/add "future seasons".
 - breaks: skipped seasons' episodes stop getting air-date/availability updates.
 
+**4.2 done 2026-09-28:** `status_rules.followed_sql()` / `episode_followed()`: episodes
+of a skipped TVDB season are left out of calendar (episodesInRange, episodesAiringSoon),
+nextUp and backlog, get no availability update, and no AniList / AnimeSchedule / Syoboi
+air-date update. NULL-only date fills (TVmaze, AniDB) and the Sonarr episode fetch stay:
+numbering needs them (R2.10 exception, R2.19). Browse already shows a season's status.
+
+**4.3 done with 4.1:** the engine raises `NeedsConfirmation`; `setStatus` and
+`setSeasonStatus` return it as a GraphQLError ("… pass confirmed: true to proceed"):
+unaired episodes marked watched (R3.4), later seasons you set planned skipped (Q-J4).
+The UI showing it is phase 8.
+
 **4.3 Warnings (R3.4, R2.16/J4).** GraphQL returns a "needs confirmation" with the
 effect (e.g. "this will mark 4 unaired episodes watched", "this show has later
 seasons planned — skip all?"); UI shows it.
