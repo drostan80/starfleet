@@ -340,6 +340,23 @@ not in LCARS goes through 5.1 as a season with the list's status.
 **APPROVED 2026-09-28**, with 3.4 films and **R2.13b** (skipped picked on a show →
 last season skipped, show dropped) added.
 
+Progress (2026-09-28):
+- **done** 5.1 classifier `add_check.classify` (e2de0e3) — dry run over the AniList list:
+  1,586 tracked, 12 season-0 pieces, 8 individual seasons, 2 for you (Mushoku Tensei
+  III part 2 → part of Mushoku after 178789; Skip and Loafer S2).
+- **done** Sonarr webhook + catalog sweep through it, R5.3 statuses (b17b256).
+- **done** 5.2 relation stubs gone; related entries through the add check, automatic
+  adds (new season / its AniList id / cour → parts / season-0 piece) (ecc64fb).
+- **done** R2.13b (ac2f558). Reading: "skip every planned season after the last one
+  watched" (with S1 completed, S2+S3 planned both get skipped) — to confirm.
+- **done** 5.3 step 2g review-only; AniDB drip 200/day cap (fa419b2).
+- **to do** R1.23: AniList/MAL lookups at season level, stop writing show-level rows;
+  browse/add through the add check (keep the "add as season N?" dialog); backfill
+  through it; 5.4 list adds (flag, off until phase 9); individual seasons (GraphQL
+  nullability, episode table rebuild); consolidation + films (3.4) dry-run tool;
+  actionable resolution for `add_check:*` and `same_tvdb_show` reviews (R4.8b);
+  numbering spans for part/special levels.
+
 ## Phase 6 — Sonarr (R5.x; F2–F5, G6)
 
 - **6.1** New show added to LCARS with a TVDB id → added to Sonarr, monitor future
