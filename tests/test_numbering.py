@@ -293,3 +293,32 @@ def test_writer_creates_the_side_piece_between_seasons(conn):
     assert conn.execute(
         "SELECT COUNT(*) FROM season WHERE show_id = 's-test01' AND kind = 'special'"
     ).fetchone()[0] == 1
+
+
+def test_side_piece_with_its_own_anilist_id_is_that_level(conn, monkeypatch):
+    # A mini-anime between S1 and S2 that AniList lists (anidb 900 → anilist 9000):
+    # its existing special level takes the spans; no second id-less level.
+    monkeypatch.setattr(
+        numbering, "_anilist_ids_for_anidb", lambda a: {9000} if a == 900 else set()
+    )
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, kind, anilist_id, source, status,"
+        " created_at, updated_at) VALUES ('z-mini01', 's-test01', NULL, 'special', 9000,"
+        " 'auto', 'planned', ?, ?)",
+        (NOW, NOW),
+    )
+    items = [Item(r[0], r[1], r[2], r[3], 2) for r in conn.execute(
+        "SELECT id, season, episode, air_date_utc FROM episode")]
+    mini = Item("e-mini01", 0, 5, "2020-01-05T12:00:00Z", 2, anidb=(900, 1, 1))
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, created_at,"
+        " updated_at) VALUES ('e-mini01', 's-test01', 0, 5, 'special', ?, ?, ?)",
+        (mini.air, NOW, NOW),
+    )
+    plan = numbering.plan_show("s-test01", [*items, mini], "anidb")
+    numbering.apply_plan(conn, plan)
+    specials = conn.execute(
+        "SELECT id, decimal_season_number FROM season WHERE kind = 'special'").fetchall()
+    assert specials == [("z-mini01", 1.5)]
+    assert conn.execute(
+        "SELECT COUNT(*) FROM season_span WHERE season_id = 'z-mini01'").fetchone()[0] == 1

@@ -80,6 +80,8 @@ class Plan:
     season_spans: dict[int, list[tuple[float, float]]] = field(default_factory=dict)
     # other levels for the rebuild: key → spans ("part:<season>:<anidb id>", "anidb:<id>")
     level_spans: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
+    # side piece key ("side:<season>") → AniDB ids of its items, to find its level
+    side_anidb: dict[str, set[int]] = field(default_factory=dict)
     flags: list[dict] = field(default_factory=list)
 
 
@@ -267,6 +269,9 @@ def plan_show(
         plan.level_spans[f"side:{season}"] = runs(
             lambda x, season=season: between.get(x.id) == season
         )
+        plan.side_anidb[f"side:{season}"] = {
+            it.anidb[0] for it in side if between.get(it.id) == season and it.anidb
+        }
     for it in side:
         if plan.numbers.get(it.id) is None or it.id in between:
             continue
@@ -456,12 +461,32 @@ def _apply_level_spans(conn, plan: Plan, now: str) -> None:
                 _write_spans(conn, row[0], spans, now)
         elif kind == "side":
             after = int(rest[0])
-            row = conn.execute(
-                "SELECT id FROM season WHERE show_id = ? AND kind = 'special' AND parent_id IS NULL"
-                " AND anilist_id IS NULL AND decimal_season_number > ?"
-                " AND decimal_season_number < ?",
-                (plan.show_id, after, after + 1),
-            ).fetchone()
+            row = None
+            # A side piece with its own id (a mini-anime on AniList) is that
+            # level — never a second one beside it.
+            list_ids = set()
+            for anidb_id in plan.side_anidb.get(key, ()):
+                list_ids |= _anilist_ids_for_anidb(anidb_id)
+            if list_ids:
+                marks = ",".join("?" * len(list_ids))
+                row = conn.execute(
+                    "SELECT id FROM season WHERE show_id = ? AND kind = 'special'"
+                    f" AND anilist_id IN ({marks})",
+                    (plan.show_id, *list_ids),
+                ).fetchone()
+                if row is not None:
+                    conn.execute(
+                        "UPDATE season SET decimal_season_number = COALESCE("
+                        "decimal_season_number, ?) WHERE id = ?",
+                        (after + 0.5, row[0]),
+                    )
+            if row is None:
+                row = conn.execute(
+                    "SELECT id FROM season WHERE show_id = ? AND kind = 'special'"
+                    " AND parent_id IS NULL AND anilist_id IS NULL"
+                    " AND decimal_season_number > ? AND decimal_season_number < ?",
+                    (plan.show_id, after, after + 1),
+                ).fetchone()
             if row is None:
                 before = conn.execute(
                     "SELECT status FROM season WHERE show_id = ? AND kind = 'tvdb_season'"
