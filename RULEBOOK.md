@@ -296,9 +296,22 @@ An episode can be unaired but watched (pre-air showing, leak…).
     seasons; (2) completed or watching affects only the last season; any other
     status leaves the latest season skipped;
   - watching an episode of a skipped season → that season **watching**; earlier
-    skipped seasons stay skipped; later seasons → **planned**; show → **watching**;
-    a warning may say you're watching a season out of order with earlier seasons
-    unwatched / skipped. (Extends R2.14 to skipped seasons.)
+    skipped seasons stay skipped; show → **watching**; a warning may say you're
+    watching a season out of order with earlier seasons unwatched / skipped.
+    (Extends R2.14 to skipped seasons.)
+  - Answers to Q-W2 `[clarified 2026-09-28]`:
+    (a) a season **in progress** (watching) when you pick skipped on the show → a
+    warning: "a season is in progress; proceeding switches it to dropped —
+    continue?"; if yes, that season → **dropped**, later seasons → skipped.
+    (b) afterwards, **planned** picked on the show works like watching (and
+    completed): it goes on the show's last season; **paused or dropped** go on the
+    latest non-skipped season, later seasons skipped.
+    (c) the show-level "dropped" ends when you next pick a status other than
+    skipped on the show or one of its seasons, or when you watch an episode of a
+    skipped season.
+    (d) **every season after a skipped season stays skipped unless you say
+    otherwise** — watching an episode of a skipped season doesn't un-skip later
+    seasons (this replaces "later seasons → planned" above).
 - **R2.14** Season planned + one episode set watched → season watching. This is
   the **only** automatic path to watching (R2.6). `[clarified 2026-09-27, Q-B]`
 - **R2.15** All episodes of a level with an id watched → that level completed —
@@ -607,7 +620,7 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
   show would read e.g. *completed*, not skipped. Should picking skipped on a show skip
   **every** season (the show then reads skipped), or follow R2.13a literally?
 
-- **Q-W2 (R2.13b)** Gaps in the detailed rule: **[OPEN]**
+- **Q-W2 (R2.13b)** Gaps in the detailed rule: **[ANSWERED → R2.13b]**
   (a) an earlier season **watching** (in progress) or **planned** when you pick
   skipped: does the show read watching / skipped? (b) "any other status leaves the
   latest season skipped": planned / paused / dropped picked then stay at show level
@@ -645,3 +658,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — Q-W asked (skipped picked on a show).
 - 2026-09-28 — R2.10 (skipped appears in browse/add only, filterable), R2.13b (Q-W: skipped on a show → last season skipped, show dropped), R4.8a (remote completed mirrors R2.7, review for unaired), R4.8b (reviews actionable, link to show page).
 - 2026-09-28 — R2.13b detailed by the user; Q-W2 asked (gaps).
+- 2026-09-28 — Q-W2 answered → R2.13b (a)–(d).
