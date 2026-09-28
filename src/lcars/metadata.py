@@ -62,6 +62,7 @@ from lcars import (
     fribb,
     ids,
     mal_client,
+    numbering,
     pending_review,
     radarr_client,
     season_mapping,
@@ -1374,21 +1375,6 @@ def _fetch_sonarr(conn, show: dict) -> None:
                     "UPDATE episode SET title = ? WHERE id = ? AND title IS NULL",
                     (ep["title"], existing["id"]),
                 )
-            if ep.get("absoluteEpisodeNumber") is not None:
-                # Overwrites NULL *and* any previously-synthesized value:
-                # §5.2 sources as-is whenever a source reports an official
-                # number, and only synthesizes "when no source numbering
-                # exists" — so a real value always supersedes a guess.
-                # Fractional part tells them apart (see
-                # _synthesize_absolute_numbers). Caught by a test: without
-                # the second clause, synthesis ran first, filled the column,
-                # and permanently blocked the real value from ever landing.
-                conn.execute(
-                    "UPDATE episode SET absolute_number = ?"
-                    " WHERE id = ? AND (absolute_number IS NULL"
-                    "   OR absolute_number <> CAST(absolute_number AS INTEGER))",
-                    (ep["absoluteEpisodeNumber"], existing["id"]),
-                )
             # Phase 3.1 (R1.2a): TVDB's absolute number, a mapping only —
             # Sonarr's current value, refreshed every read.
             conn.execute(
@@ -1425,7 +1411,7 @@ def _fetch_sonarr(conn, show: dict) -> None:
                 # `nextUp` orders by air date precisely so an external
                 # platform's filing convention can't drive watch order.
                 "special" if season_number == 0 else "regular",
-                ep.get("absoluteEpisodeNumber"),
+                None,  # absolute_number: Memory Alpha sets it below (R1.2c)
                 ep.get("absoluteEpisodeNumber"),  # tvdb_absolute (phase 3.1)
                 ep.get("airDateUtc"),
                 ep.get("airDateUtc"),
@@ -1452,56 +1438,9 @@ def _fetch_sonarr(conn, show: dict) -> None:
     # attempt it, the same "on-demand, immediately" pattern as everything
     # else here — not a separate background pass.
     _derive_episode_numbering(conn, show["id"], series, episodes)
-    _synthesize_absolute_numbers(conn, show["id"])
-    # S2 lazy range-fill: absolute numbers are final, derive season ranges
-    # for any season that doesn't have them yet (see season_ranges.py).
-    season_ranges.fill_season_ranges(conn, show["id"])
-
-
-def _synthesize_absolute_numbers(conn, show_id: str) -> None:
-    """§5.2's synthesis rule (A.25): "When no source numbering exists,
-    LCARS synthesizes one as `<preceding regular absolute number>.
-    <sequential index by air/publish date>` — e.g. a special airing
-    between S1E12 and S2E1 becomes `12.1`; a second one before S2E1
-    becomes `12.2`."
-
-    Whole-show recompute rather than incremental, deliberately: the
-    indices are positional, so a newly-discovered special landing
-    mid-season shifts every later one. Recomputing the lot after each
-    fetch is the only way they stay correct, and it is cheap at this
-    project's scale (one show's episodes).
-
-    Only ever writes rows whose absolute number this function itself
-    synthesized — a real source-reported value (A.25's capture, above)
-    is never overwritten, and a synthesized value is always recomputed
-    from scratch. The two are told apart by the fractional part: a
-    source value is a whole number, a synthesized one never is.
-    """
-    rows = conn.execute(
-        "SELECT id, absolute_number, air_date_utc, season, episode FROM episode"
-        " WHERE show_id = ?"
-        " ORDER BY air_date_utc IS NULL, air_date_utc ASC, season ASC, episode ASC",
-        (show_id,),
-    ).fetchall()
-
-    preceding = 0.0
-    index_after = 0
-    now = util.now_utc_iso()
-    for row in rows:
-        source_number = row["absolute_number"]
-        is_source_value = source_number is not None and float(source_number).is_integer()
-        if is_source_value:
-            preceding = float(source_number)
-            index_after = 0
-            continue
-        index_after += 1
-        synthesized = round(preceding + index_after / 10.0, 4)
-        if source_number != synthesized:
-            conn.execute(
-                "UPDATE episode SET absolute_number = ?, updated_at = ? WHERE id = ?",
-                (synthesized, now, row["id"]),
-            )
-    conn.commit()
+    # Phase 3.2 (R1.2c): Memory Alpha numbers the show and sets its seasons'
+    # spans — never Sonarr's absolute number (a mapping, `tvdb_absolute`).
+    numbering.renumber_show(conn, show["id"])
 
 
 def _ensure_seasons(

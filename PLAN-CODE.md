@@ -199,6 +199,15 @@ keep TVDB's season/episode (R1.9a; the "subdivision offset" routing is gone); mu
 routing deleted (metadata + availability): a TVDB id held by several shows gets nothing
 filed (R1.14). Tests for the deleted routing replaced.
 
+### 3.2 done 2026-09-28: Memory Alpha numbering engine `lcars/numbering.py` (pure
+`plan_show`, `load_show`, `apply_plan`, `renumber_show/_all`, `lcars numbering <db>
+[--show] [--apply] [--json]`). Runs after every Sonarr fetch and in Memory Alpha's poll
+(replaces `_synthesize_absolute_numbers`, the Sonarr absolute-number overwrite and both
+range fills). `show.absolute_numbering_source` (anidb | tvmaze | tvdb), change log
+`absolute_number_change` (reconciliations only). Old abs→span triggers dropped.
+First dry run on live + 09-28 AniDB data: 1,785 shows — anidb 160, tvmaze 434,
+tvdb 1,191; flags: no_level 1,296, no_air_date 94, film_placement 88, …
+
 #### Phase 3 — Numbering: LCARS absolute numbers (R1.0, R1.2, R1.2a–b, R1.3–R1.5, R1.8, R1.18–19; A1–A5, G3, G4)
 
 **3.1 Memory Alpha numbering engine** (R1.2c: Memory Alpha is the authority) (`lcars/numbering.py`, replaces

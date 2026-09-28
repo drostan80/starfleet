@@ -161,6 +161,12 @@ def _cmd_rulecheck(args: argparse.Namespace) -> None:
     raise SystemExit(rulecheck.main(argv))
 
 
+def _cmd_numbering(args: argparse.Namespace) -> None:
+    from lcars import numbering
+
+    raise SystemExit(numbering.main(args.rest))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="lcars", description="Starfleet's GraphQL server.")
     subparsers = parser.add_subparsers(dest="command")
@@ -198,6 +204,12 @@ def main() -> None:
     rulecheck.add_argument("database", help="path to an LCARS SQLite file (opened read-only)")
     rulecheck.add_argument("--json", action="store_true", help="print findings as JSON")
     rulecheck.set_defaults(func=_cmd_rulecheck)
+
+    numbering_cmd = subparsers.add_parser(
+        "numbering", help="Memory Alpha absolute numbering (dry run unless --apply)"
+    )
+    numbering_cmd.add_argument("rest", nargs=argparse.REMAINDER)
+    numbering_cmd.set_defaults(func=_cmd_numbering)
 
     # No subcommand at all ("lcars" alone, e.g. the Dockerfile's CMD) still
     # means "serve", with serve's own --host/--port defaults — argparse

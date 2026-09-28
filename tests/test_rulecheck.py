@@ -57,6 +57,12 @@ def _season(path, zid, sid, n, status, start, end):
         " abs_end, created_at, updated_at) VALUES (?, ?, ?, 'manual', ?, ?, ?, ?, ?)",
         (zid, sid, n, status, start, end, NOW, NOW),
     )
+    if start is not None and end is not None:  # spans: set by Memory Alpha (phase 3.2)
+        _write(
+            path,
+            "INSERT INTO season_span (season_id, abs_from, abs_to) VALUES (?, ?, ?)",
+            (zid, start, end),
+        )
 
 
 def _episode(path, eid, sid, zid, season, ep, abs_n, state="watched"):

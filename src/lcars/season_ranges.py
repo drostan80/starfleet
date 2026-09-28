@@ -7,12 +7,8 @@ Two responsibilities, both inert until S3 switches reconcile reads:
    metadata._upsert_season, resolvers.setSeasonMapping) so the mapping
    table stays current going forward — S3 won't need its own backfill.
 
-2. **Lazy range-fill**: after `_synthesize_absolute_numbers` in
-   `_fetch_sonarr`/`_fetch_sonarr_multi_show`, fills `abs_start`/
-   `abs_end` from observed integer `absolute_number` values for any
-   season of the show that has episodes but no range yet. This is
-   D5's "lazy for the long tail" — the one-time backfill script
-   handles the bulk, this catches everything on its next Sonarr touch.
+2. (Range fill removed 2026-09-28, phase 3.2: Memory Alpha's numbering
+   engine, `lcars/numbering.py`, sets every season's spans.)
 
 3. **Subdivision width check** (S5, 2026-08-27): `check_subdivision_widths`
    is the `pollSeasonSubdivision` mutation's own implementation. For
@@ -282,55 +278,6 @@ def upsert_season_external_id(
                     " external_id = excluded.external_id, url = excluded.url",
                     (show_id, service, str(ext_id), url, now),
                 )
-
-
-def fill_season_ranges(conn: sqlite3.Connection, show_id: str) -> None:
-    """Lazy range-fill: for each season of this show that has episodes with
-    integer absolute_number values but no range set yet, derive abs_start/
-    abs_end from MIN/MAX(absolute_number).
-
-    Skips season 0 (specials). Only writes seasons with no existing range
-    — never overwrites a range the backfill script or a human already set.
-    The commit is the caller's responsibility (both _fetch_sonarr call
-    sites commit after their own episode writes).
-    """
-    # Only anime shows — TV shows have no meaningful absolute numbering
-    # model, and filling ranges for them would write anime-model data
-    # for shows the backfill script deliberately skips (same class as
-    # the tracking_space check in season_mapping.py:41-48).
-    is_anime = conn.execute(
-        "SELECT tracking_space FROM show WHERE id = ?", (show_id,)
-    ).fetchone()
-    if is_anime is None or is_anime["tracking_space"] != "anime":
-        return
-
-    seasons = conn.execute(
-        "SELECT id, season_number FROM season"
-        " WHERE show_id = ? AND season_number > 0"
-        "   AND abs_start IS NULL AND abs_end IS NULL",
-        (show_id,),
-    ).fetchall()
-    if not seasons:
-        return
-
-    now = util.now_utc_iso()
-    for season in seasons:
-        range_row = conn.execute(
-            "SELECT MIN(absolute_number) AS abs_min,"
-            "       MAX(absolute_number) AS abs_max"
-            " FROM episode"
-            " WHERE show_id = ? AND season = ?"
-            "   AND absolute_number IS NOT NULL"
-            "   AND absolute_number = CAST(absolute_number AS INTEGER)",
-            (show_id, season["season_number"]),
-        ).fetchone()
-        if range_row["abs_min"] is None:
-            continue  # no integer absolute numbers — can't derive a range
-        conn.execute(
-            "UPDATE season SET abs_start = ?, abs_end = ?, updated_at = ?"
-            " WHERE id = ?",
-            (int(range_row["abs_min"]), int(range_row["abs_max"]), now, season["id"]),
-        )
 
 
 def check_subdivision_widths(conn: sqlite3.Connection) -> dict[str, int]:
@@ -891,111 +838,3 @@ def backfill_season_names(conn: sqlite3.Connection) -> int:
     if filled:
         log.info("backfill_season_names: filled %d names", filled)
     return filled
-
-
-# ---------------------------------------------------------------------------
-# Step 5 — Fill abs_start/abs_end for all tracking spaces
-# ---------------------------------------------------------------------------
-
-
-def fill_season_ranges_bulk(conn: sqlite3.Connection) -> int:
-    """Bulk fill ``abs_start``/``abs_end`` on seasons that lack them.
-
-    Extends the per-show ``fill_season_ranges`` to cover all shows in
-    one pass and to handle TV shows (which use episode counts instead
-    of Sonarr absolute numbering).
-
-    **Anime**: derives from ``MIN``/``MAX(absolute_number)`` per season
-    (show-wide Sonarr-style numbering). Same logic as ``fill_season_ranges``
-    but batched.
-
-    **TV**: derives from episode counts per season, accumulated in show
-    order. Season 1 with 22 episodes → abs_start=1, abs_end=22.
-    Season 2 with 13 episodes → abs_start=23, abs_end=35.
-
-    Strictly NULL-only — never overwrites existing ranges.  Skips
-    season 0 (specials).  Idempotent and safe to call every tick.
-
-    Returns the number of seasons updated.
-    """
-    now = util.now_utc_iso()
-    updated = 0
-
-    # ── Anime: from absolute_number ──
-    anime_seasons = conn.execute(
-        "SELECT s.id, s.show_id, s.season_number"
-        " FROM season s"
-        " JOIN show sh ON sh.id = s.show_id"
-        " WHERE sh.tracking_space = 'anime'"
-        "   AND s.season_number > 0"
-        "   AND s.abs_start IS NULL AND s.abs_end IS NULL",
-    ).fetchall()
-
-    for s in anime_seasons:
-        range_row = conn.execute(
-            "SELECT MIN(absolute_number) AS abs_min,"
-            "       MAX(absolute_number) AS abs_max"
-            " FROM episode"
-            " WHERE show_id = ? AND season = ?"
-            "   AND absolute_number IS NOT NULL"
-            "   AND absolute_number = CAST(absolute_number AS INTEGER)",
-            (s["show_id"], s["season_number"]),
-        ).fetchone()
-        if range_row["abs_min"] is None:
-            continue
-        conn.execute(
-            "UPDATE season SET abs_start = ?, abs_end = ?, updated_at = ?"
-            " WHERE id = ?",
-            (int(range_row["abs_min"]), int(range_row["abs_max"]), now, s["id"]),
-        )
-        updated += 1
-
-    # ── TV: from episode counts, accumulated per show ──
-    # Group by show, order by season_number, accumulate ranges.
-    tv_shows = conn.execute(
-        "SELECT DISTINCT s.show_id"
-        " FROM season s"
-        " JOIN show sh ON sh.id = s.show_id"
-        " WHERE sh.tracking_space = 'tv'"
-        "   AND s.season_number > 0"
-        "   AND s.abs_start IS NULL AND s.abs_end IS NULL",
-    ).fetchall()
-
-    for show in tv_shows:
-        show_id = show["show_id"]
-        # Get ALL seasons for this show (including ones with ranges
-        # already set) to compute correct cumulative offsets.
-        all_seasons = conn.execute(
-            "SELECT s.id, s.season_number, s.abs_start, s.abs_end,"
-            "  (SELECT count(*) FROM episode e"
-            "   WHERE e.show_id = ? AND e.season = s.season_number"
-            "  ) AS ep_count"
-            " FROM season s"
-            " WHERE s.show_id = ? AND s.season_number > 0"
-            " ORDER BY s.season_number",
-            (show_id, show_id),
-        ).fetchall()
-
-        running = 1
-        for s in all_seasons:
-            ep_count = s["ep_count"]
-            if ep_count == 0:
-                continue
-            if s["abs_start"] is not None:
-                # Already has a range — advance running counter past it
-                running = s["abs_end"] + 1
-                continue
-            abs_start = running
-            abs_end = running + ep_count - 1
-            conn.execute(
-                "UPDATE season SET abs_start = ?, abs_end = ?, updated_at = ?"
-                " WHERE id = ?",
-                (abs_start, abs_end, now, s["id"]),
-            )
-            running = abs_end + 1
-            updated += 1
-
-    conn.commit()  # unconditional: a no-op write still holds the lock
-    if updated:
-        log.info("fill_season_ranges_bulk: updated %d seasons", updated)
-    return updated

@@ -118,10 +118,11 @@ def _seed(c):
     for (season, ep), (abs_n, _ts, _te, _aid, raw) in LAYOUT.items():
         c.execute(
             "INSERT INTO episode (id, show_id, season, episode, kind, absolute_number,"
-            " air_date_utc, air_date_source, air_date_raw_sonarr, season_id,"
+            " tvdb_absolute, air_date_utc, air_date_source, air_date_raw_sonarr, season_id,"
             " created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 'regular', ?, ?, 'sonarr', ?, ?, 'x', 'x')",
-            (f"e-{season}{ep}xxxx", SHOW, season, ep, abs_n, raw, raw, f"z-sea00{season}"),
+            " VALUES (?, ?, ?, ?, 'regular', ?, ?, ?, 'sonarr', ?, ?, 'x', 'x')",
+            (f"e-{season}{ep}xxxx", SHOW, season, ep, abs_n, abs_n, raw, raw,
+             f"z-sea00{season}"),
         )
     # Anime-Lists: TVDB coordinates -> AniDB, as the real community list has it.
     for aid, tvdb_season, offset in ((100, 1, 0), (101, 2, 0), (102, 2, 1), (103, 3, 0),

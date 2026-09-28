@@ -375,9 +375,9 @@ def _add_season(conn, season_id, show_id, season_number, abs_start=None, abs_end
     conn.commit()
 
 
-def test_range_routing_single_show_multiple_seasons(conn, monkeypatch):
-    """Post-S4b shape: one show, two ranged seasons. Sonarr's absolute
-    episode number routes to the correct season and relative episode."""
+def test_sonarr_episode_found_by_tvdb_absolute_mapping(conn, monkeypatch):
+    """Phase 3.1 (R1.2a): Sonarr's absolute number is matched against the
+    episode's stored TVDB absolute number (a mapping), not LCARS's own."""
     _configure_sonarr()
     _add_show(conn, "s-rng001", tvdb_id=457900)
     _add_season(conn, "z-rng001", "s-rng001", season_number=1, abs_start=1, abs_end=3)
@@ -390,10 +390,12 @@ def test_range_routing_single_show_multiple_seasons(conn, monkeypatch):
     _add_episode(conn, "e-rng004", "s-rng001", season=2, episode=1, absolute_number=4)
     _add_episode(conn, "e-rng005", "s-rng001", season=2, episode=2, absolute_number=5)
     _add_episode(conn, "e-rng006", "s-rng001", season=2, episode=3, absolute_number=6)
+    conn.execute("UPDATE episode SET tvdb_absolute = absolute_number WHERE show_id = 's-rng001'")
+    conn.execute("UPDATE episode SET absolute_number = absolute_number + 100")  # LCARS's own
 
     fake = _FakeHistoryClient(
         [
-            # absolute 5 → season 2, episode 2 (5 − 4 + 1 = 2)
+            # TVDB absolute 5 → S2E2
             _sonarr_record(
                 "downloadFolderImported",
                 "2026-08-27T10:00:00Z",

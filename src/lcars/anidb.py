@@ -1753,15 +1753,15 @@ def poll_memory_alpha(conn) -> dict:
     except Exception:
         log.exception("season_external_id name backfill failed")
 
-    # ── 2f. Fill abs_start/abs_end ranges ──
-    # Bulk fill season absolute-episode ranges for anime (from Sonarr
-    # absolute_number) and TV (from episode counts per season).
+    # ── 2f. Numbering (phase 3.2, R1.2c/R1.2d) ──
+    # Memory Alpha renumbers every tracked show: TVDB order + air date
+    # first, reconciled with AniDB/TVmaze as their data comes in.
     try:
         with db.undo_on_error(conn):
-            from lcars import season_ranges as _sr3
-            result["season_ranges_filled"] = _sr3.fill_season_ranges_bulk(conn)
+            from lcars import numbering
+            result["shows_numbered"] = numbering.renumber_all(conn)["shows"]
     except Exception:
-        log.exception("Season range bulk fill failed")
+        log.exception("Numbering pass failed")
 
     # ── 2g. Same-TVDB show consolidation ──
     # After cross-IDs are propagated and season rows exist, detect shows

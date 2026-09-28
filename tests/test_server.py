@@ -2110,7 +2110,9 @@ async def test_search_arr_candidates_does_not_write_or_track_anything(client, mo
 # convention can't drive watch order.
 
 
-async def test_sonarr_fetch_captures_absolute_episode_number(client, monkeypatch):
+async def test_sonarr_fetch_keeps_tvdb_absolute_as_a_mapping(client, monkeypatch):
+    """R1.2a/R1.2c (phase 3.2): LCARS numbers its own episodes (Memory
+    Alpha); Sonarr's absolute number is only stored as `tvdb_absolute`."""
     config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
     _patch_fribb_dataset(monkeypatch, dataset=[])
     eps = [
@@ -2145,12 +2147,15 @@ async def test_sonarr_fetch_captures_absolute_episode_number(client, monkeypatch
     )
     by_season = {e["node"]["season"]: e["node"] for e in data["show"]["episodes"]["edges"]}
     assert by_season[1]["absoluteNumber"] == 1
-    assert by_season[2]["absoluteNumber"] == 13
+    assert by_season[2]["absoluteNumber"] == 2
+    conn = db.get_connection()
+    mapped = {r[0]: r[1] for r in conn.execute("SELECT season, tvdb_absolute FROM episode")}
+    assert mapped == {1: 1, 2: 13}
 
 
-async def test_sonarr_fetch_backfills_absolute_number_on_existing_episode(client, monkeypatch):
-    """A refetch fills a column that was empty, without disturbing
-    anything a human may have set on that row."""
+async def test_sonarr_refetch_updates_the_tvdb_absolute_mapping(client, monkeypatch):
+    """A refetch records Sonarr's absolute number as the mapping; LCARS's
+    own number stays Memory Alpha's."""
     config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
     _patch_fribb_dataset(monkeypatch, dataset=[])
     bare = {"seasonNumber": 1, "episodeNumber": 1, "airDateUtc": None, "runtime": None}
@@ -2171,7 +2176,9 @@ async def test_sonarr_fetch_backfills_absolute_number_on_existing_episode(client
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    assert data["show"]["episodes"]["edges"][0]["node"]["absoluteNumber"] == 7
+    assert data["show"]["episodes"]["edges"][0]["node"]["absoluteNumber"] == 1
+    conn = db.get_connection()
+    assert conn.execute("SELECT tvdb_absolute FROM episode").fetchone()[0] == 7
 
 
 async def test_sonarr_fetch_does_not_duplicate_a_renumbered_episode(client, monkeypatch):
@@ -9512,9 +9519,9 @@ async def test_backlog_include_planned_excludes_a_planning_show_with_nothing_ava
 # --- absolute_number synthesis (§5.2, A.25) ---------------------------------
 
 
-async def test_absolute_number_synthesis_numbers_specials_between_regulars(client, monkeypatch):
-    """§5.2: 'a special airing between S1E12 and S2E1 becomes 12.1; a
-    second one before S2E1 becomes 12.2'."""
+async def test_numbering_gives_specials_between_seasons_whole_numbers(client, monkeypatch):
+    """RULEBOOK R1.8b (phase 3.2): specials airing between two seasons take
+    whole numbers, shifting the next season."""
     config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
     _patch_fribb_dataset(monkeypatch, dataset=[])
     eps = [
@@ -9563,15 +9570,15 @@ async def test_absolute_number_synthesis_numbers_specials_between_regulars(clien
         (e["node"]["season"], e["node"]["episode"]): e["node"]["absoluteNumber"]
         for e in data["show"]["episodes"]["edges"]
     }
-    assert got[(1, 12)] == 12  # source value, untouched
-    assert got[(0, 1)] == 12.1  # first special after absolute 12
-    assert got[(0, 2)] == 12.2  # second one
-    assert got[(2, 1)] == 13  # source value, untouched
+    assert got[(1, 12)] == 1  # LCARS's own numbering (R1.2a)
+    assert got[(0, 1)] == 2
+    assert got[(0, 2)] == 3
+    assert got[(2, 1)] == 4
 
 
-async def test_absolute_number_synthesis_recomputes_when_a_special_is_inserted(client, monkeypatch):
-    """Indices are positional, so a newly-discovered special landing
-    between two existing ones must renumber the later one."""
+async def test_numbering_recomputes_when_a_special_is_inserted(client, monkeypatch):
+    """A newly-discovered special that aired earlier renumbers the later one
+    (reconciliation, R1.2d)."""
     config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
     _patch_fribb_dataset(monkeypatch, dataset=[])
     base = [
@@ -9624,8 +9631,8 @@ async def test_absolute_number_synthesis_recomputes_when_a_special_is_inserted(c
         for e in data["show"]["episodes"]["edges"]
     }
     assert got[(1, 1)] == 1
-    assert got[(0, 8)] == 1.1  # earlier-airing special takes the first slot
-    assert got[(0, 9)] == 1.2  # the pre-existing one renumbered behind it
+    assert got[(0, 8)] == 2  # after the last season: whole numbers (R1.8b)
+    assert got[(0, 9)] == 3  # the pre-existing one renumbered behind it
 
 
 # --- file availability polling (§5.2/§6.7, B.3) — GraphQL wiring only; the ---

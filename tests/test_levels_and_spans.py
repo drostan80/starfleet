@@ -1,7 +1,8 @@
 """Phase 2 layout (PLAN-CODE 2.1–2.3): levels, spans, decimal season numbers.
 
-The old columns stay during the transition; triggers keep the new ones
-filled from them until they go (migration f4a5b6c7d8e9)."""
+The old columns stay during the transition; a trigger keeps the decimal
+season number filled from `season_number`. Spans are written by Memory
+Alpha's numbering engine (phase 3.2)."""
 
 import os
 import sqlite3
@@ -51,21 +52,17 @@ def _spans(conn, zid):
     ).fetchall()
 
 
-def test_old_writers_fill_span_and_decimal_number(conn):
+def test_old_writers_fill_the_decimal_number(conn):
     _season(conn, "z-aaaaa1", 2, 13, 24)
-    assert _spans(conn, "z-aaaaa1") == [(13.0, 24.0)]
     kind, number = conn.execute(
         "SELECT kind, decimal_season_number FROM season WHERE id = 'z-aaaaa1'"
     ).fetchone()
     assert (kind, number) == ("tvdb_season", 2.0)
-
-    conn.execute("UPDATE season SET abs_end = 25, season_number = 3 WHERE id = 'z-aaaaa1'")
-    assert _spans(conn, "z-aaaaa1") == [(13.0, 25.0)]
+    conn.execute("UPDATE season SET season_number = 3 WHERE id = 'z-aaaaa1'")
     assert conn.execute(
         "SELECT decimal_season_number FROM season WHERE id = 'z-aaaaa1'"
     ).fetchone() == (3.0,)
-
-    conn.execute("UPDATE season SET abs_start = NULL WHERE id = 'z-aaaaa1'")
+    # Spans come from Memory Alpha's numbering engine only (phase 3.2).
     assert _spans(conn, "z-aaaaa1") == []
 
 
@@ -76,6 +73,7 @@ def test_season_without_range_has_no_span(conn):
 
 def test_deleting_a_season_deletes_its_spans(conn):
     _season(conn, "z-aaaaa1", 1, 1, 12)
+    conn.execute("INSERT INTO season_span (season_id, abs_from, abs_to) VALUES ('z-aaaaa1', 1, 12)")
     conn.execute("DELETE FROM season WHERE id = 'z-aaaaa1'")
     assert conn.execute("SELECT COUNT(*) FROM season_span").fetchone() == (0,)
 

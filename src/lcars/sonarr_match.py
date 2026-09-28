@@ -16,8 +16,8 @@ episode is matched to an LCARS episode row, in that order:
 1. Sonarr's own raw coordinates already captured on the row
    (`sonarr_season`/`sonarr_episode`) — immutable once captured.
 2. `absoluteEpisodeNumber` against the row's `tvdb_absolute` (TVDB's own
-   absolute number, a mapping — phase 3.1), then, until Memory Alpha sets
-   LCARS's numbers (phase 3.2), against `episode.absolute_number`.
+   absolute number, a mapping — phase 3.1). Never against LCARS's own
+   absolute number, which Memory Alpha sets (R1.2c).
 3. LCARS season/episode — only for a row never captured, and only when
    absolute order can't decide it (season 0 specials, or a show/episode
    with no absolute numbers) and no captured row shows this show's
@@ -64,10 +64,10 @@ def show_numbering_diverged(conn, show_id: str) -> bool:
     return row is not None
 
 
-def _show_has_absolute_numbers(conn, show_id: str) -> bool:
+def _show_has_tvdb_absolute(conn, show_id: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM episode WHERE show_id = ? AND kind = 'regular'"
-        "   AND absolute_number IS NOT NULL LIMIT 1",
+        "   AND tvdb_absolute IS NOT NULL LIMIT 1",
         (show_id,),
     ).fetchone()
     return row is not None
@@ -103,25 +103,13 @@ def find_episode(conn, show_ids: list[str], ep: dict) -> dict | None:
             return _capture(conn, dict(rows[0]), season_number, episode_number)
         if len(rows) > 1:
             return None  # ambiguous — never guess
-    if abs_number is not None and season_number != 0:
-        rows = conn.execute(
-            f"SELECT {cols} FROM episode WHERE show_id IN ({placeholders})"
-            "   AND absolute_number = ? AND season > 0 AND kind = 'regular'"
-            "   AND sonarr_season IS NULL",
-            (*show_ids, float(abs_number)),
-        ).fetchall()
-        if len(rows) == 1:
-            return _capture(conn, dict(rows[0]), season_number, episode_number)
-        if len(rows) > 1:
-            return None  # ambiguous — never guess
-
     if len(show_ids) != 1:
         return None  # display numbering restarts per sibling — meaningless across shows
     if season_number != 0:
         if show_numbering_diverged(conn, show_ids[0]):
             return None
-        if abs_number is not None and _show_has_absolute_numbers(conn, show_ids[0]):
-            return None  # absolute order is the spine: no abs match means a new episode
+        if abs_number is not None and _show_has_tvdb_absolute(conn, show_ids[0]):
+            return None  # TVDB's absolute numbers are known here: no match means a new episode
     row = conn.execute(
         f"SELECT {cols} FROM episode WHERE show_id = ? AND season = ? AND episode = ?"
         "   AND sonarr_season IS NULL",
