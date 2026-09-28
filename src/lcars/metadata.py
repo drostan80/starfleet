@@ -901,7 +901,7 @@ def _add_related(conn, anilist_id: int, node: dict, relation_type: str | None) -
     if decision.kind in add_check.AUTOMATIC:
         add_check.apply_decision(conn, decision, candidate)
     elif decision.kind == "needs_user":
-        add_check.review(conn, f"anilist:{node['id']}", decision, "anilist_relation")
+        add_check.review(conn, f"anilist:{node['id']}", decision, "anilist_relation", candidate)
 
 
 def _upsert_season(

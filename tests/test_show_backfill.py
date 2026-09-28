@@ -539,8 +539,11 @@ def test_backfill_creates_an_anilist_sweep_show_with_known_status(conn, monkeypa
         show_backfill.backfill_untracked_shows(conn)
     finally:
         config.get_current().list_adds_enabled = False
-    row = conn.execute("SELECT status FROM show WHERE title_romaji = 'AniList Only'").fetchone()
-    assert row["status"] == "completed"  # the status on your list
+    # No TVDB id: an individual season (R3.6c, R4.7) with your list's status.
+    row = conn.execute(
+        "SELECT kind, show_id, status FROM season WHERE anilist_id = 707"
+    ).fetchone()
+    assert tuple(row) == ("individual_season", None, "completed")
     # The sweep already knew the status from MediaListCollection — no
     # extra live fetch_my_list_status() read needed.
     assert fetch_status_calls == []

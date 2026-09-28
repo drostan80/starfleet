@@ -665,7 +665,10 @@ def add_checked(conn, input: dict) -> str:
         raise ShowInputError(f"{d.reason} — {d.proposal}" if d.proposal else d.reason)
     if d.kind == "new_show":
         return create_show(conn, {**input, "skip_sequel_check": True})
-    return create_show(conn, input)  # individual season: today's path (phase 5 to do)
+    # No TVDB id yet: R3.6c makes it an individual season, but browse can't
+    # show those until the UI goes per level (phase 8) — until then your add
+    # stays a show, flagged for its TVDB link. Cutover blocker (PLAN-CODE).
+    return create_show(conn, input)
 
 
 def create_show(conn, input: dict) -> str:

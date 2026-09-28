@@ -492,7 +492,8 @@ ShowExternalId, unchanged — TVDB doesn't split by season.
 """
 type Season {
   id: ID!
-  show: Show!
+  "Null for an individual season (no TVDB show yet — RULEBOOK R3.6c)."
+  show: Show
   "TVDB's season number. Null for a level that isn't a TVDB season (a special, side piece or mini sub-season — see decimalSeasonNumber, kind, parentId)."
   seasonNumber: Int
   "RULEBOOK R1.9a — the season number as shown and sorted: TVDB's number for a TVDB season and its parts; N.5, or N.1, N.2… in air-date order, for a side piece between TVDB seasons N and N+1 (seasonNumber is TVDB's whole number and will be null for those once they exist, PLAN-CODE phase 8)."
@@ -631,6 +632,15 @@ type PendingReview {
   resolvedAt: DateTime
   resolvedByClient: ResolvedByClient
   resolutionNote: String
+  "RULEBOOK R4.8b: the choices that resolve this review (apply one with resolveReviewChoice). Empty for older kinds, resolved with a note."
+  choices: [ReviewChoice!]!
+  "The show page this review is about."
+  showId: ID
+}
+
+type ReviewChoice {
+  id: String!
+  label: String!
 }
 
 type PendingReviewEdge {
@@ -2268,6 +2278,8 @@ type Mutation {
   decision, not a separate design.
   """
   resolvePendingReview(id: ID!, resolutionNote: String): PendingReview!
+  "RULEBOOK R4.8b: apply one of the review's choices (its effect is done, then the review closes)."
+  resolveReviewChoice(id: ID!, choice: String!, note: String): PendingReview!
 
   # -- 5.9 franchise / next-up manual ordering (§3 principle 6) --------------
   setFranchiseMemberOrder(franchiseId: ID!, showId: ID!, sortOrder: Int!): FranchiseEntry!

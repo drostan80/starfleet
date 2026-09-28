@@ -1787,6 +1787,7 @@ def poll_memory_alpha(conn) -> dict:
     try:
         with db.undo_on_error(conn):
             from lcars import pending_review as _pr
+            from lcars import reviews as _rv
             groups = conn.execute(
                 "SELECT x.external_id AS tvdb_id, GROUP_CONCAT(x.show_id) AS show_ids"
                 " FROM show_external_id x JOIN show sh ON sh.id = x.show_id"
@@ -1797,8 +1798,11 @@ def poll_memory_alpha(conn) -> dict:
                 value = f"shows {group['show_ids']} share TVDB {group['tvdb_id']} — merge?"
                 key = f"tvdb:{group['tvdb_id']}"
                 if not _pr.already_resolved_with(conn, "show", key, "same_tvdb_show", value):
-                    _pr.open_or_extend(conn, "show", key, "same_tvdb_show", "memory_alpha",
-                                       None, value)
+                    _rv.open_review(
+                        conn, "show", key, "same_tvdb_show", "memory_alpha", value,
+                        ["merge", "not_same"], {"tvdb_id": group["tvdb_id"]},
+                        show_id=group["show_ids"].split(",")[0],
+                    )
             result["same_tvdb_duplicates_found"] = len(groups)
             conn.commit()
     except Exception:

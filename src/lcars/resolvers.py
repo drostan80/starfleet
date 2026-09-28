@@ -51,6 +51,7 @@ from lcars import (
     pagination,
     pending_review,
     radarr_client,
+    reviews,
     score_sync,
     season_mapping,
     season_ranges,
@@ -1990,6 +1991,11 @@ def resolve_episode_movie_link_movie_show(obj, info):
 @pending_review_type.field("proposedValueChain")
 def resolve_proposed_value_chain(obj, info):
     return json.loads(obj["proposed_value_chain"])
+
+
+@pending_review_type.field("choices")
+def resolve_review_choices(obj, info):
+    return json.loads(obj.get("choices") or "[]")
 
 
 # --- History table fields ---------------------------------------------------
@@ -4535,6 +4541,23 @@ def resolve_resolve_pending_review(_, info, id, resolution_note=None):
         (now, client, resolution_note, id),
     )
     conn.commit()
+    return _get_pending_review(conn, id)
+
+
+@mutation.field("resolveReviewChoice")
+def resolve_resolve_review_choice(_, info, id, choice, note=None):
+    conn = db.get_connection()
+    client = require_client(info)
+    if client not in RESOLVING_CLIENTS:
+        raise GraphQLError(
+            f"{client!r} cannot resolve a pending_review — only "
+            f"{sorted(RESOLVING_CLIENTS)} can (§5.6)"
+        )
+    try:
+        reviews.resolve_choice(conn, id, choice, client, note)
+    except (reviews.ReviewError, shows.ShowInputError, ValueError) as e:
+        conn.rollback()
+        raise GraphQLError(str(e)) from None
     return _get_pending_review(conn, id)
 
 

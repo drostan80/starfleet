@@ -226,3 +226,50 @@ def test_arr_search_also_tries_the_japanese_title(conn, monkeypatch):
     assert shows.search_arr_candidates(conn, "episodic", "Bless", "ブレス") == [
         {"tvdbId": 1, "title": "Bless"}
     ]
+
+
+def _needs_you_review(conn):
+    from lcars import reviews
+
+    c = _c(LIST, anilist_id=217434, prequel_anilist_ids=[178789], status="PLANNING")
+    d = add_check.classify(conn, c, DATASET)
+    add_check.review(conn, "anilist:217434", d, "list", c)
+    row = conn.execute(
+        "SELECT id, choices, show_id FROM pending_review WHERE entity_id = 'anilist:217434'"
+    ).fetchone()
+    return reviews, row
+
+
+def test_needs_you_review_offers_its_choices_and_the_show(conn):
+    _reviews, row = _needs_you_review(conn)
+    choices = [c["id"] for c in __import__("json").loads(row["choices"])]
+    assert choices == ["add_to_show", "individual", "dont_add"]
+    assert row["show_id"] == "s-mush01"  # R4.8b: links to the show page
+
+
+def test_choosing_add_to_show_adds_the_cour_to_the_season_it_follows(conn):
+    reviews, row = _needs_you_review(conn)
+    reviews.resolve_choice(conn, row["id"], "add_to_show", "captains_log", None)
+    parts = conn.execute(
+        "SELECT part_number, anilist_id FROM season WHERE parent_id = 'z-mush03' AND kind = 'part'"
+        " ORDER BY part_number"
+    ).fetchall()
+    assert [tuple(p) for p in parts] == [(1, 178789), (2, 217434)]  # Mushoku S3 part 2
+    assert conn.execute(
+        "SELECT resolved_at IS NOT NULL FROM pending_review WHERE id = ?", (row["id"],)
+    ).fetchone()[0] == 1
+
+
+def test_choosing_individual_season_creates_one_without_a_show(conn):
+    reviews, row = _needs_you_review(conn)
+    reviews.resolve_choice(conn, row["id"], "individual", "captains_log", "wait for TVDB")
+    ind = conn.execute(
+        "SELECT show_id, kind, anilist_id, status FROM season WHERE anilist_id = 217434"
+    ).fetchone()
+    assert tuple(ind) == (None, "individual_season", 217434, "planned")
+
+
+def test_a_choice_the_review_doesnt_offer_is_refused(conn):
+    reviews, row = _needs_you_review(conn)
+    with pytest.raises(reviews.ReviewError):
+        reviews.resolve_choice(conn, row["id"], "merge", "captains_log", None)

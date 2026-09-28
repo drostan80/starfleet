@@ -155,7 +155,8 @@ def classify(conn, c: Candidate, dataset: list[dict]) -> Decision:
                                     (season["show_id"],)).fetchone()
                 if show is not None and show["tracked"]:
                     return Decision(
-                        "needs_user", show["id"], reason="TVDB doesn't list it yet (Fribb)",
+                        "needs_user", show["id"], season["id"],
+                        reason="TVDB doesn't list it yet (Fribb)",
                         proposal=f"part of {_show_titles(show)[0]} after AniList {prequel}"
                                  " — or an individual season until TVDB has it")
         if c.origin == RELATION:
@@ -215,10 +216,12 @@ def classify(conn, c: Candidate, dataset: list[dict]) -> Decision:
 # ── Applying: a series added in Sonarr (R5.1–R5.3) ─────────────────────
 
 
-def review(conn, key: str, decision: Decision, source: str) -> None:
+def review(
+    conn, key: str, decision: Decision, source: str, candidate: Candidate | None = None
+) -> None:
     """A decision you must take (R3.7a) or a candidate the rules don't add,
-    kept for you as a review (R4.8b: the choices are in `proposal`)."""
-    from lcars import pending_review  # deferred: pending_review is a leaf, kept lazy
+    kept for you as an actionable review (R4.8b)."""
+    from lcars import pending_review, reviews  # deferred: keep this module light
 
     field_name = f"add_check:{decision.kind}"
     value = f"{decision.reason} — {decision.proposal}" if decision.proposal else decision.reason
@@ -231,7 +234,36 @@ def review(conn, key: str, decision: Decision, source: str) -> None:
     ).fetchone()
     if open_row is not None and value in json.loads(open_row[0]):
         return  # already waiting for you
-    pending_review.open_or_extend(conn, "show", key, field_name, source, None, value)
+    choices = ["individual", "dont_add"]
+    if decision.show_id and decision.season_id:
+        choices = ["add_to_show", *choices]
+    payload = {"show_id": decision.show_id, "season_id": decision.season_id,
+               "tvdb_id": decision.tvdb_id}
+    if candidate is not None:
+        payload.update(anilist_id=candidate.anilist_id, mal_id=candidate.mal_id,
+                       titles=candidate.titles, media_type=candidate.media_type,
+                       status=LIST_STATUS.get((candidate.status or "").upper()))
+    reviews.open_review(conn, "show", key, field_name, source, value, choices, payload,
+                        show_id=decision.show_id)
+
+
+def create_individual_season(conn, c: Candidate, status: str | None = None) -> str:
+    """R3.2, R3.6, R3.6c/d, R4.7: a season with no TVDB show yet — its own
+    AniList/MAL ids, mirrored like any season (R3.6b), planned unless your
+    list says otherwise; it joins a show once TVDB has it (proposed to you)."""
+    from lcars import ids, season_ranges, util
+
+    season_id = ids.generate_id(conn, "z")
+    now = util.now_utc_iso()
+    title = c.titles[0] if c.titles else None
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, kind, anilist_id, mal_id, label,"
+        " source, status, status_set_manually, list_sync, created_at, updated_at)"
+        " VALUES (?, NULL, NULL, 'individual_season', ?, ?, ?, 'manual', ?, 1, 1, ?, ?)",
+        (season_id, c.anilist_id, c.mal_id, title, status or "planned", now, now),
+    )
+    season_ranges.upsert_season_external_id(conn, season_id, c.anilist_id, c.mal_id, now)
+    return season_id
 
 
 def apply_sonarr_initial_statuses(conn, show_id: str) -> None:
@@ -379,15 +411,17 @@ def add_list_entry(conn, c: Candidate, dataset: list[dict]) -> Decision:
     if d.kind in AUTOMATIC:
         season_id = apply_decision(conn, d, c)
     elif d.kind == "needs_user":
-        review(conn, f"anilist:{c.anilist_id}", d, "list")
-    elif d.kind in ("new_show", "individual_season"):
+        review(conn, f"anilist:{c.anilist_id}", d, "list", c)
+    elif d.kind == "individual_season":
+        season_id = create_individual_season(conn, c, LIST_STATUS.get((c.status or "").upper()))
+    elif d.kind == "new_show":
         title = c.titles[0] if c.titles else str(c.anilist_id)
         show_id = shows.create_show(conn, {
             "media_shape": "movie" if (c.media_type or "").upper() == "MOVIE" else "episodic",
             "tracking_space": "anime", "primary_title": "romaji", "title_romaji": title,
             "anilist_id": c.anilist_id, "mal_id": c.mal_id, "tvdb_id": d.tvdb_id,
             "skip_sequel_check": True,
-        })  # individual seasons: today's path until they land (phase 5)
+        })
         found = _season_by_list_id(conn, c.anilist_id, c.mal_id)
         season_id = found["id"] if found is not None else None
         if season_id is None:
