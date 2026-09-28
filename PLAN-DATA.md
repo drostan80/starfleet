@@ -579,6 +579,21 @@ Read back from the page's `decisions` collection (228 entries).
   208766 → TVDB 475021; 185657 and 217434 → add to the proposed show (Skip and Loafer,
   Mushoku Tensei).
 
+## Phase 9.1 decisions (user, 2026-09-28)
+
+1. **The 216 Trakt drops** (TV shows imported dropped on 08-18, no season carrying it):
+   dropped on the **last season that has aired** (never an unaired one), so the show
+   can't revert to watching/planned; later unaired seasons → skipped (R2.16); earlier
+   seasons: all watched → completed, otherwise unchanged. Follow the rules. *The user has
+   another, unpolluted source for these (not practical now); they may rework these shows
+   in isolation later.*
+2. **Mine = everything the user reviewed during this rebuild (since step 0)**: every
+   season status from an accepted review, the gap decisions, the TVDB/phase-5 decisions →
+   `status_set_manually = 1`. What the engine derives afterwards is automatic.
+3. **Two runs**: now (write list for review) and at cutover (fresh live copy). **Labelled
+   snapshots before and after**, so a rollback is always possible. **The user won't watch
+   anything until the new setup is live** — the gap ends at the last watch logged below.
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
