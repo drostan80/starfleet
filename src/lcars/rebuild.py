@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -50,6 +49,7 @@ class Run:
     live: Path
     inputs: Path
     ledger: list = field(default_factory=list)
+    stage: str = ""
 
     def checkpoint(self, n: int) -> Path:
         return self.dir / f"{n:02d}-{STAGES[n - 1]}.db"
@@ -58,8 +58,8 @@ class Run:
         return self.dir / "work.db"
 
     def record(self, kind: str, key: str, outcome: str, detail: str = "") -> None:
-        entry = {"at": util.now_utc_iso(), "kind": kind, "key": key, "outcome": outcome,
-                 "detail": detail}
+        entry = {"at": util.now_utc_iso(), "stage": self.stage, "kind": kind, "key": key,
+                 "outcome": outcome, "detail": detail}
         self.ledger.append(entry)
         with open(self.dir / "ledger.jsonl", "a") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -142,7 +142,244 @@ def stage_sources(run: Run) -> None:
     run.record("stage", "sources", "applied", f"{fetched} AniDB answers ingested")
 
 
-STAGE_FUNCS = {"base": stage_base, "sources": stage_sources}
+# ── stage 3: structure (the user's decisions) ────────────────────────────
+
+
+def decisions(run: Run) -> dict:
+    return json.load(open(run.inputs / "rebuild-inputs" / "decisions.json"))
+
+
+def _mine(conn, season_id: str, status: str) -> None:
+    """A status the user decided in this rebuild's reviews (PLAN-DATA 9.1
+    decision 2: everything reviewed since step 0 is theirs)."""
+    from lcars import season_status_log
+
+    season_status_log.set_status(conn, season_id, status, "rebuild")
+    conn.execute("UPDATE season SET status_set_manually = 1 WHERE id = ?", (season_id,))
+
+
+def _show_for(conn, t: dict):
+    if t.get("show"):
+        row = conn.execute("SELECT * FROM show WHERE id = ?", (t["show"],)).fetchone()
+        if row is not None:
+            return row
+    if t.get("anilist"):
+        return conn.execute(
+            "SELECT sh.* FROM season z JOIN show sh ON sh.id = z.show_id WHERE z.anilist_id = ?"
+            " ORDER BY sh.tracked DESC", (t["anilist"],)).fetchone()
+    return None
+
+
+def _set_link(conn, show_id: str, service: str, value) -> None:
+    from lcars import shows
+
+    conn.execute("DELETE FROM show_external_id WHERE show_id = ? AND service = ?",
+                 (show_id, service))
+    if value is not None:
+        url = shows._EXTERNAL_ID_URL_TEMPLATES.get(service, "").format(id=value)
+        conn.execute(
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES (?, ?, ?, ?, ?)", (show_id, service, str(value), url, util.now_utc_iso()))
+
+
+def _as_pieces(conn, show_id: str) -> None:
+    """The show's seasons become special levels (placed later by Memory
+    Alpha, R1.8/R1.13a), keeping their status and list ids."""
+    conn.execute("UPDATE season SET kind = 'special', season_number = NULL,"
+                 " decimal_season_number = NULL, parent_id = NULL WHERE show_id = ?"
+                 " AND kind = 'tvdb_season'", (show_id,))
+
+
+def _tracked_tvdb_show(conn, tvdb_id, not_show=None):
+    return conn.execute(
+        "SELECT sh.* FROM show sh JOIN show_external_id x ON x.show_id = sh.id"
+        " WHERE x.service = 'tvdb' AND x.external_id = ? AND sh.tracked = 1 AND sh.id != ?"
+        " ORDER BY sh.created_at", (str(tvdb_id), not_show or "")).fetchone()
+
+
+def _fold_into(conn, winner: str, loser: str, why: str) -> None:
+    from lcars import show_merge
+
+    _as_pieces(conn, loser)
+    conn.execute("UPDATE season_status_change SET show_id = ? WHERE show_id = ?",
+                 (winner, loser))
+    tracked = conn.execute("SELECT tracked FROM show WHERE id = ?", (loser,)).fetchone()[0]
+    if tracked:
+        show_merge.merge_shows(conn, winner, loser, why)
+    else:  # an untracked piece: only its seasons (status, ids) come across
+        conn.execute("UPDATE season SET show_id = ? WHERE show_id = ?", (winner, loser))
+
+
+PIECE_FORMATS = {"MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC", "TV_SHORT_SPECIAL"}
+
+
+def _place_without_fribb(run: Run, conn, tvdb_id: str, anilist_index) -> dict:
+    """Seasons of a same-TVDB group Fribb can't place yet (new sequels, pieces;
+    the group exists because the user confirmed the TVDB link). The user's
+    standing rules: a sequel is a new season of the same show; a piece is its
+    own level; a season with no list id keeps the TVDB number Sonarr gave it.
+    Each placement is recorded for the 9.2 review."""
+    from lcars import anilist_client, consolidation
+
+    show_ids = consolidation._groups(conn).get(str(tvdb_id)) or []
+    from lcars import season_ranges
+
+    places = {sid: consolidation._fribb_place(
+        anilist_index, season_ranges.show_list_id(conn, sid, "anilist")) for sid in show_ids}
+    winner = next((sid for sid in show_ids if places[sid][0] == 1),
+                  show_ids[0] if show_ids else None)
+    top = conn.execute("SELECT MAX(season_number) FROM season WHERE show_id = ? AND"
+                       " kind = 'tvdb_season'", (winner,)).fetchone()[0] or 0
+    placed = {}
+    for sid in show_ids:
+        if sid == winner:
+            continue
+        for z in conn.execute(
+                "SELECT id, anilist_id, season_number FROM season WHERE show_id = ?"
+                " AND kind = 'tvdb_season' ORDER BY season_number", (sid,)).fetchall():
+            if consolidation._fribb_place(anilist_index, z["anilist_id"])[0] is not None:
+                continue
+            if z["anilist_id"] is None:
+                placed[z["id"]], why = (z["season_number"], 0), "no list id: its own TVDB number"
+            else:
+                facts = None
+                try:
+                    facts = anilist_client.fetch_media_facts(z["anilist_id"])
+                except anilist_client.AniListError:
+                    pass
+                fmt = ((facts or {}).get("format") or "").upper()
+                if fmt in PIECE_FORMATS:
+                    placed[z["id"]], why = (0, 0), f"{fmt}: its own level"
+                else:
+                    top += 1
+                    placed[z["id"]], why = (top, 0), f"{fmt or 'TV'} sequel: new TVDB season {top}"
+            run.record("placement", f"{tvdb_id}:{z['id']}", "applied",
+                       f"placed without Fribb (review in 9.2) — {why}")
+    return placed
+
+
+def stage_structure(run: Run) -> None:
+    from lcars import consolidation, fribb
+
+    conn = _connect(run.work())
+    d = decisions(run)
+
+    # a) the 1,700 accepted season statuses, by their 09-06 season ids (before
+    #    anything changes ids — merges and numbering carry them forward).
+    for s in d["season_statuses"]:
+        if conn.execute("SELECT 1 FROM season WHERE id = ?", (s["season"],)).fetchone() is None:
+            raise RebuildError(f"season status for a season not in 09-06: {s['key']}")
+        _mine(conn, s["season"], s["status"])
+        run.record("season_status", s["key"], "applied", s["status"])
+    conn.commit()
+
+    # b0) Show-level TVDB ids come from today's data — the latest fixes (PLAN-DATA
+    #     "TVDB alignment": 1,147 identical, 35 gained since 09-06, 0 conflicting);
+    #     season placement doesn't (Memory Alpha re-derives it).
+    conn.execute("ATTACH DATABASE ? AS live", (str(run.live),))
+    live_ids = dict(conn.execute(
+        "SELECT show_id, external_id FROM live.show_external_id WHERE service = 'tvdb'"))
+    by_list = dict(conn.execute(
+        "SELECT z.anilist_id, x.external_id FROM live.season z"
+        " JOIN live.show_external_id x ON x.show_id = z.show_id AND x.service = 'tvdb'"
+        " WHERE z.anilist_id IS NOT NULL"))
+    conn.execute("DETACH DATABASE live")
+    changed = gained = 0
+    for show in conn.execute("SELECT id FROM show WHERE tracked = 1").fetchall():
+        sid = show["id"]
+        today = live_ids.get(sid)
+        if today is None:
+            anilist = conn.execute("SELECT anilist_id FROM season WHERE show_id = ? AND"
+                                   " anilist_id IS NOT NULL ORDER BY season_number LIMIT 1",
+                                   (sid,)).fetchone()
+            today = by_list.get(anilist[0]) if anilist else None
+        if today is None:
+            continue
+        had = conn.execute("SELECT external_id FROM show_external_id WHERE show_id = ? AND"
+                           " service = 'tvdb'", (sid,)).fetchone()
+        if had is None or had[0] != today:
+            _set_link(conn, sid, "tvdb", today)
+            gained += had is None
+            changed += had is not None
+    run.record("tvdb_from_live", "all shows", "applied",
+               f"{gained} gained a TVDB id, {changed} changed to today's")
+    conn.commit()
+
+    # b) TVDB decisions (PLAN-DATA "TVDB decisions — authoritative").
+    folds = []
+    for t in d["tvdb"]:
+        show = _show_for(conn, t)
+        if show is None:
+            run.record("tvdb", t["key"], "deferred", "show created after 09-06 (new shows)")
+            continue
+        sid, action, value = show["id"], t["action"], t["value"]
+        detail = f"{action} {value or ''} on {sid}".strip()
+        if t.get("note_differs"):
+            detail += f" (user note differed: {t['note_differs']}; PLAN-DATA followed)"
+        if action == "series":
+            _set_link(conn, sid, "tvdb", value)
+        elif action == "movie":
+            _set_link(conn, sid, "tvdb", None)
+            _set_link(conn, sid, "tvdb_movie", value)
+        elif action == "own_show":
+            _set_link(conn, sid, "tvdb", None)  # R3.3 exception, user-checked
+            detail += " (R3.3: own show, no TVDB id — user-checked)"
+        elif action == "remove":
+            conn.execute("UPDATE show SET tracked = 0, status = 'skipped' WHERE id = ?", (sid,))
+        elif action == "parent" and conn.execute(
+                "SELECT 1 FROM show_external_id WHERE show_id = ? AND service = 'tvdb'"
+                " AND external_id = ?", (sid, str(value))).fetchone():
+            detail += " (already inside its parent show)"
+        elif action in ("parent", "parent_show"):
+            parent = (_tracked_tvdb_show(conn, value, sid) if action == "parent"
+                      else conn.execute(
+                          "SELECT * FROM show WHERE tracked = 1 AND id != ? AND"
+                          " (title_english = ? OR title_romaji LIKE ?) ORDER BY created_at",
+                          (sid, value, "Dungeon Meshi%")).fetchone())
+            if parent is None:
+                raise RebuildError(f"{t['key']}: parent {value} isn't a tracked show")
+            folds.append((parent["id"], sid, t["key"]))
+            detail += f" → folded into {parent['id']}"
+        run.record("tvdb", t["key"], "applied", detail)
+    conn.commit()
+    for parent_id, sid, key in folds:
+        _fold_into(conn, parent_id, sid, f"{key}: belongs to its parent show (PLAN-DATA)")
+    conn.commit()
+
+    # c) films fold into their show as a special level (PLAN-CODE 3.3).
+    dataset = fribb.load_dataset()
+    plan = consolidation.plan(conn, dataset, {})
+    into = {f["show_id"]: f["into"] for f in plan["films"]}
+    for f in d["phase5"]["films"]:
+        target = into.get(f["show"])
+        if target is None:
+            raise RebuildError(f"film {f['key']}: no show to fold into")
+        conn.execute("UPDATE season SET show_id = ?, kind = 'special', season_number = NULL,"
+                     " decimal_season_number = NULL WHERE show_id = ?", (target, f["show"]))
+        conn.execute("UPDATE season_status_change SET show_id = ? WHERE show_id = ?",
+                     (target, f["show"]))
+        conn.execute("UPDATE show SET tracked = 0 WHERE id = ?", (f["show"],))
+        run.record("film", f["key"], "applied", f"→ {target} (episode link after numbering)")
+    conn.commit()
+    # d) same-TVDB merges (all 181 OK, phase 5 page).
+    merged = set()
+    anilist_index = fribb.build_anilist_index(dataset)
+    for tvdb_id in sorted(consolidation._groups(conn)):
+        placed = _place_without_fribb(run, conn, tvdb_id, anilist_index)
+        result = consolidation.apply_group(conn, tvdb_id, dataset, placed)
+        if not result.get("merged"):
+            raise RebuildError(f"merge of TVDB {tvdb_id} stopped: {result.get('reason')}")
+        merged.update(result["merged"])
+        merged.add(result["winner"])
+    for m in d["phase5"]["merges"]:
+        outcome = "applied" if m["show"] in merged else "skipped"
+        run.record("merge", m["key"], outcome,
+                   "" if outcome == "applied" else "no longer shares its TVDB id")
+
+    run.record("stage", "structure", "applied", "")
+
+
+STAGE_FUNCS = {"base": stage_base, "sources": stage_sources, "structure": stage_structure}
 
 
 def main(argv=None) -> int:
@@ -167,11 +404,17 @@ def main(argv=None) -> int:
     run.dir.mkdir(parents=True, exist_ok=True)
     if args.from_stage > 1:
         _backup(run.checkpoint(args.from_stage - 1), run.work())
+    ledger = run.dir / "ledger.jsonl"
+    if ledger.exists():  # a re-run replaces what those stages recorded before
+        keep = [line for line in ledger.read_text().splitlines()
+                if STAGES.index(json.loads(line).get("stage") or "base") < args.from_stage - 1]
+        ledger.write_text("".join(line + "\n" for line in keep))
     for n in range(args.from_stage, args.until_stage + 1):
         name = STAGES[n - 1]
         if name not in STAGE_FUNCS:
             raise RebuildError(f"stage {n} ({name}) isn't built yet")
         print(f"stage {n}: {name}", flush=True)
+        run.stage = name
         STAGE_FUNCS[name](run)
         from lcars import db
 

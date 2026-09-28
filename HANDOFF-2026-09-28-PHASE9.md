@@ -133,7 +133,14 @@ Grep for any other outbound write before trusting it (`httpx.post`, `.patch(`, `
   `rebuild-inputs/decisions.json` (explicit actions; PLAN-DATA transcription wins over
   ambiguous notes — 2 differences flagged).
 - `src/lcars/rebuild.py` (`lcars rebuild`): stages base + sources done and run
-  (`~/starfleet-rebuild/run1/01-base.db`, `02-sources.db`). Next: stage 3 structure.
+  (`~/starfleet-rebuild/run1/01-base.db`, `02-sources.db`). Stage 3 (structure) written, part 1:
+  1,700 statuses by 09-06 id, today's TVDB ids from live (97 gained), 101 TVDB decisions,
+  19 films folded (before merges), merges with a placement override for 17 new groups
+  (20 seasons Fribb can't place: no list id → own number, piece → special, sequel → next
+  season; each in the ledger for the 9.2 review). **Last run stopped at the merge of TVDB
+  422090 — rerun stage 3 now that the override exists** (`--from-stage 3 --until-stage 3`,
+  env `LCARS_SONARR_URL`/`LCARS_RADARR_URL` for later stages). Stage 3 part 2 (adds: phase 5,
+  77 new shows, extra add, 178 skipped) and stages 4–9 not written yet.
 - Findings to report: local lcars.ini has tiny's old IP (use env overrides
   `LCARS_SONARR_URL=http://192.168.1.77:8989`, `LCARS_RADARR_URL=http://192.168.1.77:7878`);
   freeze ON by default (rebuild lifts it on its copy; prod at cutover = user's call);

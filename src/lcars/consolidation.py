@@ -156,13 +156,15 @@ def main(argv=None) -> int:
 # ── Applying one group, on your yes (review choice "merge") ────────────
 
 
-def apply_group(conn, tvdb_id: str, dataset: list[dict]) -> dict:
+def apply_group(conn, tvdb_id: str, dataset: list[dict], placed: dict | None = None) -> dict:
     """Folds every show sharing `tvdb_id` into its winner: each of their
     seasons first becomes the level the plan names (a cour → part of the TVDB
     season, the TVDB season's missing AniList/MAL id → linked, a new TVDB
     season, a season-0 piece), keeping its status; then the show merges
     (`show_merge.merge_shows`: episodes, watches, links). A season Fribb
-    can't place stops the group — nothing is written for it."""
+    can't place stops the group — nothing is written for it — unless
+    `placed` names its place: {season id: (TVDB season, episode offset)},
+    decided elsewhere (the rebuild, PLAN-CODE 9.1)."""
     from lcars import show_merge, util
 
     show_ids = _groups(conn).get(str(tvdb_id))
@@ -181,7 +183,7 @@ def apply_group(conn, tvdb_id: str, dataset: list[dict]) -> dict:
             "SELECT id, anilist_id, mal_id FROM season WHERE show_id = ? AND kind = 'tvdb_season'",
             (sid,),
         ).fetchall():
-            n, _offset = _fribb_place(anilist_index, z[1])
+            n, _offset = (placed or {}).get(z[0]) or _fribb_place(anilist_index, z[1])
             if n is None:
                 return {"merged": [], "reason": f"season {z[0]} has no TVDB place (Fribb)"}
     merged = []
@@ -190,7 +192,7 @@ def apply_group(conn, tvdb_id: str, dataset: list[dict]) -> dict:
             "SELECT id, anilist_id, mal_id FROM season WHERE show_id = ? AND kind = 'tvdb_season'",
             (sid,),
         ).fetchall():
-            n, _offset = _fribb_place(anilist_index, anilist_id)
+            n, _offset = (placed or {}).get(zid) or _fribb_place(anilist_index, anilist_id)
             if n == 0:
                 conn.execute(
                     "UPDATE season SET kind = 'special', season_number = NULL,"
