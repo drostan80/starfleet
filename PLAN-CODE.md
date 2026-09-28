@@ -243,6 +243,9 @@ in by the rebuild.
 
 ## Phase 4 — Status engine (R2.x; C1–C12, G1, G2, G5)
 
+**APPROVED 2026-09-28** (with 3.4 films moved into phase 5, next to the same-TVDB
+consolidation it shares its merge work with).
+
 **4.1 One module `lcars/status_rules.py`** holding every rule, replacing
 `inherit_season_status`, `new_season_status`, `auto_season_fields`,
 `is_users_own_season`, `_compute_show_status`, `_recompute_show_status`,
