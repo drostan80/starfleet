@@ -591,6 +591,7 @@ cutover moment, PLAN-DATA §2):
    | 2026-09-27 ~21:15 | Mushoku Tensei — S3, last aired episode (number not given) | S3 finished → completed. User also added the following entry on AniList: id **217434** (looks like S3 cour 2) — added on AniList directly |
    | 2026-09-27 ~22:00 (finished) | Overgeared — ep 1 | season/show → watching |
    | 2026-09-28 (reported) | Last Week Tonight with John Oliver — S13E24 | watched |
+   | 2026-09-28 (reported) | Animal Control — S05E01 | watched |
 
 2. **Live LCARS** (v0.2.70): watch events and status changes after 09-27 in the live DB
    (take a fresh `.backup` at cutover).
