@@ -350,12 +350,18 @@ Progress (2026-09-28):
 - **done** R2.13b (ac2f558). Reading: "skip every planned season after the last one
   watched" (with S1 completed, S2+S3 planned both get skipped) — to confirm.
 - **done** 5.3 step 2g review-only; AniDB drip 200/day cap (fa419b2).
-- **to do** R1.23: AniList/MAL lookups at season level, stop writing show-level rows;
-  browse/add through the add check (keep the "add as season N?" dialog); backfill
-  through it; 5.4 list adds (flag, off until phase 9); individual seasons (GraphQL
-  nullability, episode table rebuild); consolidation + films (3.4) dry-run tool;
-  actionable resolution for `add_check:*` and `same_tvdb_show` reviews (R4.8b);
-  numbering spans for part/special levels.
+- **done** R1.23 season-level ids (c654b93); your adds through the check (6af2f0d);
+  backfill + list adds behind `list_adds_enabled` (3a724b2); level spans (2af84af,
+  caef2d7); R1.13b every episode in a level + `Show.levels` (430ccd4); R1.0a placeholder
+  5000.x (c85d72c); R3.7b Japanese title search (85c1625); merge/films plan
+  `lcars consolidation` (3005288) and apply (ec1c29c); actionable reviews R4.8b +
+  individual seasons (614c25b).
+- **Moved on:** individual seasons hold no episodes yet (their status follows your
+  list; `episode.show_id` stays NOT NULL) → phase 7 (list progress) / 8 (UI).
+  Films (3.4) are listed; folding them in is part of the rebuild's apply step.
+- **Cutover blockers from phase 5** (resolved in phase 8): your own browse add with no
+  TVDB id still creates a show without one (R3.2) — until browse can show individual
+  seasons; reviews' choices need the UI to be clickable (the API is there).
 
 ## Phase 6 — Sonarr (R5.x; F2–F5, G6)
 
