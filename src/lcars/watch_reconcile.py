@@ -339,7 +339,11 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
                 pushes_left -= 1
                 stats["lcars_pushed"] += 1
             continue
-        if progress > 0:
+        # Only a change on the list is taken (as for statuses): progress the
+        # list already had when LCARS and the list last agreed is not new —
+        # it may be LCARS's own old push (PLAN-CODE 9.2, cutover guard).
+        list_changed = base["progress"] is None or progress != base["progress"]
+        if progress > 0 and list_changed:
             if show_id not in show_before:
                 show_before[show_id] = conn.execute(
                     "SELECT status FROM show WHERE id = ?", (show_id,)

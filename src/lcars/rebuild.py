@@ -389,6 +389,10 @@ def stage_structure(run: Run) -> None:
         conn.execute("UPDATE season_status_change SET show_id = ? WHERE show_id = ?",
                      (target, f["show"]))
         conn.execute("UPDATE show SET tracked = 0 WHERE id = ?", (f["show"],))
+        # The franchise's series id stays with the franchise: a film row holding
+        # it too stops Sonarr's episodes being filed for the show (R1.14).
+        conn.execute("DELETE FROM show_external_id WHERE show_id = ? AND service = 'tvdb'",
+                     (f["show"],))
         run.record("film", f["key"], "applied", f"→ {target} (episode link after numbering)")
     conn.commit()
     # d) same-TVDB merges (all 181 OK, phase 5 page).
@@ -655,7 +659,47 @@ def _structure_adds(run: Run, conn, d: dict) -> None:
     live.close()
 
 
-STAGE_FUNCS = {"base": stage_base, "sources": stage_sources, "structure": stage_structure}
+# ── stage 4: the Sonarr read (episodes, files, TVDB numbering) ────────────
+
+
+def stage_sonarr(run: Run) -> None:
+    """Every tracked episodic show whose TVDB series is in the Sonarr library:
+    episodes at TVDB season/episode, `tvdb_absolute`, files — `_fetch_sonarr`
+    alone (no AniList, art or synopsis fetch). Shows not in Sonarr keep the
+    episodes the 09-06 base has."""
+    from lcars import metadata, sonarr_client
+
+    conn = _connect(run.work())
+    rows = conn.execute(
+        "SELECT sh.* FROM show sh JOIN show_external_id x ON x.show_id = sh.id"
+        " AND x.service = 'tvdb' WHERE sh.tracked = 1 AND sh.media_shape = 'episodic'"
+        " ORDER BY sh.id").fetchall()
+    read = absent = failed = 0
+    for show in rows:
+        before = conn.execute("SELECT COUNT(*) FROM episode WHERE show_id = ?",
+                              (show["id"],)).fetchone()[0]
+        try:
+            metadata._fetch_sonarr(conn, dict(show))
+        except sonarr_client.SonarrError as e:
+            failed += 1
+            run.record("sonarr", show["id"], "skipped", f"Sonarr error: {e}")
+            continue
+        after = conn.execute("SELECT COUNT(*) FROM episode WHERE show_id = ?",
+                             (show["id"],)).fetchone()[0]
+        if conn.execute("SELECT 1 FROM episode WHERE show_id = ? AND sonarr_season IS NOT NULL",
+                        (show["id"],)).fetchone() or after != before:
+            read += 1
+        else:
+            absent += 1
+        conn.commit()
+    if failed:
+        raise RebuildError(f"{failed} Sonarr reads failed — see the ledger")
+    run.record("stage", "sonarr", "applied",
+               f"{read} shows read from Sonarr, {absent} not in the Sonarr library")
+
+
+STAGE_FUNCS = {"base": stage_base, "sources": stage_sources, "structure": stage_structure,
+               "sonarr": stage_sonarr}
 
 
 def main(argv=None) -> int:

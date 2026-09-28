@@ -845,3 +845,44 @@ def test_remote_drop_with_later_seasons_you_planned_asks_before_skipping_them(co
         "SELECT choices FROM pending_review WHERE field = 'later_planned' AND resolved_at IS NULL"
     ).fetchone()
     assert review is not None and "skip_later" in review["choices"]
+
+
+def test_list_progress_already_agreed_is_not_taken_again(conn, monkeypatch):
+    # The list shows 3 watched, but that's the value LCARS and the list last
+    # agreed on (e.g. an old LCARS push); LCARS has them unwatched now (the
+    # rebuild said so). Not a change on the list -> nothing is marked.
+    from lcars import list_baseline
+
+    _show(conn, "s-agr001", status="watching")
+    _season(conn, "z-agr001", "s-agr001", 1, anilist_id=105)
+    conn.execute("UPDATE season SET status = 'watching' WHERE id = 'z-agr001'")
+    for n in (1, 2, 3):
+        _episode(conn, f"e-agr00{n}", "s-agr001", 1, n, air_date=f"2020-01-0{n}T00:00:00Z")
+    list_baseline.record(conn, "anilist", 105, status="watching", progress=3, lcars_progress=0)
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(105, status="CURRENT", progress=3)])
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    watched = conn.execute("SELECT COUNT(*) FROM episode WHERE show_id = 's-agr001'"
+                           " AND state = 'watched'").fetchone()[0]
+    assert watched == 0
+
+
+def test_a_real_new_watch_on_the_list_is_still_taken(conn, monkeypatch):
+    from lcars import list_baseline
+
+    _show(conn, "s-agr002", status="watching")
+    _season(conn, "z-agr002", "s-agr002", 1, anilist_id=106)
+    conn.execute("UPDATE season SET status = 'watching' WHERE id = 'z-agr002'")
+    for n in (1, 2, 3):
+        _episode(conn, f"e-agr01{n}", "s-agr002", 1, n, air_date=f"2020-01-0{n}T00:00:00Z")
+    list_baseline.record(conn, "anilist", 106, status="watching", progress=1, lcars_progress=0)
+    conn.commit()
+    _configure_anilist(monkeypatch, [_entry(106, status="CURRENT", progress=2)])
+
+    watch_reconcile.reconcile_watch_progress(conn)
+
+    watched = conn.execute("SELECT COUNT(*) FROM episode WHERE show_id = 's-agr002'"
+                           " AND state = 'watched'").fetchone()[0]
+    assert watched == 2
