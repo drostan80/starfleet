@@ -191,8 +191,6 @@ episode fetch from intermediate snapshots/live DB; source tables (anidb_*,
 anime_list_*, tvmaze_*, …) carried from live into the rebuild ("essential — part of
 what works now"); reads of prod allowed; Sonarr multi-show routing deleted, not ported.
 
-### (original plan text)
-
 #### Phase 3 — Numbering: LCARS absolute numbers (R1.0, R1.2, R1.2a–b, R1.3–R1.5, R1.8, R1.18–19; A1–A5, G3, G4)
 
 **3.1 Memory Alpha numbering engine** (R1.2c: Memory Alpha is the authority) (`lcars/numbering.py`, replaces
