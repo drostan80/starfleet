@@ -1029,7 +1029,9 @@ def _resolve_arr_candidate(conn, input: dict) -> tuple[dict | None, dict]:
     return None, arr_result
 
 
-def search_arr_candidates(conn, media_shape: str, title: str) -> list[dict]:
+def search_arr_candidates(
+    conn, media_shape: str, title: str, original_title: str | None = None
+) -> list[dict]:
     """2026-08-18 — read-only Sonarr/Radarr search for Data's own `A`
     disambiguation picker, called *before* `addShowWithArr` rather than
     from inside it: the user picks a candidate here, then that exact
@@ -1040,8 +1042,16 @@ def search_arr_candidates(conn, media_shape: str, title: str) -> list[dict]:
     docstring), so this needed no changes to the write path at all.
     Returns the raw candidate list, genuinely empty (not an error) when
     the search itself found nothing or the relevant service isn't
-    configured — see `_lookup_arr`'s own docstring."""
-    return _lookup_arr(conn, media_shape, title)
+    configured — see `_lookup_arr`'s own docstring. RULEBOOK R3.7b: the
+    original (Japanese) title is searched too when given (Bless was only
+    found as ブレス); results merged without duplicates."""
+    results = _lookup_arr(conn, media_shape, title)
+    if original_title and original_title != title:
+        key = "tvdbId" if media_shape == "episodic" else "tmdbId"
+        seen = {r.get(key) for r in results}
+        results += [r for r in _lookup_arr(conn, media_shape, original_title)
+                    if r.get(key) not in seen]
+    return results
 
 
 def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:

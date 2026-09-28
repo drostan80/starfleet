@@ -215,3 +215,14 @@ def test_your_add_of_something_tracked_is_refused(conn, monkeypatch):
 
     with pytest.raises(shows.ShowInputError, match="already tracked"):
         _user_add(conn, monkeypatch, anilist_id=108465)
+
+
+def test_arr_search_also_tries_the_japanese_title(conn, monkeypatch):
+    # R3.7b: Bless was only found as ブレス.
+    from lcars import shows
+
+    found = {"Bless": [], "ブレス": [{"tvdbId": 1, "title": "Bless"}]}
+    monkeypatch.setattr(shows, "_lookup_arr", lambda conn, shape, term: list(found.get(term, [])))
+    assert shows.search_arr_candidates(conn, "episodic", "Bless", "ブレス") == [
+        {"tvdbId": 1, "title": "Bless"}
+    ]

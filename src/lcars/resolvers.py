@@ -1159,7 +1159,7 @@ def resolve_search(_, info, query, **page_args):
 
 
 @query.field("searchArrCandidates")
-def resolve_search_arr_candidates(_, info, media_shape, title):
+def resolve_search_arr_candidates(_, info, media_shape, title, original_title=None):
     """2026-08-18 — Data's own `A` disambiguation picker. Explicit
     dict-shaping below, not a bare passthrough of Sonarr's/Radarr's own
     raw response: those come back genuinely camelCase already
@@ -1171,7 +1171,7 @@ def resolve_search_arr_candidates(_, info, media_shape, title):
     gap that's easy to miss without a real end-to-end test."""
     conn = db.get_connection()
     try:
-        results = shows.search_arr_candidates(conn, media_shape, title)
+        results = shows.search_arr_candidates(conn, media_shape, title, original_title)
     except shows.ShowInputError as e:
         raise GraphQLError(str(e)) from e
     return [
