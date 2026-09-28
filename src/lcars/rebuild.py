@@ -248,14 +248,44 @@ def _place_without_fribb(run: Run, conn, tvdb_id: str, anilist_index) -> dict:
                 except anilist_client.AniListError:
                     pass
                 fmt = ((facts or {}).get("format") or "").upper()
+                start = _iso_date((facts or {}).get("startDate"))
+                inside = _season_airing_on(conn, winner, start) if start else None
                 if fmt in PIECE_FORMATS:
                     placed[z["id"]], why = (0, 0), f"{fmt}: its own level"
+                elif inside is not None:
+                    placed[z["id"]], why = (inside, 0), (
+                        f"{fmt or 'TV'} starting {start}: inside TVDB season {inside}'s airing")
                 else:
                     top += 1
-                    placed[z["id"]], why = (top, 0), f"{fmt or 'TV'} sequel: new TVDB season {top}"
+                    placed[z["id"]], why = (top, 0), (
+                        f"{fmt or 'TV'} starting {start or '?'}: new TVDB season {top}")
             run.record("placement", f"{tvdb_id}:{z['id']}", "applied",
                        f"placed without Fribb (review in 9.2) — {why}")
     return placed
+
+
+def _iso_date(fuzzy: dict | None) -> str | None:
+    if not fuzzy or not fuzzy.get("year"):
+        return None
+    return f"{fuzzy['year']:04d}-{fuzzy.get('month') or 1:02d}-{fuzzy.get('day') or 1:02d}"
+
+
+def _season_airing_on(conn, show_id: str, date: str) -> int | None:
+    """The TVDB season of `show_id` whose episodes were airing on `date`
+    (first episode − 14 days … last episode)."""
+    for n, first, last in conn.execute(
+            "SELECT season, MIN(air_date_utc), MAX(air_date_utc) FROM episode"
+            " WHERE show_id = ? AND season > 0 AND air_date_utc IS NOT NULL GROUP BY season",
+            (show_id,)):
+        if first and date >= _days_before(first[:10], 14) and date <= last[:10]:
+            return n
+    return None
+
+
+def _days_before(day: str, n: int) -> str:
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(day) - timedelta(days=n)).isoformat()
 
 
 def stage_structure(run: Run) -> None:

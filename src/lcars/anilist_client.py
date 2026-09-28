@@ -286,7 +286,7 @@ query ($mediaId: Int) {
   Media(id: $mediaId) {
     title { romaji english native }
     synonyms
-    startDate { year }
+    startDate { year month day }
     countryOfOrigin
     format
     episodes
