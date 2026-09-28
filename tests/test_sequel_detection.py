@@ -53,6 +53,15 @@ def conn(tmp_path):
             created_at TEXT NOT NULL DEFAULT '2026-01-01',
             updated_at TEXT NOT NULL DEFAULT '2026-01-01'
         );
+        CREATE TABLE season_external_id (
+            season_id TEXT NOT NULL REFERENCES season (id),
+            service TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            name TEXT,
+            url TEXT,
+            created_at TEXT NOT NULL DEFAULT '2026-01-01',
+            UNIQUE (season_id, service)
+        );
         CREATE TABLE show_external_id (
             show_id TEXT NOT NULL REFERENCES show (id),
             service TEXT NOT NULL,

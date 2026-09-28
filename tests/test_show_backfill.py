@@ -602,9 +602,9 @@ def test_backfill_related_show_with_its_own_tvdb_id_is_its_own_show(conn, monkey
     assert [r["tracked"] for r in rows] == [1, 1]
 
     anilist_links = conn.execute(
-        "SELECT show_id, external_id FROM show_external_id WHERE service = 'anilist'"
+        "SELECT show_id, anilist_id FROM season WHERE anilist_id IS NOT NULL"
     ).fetchall()
-    assert {r["external_id"] for r in anilist_links} == {"900", "950"}  # no id shared by two rows
+    assert {r["anilist_id"] for r in anilist_links} == {900, 950}  # R1.23: season level
 
 
 def test_backfill_no_longer_has_its_own_throttle_mechanism():

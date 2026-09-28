@@ -74,12 +74,7 @@ def is_users_own_season(
         return True
     if anilist_id is None:
         return False
-    row = conn.execute(
-        "SELECT 1 FROM show_external_id WHERE show_id = ? AND service = 'anilist'"
-        " AND external_id = ?",
-        (show_id, str(anilist_id)),
-    ).fetchone()
-    return row is not None
+    return show_list_id(conn, show_id, "anilist") == str(anilist_id)  # R1.23
 
 
 def auto_season_fields(
@@ -203,27 +198,35 @@ def upsert_season_external_id(
                 (season_id, service),
             )
 
-    if anilist_id is not None or mal_id is not None:
-        season_row = conn.execute(
-            "SELECT show_id, season_number FROM season WHERE id = ?", (season_id,)
+    # (Phase 5, R1.23: season 1's ids are no longer mirrored onto the show.)
+
+
+def show_list_id(conn: sqlite3.Connection, show_id: str, service: str) -> str | None:
+    """The show's AniList/MAL id for reading its metadata: its earliest season
+    carrying one (R1.23 — these ids are season level). Falls back to an old
+    show-level row until the rebuild removes them (PLAN-CODE 2.4)."""
+    row = conn.execute(
+        "SELECT x.external_id FROM season z JOIN season_external_id x ON x.season_id = z.id"
+        " WHERE z.show_id = ? AND x.service = ?"
+        " ORDER BY z.season_number IS NULL, z.season_number, z.part_number LIMIT 1",
+        (show_id, service),
+    ).fetchone()
+    if row is not None:
+        return row[0]
+    col = {"anilist": "anilist_id", "mal": "mal_id"}.get(service)
+    if col is not None:
+        row = conn.execute(
+            f"SELECT {col} FROM season WHERE show_id = ? AND {col} IS NOT NULL"
+            " ORDER BY season_number IS NULL, season_number, part_number LIMIT 1",
+            (show_id,),
         ).fetchone()
-        if season_row is not None and season_row["season_number"] == 1:
-            show_id = season_row["show_id"]
-            anilist_url = f"https://anilist.co/anime/{anilist_id}" if anilist_id else None
-            mal_url = f"https://myanimelist.net/anime/{mal_id}" if mal_id else None
-            for service, ext_id, url in (
-                ("anilist", anilist_id, anilist_url),
-                ("mal", mal_id, mal_url),
-            ):
-                if ext_id is None:
-                    continue
-                conn.execute(
-                    "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
-                    " VALUES (?, ?, ?, ?, ?)"
-                    " ON CONFLICT (show_id, service) DO UPDATE SET"
-                    " external_id = excluded.external_id, url = excluded.url",
-                    (show_id, service, str(ext_id), url, now),
-                )
+        if row is not None:
+            return str(row[0])
+    row = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = ?",
+        (show_id, service),
+    ).fetchone()
+    return row[0] if row is not None else None
 
 
 def check_subdivision_widths(conn: sqlite3.Connection) -> dict[str, int]:

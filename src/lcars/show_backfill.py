@@ -528,10 +528,8 @@ def _seed_status_from_anilist(conn, show_id: str, known_status: str | None = Non
     cfg = get_current()
     if not cfg.anilist_access_token:
         return
-    row = conn.execute(
-        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'anilist'",
-        (show_id,),
-    ).fetchone()
+    anilist_id = season_ranges.show_list_id(conn, show_id, "anilist")  # R1.23
+    row = {"external_id": anilist_id} if anilist_id is not None else None
     if row is None:
         return  # no AniList link resolved (Fribb miss, or genuinely no match) — nothing to seed
     if known_status is not None:

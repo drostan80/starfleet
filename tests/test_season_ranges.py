@@ -151,85 +151,17 @@ class TestUpsertSeasonExternalId:
         assert len(rows) == 1
         assert rows[0]["service"] == "anilist"
 
-    def test_season_one_syncs_show_external_id(self, conn):
-        """2026-09-22: show_external_id[anilist]/[mal] is supposed to be
-        season 1's own id by established convention — must be kept in
-        sync whenever season 1's own id is written through here."""
+    def test_season_ids_are_never_mirrored_onto_the_show(self, conn):
+        """R1.23 (phase 5): AniList/MAL ids are season level only."""
         _show(conn, "s-aaaaaa")
-        _season(conn, "z-aaaaaa", "s-aaaaaa", 1, anilist_id=100, mal_id=200)
+        _season(conn, "z-aaaaaa", "s-aaaaaa", 1, anilist_id=100)
         conn.commit()
-
         season_ranges.upsert_season_external_id(conn, "z-aaaaaa", 100, 200, "now")
         conn.commit()
-
-        rows = {
-            r["service"]: r["external_id"]
-            for r in conn.execute(
-                "SELECT service, external_id FROM show_external_id WHERE show_id = 's-aaaaaa'"
-            ).fetchall()
-        }
-        assert rows == {"anilist": "100", "mal": "200"}
-
-    def test_correcting_season_one_updates_stale_show_level_id(self, conn):
-        """The actual desync bug: a human correcting season 1's
-        anilist_id (e.g. resolving an identity_mismatch review via
-        setSeasonMapping) must not leave show_external_id pointing at
-        the old, now-wrong value."""
-        _show(conn, "s-aaaaaa")
-        _season(conn, "z-aaaaaa", "s-aaaaaa", 1, anilist_id=100)
-        conn.commit()
-        season_ranges.upsert_season_external_id(conn, "z-aaaaaa", 100, None, "now")
-        conn.commit()
-
-        # Season 1 gets corrected to a different real id.
-        season_ranges.upsert_season_external_id(conn, "z-aaaaaa", 999, None, "now")
-        conn.commit()
-
-        row = conn.execute(
-            "SELECT external_id FROM show_external_id"
-            " WHERE show_id = 's-aaaaaa' AND service = 'anilist'"
-        ).fetchone()
-        assert row["external_id"] == "999"
-
-    def test_season_two_does_not_touch_show_external_id(self, conn):
-        """Only season 1 is 'the show's' AniList entry by convention —
-        a later season's own id must never overwrite it."""
-        _show(conn, "s-aaaaaa")
-        _season(conn, "z-aaaaaa", "s-aaaaaa", 1, anilist_id=100)
-        _season(conn, "z-bbbbbb", "s-aaaaaa", 2, anilist_id=555)
-        conn.commit()
-        season_ranges.upsert_season_external_id(conn, "z-aaaaaa", 100, None, "now")
-        conn.commit()
-
-        season_ranges.upsert_season_external_id(conn, "z-bbbbbb", 555, None, "now")
-        conn.commit()
-
-        row = conn.execute(
-            "SELECT external_id FROM show_external_id"
-            " WHERE show_id = 's-aaaaaa' AND service = 'anilist'"
-        ).fetchone()
-        assert row["external_id"] == "100"
-
-    def test_clearing_season_one_id_does_not_delete_show_external_id(self, conn):
-        """Conservative — never clears show_external_id, same 'add/
-        correct, never delete' convention every other external-id write
-        already follows."""
-        _show(conn, "s-aaaaaa")
-        _season(conn, "z-aaaaaa", "s-aaaaaa", 1, anilist_id=100)
-        conn.commit()
-        season_ranges.upsert_season_external_id(conn, "z-aaaaaa", 100, None, "now")
-        conn.commit()
-
-        season_ranges.upsert_season_external_id(conn, "z-aaaaaa", None, None, "now")
-        conn.commit()
-
-        row = conn.execute(
-            "SELECT external_id FROM show_external_id"
-            " WHERE show_id = 's-aaaaaa' AND service = 'anilist'"
-        ).fetchone()
-        assert row is not None
-        assert row["external_id"] == "100"
-
+        assert conn.execute(
+            "SELECT COUNT(*) FROM show_external_id WHERE show_id = 's-aaaaaa'"
+        ).fetchone()[0] == 0
+        assert season_ranges.show_list_id(conn, "s-aaaaaa", "mal") == "200"
 
 # ---------------------------------------------------------------------------
 # Backfill script (compute_season_ranges)

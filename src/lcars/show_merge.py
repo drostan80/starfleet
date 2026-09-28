@@ -115,15 +115,16 @@ def find_candidate_pairs(conn) -> list[tuple[str, str, str]]:
           AND NOT EXISTS (
               SELECT 1 FROM show_external_id WHERE show_id = show.id AND service = 'anilist'
           )
+          AND NOT EXISTS (SELECT 1 FROM season WHERE show_id = show.id AND anilist_id IS NOT NULL)
         """
     ).fetchall()
     winners = conn.execute(
         """
         SELECT id, title_romaji, title_english, title_native FROM show
         WHERE tracked = 1 AND tracking_space = 'anime'
-          AND EXISTS (
+          AND (EXISTS (
               SELECT 1 FROM show_external_id WHERE show_id = show.id AND service = 'anilist'
-          )
+          ) OR EXISTS (SELECT 1 FROM season WHERE show_id = show.id AND anilist_id IS NOT NULL))
           AND NOT EXISTS (
               SELECT 1 FROM show_external_id WHERE show_id = show.id AND service = 'tvdb'
           )

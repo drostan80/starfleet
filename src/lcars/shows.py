@@ -460,15 +460,26 @@ def _find_parent_via_anilist(conn, anilist_id: int) -> dict | None:
     # Check if any of those prequel anilist_ids belong to a tracked show.
     placeholders = ",".join("?" for _ in prequel_anilist_ids)
     parent_row = conn.execute(
-        "SELECT sei.show_id AS parent_id,"
+        "SELECT z.show_id AS parent_id,"
         "       s.title_english, s.title_romaji, s.primary_title"
-        " FROM show_external_id sei"
-        " JOIN show s ON s.id = sei.show_id"
-        f" WHERE sei.service = 'anilist' AND sei.external_id IN ({placeholders})"
+        " FROM season z"
+        " JOIN show s ON s.id = z.show_id"
+        f" WHERE z.anilist_id IN ({placeholders})"  # R1.23: season level
         "   AND s.tracked = 1"
         " LIMIT 1",
-        prequel_anilist_ids,
+        [int(x) for x in prequel_anilist_ids],
     ).fetchone()
+    if parent_row is None:
+        parent_row = conn.execute(
+            "SELECT sei.show_id AS parent_id,"
+            "       s.title_english, s.title_romaji, s.primary_title"
+            " FROM show_external_id sei"
+            " JOIN show s ON s.id = sei.show_id"
+            f" WHERE sei.service = 'anilist' AND sei.external_id IN ({placeholders})"
+            "   AND s.tracked = 1"
+            " LIMIT 1",
+            prequel_anilist_ids,
+        ).fetchone()
     if parent_row is None:
         return None
     # stub_show_id is None — no local show for this anilist_id yet.
@@ -516,6 +527,11 @@ def find_existing_show(conn, input: dict) -> str | None:
     boundary has to be. Public (not `_`-prefixed): show_backfill.py
     calls it too, to tell a genuine new row apart from a promoted one
     for its own result reporting."""
+    from lcars import add_check  # deferred: add_check imports this module lazily
+
+    season = add_check._season_by_list_id(conn, input.get("anilist_id"), input.get("mal_id"))
+    if season is not None and season["show_id"] is not None:
+        return season["show_id"]  # R1.23: AniList/MAL ids are season level
     for service, key in (
         ("anilist", "anilist_id"),
         ("tvdb", "tvdb_id"),
@@ -561,11 +577,10 @@ def _promote_stub(conn, show_id: str, input: dict) -> str:
             "SELECT service FROM show_external_id WHERE show_id = ?", (show_id,)
         ).fetchall()
     }
+    _link_list_ids_to_season(conn, show_id, input)
     for service, key in (
-        ("anilist", "anilist_id"),
         ("tvdb", "tvdb_id"),
         ("imdb", "imdb_id"),
-        ("mal", "mal_id"),
     ):
         value = input.get(key)
         if value is not None and service not in existing_services:
@@ -593,6 +608,20 @@ def _promote_stub(conn, show_id: str, input: dict) -> str:
     metadata.fetch_and_populate(conn, show_id)
     conn.commit()
     return show_id
+
+
+def _link_list_ids_to_season(conn, show_id: str, input: dict) -> None:
+    """R1.23 (phase 5): the AniList/MAL id you add a show with is a season's,
+    never the show's — the TVDB season Fribb places it in, else season 1."""
+    anilist_id, mal_id = input.get("anilist_id"), input.get("mal_id")
+    if anilist_id is None and mal_id is None:
+        return
+    season_number = _resolve_fribb_season(anilist_id) if anilist_id is not None else None
+    metadata._upsert_season(
+        conn, show_id, season_number or 1,
+        int(anilist_id) if anilist_id is not None else None,
+        int(mal_id) if mal_id is not None else None,
+    )
 
 
 def create_show(conn, input: dict) -> str:
@@ -710,10 +739,8 @@ def create_show(conn, input: dict) -> str:
     )
 
     for service, key in (
-        ("anilist", "anilist_id"),
         ("tvdb", "tvdb_id"),
         ("imdb", "imdb_id"),
-        ("mal", "mal_id"),
     ):
         value = input.get(key)
         if value is not None:
@@ -733,6 +760,7 @@ def create_show(conn, input: dict) -> str:
             (show_id, str(tmdb_id), url, now),
         )
 
+    _link_list_ids_to_season(conn, show_id, input)
     conn.commit()
     events.publish("show_created", show_id)  # events.py, 2026-08-25 — see _promote_stub's own note
 
@@ -745,62 +773,6 @@ def create_show(conn, input: dict) -> str:
     conn.commit()
 
     return show_id
-
-
-def flag_possible_sequel(conn, show_id: str) -> None:
-    """Post-create sequel check for the id-blind auto-create paths
-    (Sonarr/Radarr webhooks' SeriesAdd/MovieAdded, reconcileArrState's
-    untracked-show discovery) — these call `create_show` with only a
-    tvdb_id/tmdb_id, no anilist_id (nothing in a webhook payload or an
-    Sonarr/Radarr catalog entry carries one), so `create_show`'s own
-    pre-insert `find_sequel_parent` call there can only ever use tier 2
-    (TVDB/Wikidata same-TVDB duplicate) — tiers 1 and 3, the ones that
-    actually catch an anime sequel, need an anilist_id neither path
-    supplies. By the time `create_show` returns, its own inline
-    `metadata.fetch_and_populate` has already resolved the anilist_id
-    (for an anime show) and written its AniList relations to
-    `show_relation` — so this re-runs `find_sequel_parent` now that data
-    exists, and flags a `pending_review` instead of raising (there's no
-    human in this loop to answer `SequelDetectedError`). A no-op for a
-    non-anime show (no anilist_id ever gets resolved) or when no sequel
-    relationship is found.
-
-    Deliberately never called from the interactive `create_show`/
-    `skip_sequel_check` path: that path either already caught this
-    pre-insert (tier 3, a live AniList query — no local anilist_id
-    existed yet to make it self-match) or the user explicitly said "not
-    a sequel," and re-litigating that decision here via the review
-    queue would recreate the exact "loops back to the same dialog" bug
-    `skip_sequel_check` itself was built to fix."""
-    row = conn.execute(
-        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'anilist'",
-        (show_id,),
-    ).fetchone()
-    if row is None:
-        return
-    sequel = find_sequel_parent(conn, int(row["external_id"]))
-    if sequel is None:
-        return
-
-    import json
-    field = f"possible_sequel_of:{sequel['parent_show_id']}"
-    value = json.dumps({
-        "parentShowId": sequel["parent_show_id"],
-        "parentTitle": sequel["parent_title"],
-        "nextSeason": sequel["next_season"],
-    }, ensure_ascii=False)
-    existing_unresolved = conn.execute(
-        "SELECT 1 FROM pending_review"
-        " WHERE entity_type = 'show' AND entity_id = ? AND field = ?"
-        "   AND resolved_at IS NULL",
-        (show_id, field),
-    ).fetchone()
-    if existing_unresolved is not None:
-        return
-    if pending_review.already_resolved_with(conn, "show", show_id, field, value):
-        return
-    pending_review.open_or_extend(conn, "show", show_id, field, "anilist", None, value)
-    conn.commit()
 
 
 def skip_show(conn, input: dict) -> str:

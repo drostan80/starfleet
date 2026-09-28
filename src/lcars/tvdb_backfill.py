@@ -49,23 +49,25 @@ free — no separate due-tracking of its own — and a show this pass does
 resolve is never reconsidered.
 """
 
-from lcars import fribb, shows
+from lcars import fribb, season_ranges, shows
 
 
 def backfill_tvdb_ids(conn) -> int:
     """Returns the count of shows that actually got a new `tvdb` link
     written — never every show checked, same "count real changes, not
     every check" convention every other Phase B poller here uses."""
-    candidates = conn.execute(
-        "SELECT s.id AS show_id, link.external_id AS anilist_id"
-        " FROM show s"
-        " JOIN show_external_id link ON link.show_id = s.id AND link.service = 'anilist'"
+    candidates = []
+    for row in conn.execute(
+        "SELECT s.id FROM show s"
         " WHERE s.tracked = 1 AND s.media_shape = 'episodic'"
         " AND NOT EXISTS ("
         "   SELECT 1 FROM show_external_id tvdb_link"
         "   WHERE tvdb_link.show_id = s.id AND tvdb_link.service = 'tvdb'"
         " )"
-    ).fetchall()
+    ).fetchall():
+        anilist_id = season_ranges.show_list_id(conn, row[0], "anilist")  # R1.23
+        if anilist_id is not None:
+            candidates.append({"show_id": row[0], "anilist_id": anilist_id})
     if not candidates:
         return 0
 

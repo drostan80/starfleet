@@ -783,7 +783,9 @@ async def test_add_show_anilist_fetch_no_media_found_leaves_show_bare(client, mo
     show = await add_show(client, anilistId=12345)
     data = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
     assert data["show"]["posterUrl"] is None
-    assert data["show"]["seasons"]["edges"] == []
+    # R1.23 (phase 5): the AniList id you added it with sits on its season.
+    seasons = data["show"]["seasons"]["edges"]
+    assert [(e["node"]["seasonNumber"], e["node"]["anilistId"]) for e in seasons] == [(1, 12345)]
 
 
 async def test_add_show_sonarr_fetch_creates_episodes(client, monkeypatch):
@@ -2558,11 +2560,13 @@ async def test_add_show_metadata_fetch_skips_silently_when_not_configured(client
 
 
 async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(client, monkeypatch):
-    monkeypatch.setattr(
-        anilist_client,
-        "fetch_media",
-        lambda *a, **kw: (_ for _ in ()).throw(anilist_client.AniListError("Could not connect")),
+    down = lambda *a, **kw: (_ for _ in ()).throw(  # noqa: E731
+        anilist_client.AniListError("Could not connect")
     )
+    monkeypatch.setattr(anilist_client, "fetch_media", down)
+    # AniList is down for every call (the season you added it with now
+    # exists from the start, so the airing-schedule call runs too).
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", down)
     show = await add_show(client, anilistId=12345)
 
     bare = await gql(client, SHOW_METADATA_QUERY, {"id": show["id"]}, headers=auth_headers())
@@ -2573,7 +2577,7 @@ async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(cl
     assert reviews[0]["entityType"] == "show"
     assert reviews[0]["field"] == "metadata_fetch"
     assert reviews[0]["source"] == "anilist"
-    assert reviews[0]["proposedValueChain"] == ["Could not connect"]
+    assert set(reviews[0]["proposedValueChain"]) == {"Could not connect"}  # fetch + schedule
 
     # §6.7, B.6 — the same failure that opened the pending_review above
     # also recorded a service_health entry, through metadata._guarded's
@@ -2756,11 +2760,7 @@ async def test_mal_fallback_skips_shared_mal_id(client, monkeypatch):
     # show2 at show1's MAL id (88888), mimicking what a backfill or
     # relation-stub promotion would produce.
     conn = db.get_connection()
-    conn.execute(
-        "UPDATE show_external_id SET external_id = '88888'"
-        " WHERE show_id = ? AND service = 'mal'",
-        (show2["id"],),
-    )
+    conn.execute("UPDATE season SET mal_id = 88888 WHERE show_id = ?", (show2["id"],))
     conn.commit()
 
     # Now AniList goes down
@@ -3824,9 +3824,9 @@ async def test_anilist_air_date_reconciliation_skips_a_season_with_no_anilist_id
     client, monkeypatch
 ):
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
-    # fetch_media returns None (default fixture behavior) — season 1 never
-    # gets an anilist_id at all, so the reconciliation loop has nothing to
-    # iterate; fetch_airing_schedule must never even be called.
+    # No AniList id anywhere (TV show, tvdb only) — no season carries one,
+    # so the reconciliation loop has nothing to iterate;
+    # fetch_airing_schedule must never even be called.
     calls = []
     monkeypatch.setattr(
         anilist_client,
@@ -3839,7 +3839,7 @@ async def test_anilist_air_date_reconciliation_skips_a_season_with_no_anilist_id
 
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
-    await add_show(client, anilistId=12345)
+    await add_show(client, trackingSpace="TV", tvdbId=555)
     assert calls == []
 
 

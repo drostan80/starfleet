@@ -185,6 +185,8 @@ def _guarded(conn, show: dict, service: str, fn: Callable[[object, dict], None])
 
 
 def _external_id(conn, show_id: str, service: str) -> str | None:
+    if service in ("anilist", "mal"):
+        return season_ranges.show_list_id(conn, show_id, service)  # R1.23
     row = conn.execute(
         "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = ?",
         (show_id, service),
@@ -230,6 +232,8 @@ def _ensure_anilist_link(conn, show: dict) -> None:
     index = fribb.build_tvdb_index(dataset)
     candidate = fribb.resolve_season_candidate(index, int(tvdb_id_str), 1)
     anilist_id, _mal_id = fribb.extract_ids(candidate)
+    # R1.23: the id goes on the season Fribb places it in, not "season 1".
+    season_number = ((candidate or {}).get("season") or {}).get("tvdb") or 1
     if anilist_id is None:
         pending_review.open_or_extend(
             conn,
@@ -243,11 +247,7 @@ def _ensure_anilist_link(conn, show: dict) -> None:
         conn.commit()
         return
 
-    conn.execute(
-        "INSERT OR IGNORE INTO show_external_id (show_id, service, external_id, url, created_at)"
-        " VALUES (?, 'anilist', ?, ?, ?)",
-        (show["id"], str(anilist_id), f"https://anilist.co/anime/{anilist_id}", util.now_utc_iso()),
-    )
+    _upsert_season(conn, show["id"], season_number, anilist_id, _mal_id, source="fribb")
     conn.commit()
 
 
@@ -454,9 +454,10 @@ def _fetch_mal_fallback(conn, show: dict) -> None:
     # num_episodes, which is the total across all parts) into each split
     # part's columns.  Skip instead — the data is ambiguous.
     (shared_count,) = conn.execute(
-        "SELECT COUNT(DISTINCT show_id) FROM show_external_id"
-        " WHERE service = 'mal' AND external_id = ?",
-        (mal_id_str,),
+        "SELECT COUNT(DISTINCT show_id) FROM ("
+        " SELECT show_id FROM show_external_id WHERE service = 'mal' AND external_id = ?"
+        " UNION SELECT show_id FROM season WHERE mal_id = ?)",  # R1.23: season level too
+        (mal_id_str, int(mal_id_str)),
     ).fetchone()
     if shared_count > 1:
         log.info(
@@ -824,6 +825,9 @@ def _existing_related_show(conn, anilist_id: str, mal_id) -> str | None:
     within one relation walk too — two edges on the same parent
     show's own relations list resolve to one stub, not two, the same
     write-time-not-snapshot shape the B.11e fix already established."""
+    season = add_check._season_by_list_id(conn, int(anilist_id), mal_id)  # R1.23
+    if season is not None and season["show_id"] is not None:
+        return season["show_id"]
     row = conn.execute(
         "SELECT show_id FROM show_external_id WHERE service = 'anilist' AND external_id = ?",
         (anilist_id,),
@@ -901,7 +905,8 @@ def _add_related(conn, anilist_id: int, node: dict, relation_type: str | None) -
 
 
 def _upsert_season(
-    conn, show_id: str, season_number: int, anilist_id: int | None, mal_id: int | None
+    conn, show_id: str, season_number: int, anilist_id: int | None, mal_id: int | None,
+    *, source: str = "manual",
 ) -> None:
     """A caller-supplied id at addShow time is the same class of
     "a human already confirmed this" information setSeasonMapping
@@ -915,7 +920,20 @@ def _upsert_season(
         (show_id, season_number),
     ).fetchone()
     if existing is not None:
-        if existing["manual_override"]:
+        if existing["manual_override"] or source != "manual":
+            # Yours (or a dataset's guess): never overwritten, only an id it
+            # lacks is filled in.
+            conn.execute(
+                "UPDATE season SET anilist_id = COALESCE(anilist_id, ?),"
+                " mal_id = COALESCE(mal_id, ?), updated_at = ? WHERE id = ?",
+                (anilist_id, mal_id, now, existing["id"]),
+            )
+            row = conn.execute(
+                "SELECT anilist_id, mal_id FROM season WHERE id = ?", (existing["id"],)
+            ).fetchone()
+            season_ranges.upsert_season_external_id(
+                conn, existing["id"], row["anilist_id"], row["mal_id"], now
+            )
             return
         conn.execute(
             "UPDATE season SET anilist_id = ?, mal_id = ?, source = 'manual',"
@@ -927,12 +945,13 @@ def _upsert_season(
         season_ranges.upsert_season_external_id(conn, existing["id"], anilist_id, mal_id, now)
         return
     season_id = ids.generate_id(conn, "z")
+    manual = 1 if source == "manual" else 0
     conn.execute(
         "INSERT INTO season"
         " (id, show_id, season_number, status, anilist_id, mal_id, source, matched,"
         "  manual_override, created_at, updated_at)"
-        " VALUES (?, ?, ?, 'planned', ?, ?, 'manual', 1, 1, ?, ?)",
-        (season_id, show_id, season_number, anilist_id, mal_id, now, now),
+        " VALUES (?, ?, ?, 'planned', ?, ?, ?, 1, ?, ?, ?)",
+        (season_id, show_id, season_number, anilist_id, mal_id, source, manual, now, now),
     )
     # S2 dual-write (see season_ranges.py)
     season_ranges.upsert_season_external_id(conn, season_id, anilist_id, mal_id, now)

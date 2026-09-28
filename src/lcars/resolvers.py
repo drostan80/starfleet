@@ -1600,6 +1600,21 @@ def resolve_show_external_ids(obj, info, **page_args):
     synthetic = _synthetic_arr_add_edge(obj, connection["edges"])
     if synthetic is not None:
         connection["edges"] = [*connection["edges"], synthetic]
+    # R1.23 (phase 5): AniList/MAL ids are stored per season; the show's
+    # badge shows its earliest season's until the UI goes per season (phase 8).
+    present = {e["node"]["service"] for e in connection["edges"]}
+    conn = db.get_connection()
+    for service, template in (("anilist", "https://anilist.co/anime/{}"),
+                              ("mal", "https://myanimelist.net/anime/{}")):
+        if service in present:
+            continue
+        value = season_ranges.show_list_id(conn, obj["id"], service)
+        if value is not None:
+            connection["edges"].append({
+                "node": {"show_id": obj["id"], "service": service, "external_id": value,
+                         "url": template.format(value), "created_at": obj["created_at"]},
+                "cursor": f"season:{service}",
+            })
     return connection
 
 
@@ -2532,23 +2547,8 @@ def _correct_child_ids(conn, child_id, corrected_tvdb_id, corrected_anilist_id, 
             (corrected_tvdb_id, child_id),
         )
     if corrected_anilist_id is not None:
-        existing = conn.execute(
-            "SELECT 1 FROM show_external_id WHERE show_id = ? AND service = 'anilist'",
-            (child_id,),
-        ).fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE show_external_id SET external_id = ?"
-                " WHERE show_id = ? AND service = 'anilist'",
-                (str(corrected_anilist_id), child_id),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
-                " VALUES (?, 'anilist', ?, ?, ?)",
-                (child_id, str(corrected_anilist_id),
-                 f"https://anilist.co/anime/{corrected_anilist_id}", now),
-            )
+        # R1.23 (phase 5): the corrected AniList id goes on the child's season.
+        metadata._upsert_season(conn, child_id, 1, int(corrected_anilist_id), None)
 
 
 @show_merge_type.field("winnerShow")
