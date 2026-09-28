@@ -79,9 +79,11 @@ def test_a_new_shows_first_season_is_the_users_and_stays_synced(conn):
     assert list_sync == 1
 
 
-def test_show_status_change_never_pushes_a_list_sync_0_season(conn, monkeypatch):
-    # Real incident class: every show status change pushed every season,
-    # which would have added 86 auto-created "dropped" seasons to the lists.
+def test_every_season_but_skipped_is_pushed(conn, monkeypatch):
+    # Phase 7 (R4.5, R4.6): a season LCARS added itself is mirrored too;
+    # only skipped never is.
+    from lcars import list_sync
+
     config.set_current(config.Config(anilist_access_token="a", mal_access_token="m"))
     anilist_calls, mal_calls = [], []
     monkeypatch.setattr(
@@ -95,16 +97,12 @@ def test_show_status_change_never_pushes_a_list_sync_0_season(conn, monkeypatch)
     _show(conn, "s-rule05", "watching")
     _season(conn, "z-rule05", "s-rule05", 1, "completed", anilist_id=100, mal_id=200)
     _season(conn, "z-rule06", "s-rule05", 2, "dropped", anilist_id=101, mal_id=201, list_sync=0)
+    _season(conn, "z-rule08", "s-rule05", 3, "skipped", anilist_id=102, mal_id=202, list_sync=0)
     conn.commit()
-
-    resolvers._push_show_status(conn, "s-rule05", "completed")
-    resolvers._push_mal_show_status(conn, "s-rule05", "completed")
-    season = dict(conn.execute("SELECT * FROM season WHERE id = 'z-rule06'").fetchone())
-    resolvers._push_season_progress(conn, season)
-    resolvers._push_mal_season_status(conn, season, "dropped")
-
-    assert anilist_calls == [100]
-    assert mal_calls == [200]
+    for zid in ("z-rule05", "z-rule06", "z-rule08"):
+        list_sync.push(conn, zid)
+    assert anilist_calls == [100, 101]
+    assert mal_calls == [200, 201]
 
 
 def test_acting_on_a_season_turns_list_sync_on(conn):

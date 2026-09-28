@@ -7508,7 +7508,7 @@ async def test_add_show_pushes_status_at_creation(client, monkeypatch):
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
     show = await add_show(client, anilistId=999)
     assert show["status"] == "PLANNED"  # LCARS's own enum value
-    assert calls == [(999, {"status": "PLANNING"})]  # AniList's own enum value
+    assert calls == [(999, {"status": "PLANNING", "progress": 0})]  # phase 7: per season
 
 
 async def test_add_show_no_status_push_without_anilist_link(client, monkeypatch):

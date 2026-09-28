@@ -413,6 +413,31 @@ def update_my_list_status(
             client.close()
 
 
+def delete_my_list_status(token: str, mal_id: int, client: httpx.Client | None = None) -> None:
+    """Phase 7 (RULEBOOK R2.10): removes the entry from your MAL list —
+    `DELETE /v2/anime/{mal_id}/my_list_status`. Already absent (404) is
+    success, not an error."""
+    owns_client = client is None
+    client = client or httpx.Client(timeout=10.0)
+    try:
+        try:
+            response = client.delete(
+                f"{API_BASE_URL}/anime/{mal_id}/my_list_status",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except httpx.ConnectError as e:
+            raise MALError("Could not connect to MyAnimeList") from e
+        except httpx.TimeoutException as e:
+            raise MALError("Timed out talking to MyAnimeList") from e
+        if response.status_code == 401:
+            raise MALAuthError("MyAnimeList rejected the access token (401 Unauthorized)")
+        if response.status_code >= 400 and response.status_code != 404:
+            raise MALError(f"MyAnimeList returned an error: HTTP {response.status_code}")
+    finally:
+        if owns_client:
+            client.close()
+
+
 def fetch_my_list(token: str, client: httpx.Client | None = None) -> list[dict]:
     """The authenticated user's entire MAL anime list — the read side of
     the MAL bidirectional sync (2026-08-26), counterpart to

@@ -44,6 +44,7 @@ from lcars import (
     identity_mismatch,
     ids,
     list_baseline,
+    list_sync,
     local_audit,
     mal_client,
     mal_reconcile,
@@ -253,8 +254,11 @@ def _season_list_sync(conn, season_id: str) -> bool:
     acted on (`season.list_sync = 0`): nothing about it may be written to
     AniList/MAL (user rule, 2026-09-25). Every season-level push checks
     this; the show-level fanouts filter on the column directly."""
-    row = conn.execute("SELECT list_sync FROM season WHERE id = ?", (season_id,)).fetchone()
-    return row is None or bool(row["list_sync"])
+    # Phase 7 (R4.5, R4.6, R3.6b): every season that isn't skipped is
+    # mirrored; `list_sync` no longer gates anything.
+    return list_sync.pushable(
+        conn, conn.execute("SELECT * FROM season WHERE id = ?", (season_id,)).fetchone()
+    )
 
 
 def _enable_list_sync(conn, season: dict) -> None:
@@ -300,33 +304,6 @@ def _push_show_score(conn, show_id: str, show_score) -> None:
     ).fetchall()
     for season in seasons:
         _push_season_score(conn, dict(season), show_score)
-
-
-def _push_show_status(conn, show_id: str, status: str) -> None:
-    """Push status to AniList for every linked season.  Each season uses
-    its own per-season status when set (2.1c), falling back to the
-    show-level status passed in."""
-    cfg = config.get_current()
-    if not cfg.anilist_access_token:
-        return
-    seasons = conn.execute(
-        "SELECT id, anilist_id, status AS season_status"
-        " FROM season WHERE show_id = ? AND anilist_id IS NOT NULL AND list_sync = 1",
-        (show_id,),
-    ).fetchall()
-    for season in seasons:
-        effective = season["season_status"] or status
-        anilist_status = _STATUS_TO_ANILIST.get(effective)
-        if anilist_status is None:
-            continue  # 'skipped' — no AniList equivalent
-        try:
-            list_baseline.anilist_save(
-                conn, cfg.anilist_access_token, season["anilist_id"], status=anilist_status
-            )
-        except anilist_client.AniListError as e:
-            pending_review.open_or_extend(
-                conn, "season", season["id"], "anilist_push", "anilist", None, str(e)
-            )
 
 
 def _push_season_status(conn, season: dict, status: str) -> None:
@@ -535,7 +512,9 @@ def _apply_status_effects(
             )
             if push:
                 _push_season_completed_at(conn, season_id, season.get("anilist_id"), at)
-        if push and new and new != "skipped":
+        if push and new == "skipped":
+            list_sync.delete_if_auto_skipped(conn, season_id, _old)  # R2.10
+        elif push and new:
             _push_season_status(conn, season, new)
             _push_mal_season_status(conn, season, new)
     if push:
@@ -638,28 +617,11 @@ def _push_season_progress(conn, season: dict) -> None:
 
 
 def _push_show_episode_progress(conn, show_id: str, season_number: int) -> None:
-    """Looks up the one season row for this show+season_number and
-    pushes its recomputed progress — the shared entry point every
-    watch/unwatch mutation below calls (addWatchEvent,
-    deleteWatchEvent, markSeasonWatched, markEpisodeRangeWatched):
-    "episode watched"/"episode un-watched" are the
-    same push operation, not two, since progress is always recomputed
-    fresh from current episode.state rather than incremented/
-    decremented (todo.md's write-mirror enumeration originally listed
-    them as two separate gaps; they collapse into one function here).
-    No-ops silently if this show has no season row at all (e.g. a
-    movie's watch event, season is None)."""
-    if season_number is None:
-        return
-    season = conn.execute(
-        "SELECT * FROM season WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
-        (show_id, season_number),
-    ).fetchone()
-    if season is None:
-        return
-    season = dict(season)
-    _enable_list_sync(conn, season)
-    _push_season_progress(conn, season)
+    """After watches (addWatchEvent, deleteWatchEvent, markSeasonWatched,
+    markEpisodeRangeWatched): every level of the show whose progress moved is
+    pushed to AniList and MAL, each counting only its own episodes (phase 7,
+    R1.23 — a cour's progress is the cour's)."""
+    list_sync.push_progress_for_show(conn, show_id)
 
 
 # -- MAL push (§6.1/§6.9, B.10) ----------------------------------------------
@@ -726,33 +688,6 @@ def _push_mal_show_score(conn, show_id: str, show_score) -> None:
         _push_mal_season_score(conn, dict(season), show_score)
 
 
-def _push_mal_show_status(conn, show_id: str, status: str) -> None:
-    """Push status to MAL for every linked season.  Each season uses
-    its own per-season status when set (2.1c), falling back to the
-    show-level status passed in."""
-    cfg = config.get_current()
-    if not cfg.mal_access_token:
-        return
-    seasons = conn.execute(
-        "SELECT id, mal_id, status AS season_status"
-        " FROM season WHERE show_id = ? AND mal_id IS NOT NULL AND list_sync = 1",
-        (show_id,),
-    ).fetchall()
-    for season in seasons:
-        effective = season["season_status"] or status
-        mal_status = _STATUS_TO_MAL.get(effective)
-        if mal_status is None:
-            continue  # 'skipped' — no MAL equivalent
-        try:
-            list_baseline.mal_save(
-                conn, cfg.mal_access_token, season["mal_id"], status=mal_status
-            )
-        except mal_client.MALError as e:
-            pending_review.open_or_extend(
-                conn, "season", season["id"], "mal_push", "mal", None, str(e)
-            )
-
-
 def _push_mal_season_progress(conn, season: dict) -> None:
     """Mirrors _push_season_progress (AniList) — pushes this season's own
     recomputed episode-watched high-water mark to MAL's
@@ -777,17 +712,8 @@ def _push_mal_season_progress(conn, season: dict) -> None:
 
 
 def _push_mal_show_episode_progress(conn, show_id: str, season_number: int) -> None:
-    """MAL counterpart to _push_show_episode_progress — same one-season
-    lookup, same no-op on a movie/absent season."""
-    if season_number is None:
-        return
-    season = conn.execute(
-        "SELECT * FROM season WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
-        (show_id, season_number),
-    ).fetchone()
-    if season is None:
-        return
-    _push_mal_season_progress(conn, dict(season))
+    """MAL progress goes with AniList's in `_push_show_episode_progress`
+    (phase 7: one push per level, both lists)."""
 
 
 def _get_episode_numbering_mapping(conn, mapping_id: str) -> dict | None:
@@ -2140,7 +2066,10 @@ def resolve_add_show(_, info, input):
     except shows.ShowInputError as e:
         raise GraphQLError(str(e)) from e
     show = _get_show(conn, show_id)
-    _push_show_status(conn, show_id, show["status"])
+    for (season_id,) in conn.execute(
+        "SELECT id FROM season WHERE show_id = ?", (show_id,)
+    ).fetchall():
+        list_sync.push(conn, season_id)  # phase 7: each season its own entry (R1.23)
     return show
 
 
@@ -2160,7 +2089,10 @@ def resolve_add_show_with_arr(_, info, input):
     except shows.ShowInputError as e:
         raise GraphQLError(str(e)) from e
     show = _get_show(conn, show_id)
-    _push_show_status(conn, show_id, show["status"])
+    for (season_id,) in conn.execute(
+        "SELECT id FROM season WHERE show_id = ?", (show_id,)
+    ).fetchall():
+        list_sync.push(conn, season_id)  # phase 7: each season its own entry (R1.23)
     return {
         "show": show,
         # snake_case keys — convert_names_case=True (server.py) maps these to
