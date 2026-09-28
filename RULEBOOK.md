@@ -41,7 +41,8 @@ rule applies to TV series, ask — do not assume.
   kept only as a **mapping** to the LCARS episode.
 - **R1.2b Decimal scheme** `[clarified 2026-09-27, Q-F]`: items in one gap are
   numbered `.1`, `.2`, … after the preceding whole number (two specials between
-  ep 5 and ep 6 → 5.1, 5.2). An item before ep 1 is 0.x — Frieren's pre-air
+  ep 5 and ep 6 → 5.1, 5.2). **One item alone in a gap → `.5`** (5.5) — it looks
+  better. `[clarified 2026-09-28, Q-U]` An item before ep 1 is 0.x — Frieren's pre-air
   3-episode block shown as one film is S1E0.5 → abs **0.5**.
 - **R1.3** Specials, OVAs, minis… take either a **whole** absolute number or a
   **decimal** one, depending on logic:
@@ -148,6 +149,13 @@ show X
   air date may be used, carefully — the numbering still follows every rule above
   (season 0 episodes get their numbers too, R1.8). It is **reconciled once the
   authoritative source (AniDB / TVmaze) has the data**.
+  **Build model** `[clarified 2026-09-28]`: absolute numbers are first derived from
+  TVDB order + air date (best guess), **then reconciled with AniDB as its data comes
+  in**. The rebuilt database may ship before AniDB data is complete — an exception
+  to the clean-data start, accepted by the user because ~1,330 AniDB entries are still
+  missing after a month of fetching; it also exercises the fallback and the
+  reconciliation. AniDB fetching is paced safely, in this order: shows missing data
+  that are watching → planned → the rest → a re-check of shows with existing data.
 - **R1.2c Memory Alpha is the authority that sets every episode's absolute
   number** (season 0 included), from AniDB + Fribb (anime) and TVmaze with
   specials (TV), air date deciding conflicts. Sonarr/TVDB/AniDB/AniList numbers
@@ -555,7 +563,7 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
   TVDB order + air date and put it on a list for you, or leave it unnumbered and
   listed until the source has it?
 
-- **Q-U (R1.2b, R1.5, R1.9a)** **One** special alone in a gap (e.g. a single OVA **[OPEN]**
+- **Q-U (R1.2b, R1.5, R1.9a)** **One** special alone in a gap (e.g. a single OVA **[ANSWERED → R1.2b]**
   between ep 5 and ep 6): does it take **5.1** (R1.2b's `.1, .2…`) or **5.5**
   (like Frieren's 0.5 and the N.5 season numbers)? Two or more stay 5.1, 5.2….
 
@@ -583,3 +591,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — Q-T asked (numbering fallback when AniDB/TVmaze have no data).
 - 2026-09-28 — Q-T answered → R1.2d (TVDB-order fallback following all rules, reconciled when the source appears).
 - 2026-09-28 — Q-U asked (single special in a gap: .1 or .5).
+- 2026-09-28 — R1.2d build model (TVDB-order first, reconcile with AniDB; ship before AniDB is complete; AniDB fetch priority); Q-U answered → R1.2b (single item → .5).
