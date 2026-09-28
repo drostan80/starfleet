@@ -594,6 +594,9 @@ Read back from the page's `decisions` collection (228 entries).
    snapshots before and after**, so a rollback is always possible. **The user won't watch
    anything until the new setup is live** — the gap ends at the last watch logged below.
 
+4. **Freeze** (user, 2026-09-28): lift it at cutover (`LCARS_AUTOMATION_FROZEN=0`) — the
+   issues that triggered it are fixed by the rebuild code.
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
