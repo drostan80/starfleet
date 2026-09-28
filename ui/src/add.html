@@ -961,16 +961,17 @@
 
 <!-- ── Scripts ─────────────────────────────────────────── -->
 <script type="module">
-import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=22';
+import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=23';
 import { bootstrapConfig, applyAppName } from './js/config.js?v=5';
-import { showBanner, hideBanner } from './js/calendar.js?v=45';
-import { initSearch } from './js/search.js?v=5';
+import { showBanner, hideBanner } from './js/calendar.js?v=46';
+import { initSearch } from './js/search.js?v=6';
+import { withConfirmation } from './js/status-picker.js?v=2';
 import {
   initBrowse, teardownBrowse, setBrowseType,
   parseSequelError, confirmSequelAttach, attachSequel,
   parseLaterSeasonError, confirmAddSeason1,
   pickCorrectParent, attachSequelToChosenParent,
-} from './js/browse.js?v=15';
+} from './js/browse.js?v=16';
 
 applyAppName();
 await bootstrapConfig();
@@ -1194,7 +1195,7 @@ async function handleSequelOrLaterSeason(err, card, status) {
     const choice = await confirmSequelAttach(sequel);
     if (choice === 'attach') {
       await attachSequel(sequel);
-      if (status !== 'PLANNED') await setStatus(sequel.parentShowId, status);
+      if (status !== 'PLANNED') await withConfirmation((c) => setStatus(sequel.parentShowId, status, c));
       setCardTracked(card, sequel.parentShowId, status);
       showBanner(`Attached as Season ${sequel.nextSeason} of ${sequel.parentTitle}`, 'ok');
       return 'handled';
@@ -1206,7 +1207,7 @@ async function handleSequelOrLaterSeason(err, card, status) {
         const attached = await attachSequelToChosenParent(
           chosen.id, sequel.sequelAnilistId, sequel.sequelMalId,
         );
-        if (status !== 'PLANNED') await setStatus(attached.parentShowId, status);
+        if (status !== 'PLANNED') await withConfirmation((c) => setStatus(attached.parentShowId, status, c));
         setCardTracked(card, attached.parentShowId, status);
         showBanner(`Attached as Season ${attached.nextSeason} of ${attached.parentTitle}`, 'ok');
       } else {
@@ -1236,7 +1237,7 @@ async function handleSequelOrLaterSeason(err, card, status) {
     };
     const show = await addShow(s1Input);
     if (status !== 'PLANNED' && show.status !== status) {
-      await setStatus(show.id, status);
+      await withConfirmation((c) => setStatus(show.id, status, c));
       show.status = status;
     }
     setCardTracked(card, show.id, show.status || status);
@@ -1262,7 +1263,7 @@ async function onChipClick(card, cand, status) {
   if (trackedShowId) {
     card.classList.add('loading');
     try {
-      await setStatus(trackedShowId, status);
+      await withConfirmation((c) => setStatus(trackedShowId, status, c));
       setCardTracked(card, trackedShowId, status);
       showBanner(`Status → ${STATUS_LABELS[status]}`, 'ok');
     } catch (err) {
@@ -1294,7 +1295,7 @@ async function onChipClick(card, cand, status) {
       }
       // addShow creates as PLANNED — need setStatus follow-up
       if (show.status !== status) {
-        await setStatus(show.id, status);
+        await withConfirmation((c) => setStatus(show.id, status, c));
         show.status = status;
       }
     } else {
@@ -1330,7 +1331,7 @@ async function onChipClick(card, cand, status) {
       }
       // addShowWithArr creates as PLANNED — setStatus if needed
       if (status !== 'PLANNED' && show.status !== status) {
-        await setStatus(show.id, status);
+        await withConfirmation((c) => setStatus(show.id, status, c));
         show.status = status;
       }
     }

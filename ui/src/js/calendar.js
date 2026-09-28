@@ -9,13 +9,13 @@
  */
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=22';
-import { openArtPicker } from './art-picker.js?v=4';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=23';
+import { openArtPicker } from './art-picker.js?v=5';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,
-  STATUS_ICONS, STATUS_ICON_CLASS,
-} from './status-picker.js?v=1';
+  STATUS_ICONS, STATUS_ICON_CLASS, withConfirmation,
+} from './status-picker.js?v=2';
 import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg, SVC_ICONS } from './icons.js?v=16';
 import { startDownload } from './downloads.js?v=2';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
@@ -906,19 +906,7 @@ export async function onWatchToggle(btn, ep) {
 export async function onStatusChange(wrap, showId, newStatus) {
   if (newStatus === wrap.dataset.status) return;
   try {
-    try {
-      await setStatus(showId, newStatus);
-    } catch (err) {
-      // Completion guard — prompt for confirmation
-      if (newStatus === 'COMPLETED' && err.message?.includes('confirmed: true')) {
-        if (!confirm('This show still has unaired or undated episodes. Mark completed anyway?')) {
-          return;
-        }
-        await setStatus(showId, newStatus, true);
-      } else {
-        throw err;
-      }
-    }
+    await withConfirmation((confirmed) => setStatus(showId, newStatus, confirmed));
 
     // Update every status button for this show (multiple episodes may share it)
     document.querySelectorAll(`.status-btn-wrap[data-show-id="${showId}"]`).forEach(w => {

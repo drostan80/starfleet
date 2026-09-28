@@ -22,19 +22,19 @@ import {
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=22';
+} from './api.js?v=23';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange,
-} from './calendar.js?v=45';
+} from './calendar.js?v=46';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
-  STATUSES_5, STATUS_LABELS, STATUS_ICON_CLASS,
-} from './status-picker.js?v=1';
+  STATUSES_6, STATUS_LABELS, withConfirmation, STATUS_ICON_CLASS,
+} from './status-picker.js?v=2';
 import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=16';
 import { startDownload } from './downloads.js?v=2';
-import { openArtPicker } from './art-picker.js?v=4';
+import { openArtPicker } from './art-picker.js?v=5';
 
 /* ── Constants ───────────────────────────────────────────── */
 
@@ -1361,7 +1361,7 @@ function renderSeasons(show, body, cfg, targetSeason) {
       if (anidbMode) {
         renderAnidbOrder(show, content, cfg);
       } else {
-        renderBroadcastOrder(show, content, cfg, targetSeason);
+        renderLevelOrder(show, content, cfg, targetSeason);
       }
       section.appendChild(content);
     });
@@ -1375,7 +1375,7 @@ function renderSeasons(show, body, cfg, targetSeason) {
 
   // Initial broadcast order render
   const content = el('div', 'sp-season-content');
-  renderBroadcastOrder(show, content, cfg, targetSeason);
+  renderLevelOrder(show, content, cfg, targetSeason);
   section.appendChild(content);
 
   body.appendChild(section);
@@ -1584,375 +1584,117 @@ function buildAnidbEpRow(ep, show, cfg) {
 
 /* ── Broadcast order (original season/episode layout) ── */
 
-function renderBroadcastOrder(show, section, cfg, targetSeason) {
-  // ── 1. Group episodes by season number ──
-  const epsBySeason = new Map();
-  for (const ep of show.episodes) {
-    const sn = ep.season ?? 0;
-    if (!epsBySeason.has(sn)) epsBySeason.set(sn, []);
-    epsBySeason.get(sn).push(ep);
-  }
-
-  // Build season map from Season rows
-  const seasonMap = new Map();
-  for (const s of show.seasons) {
-    seasonMap.set(s.seasonNumber, s);
-  }
-
-  // ── 2. Partition season-0 episodes: interleave / minisode / remainder ──
-  const s0Eps = epsBySeason.get(0) || [];
-  const interleaveEps = []; // non-REGULAR with integer absoluteNumber → special cards
-  const minisodeEps = [];   // fractional absoluteNumber (e.g. 1.1, 2.1) → inline rows
-  const s0Remainder = [];   // stay in the Specials card at the bottom
-  for (const ep of s0Eps) {
-    if (ep.kind !== 'REGULAR' && ep.absoluteNumber != null) {
-      if (ep.absoluteNumber % 1 !== 0) {
-        minisodeEps.push(ep);
-      } else {
-        interleaveEps.push(ep);
-      }
-    } else {
-      s0Remainder.push(ep);
-    }
-  }
-
-  // ── 3. Collect non-zero season numbers, descending ──
-  const allSeasonNums = new Set([...epsBySeason.keys(), ...seasonMap.keys()]);
-  const hasSeasonZero = allSeasonNums.has(0);
-  allSeasonNums.delete(0);
-  const sorted = [...allSeasonNums].sort((a, b) => b - a);
-
-  // ── 4. Derive abs range per season ──
-  function seasonAbsRange(sn) {
-    const sd = seasonMap.get(sn);
-    if (sd?.absStart != null && sd?.absEnd != null) return [sd.absStart, sd.absEnd];
-    // Fall back to min/max of regular episodes' absoluteNumber
-    const eps = (epsBySeason.get(sn) || []).filter(e => e.kind === 'REGULAR' && e.absoluteNumber != null);
-    if (!eps.length) return null;
-    const nums = eps.map(e => e.absoluteNumber);
-    return [Math.min(...nums), Math.max(...nums)];
-  }
-
-  // ── 5. Build render plan: [{type:'season'|'special', ...}] in descending order ──
-  const plan = [];
-  const placed = new Set(); // track interleaved eps by id
-
-  for (const sn of sorted) {
-    const seasonData = seasonMap.get(sn) || null;
-    const eps = (epsBySeason.get(sn) || []).slice();
-    eps.sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
-    const range = seasonAbsRange(sn);
-
-    // Find specials that fall inside this season's abs range
-    const insideSpecials = [];
-    if (range) {
-      for (const sp of interleaveEps) {
-        if (placed.has(sp.id)) continue;
-        if (sp.absoluteNumber > range[0] && sp.absoluteNumber < range[1]) {
-          insideSpecials.push(sp);
-        }
-      }
-      insideSpecials.sort((a, b) => a.absoluteNumber - b.absoluteNumber);
-    }
-
-    if (insideSpecials.length > 0) {
-      // Split season at each special's position
-      // Work out abs number for each regular ep: use absStart + (episode-1) if season has absStart
-      const sdAbsStart = seasonData?.absStart;
-      function epAbsNum(ep) {
-        if (ep.absoluteNumber != null) return ep.absoluteNumber;
-        if (sdAbsStart != null) return sdAbsStart + (ep.episode - 1);
-        return null;
-      }
-
-      // Build segments in ascending order, then reverse for descending display
-      const segments = []; // [{type:'season'|'special', ...}]
-      let remaining = eps.slice();
-      for (const sp of insideSpecials) {
-        const before = [];
-        const after = [];
-        for (const ep of remaining) {
-          const absN = epAbsNum(ep);
-          if (absN != null && absN <= sp.absoluteNumber) before.push(ep);
-          else after.push(ep);
-        }
-        if (before.length) {
-          const firstEp = before[0].episode;
-          const lastEp = before[before.length - 1].episode;
-          segments.push({
-            type: 'season', sn, seasonData, eps: before, show,
-            rangeLabel: `(ep ${firstEp}–${lastEp})`,
-          });
-        }
-        segments.push({ type: 'special', ep: sp });
-        placed.add(sp.id);
-        remaining = after;
-      }
-      if (remaining.length) {
-        const firstEp = remaining[0].episode;
-        const lastEp = remaining[remaining.length - 1].episode;
-        segments.push({
-          type: 'season', sn, seasonData, eps: remaining, show,
-          rangeLabel: `(ep ${firstEp}–${lastEp})`,
-        });
-      }
-      // Reverse so higher episodes appear first (descending page order)
-      segments.reverse();
-      let splitIdx = 0;
-      for (const seg of segments) {
-        if (seg.type === 'season') {
-          seg.suffix = splitIdx > 0 ? `-split-${splitIdx}` : '';
-          splitIdx++;
-        }
-        plan.push(seg);
-      }
-    } else {
-      // No splits — render whole season
-      plan.push({ type: 'season', sn, seasonData, eps, show, rangeLabel: null, suffix: '' });
-    }
-
-  }
-
-  // Place any remaining interleave candidates that weren't placed inside a season
-  // Sort by absoluteNumber descending to match the page order
-  const unplaced = interleaveEps.filter(ep => !placed.has(ep.id));
-  unplaced.sort((a, b) => b.absoluteNumber - a.absoluteNumber);
-
-  // Insert unplaced specials into the plan at their correct descending position.
-  // Plan is descending (highest abs first). A special at absNum X goes before
-  // the first season segment whose absEnd < X (i.e., after all higher content).
-  for (const sp of unplaced) {
-    let insertIdx = plan.length; // default: end (before season 0)
-    for (let i = 0; i < plan.length; i++) {
-      const item = plan[i];
-      if (item.type === 'season') {
-        const range = seasonAbsRange(item.sn);
-        if (range && range[1] < sp.absoluteNumber) {
-          insertIdx = i;
-          break;
-        }
-      }
-    }
-    plan.splice(insertIdx, 0, { type: 'special', ep: sp });
-    placed.add(sp.id);
-  }
-
-  // ── 5b. Attach minisode episodes to the season they belong to ──
-  // Minisodes have fractional abs numbers (e.g. 1.1 follows regular ep #1)
-  // Group by Math.floor(absoluteNumber) to find host season
-  for (const item of plan) {
-    if (item.type !== 'season') continue;
-    const range = seasonAbsRange(item.sn);
-    if (!range) continue;
-    const attached = [];
-    for (const mini of minisodeEps) {
-      const hostAbs = Math.floor(mini.absoluteNumber);
-      if (hostAbs >= range[0] && hostAbs <= range[1]) {
-        attached.push(mini);
-      }
-    }
-    if (attached.length) item.minisodes = attached;
-  }
-
-  // ── 6. Determine target / startOpen ──
-  const targetExists = targetSeason != null &&
-    (allSeasonNums.has(targetSeason) || (targetSeason === 0 && hasSeasonZero));
-  const effectiveTarget = targetExists ? targetSeason : null;
-  const firstSeason = sorted[0]; // newest season number
-
-  // Track score value spans per season for cross-segment updates
-  const seasonScoreSpans = new Map(); // sn → [span, ...]
-
-  // ── 7. Render the plan ──
-  for (const item of plan) {
-    if (item.type === 'special') {
-      renderSpecialCard(item.ep, show, section, cfg);
-    } else {
-      const { sn, seasonData: sd, eps, rangeLabel, suffix } = item;
-      const isTarget = effectiveTarget != null && sn === effectiveTarget;
-      const isFirst = sn === firstSeason;
-      const startOpen = isTarget || (effectiveTarget == null && isFirst);
-
-      renderSeasonCard(sn, sd, eps, show, section, cfg, startOpen, {
-        idSuffix: suffix,
-        rangeLabel,
-        scoreSpans: seasonScoreSpans,
-        minisodes: item.minisodes || [],
-      });
-    }
-  }
-
-  // ── 8. Season 0 remainder ──
-  if (s0Remainder.length) {
-    s0Remainder.sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
-    const sd = seasonMap.get(0) || null;
-    const startOpen = effectiveTarget != null && effectiveTarget === 0;
-    renderSeasonCard(0, sd, s0Remainder, show, section, cfg, startOpen, {
-      idSuffix: '', rangeLabel: null, scoreSpans: seasonScoreSpans,
-    });
-  }
-
+/** RULEBOOK R1.0a: an absolute number from 5000 up is a placeholder (no air
+ * date yet) — shown as x. */
+export function fmtAbs(n) {
+  if (n == null) return '—';
+  return n >= 5000 ? '#x' : `#${n}`;
 }
 
-/* ── Special / film interleave card ────────────────────── */
-
-/** The shared, manual-only cover for all of this show's episodes of a
- * given kind (df50e70a1faa, 2026-09-22) — null if none has been set,
- * in which case the caller falls back to show.posterUrl. */
-function episodeKindPosterUrl(show, kind) {
-  if (kind === 'SPECIAL') return show.specialPosterUrl;
-  if (kind === 'OVA') return show.ovaPosterUrl;
-  if (kind === 'BONUS_MOVIE') return show.bonusMoviePosterUrl;
-  return null;
+/** A level's heading (RULEBOOK R1.9a, R1.10, R1.13b): TVDB seasons by
+ * number, side pieces by their decimal number, the rest by their label. */
+function levelLabel(level) {
+  const n = level.decimalSeasonNumber;
+  const num = n == null ? null : n >= 5000 ? 'x' : String(n).replace(/\.0$/, '');
+  switch (level.kind) {
+    case 'tvdb_season':
+      return level.seasonNumber === 0 ? 'Specials' : `Season ${level.seasonNumber}`;
+    case 'individual_season':
+      return level.label || 'Individual season';
+    case 'part':
+      return level.label || `Part ${level.partNumber ?? ''}`.trim();
+    default:
+      if (level.parentId) return level.label || 'Minis';
+      return level.label && !/^Side piece/.test(level.label)
+        ? `${num != null ? `Season ${num} · ` : ''}${level.label}`
+        : `Season ${num ?? 'x'}`;
+  }
 }
 
-function renderSpecialCard(ep, show, container, cfg) {
-  const card = el('div', 'sp-special-card');
-
-  // Poster — a linked movie show's own poster (most specific) wins,
-  // then this kind's shared cover if one's set, then the regular poster.
-  const posterCol = el('div', 'sp-special-poster');
-  const posterSrc = ep.linkedMovieShow?.posterUrl
-    || episodeKindPosterUrl(show, ep.kind)
-    || show.posterUrl;
-  let posterImg = null;
-  if (posterSrc) {
-    posterImg = el('img');
-    posterImg.src = posterSrc;
-    posterImg.alt = ep.title || 'Special';
-    posterImg.onerror = () => { posterImg.remove(); posterCol.style.background = 'var(--surface-3)'; };
-    posterCol.appendChild(posterImg);
+/**
+ * PLAN-CODE 8.2 — the show page per level (RULEBOOK R1.10–R1.13b): each
+ * level's episodes are exactly the ones its spans hold (Season.episodeIds),
+ * nothing guessed here. Newest first; a side piece or film sits at its
+ * decimal place (R1.13a); parts and mini sub-seasons are nested under their
+ * TVDB season, whose own card keeps only the episodes no sub-level shows.
+ */
+function renderLevelOrder(show, section, cfg, targetSeason) {
+  const epById = new Map(show.episodes.map(ep => [ep.id, ep]));
+  const levels = show.levels || [];
+  const children = new Map();
+  for (const lv of levels) {
+    if (!lv.parentId) continue;
+    if (!children.has(lv.parentId)) children.set(lv.parentId, []);
+    children.get(lv.parentId).push(lv);
   }
-  // Editing here sets the shared cover for every episode of this kind —
-  // doesn't apply to a bonus-movie already linked to its own tracked
-  // show (edit that show's own poster instead).
-  if (!ep.linkedMovieShow) {
-    posterCol.classList.add('sp-poster-clickable');
-    posterCol.title = `Set cover for all ${ep.kind.replace('_', ' ').toLowerCase()} episodes`;
-    posterCol.appendChild(el('span', 'sp-poster-edit-hint sp-poster-edit-hint-sm', '🖼'));
-    posterCol.addEventListener('click', () => {
-      openArtPicker(show, null, 'poster', posterImg, (url) => {
-        if (ep.kind === 'SPECIAL') show.specialPosterUrl = url;
-        else if (ep.kind === 'OVA') show.ovaPosterUrl = url;
-        else if (ep.kind === 'BONUS_MOVIE') show.bonusMoviePosterUrl = url;
-      }, (msg) => showBanner(msg, 'error'), ep.kind);
-    });
-  }
-  card.appendChild(posterCol);
+  const order = (a, b) => (b.decimalSeasonNumber ?? -1) - (a.decimalSeasonNumber ?? -1);
+  const top = levels.filter(lv => !lv.parentId).sort(order);
 
-  // Info
-  const info = el('div', 'sp-special-info');
+  const epsOf = (lv, exclude = new Set()) => (lv.episodeIds || [])
+    .filter(id => !exclude.has(id)).map(id => epById.get(id)).filter(Boolean);
 
-  // Top row: badge + title (linked if BONUS_MOVIE with linkedMovieShow)
-  const topRow = el('div', 'sp-special-top-row');
-  const kindInfo = KIND_BADGE[ep.kind] || { label: 'Special', cls: 'special' };
-  topRow.appendChild(el('span', `sp-special-badge ${kindInfo.cls}`, kindInfo.label));
+  const tvdbNumbers = top.filter(lv => lv.kind === 'tvdb_season').map(lv => lv.seasonNumber);
+  const effectiveTarget = targetSeason != null && tvdbNumbers.includes(targetSeason)
+    ? targetSeason : null;
+  const newest = top.find(lv => lv.kind === 'tvdb_season' && lv.seasonNumber > 0);
+  const scoreSpans = new Map();
 
-  const title = ep.linkedMovieShow
-    ? document.createElement('a')
-    : el('span', 'sp-special-title');
-  if (ep.linkedMovieShow) {
-    title.className = 'sp-special-title';
-    title.href = `show.html?id=${ep.linkedMovieShow.id}`;
-    title.textContent = ep.linkedMovieShow.displayTitle || ep.title || 'Film';
-  } else {
-    title.textContent = ep.title || 'TBA';
-  }
-  topRow.appendChild(title);
-  info.appendChild(topRow);
+  const card = (lv, eps, nested, startOpen, extra = {}) => renderSeasonCard(
+    lv.kind === 'tvdb_season' ? lv.seasonNumber : lv.decimalSeasonNumber,
+    lv, eps, show, section, cfg, startOpen,
+    { levelLabel: levelLabel(lv), kind: lv.kind, nested, scoreSpans, ...extra },
+  );
+  const absOf = (ep) => ep?.absoluteNumber ?? Infinity;
 
-  // Bottom row: abs number, air date, play button, watch toggle
-  const bottomRow = el('div', 'sp-special-bottom-row');
-  bottomRow.appendChild(el('span', 'sp-ep-abs', `#${ep.absoluteNumber}`));
-  bottomRow.appendChild(el('span', 'sp-ep-airdate', fmtDate(ep.airDateUtc)));
+  const shown = new Set();
+  for (const lv of top) {
+    const subs = (children.get(lv.id) || []).sort(
+      (a, b) => (a.partNumber ?? 0) - (b.partNumber ?? 0) || order(b, a));
+    const parts = subs.filter(c => c.kind === 'part');
+    // A mini group (R1.13b) is nested; a single piece aired inside the
+    // season sits at its air-order place, splitting the season's card (R1.13a).
+    const groups = subs.filter(c => c.kind !== 'part' && /minis$/i.test(c.label || ''));
+    const pieces = subs.filter(c => c.kind !== 'part' && !groups.includes(c))
+      .sort((a, b) => absOf(epById.get(b.episodeIds?.[0])) - absOf(epById.get(a.episodeIds?.[0])));
+    const inSubs = new Set(subs.flatMap(c => c.episodeIds || []));
+    const isTarget = effectiveTarget != null && lv.kind === 'tvdb_season'
+      && lv.seasonNumber === effectiveTarget;
+    const startOpen = isTarget || (effectiveTarget == null && lv === newest);
 
-  // mpv play button
-  const mpvCell = el('div', 'sp-ep-mpv');
-  const filePath = ep.filePathRadarr || ep.filePathSonarr;
-  const canPlay = ep.availableLocally && filePath;
-  const effectiveShape = ep.kind === 'BONUS_MOVIE' ? 'MOVIE' : show.mediaShape;
-  const avail = epAvailState(ep, effectiveShape, show.durationMinutes);
-  const mpvIcon = el('span', `sp-mpv-icon ${canPlay ? 'available' : 'unavailable'}`);
-  if (canPlay) {
-    mpvIcon.innerHTML = _mpvSvg;
-    mpvIcon.addEventListener('click', () => launchMpv(filePath, cfg, {
-      showId: show.id,
-      season: ep.season,
-      episode: ep.episode,
-      watched: (ep.watchEvents?.edges?.length > 0) ||
-               (Array.isArray(ep.watchEvents) && ep.watchEvents.length > 0),
-    }));
-  } else {
-    mpvIcon.textContent = avail === 'downloading' ? '⬇' : avail === 'airing' ? '●' : '◷';
-  }
-  mpvCell.appendChild(mpvIcon);
-  bottomRow.appendChild(mpvCell);
-
-  // Download button
-  const dlCell = el('div', 'sp-ep-dl');
-  if (canPlay) {
-    const dlIcon = el('span', 'sp-dl-icon available');
-    dlIcon.innerHTML = _downloadSvg;
-    dlIcon.title = 'Download';
-    dlIcon.addEventListener('click', () => {
-      startDownload({
-        showTitle: show.displayTitle,
-        label: ep.title || `Special #${ep.absoluteNumber}`,
-        filePath,
-        episodeId: ep.id,
-        showId: show.id,
-        season: ep.season ?? null,
-        episode: ep.episode ?? null,
-      });
-      dlIcon.classList.add('triggered');
-      setTimeout(() => dlIcon.classList.remove('triggered'), 1200);
-    });
-    dlCell.appendChild(dlIcon);
-  }
-  bottomRow.appendChild(dlCell);
-
-  // Watch button
-  const watchCell = el('div', 'sp-ep-watch');
-  const isWatched = (ep.watchEvents?.edges?.length > 0) ||
-                    (Array.isArray(ep.watchEvents) && ep.watchEvents.length > 0);
-  if (avail !== 'future') {
-    const btn = el('button', `watch-btn${isWatched ? ' watched' : ''}`, '✓');
-    btn.title = isWatched ? 'Watched' : 'Mark watched';
-    btn.dataset.state = isWatched ? 'WATCHED' : 'UNWATCHED';
-    btn.dataset.watchEventId = ep.watchEvents?.edges?.[0]?.node?.id || '';
-    const patchedEp = { ...ep, show: { id: show.id } };
-    btn.addEventListener('click', async () => {
-      if (btn.classList.contains('loading')) return;
-      btn.classList.add('loading');
-      try {
-        if (btn.dataset.state === 'WATCHED') {
-          if (btn.dataset.watchEventId) {
-            await deleteWatchEvent(btn.dataset.watchEventId);
-            btn.dataset.watchEventId = '';
-          }
-          btn.dataset.state = 'UNWATCHED';
-          btn.classList.remove('watched');
-          btn.title = 'Mark watched';
-        } else {
-          const id = await addWatchEvent(show.id, ep.season, ep.episode);
-          btn.dataset.state = 'WATCHED';
-          btn.dataset.watchEventId = id;
-          btn.classList.add('watched');
-          btn.title = 'Watched';
-        }
-      } catch (err) {
-        showBanner(`Watch error: ${err.message}`, 'error');
-      } finally {
-        btn.classList.remove('loading');
+    // Newest first: season segments above each piece, down to the start.
+    let rest = epsOf(lv, inSubs);  // parts divide the season: nothing listed twice
+    const segments = [];
+    for (const piece of pieces) {
+      const at = absOf(epById.get(piece.episodeIds?.[0]));
+      segments.push({ eps: rest.filter(ep => absOf(ep) > at) });
+      segments.push({ piece });
+      rest = rest.filter(ep => absOf(ep) <= at);
+    }
+    segments.push({ eps: rest });
+    const seasonSegments = segments.filter(x => x.eps && (x.eps.length || segments.length === 1));
+    let n = 0;
+    for (const seg of segments) {
+      if (seg.piece) {
+        card(seg.piece, epsOf(seg.piece), false, startOpen);
+      } else if (seasonSegments.includes(seg)) {
+        const range = seasonSegments.length > 1 && seg.eps.length
+          ? `(ep ${seg.eps[0].episode}–${seg.eps[seg.eps.length - 1].episode})` : null;
+        card(lv, seg.eps, false, startOpen, { idSuffix: n ? `-split-${n}` : '', rangeLabel: range });
+        n++;
       }
-    });
-    watchCell.appendChild(btn);
+    }
+    for (const c of [...parts, ...groups]) card(c, epsOf(c), true, startOpen);
+    for (const id of [lv, ...subs].flatMap(x => x.episodeIds || [])) shown.add(id);
   }
-  bottomRow.appendChild(watchCell);
 
-  info.appendChild(bottomRow);
-  card.appendChild(info);
-  container.appendChild(card);
+  // Anything no level holds is a data fault (R1.13b says every episode has
+  // one) — shown rather than hidden, so it can be fixed.
+  const orphans = show.episodes.filter(ep => !shown.has(ep.id));
+  if (orphans.length) {
+    renderSeasonCard(-1, null, orphans, show, section, cfg, false, {
+      levelLabel: `Not in any level (${orphans.length})`, kind: 'orphans',
+    });
+  }
 }
 
 /* ── Per-episode remap (inline S/E editor) ─────────────── */
@@ -2358,16 +2100,22 @@ function openSplitSeasonEditor(card, sn, episodes, show, cfg) {
 }
 
 function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startOpen, opts = {}) {
-  const { idSuffix = '', rangeLabel = null, scoreSpans = null, minisodes = [] } = opts;
-  const card = el('div', `sp-season-card${startOpen ? ' open' : ''}`);
+  const {
+    idSuffix = '', rangeLabel = null, scoreSpans = null, minisodes = [],
+    // PLAN-CODE 8.2: every level gets a card. Only a TVDB season carries the
+    // season-number tools (mapping, remap, split, reconcile).
+    levelLabel = null, kind = 'tvdb_season', nested = false,
+  } = opts;
+  const isTvdbSeason = kind === 'tvdb_season' && sn !== 0;
+  const card = el('div', `sp-season-card${startOpen ? ' open' : ''}${nested ? ' sp-sub-level' : ''}`);
   // First segment gets the canonical ID (for scroll-to-target)
-  const cardId = `sp-season-${sn}${idSuffix}`;
+  const cardId = isTvdbSeason ? `sp-season-${sn}${idSuffix}` : `sp-level-${seasonData?.id}`;
   card.id = cardId;
 
   // Header
   const hdr = el('div', 'sp-season-hdr');
 
-  const label = sn === 0 ? 'Specials' : `Season ${sn}`;
+  const label = levelLabel || (sn === 0 ? 'Specials' : `Season ${sn}`);
   hdr.appendChild(el('span', 'sp-season-num', label));
 
   // Season name from external IDs (e.g. AniList/MAL entry title via AniDB)
@@ -2397,17 +2145,18 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     seasonScoreWrap.appendChild(seasonScoreVal);
 
     // Register this span for cross-segment score sync
+    const scoreKey = seasonData.id;
     if (scoreSpans) {
-      if (!scoreSpans.has(sn)) scoreSpans.set(sn, []);
-      scoreSpans.get(sn).push(seasonScoreVal);
+      if (!scoreSpans.has(scoreKey)) scoreSpans.set(scoreKey, []);
+      scoreSpans.get(scoreKey).push(seasonScoreVal);
     }
 
     attachScoreEditor(seasonScoreWrap, seasonScoreVal, () => seasonData.score, async (rounded) => {
       await setSeasonScore(seasonData.id, rounded);
       seasonData.score = rounded;
       // Update all sibling score spans (split season segments)
-      if (scoreSpans?.has(sn)) {
-        for (const span of scoreSpans.get(sn)) {
+      if (scoreSpans?.has(scoreKey)) {
+        for (const span of scoreSpans.get(scoreKey)) {
           span.textContent = String(rounded);
         }
       }
@@ -2459,7 +2208,7 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
   }
 
   // Edit mapping button — works for mapped AND unmapped seasons
-  if (sn !== 0) {
+  if (isTvdbSeason) {
     const editBtn = el('button', 'sp-season-edit-btn', '✎');
     editBtn.title = 'Edit season mapping';
     editBtn.addEventListener('click', e => {
@@ -2488,7 +2237,7 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
   }
 
   // Reconcile button — only for mapped seasons
-  if (seasonData && sn !== 0) {
+  if (seasonData && isTvdbSeason) {
     const reconBtn = el('button', 'sp-season-edit-btn sp-reconcile-btn', '⟲');
     reconBtn.title = 'Reconcile with Fribb';
     reconBtn.addEventListener('click', async (e) => {
@@ -2576,52 +2325,35 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
 
   hdr.appendChild(meta);
 
-  // Per-season status flower picker (only on first segment for split seasons)
+  // Per-level status picker (RULEBOOK R2.x: status lives on each level; the
+  // engine cascades to other levels and the show, so the page re-fetches).
   if (seasonData && idSuffix === '') {
-    const initStatus = seasonData.status || show.status || 'PLANNED';
     const seasonStatusWrap = el('div', 'sp-season-status-wrap');
     seasonStatusWrap.addEventListener('click', e => e.stopPropagation());
 
     const seasonBtnWrap = buildStatusBtn({
       id: seasonData.id,
-      currentStatus: initStatus,
-      statuses: STATUSES_5,
+      currentStatus: seasonData.status || 'PLANNED',
+      statuses: STATUSES_6,  // skipped is pickable (R2.10)
       onPick: async (wrap, id, newStatus) => {
-        // If picking the same as current effective → clear to null (inherit)
-        const effectiveNow = seasonData.status || show.status || 'PLANNED';
-        const setTo = newStatus === effectiveNow ? null : newStatus;
+        if (newStatus === seasonData.status) return;
         try {
-          try {
-            await setSeasonStatus(seasonData.id, setTo);
-          } catch (err) {
-            if (setTo === 'COMPLETED' && err.message?.includes('confirmed: true')) {
-              if (!confirm(`Season ${sn} still has unaired episodes. Mark completed anyway?`)) return;
-              await setSeasonStatus(seasonData.id, setTo, true);
-            } else { throw err; }
-          }
-          seasonData.status = setTo;
-          const effective = setTo || show.status || 'PLANNED';
-          refreshStatusBtn(wrap, effective, STATUSES_5);
-          // Update the inherit label
-          const lbl = seasonStatusWrap.querySelector('.sp-season-inherit');
-          if (lbl) lbl.textContent = setTo ? '' : '(inherited)';
-          const bannerText = setTo
-            ? `Season ${sn} → ${STATUS_LABELS[setTo]}`
-            : `Season ${sn} → inherited (${STATUS_LABELS[show.status] || show.status})`;
-          showBanner(bannerText, 'info');
+          if (!(await withConfirmation(
+            (confirmed) => setSeasonStatus(seasonData.id, newStatus, confirmed)))) return;
+          seasonData.status = newStatus;
+          refreshStatusBtn(wrap, newStatus, STATUSES_6);
+          showBanner(`${label} → ${STATUS_LABELS[newStatus]}`, 'info');
           setTimeout(hideBanner, 2000);
+          window.dispatchEvent(new Event('starfleet:refresh-after-watch'));
         } catch (err) {
           showBanner(`Status error: ${err.message}`, 'error');
         }
       },
     });
     seasonStatusWrap.appendChild(seasonBtnWrap);
-
-    // Show "(inherited)" label when season has no explicit status
-    const inheritLabel = el('span', 'sp-season-inherit');
-    inheritLabel.textContent = seasonData.status ? '' : '(inherited)';
-    seasonStatusWrap.appendChild(inheritLabel);
-
+    if (!seasonData.status) {
+      seasonStatusWrap.appendChild(el('span', 'sp-season-inherit', '(no status yet)'));
+    }
     hdr.appendChild(seasonStatusWrap);
   }
 
@@ -2649,7 +2381,7 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
   hdr.appendChild(epCountLabel);
 
   // "Mark season watched" button — marks all aired+unwatched episodes
-  if (sn !== 0 && episodes.length > 0) {
+  if (episodes.length > 0) {
     const markAllBtn = el('button', 'sp-mark-season-btn', '✓ all');
     markAllBtn.title = 'Mark all aired episodes as watched';
     markAllBtn.addEventListener('click', async (e) => {
@@ -2810,8 +2542,7 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     row.appendChild(numBadge);
 
     // Absolute number
-    row.appendChild(el('span', 'sp-ep-abs',
-      ep.absoluteNumber != null ? `#${ep.absoluteNumber}` : '—'));
+    row.appendChild(el('span', 'sp-ep-abs', fmtAbs(ep.absoluteNumber)));
 
     // Cross-database source coordinates (compact badges)
     if (ep.externalIds?.length) {

@@ -666,8 +666,8 @@
   import {
     gql, fetchPendingReviews, resolvePendingReview, setSeasonScore,
     linkShowExternalId, setSeasonMapping, unlinkShowExternalId,
-    resolveTvdbConsolidation,
-  } from './js/api.js?v=22';
+    resolveTvdbConsolidation, resolveReviewChoice,
+  } from './js/api.js?v=23';
 
   applyAppName();
   await bootstrapConfig();
@@ -1623,7 +1623,15 @@
         `;
       }
 
-      buttons += `<button class="btn-primary btn-dismiss" data-action="dismiss" id="btn-dismiss-${uid}">Dismiss</button>`;
+      // R4.8b: a review with choices is resolved by one of them — no
+      // plain dismiss, which would close it without doing anything.
+      if (r.choices?.length) {
+        buttons = r.choices.map(c =>
+          `<button class="btn-primary btn-approve btn-choice" data-choice="${esc(c.id)}">${esc(c.label)}</button>`
+        ).join('') + buttons;
+      } else {
+        buttons += `<button class="btn-primary btn-dismiss" data-action="dismiss" id="btn-dismiss-${uid}">Dismiss</button>`;
+      }
 
       actionsHtml = `
         <div class="detail-section">
@@ -1633,6 +1641,7 @@
           </div>
           <div class="review-actions">${buttons}</div>
           ${editRow}
+          ${(r.showId || info.showId) ? `<a class="review-show-link" href="show.html?id=${encodeURIComponent(r.showId || info.showId)}" style="color:var(--accent);font-size:12px">Open the show page →</a>` : ''}
           ${note}
           <span class="action-status" id="action-status-${uid}"></span>
         </div>
@@ -2077,6 +2086,28 @@
       function setStatus(msg, type = '') {
         const el = statusEl();
         if (el) { el.textContent = msg; el.className = `action-status ${type}`; }
+      }
+
+      // R4.8b choice buttons
+      for (const btn of detailEl.querySelectorAll('.btn-choice')) {
+        btn.addEventListener('click', async () => {
+          for (const b of detailEl.querySelectorAll('.btn-choice')) b.disabled = true;
+          setStatus('Applying…');
+          try {
+            const note = noteVal() || null;
+            const done = await resolveReviewChoice(r.id, btn.dataset.choice, note);
+            r.resolvedAt = done.resolvedAt;
+            r.resolutionNote = done.resolutionNote;
+            renderList();
+            renderPills();
+            renderBulkBar();
+            const nextOpen = filteredReviews().find(x => !x.resolvedAt && x.id !== r.id);
+            if (nextOpen) selectReview(nextOpen); else renderDetail(r);
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            for (const b of detailEl.querySelectorAll('.btn-choice')) b.disabled = false;
+          }
+        });
       }
 
       // Approve (apply proposed value)

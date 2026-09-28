@@ -13,12 +13,12 @@ import {
   browseSeasonalAnime, browseTmdb,
   searchArrCandidates, addShowWithArr, addShow, skipShow,
   setStatus, setSeasonStatus, setSeasonMapping,
-} from './api.js?v=22';
-import { showBanner } from './calendar.js?v=45';
+} from './api.js?v=23';
+import { showBanner } from './calendar.js?v=46';
 import {
   buildStatusBtn, refreshStatusBtn,
-  STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS,
-} from './status-picker.js?v=1';
+  STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS, withConfirmation,
+} from './status-picker.js?v=2';
 import { _anilistSvg, _malSvg, _tvdbSvg, _imdbSvg, _tmdbMarkSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg } from './icons.js?v=16';
 
 // ── Constants ────────────────────────────────────────────
@@ -1082,7 +1082,7 @@ async function onAnimeChipClick(card, item, status) {
   if (item.lcarsSeasonId) {
     card.classList.add('loading');
     try {
-      await setSeasonStatus(item.lcarsSeasonId, status);
+      await withConfirmation((c) => setSeasonStatus(item.lcarsSeasonId, status, c));
       item.lcarsSeasonStatus = status;
       refreshCard(card, item);
       showBanner(`Season status → ${STATUS_LABELS[status]}`, 'ok');
@@ -1098,7 +1098,7 @@ async function onAnimeChipClick(card, item, status) {
   if (item.lcarsShowId) {
     card.classList.add('loading');
     try {
-      await setStatus(item.lcarsShowId, status);
+      await withConfirmation((c) => setStatus(item.lcarsShowId, status, c));
       item.lcarsStatus = status;
       refreshCard(card, item);
       showBanner(`Status → ${STATUS_LABELS[status]}`, 'ok');
@@ -1146,7 +1146,7 @@ async function onAnimeChipClick(card, item, status) {
         throw err;
       }
       if (show.status !== status) {
-        await setStatus(show.id, status);
+        await withConfirmation((c) => setStatus(show.id, status, c));
         show.status = status;
       }
     } else {
@@ -1184,7 +1184,7 @@ async function onAnimeChipClick(card, item, status) {
       }
 
       if (show.status !== status && status !== 'PLANNED') {
-        await setStatus(show.id, status);
+        await withConfirmation((c) => setStatus(show.id, status, c));
         show.status = status;
       }
     }
@@ -1225,7 +1225,7 @@ async function handleAddError(err, card, item, input, status) {
     if (choice === 'attach') {
       await attachSequel(sequel);
       if (status !== 'PLANNED') {
-        await setStatus(sequel.parentShowId, status);
+        await withConfirmation((c) => setStatus(sequel.parentShowId, status, c));
       }
       showBanner(
         `Attached as Season ${sequel.nextSeason} of ${sequel.parentTitle}`,
@@ -1243,7 +1243,7 @@ async function handleAddError(err, card, item, input, status) {
       // instead of actually adding as a separate show.
       const show = await addShow({ ...input, skipSequelCheck: true });
       if (show.status !== status && status !== 'PLANNED') {
-        await setStatus(show.id, status);
+        await withConfirmation((c) => setStatus(show.id, status, c));
         show.status = status;
       }
       item.lcarsShowId = show.id;
@@ -1260,7 +1260,7 @@ async function handleAddError(err, card, item, input, status) {
           chosen.id, sequel.sequelAnilistId, sequel.sequelMalId,
         );
         if (status !== 'PLANNED') {
-          await setStatus(attached.parentShowId, status);
+          await withConfirmation((c) => setStatus(attached.parentShowId, status, c));
         }
         showBanner(
           `Attached as Season ${attached.nextSeason} of ${attached.parentTitle}`,
@@ -1295,7 +1295,7 @@ async function handleAddError(err, card, item, input, status) {
       };
       const show = await addShow(s1Input);
       if (show.status !== status && status !== 'PLANNED') {
-        await setStatus(show.id, status);
+        await withConfirmation((c) => setStatus(show.id, status, c));
         show.status = status;
       }
       item.lcarsShowId = show.id;
@@ -1325,7 +1325,7 @@ async function onTmdbChipClick(card, item, status) {
   if (item.lcarsShowId) {
     card.classList.add('loading');
     try {
-      await setStatus(item.lcarsShowId, status);
+      await withConfirmation((c) => setStatus(item.lcarsShowId, status, c));
       item.lcarsStatus = status;
       refreshCard(card, item);
       showBanner(`Status → ${STATUS_LABELS[status]}`, 'ok');
@@ -1370,7 +1370,7 @@ async function onTmdbChipClick(card, item, status) {
         throw err;
       }
       if (show.status !== status) {
-        await setStatus(show.id, status);
+        await withConfirmation((c) => setStatus(show.id, status, c));
         show.status = status;
       }
     } else {
@@ -1407,7 +1407,7 @@ async function onTmdbChipClick(card, item, status) {
       }
 
       if (show.status !== status && status !== 'PLANNED') {
-        await setStatus(show.id, status);
+        await withConfirmation((c) => setStatus(show.id, status, c));
         show.status = status;
       }
     }

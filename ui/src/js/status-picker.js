@@ -152,3 +152,23 @@ export function refreshStatusBtn(wrap, newStatus, statuses = STATUSES_5) {
     opt.classList.toggle('cur', opt.dataset.status === newStatus);
   });
 }
+
+/**
+ * PLAN-CODE 8.5: the status engine refuses a change that needs your say
+ * (unaired episodes marked watched, planned seasons skipped, a season in
+ * progress dropped…) with a message ending in "confirmed: true". Show that
+ * warning; on OK, send it again confirmed. Declining throws, so the caller
+ * leaves its UI as it was.
+ * @param {(confirmed: boolean) => Promise<any>} send
+ */
+export async function withConfirmation(send) {
+  try {
+    await send(false);
+  } catch (err) {
+    if (!err.message?.includes('confirmed: true')) throw err;
+    const warning = err.message.replace(/\s*[—-]?\s*pass confirmed: true to proceed\.?/i, '');
+    if (!confirm(`${warning}\n\nContinue?`)) throw new Error('Not changed (cancelled)');
+    await send(true);
+  }
+  return true;
+}

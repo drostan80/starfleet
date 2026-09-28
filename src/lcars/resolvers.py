@@ -125,7 +125,7 @@ ENUMS = [
     _enum("PersonRoleType", "voice_actor", "actor", "staff"),
     _enum("StudioRoleType", "studio", "publisher", "network"),
     _enum("PrimaryTitle", "romaji", "english", "native"),
-    _enum("SeasonSource", "fribb", "manual", "unmatched"),
+    _enum("SeasonSource", "fribb", "manual", "unmatched", "auto"),
     _enum("NumberingScheme", "absolute", "season_episode"),
     _enum("NumberingSource", "sonarr", "anilist", "manual", "unmatched"),
     _enum("EpisodeMovieLinkSource", "tmdb_match", "manual", "unmatched"),
@@ -1869,6 +1869,17 @@ def resolve_season_poster_url(obj, info):
 @season_type.field("artAssets")
 def resolve_season_art_assets(obj, info):
     return art.get_art_assets_for_season(db.get_connection(), obj["id"])
+
+
+@season_type.field("episodeIds")
+def resolve_season_episode_ids(obj, info):
+    from lcars import list_sync
+
+    conn = db.get_connection()
+    season = conn.execute("SELECT * FROM season WHERE id = ?", (obj["id"],)).fetchone()
+    if season is None or season["show_id"] is None:
+        return []
+    return [e["id"] for e in list_sync.level_episodes_ordered(conn, season)]
 
 
 @season_type.field("show")

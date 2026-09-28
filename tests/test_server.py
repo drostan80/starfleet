@@ -11799,3 +11799,40 @@ async def test_show_status_fanout_to_last_season_is_logged(client, migrated_db):
         headers=auth_headers("data"),
     )
     assert _season_status_log(s2) == [(before, "paused", "data")]
+
+
+async def test_season_episode_ids_follow_the_level_spans(client, monkeypatch):
+    """PLAN-CODE 8.1: each level lists exactly its own episodes (R1.11), so
+    the show page needn't guess splits — the special's level holds the S0
+    episode, the TVDB season its own."""
+    config.set_current(config.Config(sonarr_url="http://s:8989", sonarr_api_key="k"))
+    _patch_fribb_dataset(monkeypatch, dataset=FAKE_FRIBB_DATASET)
+
+    def _ep(season, number):
+        return {"seasonNumber": season, "episodeNumber": number,
+                "airDateUtc": None, "runtime": None}
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(0, 1), _ep(1, 1), _ep(1, 2)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=555)
+
+    data = await gql(
+        client,
+        """
+        query($id: ID!) { show(id: $id) {
+            levels { edges { node { kind episodeIds source } } }
+            episodes { edges { node { id season episode } } }
+        } }
+        """,
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    ep_id = {(e["node"]["season"], e["node"]["episode"]): e["node"]["id"]
+             for e in data["show"]["episodes"]["edges"]}
+    by_kind = {e["node"]["kind"]: e["node"]["episodeIds"]
+               for e in data["show"]["levels"]["edges"]}
+    assert by_kind["special"] == [ep_id[(0, 1)]]
+    # a level LCARS created itself reads source AUTO (it once broke the whole page)
+    sources = {e["node"]["kind"]: e["node"]["source"] for e in data["show"]["levels"]["edges"]}
+    assert sources["special"] == "AUTO"
+    assert sorted(by_kind["tvdb_season"]) == sorted([ep_id[(1, 1)], ep_id[(1, 2)]])

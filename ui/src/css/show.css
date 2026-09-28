@@ -386,6 +386,13 @@
   border-radius: 10px 10px 0 0;
 }
 .sp-season-card:not(.open) .sp-season-hdr { border-radius: 10px; }
+
+/* PLAN-CODE 8.2: a part or mini sub-season sits under its TVDB season. */
+.sp-season-card.sp-sub-level {
+  margin-left: 24px;
+  border-left: 3px solid var(--border);
+}
+.sp-season-card.sp-sub-level .sp-season-num { font-size: 14px; }
 .sp-season-hdr:hover { background: var(--surface-2); }
 
 .sp-season-num {

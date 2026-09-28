@@ -294,6 +294,14 @@ const SHOW_DETAIL_QUERY = `
           externalIds { service externalId name }
         }}
       }
+      levels(first: 500) {
+        edges { node {
+          id seasonNumber decimalSeasonNumber kind parentId label partNumber
+          anilistId malId status score posterUrl startedAt completedAt source
+          externalIds { service externalId name }
+          episodeIds
+        }}
+      }
       externalIds(first: 20) {
         edges { node { service externalId url } }
       }
@@ -348,6 +356,7 @@ export async function fetchShow(id) {
   // Flatten relay connections
   show.episodes = episodes;
   show.seasons = (show.seasons?.edges || []).map(e => e.node);
+  show.levels = (show.levels?.edges || []).map(e => e.node);  // RULEBOOK R1.10–R1.13b
   show.externalIds = (show.externalIds?.edges || []).map(e => e.node);
   show.studioCredits = (show.studioCredits?.edges || []).map(e => e.node);
   show.watchEvents = (show.watchEvents?.edges || []).map(e => e.node);
@@ -541,6 +550,7 @@ export async function fetchPendingReviews(includeResolved = false, first = 50, a
           id entityType entityId field
           previousValue proposedValueChain
           source createdAt resolvedAt resolvedByClient resolutionNote
+          choices { id label } showId
         }}
         pageInfo { hasNextPage endCursor }
       }
@@ -550,6 +560,21 @@ export async function fetchPendingReviews(includeResolved = false, first = 50, a
     nodes: data.pendingReviews.edges.map(e => e.node),
     pageInfo: data.pendingReviews.pageInfo,
   };
+}
+
+/**
+ * RULEBOOK R4.8b: resolve a review by one of its own choices — LCARS
+ * applies what the choice means, then closes the review.
+ */
+export async function resolveReviewChoice(id, choice, note = null) {
+  const data = await gql(`
+    mutation ResolveChoice($id: ID!, $choice: String!, $note: String) {
+      resolveReviewChoice(id: $id, choice: $choice, note: $note) {
+        id resolvedAt resolutionNote resolvedByClient
+      }
+    }
+  `, { id, choice, note });
+  return data.resolveReviewChoice;
 }
 
 /**

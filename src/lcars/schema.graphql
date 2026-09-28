@@ -142,6 +142,8 @@ enum SeasonSource {
   FRIBB
   MANUAL
   UNMATCHED
+  "Created by LCARS itself (Memory Alpha levels, merges, add check — migration 1b2164585c12)."
+  AUTO
 }
 
 "§5.5 episode_numbering_mapping.scheme."
@@ -502,6 +504,8 @@ type Season {
   kind: String!
   "The TVDB season this level sits in (a part, or a mini sub-season); null for a TVDB season or a top-level piece."
   parentId: ID
+  "The episodes of this level, from its spans (RULEBOOK R1.11), in absolute order — the same membership the status engine uses. A TVDB season lists its parts' and mini sub-season's episodes too."
+  episodeIds: [ID!]!
   "Subdivision within a broadcast season (default 1). When a source splits one broadcast season into parts (e.g. 'Season 3 Part 1' and 'Season 3 Part 2'), each part gets its own season row sharing the same seasonNumber but with partNumber 1 and 2."
   partNumber: Int!
   "Source-provided label for this subdivision (e.g. 'Part 2', 'Wano Country Arc'). Null for unsplit seasons."
