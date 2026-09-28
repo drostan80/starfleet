@@ -545,6 +545,12 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
   `tvdb_season` without a show, which clashes with its name. Give it its own kind
   (`individual_season`)? It would become `tvdb_season` when it joins a show.
 
+- **Q-T (R1.0, R1.2, R1.18–19)** A show whose absolute-numbering source has no **[OPEN]**
+  data (AniDB doesn't list its episodes yet, no TVmaze entry): R1.0 says every
+  episode has a number, R1.2 names the sources. May Memory Alpha number it from
+  TVDB order + air date and put it on a list for you, or leave it unnumbered and
+  listed until the source has it?
+
 ## 10. Changelog
 
 - 2026-09-27 — created from the user's rule text.
@@ -566,3 +572,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-27 — R1.2c: Memory Alpha sets every absolute number (confirmed).
 - 2026-09-28 — Q-R (film/mini inside a season window: under the season or beside it?) and Q-S (kind for individual seasons) asked.
 - 2026-09-28 — Q-R answered → R1.13a (own level, shown in air order, own art); Q-S answered → R3.6d (kind `individual_season`).
+- 2026-09-28 — Q-T asked (numbering fallback when AniDB/TVmaze have no data).
