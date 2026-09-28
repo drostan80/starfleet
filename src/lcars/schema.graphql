@@ -278,6 +278,8 @@ type Show {
 
   "Replaces one show can have multiple AniList entries, one per season (§5.5) — see Season.anilistId/malId, not a show-level field anymore."
   seasons(first: Int, after: String, last: Int, before: String): SeasonConnection!
+  "Every level of the show (RULEBOOK R1.10–R1.13b): TVDB seasons, their parts (AniList/MAL cours), season-0 pieces, side pieces (decimal seasons) and mini sub-seasons. `seasons` keeps only the TVDB seasons until the UI goes per level (phase 8)."
+  levels(first: Int, after: String, last: Int, before: String): SeasonConnection!
   "Nullable until A.8's on-demand fetch or A.4's reconciliation seeds it (or the show predates seeding) — §5.5."
   episodeNumberingMapping: EpisodeNumberingMapping
   "media_shape = MOVIE only — §5.9 addendum."
@@ -491,9 +493,14 @@ ShowExternalId, unchanged — TVDB doesn't split by season.
 type Season {
   id: ID!
   show: Show!
-  seasonNumber: Int!
+  "TVDB's season number. Null for a level that isn't a TVDB season (a special, side piece or mini sub-season — see decimalSeasonNumber, kind, parentId)."
+  seasonNumber: Int
   "RULEBOOK R1.9a — the season number as shown and sorted: TVDB's number for a TVDB season and its parts; N.5, or N.1, N.2… in air-date order, for a side piece between TVDB seasons N and N+1 (seasonNumber is TVDB's whole number and will be null for those once they exist, PLAN-CODE phase 8)."
   decimalSeasonNumber: Float
+  "tvdb_season | part | special | individual_season (RULEBOOK R1.10, R1.13, R3.6d)."
+  kind: String!
+  "The TVDB season this level sits in (a part, or a mini sub-season); null for a TVDB season or a top-level piece."
+  parentId: ID
   "Subdivision within a broadcast season (default 1). When a source splits one broadcast season into parts (e.g. 'Season 3 Part 1' and 'Season 3 Part 2'), each part gets its own season row sharing the same seasonNumber but with partNumber 1 and 2."
   partNumber: Int!
   "Source-provided label for this subdivision (e.g. 'Part 2', 'Wano Country Arc'). Null for unsplit seasons."

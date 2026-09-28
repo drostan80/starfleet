@@ -173,6 +173,7 @@ def plan_show(
     after: dict[int, list[tuple[Item, bool]]] = {}  # main index → [(item, whole)]
     between: dict[str, int | None] = {}  # side item → the season it follows (R1.8d)
     undated: list[Item] = []  # no air date: placeholder numbers (R1.0a)
+    inside: dict[str, int | None] = {}  # side item → the TVDB season whose run it sits in
     for it in sorted(side, key=lambda s: (s.air or "", s.tvdb_season, s.tvdb_episode)):
         if it.tvdb_season > 0 and not it.air:
             # AniDB special inside a TVDB season, no date: stays after its TVDB predecessor.
@@ -185,6 +186,7 @@ def plan_show(
                 before_first.append(it)
             else:
                 after.setdefault(prev, []).append((it, False))
+                inside[it.id] = it.tvdb_season
             continue
         if not it.air:
             undated.append(it)
@@ -209,6 +211,8 @@ def plan_show(
                 between[it.id] = season_of(main_order[prev])
                 if (it.runtime or 0) >= FULL_LENGTH_MINUTES:
                     _flag(plan, "full_length_between_seasons", it)
+        if it.id not in between:
+            inside[it.id] = season_of(main_order[prev])
         after.setdefault(prev, []).append((it, whole))
 
     # 3. Numbers.
@@ -289,8 +293,23 @@ def plan_show(
                     lambda x, aid=it.anidb[0]: x.anidb is not None and x.anidb[0] == aid
                     and x.id not in main_set
                 )
+            continue
+        # R1.13b: every episode belongs to a level. Minis inside a season's
+        # run are that season's mini sub-season; anything else is a level of
+        # its own (its own cover).
+        season = inside.get(it.id)
+        n = plan.numbers[it.id]
+        if season and not _is_film(it) and (it.runtime or 0) < FULL_LENGTH_MINUTES:
+            key = f"minis:{season}"
         else:
-            _flag(plan, "no_level", it, number=plan.numbers[it.id])
+            key = f"piece:{it.tvdb_season}:{it.tvdb_episode}:{season or 0}"
+        spans = plan.level_spans.setdefault(key, [])
+        if spans and spans[-1][1] < n and not any(
+            m.id in main_set and spans[-1][1] < plan.numbers[m.id] < n for m in main_order
+        ):
+            spans[-1] = (spans[-1][0], n)  # nothing of another level between: one run
+        else:
+            spans.append((n, n))
     return plan
 
 
@@ -466,6 +485,8 @@ def _apply_level_spans(conn, plan: Plan, now: str) -> None:
             ).fetchone()
             if row is not None:
                 _write_spans(conn, row[0], spans, now)
+        elif kind in ("minis", "piece"):
+            _apply_own_level(conn, plan.show_id, kind, rest, spans, now)
         elif kind == "side":
             after = int(rest[0])
             row = None
@@ -566,3 +587,47 @@ def main(argv=None) -> int:
         print(f"{len(out)} shows by source: {by_source}")
         print(f"flags: {flags}")
     return 0
+
+
+def _apply_own_level(conn, show_id: str, kind: str, rest: list[str], spans, now: str) -> None:
+    """R1.13b: a season's mini sub-season, or one special's own level — found
+    by its label, created when missing (status follows its season, R2.16)."""
+    from lcars import status_rules
+
+    if kind == "minis":
+        season_number = int(rest[0])
+        label = f"Season {season_number} minis"
+    else:
+        tvdb_s, tvdb_e, season_number = (int(x) for x in rest)
+        title = conn.execute(
+            "SELECT title FROM episode WHERE show_id = ? AND COALESCE(sonarr_season, season) = ?"
+            " AND COALESCE(sonarr_episode, episode) = ?",
+            (show_id, tvdb_s, tvdb_e),
+        ).fetchone()
+        label = f"S{tvdb_s:02d}E{tvdb_e:02d}" + (f" {title[0]}" if title and title[0] else "")
+    parent = None
+    if season_number:
+        parent = conn.execute(
+            "SELECT id, status FROM season WHERE show_id = ? AND season_number = ?"
+            " AND kind = 'tvdb_season'",
+            (show_id, season_number),
+        ).fetchone()
+    prefix = label if kind == "minis" else label[:6]
+    row = conn.execute(
+        "SELECT id FROM season WHERE show_id = ? AND kind = 'special' AND anilist_id IS NULL"
+        " AND parent_id IS ? AND substr(label, 1, ?) = ?",
+        (show_id, parent[0] if parent else None, len(prefix), prefix),
+    ).fetchone()
+    if row is None:
+        status = ("skipped" if parent is not None
+                  and parent[1] in status_rules.STOP_FOLLOWING else "planned")
+        season_id = ids_module.generate_id(conn, "z")
+        conn.execute(
+            "INSERT INTO season (id, show_id, season_number, kind, parent_id,"
+            " decimal_season_number, label, source, status, list_sync, created_at, updated_at)"
+            " VALUES (?, ?, NULL, 'special', ?, ?, ?, 'auto', ?, 0, ?, ?)",
+            (season_id, show_id, parent[0] if parent else None,
+             season_number if parent else 0.5, label, status, now, now),
+        )
+        row = (season_id,)
+    _write_spans(conn, row[0], spans, now)

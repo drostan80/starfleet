@@ -1641,6 +1641,17 @@ def resolve_show_tracked_history(obj, info, **page_args):
 
 @show_type.field("seasons")
 def resolve_show_seasons(obj, info, **page_args):
+    # Phase 5: TVDB seasons only — what every client shows today. Parts,
+    # specials, side pieces and mini sub-seasons are in `levels` until the
+    # UI goes per level (phase 8).
+    return pagination.paginate(
+        db.get_connection(), "season", "show_id = ? AND kind = 'tvdb_season'", (obj["id"],),
+        **page_args,
+    )
+
+
+@show_type.field("levels")
+def resolve_show_levels(obj, info, **page_args):
     return pagination.paginate(
         db.get_connection(), "season", "show_id = ?", (obj["id"],), **page_args
     )

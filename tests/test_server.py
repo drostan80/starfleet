@@ -2485,7 +2485,15 @@ async def test_sonarr_fetch_skips_season_zero_entirely(client, monkeypatch):
         headers=auth_headers(),
     )
     numbers = {e["node"]["seasonNumber"] for e in data["show"]["seasons"]["edges"]}
-    assert numbers == {1}, "no season row should exist for season 0"
+    assert numbers == {1}, "no TVDB season row should exist for season 0"
+    levels = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { levels { edges { node { seasonNumber kind } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    kinds = sorted(e["node"]["kind"] for e in levels["show"]["levels"]["edges"])
+    assert kinds == ["special", "tvdb_season"]  # R1.13b: the special has its own level
     by_season = {e["node"]["season"]: e["node"] for e in data["show"]["episodes"]["edges"]}
     assert by_season[0]["seasonEntity"] is None  # specials carry no season identity
     assert by_season[1]["seasonEntity"]["seasonNumber"] == 1

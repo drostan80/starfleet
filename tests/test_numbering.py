@@ -51,7 +51,7 @@ def test_film_mid_season_takes_a_whole_number_and_splits_the_span():
     assert [plan.numbers[i] for i in ("b2", "b3", "b4")] == [4, 6, 7]
     assert plan.season_spans[2] == [(3, 4), (6, 7)]
     assert "film_placement" in _kinds(plan)  # R1.4/R1.5: for the user to confirm
-    assert "no_level" in _kinds(plan)
+    assert plan.level_spans["piece:0:1:2"] == [(5, 5)]  # R1.13b: its own level in S2
 
 
 def test_one_special_inside_a_season_is_n_point_5_and_not_in_the_season():
@@ -283,7 +283,7 @@ def test_writer_creates_the_side_piece_between_seasons(conn):
     numbering.renumber_show(conn, "s-test01")
     side = conn.execute(
         "SELECT id, decimal_season_number, season_number, status FROM season"
-        " WHERE show_id = 's-test01' AND kind = 'special'"
+        " WHERE show_id = 's-test01' AND kind = 'special' AND parent_id IS NULL"
     ).fetchall()
     assert [(r[1], r[2]) for r in side] == [(1.5, None)]
     spans = conn.execute(
@@ -293,6 +293,7 @@ def test_writer_creates_the_side_piece_between_seasons(conn):
     numbering.renumber_show(conn, "s-test01")  # idempotent: no second side piece
     assert conn.execute(
         "SELECT COUNT(*) FROM season WHERE show_id = 's-test01' AND kind = 'special'"
+        " AND parent_id IS NULL"
     ).fetchone()[0] == 1
 
 
@@ -319,7 +320,27 @@ def test_side_piece_with_its_own_anilist_id_is_that_level(conn, monkeypatch):
     plan = numbering.plan_show("s-test01", [*items, mini], "anidb")
     numbering.apply_plan(conn, plan)
     specials = conn.execute(
-        "SELECT id, decimal_season_number FROM season WHERE kind = 'special'").fetchall()
+        "SELECT id, decimal_season_number FROM season WHERE kind = 'special'"
+        " AND parent_id IS NULL").fetchall()
     assert specials == [("z-mini01", 1.5)]
     assert conn.execute(
         "SELECT COUNT(*) FROM season_span WHERE season_id = 'z-mini01'").fetchone()[0] == 1
+
+
+def test_minis_inside_a_season_are_its_mini_sub_season():
+    # R1.13b: Frieren-style minis after episodes of S1 → one "Season 1 minis" level.
+    minis = [_ep("m1", 0, 1, 10), _ep("m2", 0, 2, 11)]
+    for m in minis:
+        m.air = m.air.replace("12:00", "20:00")
+        m.runtime = 1
+    plan = _plan(_two_seasons(minis))
+    assert plan.level_spans["minis:2"] == [(3.5, 3.5), (4.5, 4.5)]
+    assert "no_level" not in _kinds(plan)
+
+
+def test_writer_puts_the_minis_under_their_season(conn):
+    numbering.renumber_show(conn, "s-test01")
+    row = conn.execute(
+        "SELECT parent_id, label FROM season WHERE show_id = 's-test01' AND kind = 'special'"
+    ).fetchone()
+    assert row == ("z-test01", "Season 1 minis")
