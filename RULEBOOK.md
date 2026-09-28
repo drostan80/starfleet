@@ -527,6 +527,17 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
   (ep1 abs 14 … ep13 abs 26) and part 2 starts at abs 27. So should the sentence
   read "season 2 part **1** is abs 14–26" (and part 2 = abs 27 → end)?
 
+- **Q-R (R1.9a, R1.12, R1.13)** A film or mini inside a season's air window **[OPEN]**
+  (R1.12's example: S2 = abs 13–16 and 18–24, the film abs 17). R1.9a calls it a
+  sub-season of S2, but S2's spans leave abs 17 out. Is the film (a) a sub-season
+  under S2, whose span sits in the gap between S2's spans, or (b) its own level
+  beside S2, not under it? (Parts — AniList/MAL cours — are always inside their
+  TVDB season, R2.18.)
+- **Q-S (naming, §7, R3.6c)** In the database each level has a kind: `tvdb_season`, **[OPEN]**
+  `part`, `special`. An individual season (no TVDB show yet) is stored today as
+  `tvdb_season` without a show, which clashes with its name. Give it its own kind
+  (`individual_season`)? It would become `tvdb_season` when it joins a show.
+
 ## 10. Changelog
 
 - 2026-09-27 — created from the user's rule text.
@@ -546,3 +557,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-27 — R1.9a: one side piece N.5, several N.1, N.2…
 - 2026-09-27 — naming must follow rulebook terms (§7).
 - 2026-09-27 — R1.2c: Memory Alpha sets every absolute number (confirmed).
+- 2026-09-28 — Q-R (film/mini inside a season window: under the season or beside it?) and Q-S (kind for individual seasons) asked.

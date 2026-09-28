@@ -176,8 +176,12 @@ AniList/MAL rows) stay and are filled alongside; they go in one step before cuto
 - rulecheck: R1.12 level-aware, new R1.10 (parts inside their TVDB season).
 - **Deferred to phase 5:** `episode.show_id` is still NOT NULL, so an individual season
   can't hold episodes yet; phase 5 (the add check) rebuilds `episode` for it.
-- **Open for later (naming, §7):** an individual season has `kind = 'tvdb_season'` with
-  no show — ask the user whether it needs its own kind when phase 5 builds them.
+- **Asked (RULEBOOK Q-S):** an individual season's kind. **Asked (Q-R):** whether a
+  film/mini inside a season's window is under that season; R1.10 checks parts only
+  until answered.
+- **Before phase 5 creates an individual season:** GraphQL `Season.show: Show!` and
+  `seasonNumber: Int!` would fail on it — make both nullable (or keep individual
+  seasons out of Season-typed queries) first.
 
 ## Phase 3 — Numbering: LCARS absolute numbers (R1.0, R1.2, R1.2a–b, R1.3–R1.5, R1.8, R1.18–19; A1–A5, G3, G4)
 

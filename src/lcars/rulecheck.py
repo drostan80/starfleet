@@ -185,7 +185,9 @@ def check_parts_inside_their_season(conn):
         " JOIN season p ON p.id = c.parent_id"
         " JOIN season_span sc ON sc.season_id = c.id"
         " LEFT JOIN show sh ON sh.id = p.show_id"
-        " WHERE COALESCE(sh.tracked, 1) = 1 AND NOT EXISTS ("
+        # Parts only (R2.18). Where a film/mini inside a season's window
+        # sits is RULEBOOK §9 Q-R.
+        " WHERE c.kind = 'part' AND COALESCE(sh.tracked, 1) = 1 AND NOT EXISTS ("
         "  SELECT 1 FROM season_span sp WHERE sp.season_id = p.id"
         "  AND sc.abs_from >= sp.abs_from AND sc.abs_to <= sp.abs_to)",
         fmt=lambda r: (
