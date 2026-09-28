@@ -889,7 +889,7 @@ def _would_be_season_collision(
     """True when the parent already has the target season and every child
     episode slot would collide — merging would move nothing."""
     parent_has_season = conn.execute(
-        "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT 1 FROM season WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
         (parent_id, target_season),
     ).fetchone()
     if parent_has_season is None:
@@ -1025,7 +1025,7 @@ def merge_season_into_show(
     # If the parent already has this season number, reuse it; otherwise move
     # or create one.
     parent_season = conn.execute(
-        "SELECT id FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT id FROM season WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
         (parent_id, target_season),
     ).fetchone()
 
@@ -1077,7 +1077,8 @@ def merge_season_into_show(
             base = child_seasons[0]["season_number"]
             offset_season = target_season + extra["season_number"] - base
             existing = conn.execute(
-                "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?",
+                "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?"
+                " AND kind = 'tvdb_season'",
                 (parent_id, offset_season),
             ).fetchone()
             if existing:

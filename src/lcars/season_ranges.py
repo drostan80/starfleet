@@ -347,7 +347,7 @@ def ensure_all_season_rows(conn: sqlite3.Connection) -> int:
                 # Guard against double-insert hitting the UNIQUE constraint.
                 exists = conn.execute(
                     "SELECT 1 FROM season"
-                    " WHERE show_id = ? AND season_number = ?",
+                    " WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
                     (show_id, season_number),
                 ).fetchone()
                 if not exists:

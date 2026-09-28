@@ -141,3 +141,29 @@ def test_sonarr_series_of_a_tracked_show_is_left_alone(conn):
     assert add_check.add_sonarr_series(conn, TVDB, "Mushoku Tensei", "anime", "webhook") == (
         "already_tracked", "s-mush01"
     )
+
+
+def test_a_new_cour_moves_the_first_into_part_1_and_adds_part_2(conn):
+    c = _c(RELATION, anilist_id=127720, mal_id=45576)
+    d = add_check.classify(conn, c, DATASET)
+    add_check.apply_decision(conn, d, c)
+    parent = conn.execute("SELECT anilist_id FROM season WHERE id = 'z-mush01'").fetchone()
+    assert parent["anilist_id"] is None  # R1.22: each id on one level
+    parts = conn.execute(
+        "SELECT part_number, anilist_id, status FROM season WHERE parent_id = 'z-mush01'"
+        " AND kind = 'part' ORDER BY part_number"
+    ).fetchall()
+    assert [(p["part_number"], p["anilist_id"]) for p in parts] == [(1, 108465), (2, 127720)]
+    assert parts[1]["status"] == "planned"  # R2.16 after a watching season
+
+
+def test_a_related_new_tvdb_season_is_added_with_r2_16_status(conn):
+    conn.execute("DELETE FROM season WHERE id = 'z-mush03'")
+    conn.execute("UPDATE season SET status = 'dropped' WHERE id = 'z-mush02'")
+    c = _c(RELATION, anilist_id=178789)
+    d = add_check.classify(conn, c, DATASET)
+    assert d.kind == "new_season"
+    season_id = add_check.apply_decision(conn, d, c)
+    row = conn.execute("SELECT season_number, status FROM season WHERE id = ?",
+                       (season_id,)).fetchone()
+    assert (row["season_number"], row["status"]) == (3, "skipped")  # after a dropped season

@@ -453,7 +453,8 @@ def _stamp_season_started_at(
     if season_number is None:
         return
     season = conn.execute(
-        "SELECT id, anilist_id, started_at FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT id, anilist_id, started_at FROM season WHERE show_id = ? AND season_number = ?"
+        " AND kind = 'tvdb_season'",
         (show_id, season_number),
     ).fetchone()
     if season is None or season["started_at"] is not None:
@@ -645,7 +646,7 @@ def _push_show_episode_progress(conn, show_id: str, season_number: int) -> None:
     if season_number is None:
         return
     season = conn.execute(
-        "SELECT * FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT * FROM season WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
         (show_id, season_number),
     ).fetchone()
     if season is None:
@@ -775,7 +776,7 @@ def _push_mal_show_episode_progress(conn, show_id: str, season_number: int) -> N
     if season_number is None:
         return
     season = conn.execute(
-        "SELECT * FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT * FROM season WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
         (show_id, season_number),
     ).fetchone()
     if season is None:
@@ -3922,7 +3923,8 @@ def resolve_set_episode_number(_, info, episode_id, season, episode):
             " on this show — move it out of the way first"
         )
     season_row = conn.execute(
-        "SELECT id FROM season WHERE show_id = ? AND season_number = ?", (show_id, season)
+        "SELECT id FROM season WHERE show_id = ? AND season_number = ?"
+        " AND kind = 'tvdb_season'", (show_id, season)
     ).fetchone()
     new_season_id = season_row["id"] if season_row is not None else None
     now = util.now_utc_iso()
@@ -4168,7 +4170,8 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
     _require_show(conn, show_id)
     now = util.now_utc_iso()
     existing = conn.execute(
-        "SELECT id, mal_id FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT id, mal_id FROM season WHERE show_id = ? AND season_number = ?"
+        " AND kind = 'tvdb_season'",
         (show_id, season_number),
     ).fetchone()
     mal_id = _mal_mirroring_anilist(
@@ -4277,7 +4280,7 @@ def resolve_split_season(
     # --- 1. Validate the season and episode boundary --------------------------
     season_row = conn.execute(
         "SELECT id, abs_start, abs_end FROM season"
-        " WHERE show_id = ? AND season_number = ?",
+        " WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
         (show_id, season_number),
     ).fetchone()
     if season_row is None:
@@ -4333,7 +4336,7 @@ def resolve_split_season(
         sn = row["season_number"]
         conn.execute(
             "UPDATE season SET season_number = ?, updated_at = ?"
-            " WHERE show_id = ? AND season_number = ?",
+            " WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
             (sn + 1, now, show_id, sn),
         )
         conn.execute(

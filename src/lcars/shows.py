@@ -172,7 +172,8 @@ def find_sequel_parent(
             fribb_season = _resolve_fribb_season(anilist_id)
             if fribb_season is not None:
                 already = conn.execute(
-                    "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?",
+                    "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?"
+                    " AND kind = 'tvdb_season'",
                     (parent_row["parent_id"], fribb_season),
                 ).fetchone()
                 if already is not None:

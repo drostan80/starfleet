@@ -72,7 +72,7 @@ def reconcile_season(
     is_anime = show_row is not None and show_row["tracking_space"] == "anime"
 
     existing_row = conn.execute(
-        "SELECT * FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT * FROM season WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
         (show_id, season_number),
     ).fetchone()
     existing = dict(existing_row) if existing_row else None

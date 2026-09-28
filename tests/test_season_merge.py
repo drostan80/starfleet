@@ -58,6 +58,8 @@ def _make_db(tmp_path):
             abs_end INTEGER,
             status TEXT CHECK (status IS NULL OR status IN
                 ('watching','completed','planned','paused','dropped','skipped')),
+            kind TEXT NOT NULL DEFAULT 'tvdb_season',
+            status_set_manually INTEGER NOT NULL DEFAULT 0,
             UNIQUE (show_id, season_number, part_number)
         );
         CREATE INDEX ix_season_show_id ON season (show_id);

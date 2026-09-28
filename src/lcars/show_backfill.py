@@ -467,7 +467,7 @@ def _auto_attach_sequel(
     mal_id = err.sequel_mal_id
 
     existing = conn.execute(
-        "SELECT 1 FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT 1 FROM season WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
         (parent_id, season_number),
     ).fetchone()
     if existing is not None:

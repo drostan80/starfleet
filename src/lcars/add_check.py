@@ -26,6 +26,7 @@ LCARS derives through an AniList relation, is proposed to you (R3.7a).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 from lcars import fribb, fuzzy
@@ -219,10 +220,18 @@ def review(conn, key: str, decision: Decision, source: str) -> None:
     kept for you as a review (R4.8b: the choices are in `proposal`)."""
     from lcars import pending_review  # deferred: pending_review is a leaf, kept lazy
 
-    pending_review.open_or_extend(
-        conn, "show", key, f"add_check:{decision.kind}", source, None,
-        f"{decision.reason} — {decision.proposal}" if decision.proposal else decision.reason,
-    )
+    field_name = f"add_check:{decision.kind}"
+    value = f"{decision.reason} — {decision.proposal}" if decision.proposal else decision.reason
+    if pending_review.already_resolved_with(conn, "show", key, field_name, value):
+        return  # you already decided this one
+    open_row = conn.execute(
+        "SELECT proposed_value_chain FROM pending_review WHERE entity_type = 'show'"
+        " AND entity_id = ? AND field = ? AND resolved_at IS NULL",
+        (key, field_name),
+    ).fetchone()
+    if open_row is not None and value in json.loads(open_row[0]):
+        return  # already waiting for you
+    pending_review.open_or_extend(conn, "show", key, field_name, source, None, value)
 
 
 def apply_sonarr_initial_statuses(conn, show_id: str) -> None:
@@ -274,3 +283,81 @@ def add_sonarr_series(
     apply_sonarr_initial_statuses(conn, show_id)
     conn.commit()
     return "new_show", show_id
+
+
+# ── Applying an automatic decision (R3.4, R3.5a) ───────────────────────
+
+AUTOMATIC = ("link_season", "new_season", "part", "special")
+
+
+def _status_after(previous: str | None) -> str:
+    """R2.16 against the level it follows."""
+    from lcars import status_rules
+
+    return "skipped" if previous in status_rules.STOP_FOLLOWING else "planned"
+
+
+def _insert_level(conn, show_id, season_number, part_number, kind, parent_id, c, status):
+    from lcars import ids, season_ranges, util
+
+    season_id = ids.generate_id(conn, "z")
+    now = util.now_utc_iso()
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, part_number, kind, parent_id,"
+        " anilist_id, mal_id, source, status, list_sync, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'auto', ?, 0, ?, ?)",
+        (season_id, show_id, season_number, part_number, kind, parent_id,
+         c.anilist_id, c.mal_id, status, now, now),
+    )
+    season_ranges.upsert_season_external_id(conn, season_id, c.anilist_id, c.mal_id, now)
+    return season_id
+
+
+def apply_decision(conn, d: Decision, c: Candidate) -> str | None:
+    """Writes an automatic decision (`AUTOMATIC`); returns the season id.
+    Numbering (spans) and the show's status follow on the next pass."""
+    from lcars import season_ranges, status_rules, util
+
+    if d.kind not in AUTOMATIC:
+        return None
+    now = util.now_utc_iso()
+    if d.kind == "link_season":
+        conn.execute(
+            "UPDATE season SET anilist_id = COALESCE(anilist_id, ?), mal_id = COALESCE(mal_id, ?),"
+            " updated_at = ? WHERE id = ?",
+            (c.anilist_id, c.mal_id, now, d.season_id),
+        )
+        season_ranges.upsert_season_external_id(conn, d.season_id, c.anilist_id, c.mal_id, now)
+        return d.season_id
+    if d.kind == "new_season":
+        status = status_rules.new_season_status(conn, d.show_id, d.season_number)
+        season_id = _insert_level(conn, d.show_id, d.season_number, 1, "tvdb_season", None,
+                                  c, status)
+    elif d.kind == "part":
+        parent = conn.execute("SELECT * FROM season WHERE id = ?", (d.season_id,)).fetchone()
+        parts = conn.execute(
+            "SELECT COUNT(*) FROM season WHERE parent_id = ? AND kind = 'part'", (parent["id"],)
+        ).fetchone()[0]
+        if parts == 0 and (parent["anilist_id"] is not None or parent["mal_id"] is not None):
+            # The TVDB season held its first cour's ids: that cour becomes
+            # part 1, so every AniList/MAL id sits on exactly one level (R1.22).
+            first = Candidate(c.origin, anilist_id=parent["anilist_id"], mal_id=parent["mal_id"])
+            conn.execute(
+                "UPDATE season SET anilist_id = NULL, mal_id = NULL, updated_at = ? WHERE id = ?",
+                (now, parent["id"]),
+            )
+            conn.execute(
+                "DELETE FROM season_external_id WHERE season_id = ?"
+                " AND service IN ('anilist', 'mal')", (parent["id"],),
+            )
+            _insert_level(conn, parent["show_id"], parent["season_number"], 1, "part",
+                          parent["id"], first, parent["status"])
+            parts = 1
+        season_id = _insert_level(conn, parent["show_id"], parent["season_number"], parts + 1,
+                                  "part", parent["id"], c, _status_after(parent["status"]))
+    else:  # special: its place and number come from Memory Alpha (R1.8, R1.13a)
+        last = status_rules.last_season(conn, d.show_id)
+        season_id = _insert_level(conn, d.show_id, None, 1, "special", None, c,
+                                  _status_after(last["status"] if last else None))
+    status_rules.recompute_show(conn, d.show_id, status_rules.AUTO)  # R2.17, not pushed
+    return season_id

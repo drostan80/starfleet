@@ -567,12 +567,10 @@ FAKE_ANILIST_MEDIA_WITH_RELATIONS = {
 }
 
 
-async def test_add_show_anilist_fetch_creates_relation_stub_shows(client, monkeypatch):
-    """A.21 (2026-08-09 consolidation audit) — show_relation.related_show_id
-    is a real, non-nullable FK; a relation to a show LCARS has never seen
-    must auto-create a tracked=false stub (§5.1's own promotion-target
-    framing), not fail or silently drop the edge. The MANGA-format relation
-    must be skipped entirely — not a show LCARS can ever track."""
+async def test_add_show_relation_to_an_unknown_show_creates_no_stub(client, monkeypatch):
+    """Phase 5.2 (R3.5a): a relation to a show LCARS doesn't have creates no
+    untracked stub any more; whether it's added is the add check's call
+    (here: no TVDB id anywhere, so not added)."""
     monkeypatch.setattr(
         anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_RELATIONS
     )
@@ -581,84 +579,15 @@ async def test_add_show_anilist_fetch_creates_relation_stub_shows(client, monkey
 
     data = await gql(
         client,
-        """
-        query($id: ID!) {
-          show(id: $id) {
-            relatedShows {
-              edges { node { displayTitle mediaShape trackingSpace tracked status } }
-            }
-          }
-        }
-        """,
+        "query($id: ID!) { show(id: $id) { relatedShows { edges { node { id } } } } }",
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    related = {e["node"]["displayTitle"]: e["node"] for e in data["show"]["relatedShows"]["edges"]}
-    assert set(related) == {"Golden Kamuy 2", "Golden Kamuy Movie"}  # manga relation excluded
-    assert related["Golden Kamuy 2"]["mediaShape"] == "EPISODIC"
-    assert related["Golden Kamuy 2"]["trackingSpace"] == "ANIME"
-    assert related["Golden Kamuy 2"]["tracked"] is False
-    assert related["Golden Kamuy 2"]["status"] == "PLANNED"
-    assert related["Golden Kamuy Movie"]["mediaShape"] == "MOVIE"
-
-    stub_data = await gql(
-        client,
-        """
-        query {
-          shows(first: 10) {
-            edges { node { displayTitle externalIds { edges { node { service externalId } } } } }
-          }
-        }
-        """,
-        headers=auth_headers(),
+    assert data["show"]["relatedShows"]["edges"] == []
+    all_shows = await gql(
+        client, "query { shows(first: 10) { edges { node { id } } } }", headers=auth_headers()
     )
-    stub = next(
-        e["node"]
-        for e in stub_data["shows"]["edges"]
-        if e["node"]["displayTitle"] == "Golden Kamuy 2"
-    )
-    links = {e["node"]["service"]: e["node"]["externalId"] for e in stub["externalIds"]["edges"]}
-    assert links["anilist"] == "333"
-    assert links["mal"] == "433"
-
-
-async def test_add_show_anilist_fetch_relation_stub_prefers_english_title(client, monkeypatch):
-    # 2026-08-19, real live bug (Ascendance of a Bookworm): a relation stub
-    # used to prefer romaji whenever it existed at all, english only as a
-    # fallback for when romaji was missing — so a stub with a real English
-    # title still ended up displayed/searched under its Japanese romaji one.
-    # English wins whenever AniList actually provides one.
-    fake_media = {
-        **FAKE_ANILIST_MEDIA_WITH_RELATIONS,
-        "relations": {
-            "edges": [
-                {
-                    "node": {
-                        "id": 333,
-                        "idMal": 433,
-                        "format": "TV",
-                        "title": {
-                            "romaji": "Honzuki no Gekokujou 2nd Season",
-                            "english": "Ascendance of a Bookworm Part 2",
-                            "native": None,
-                        },
-                    }
-                }
-            ]
-        },
-    }
-    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: fake_media)
-    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
-    show = await add_show(client, anilistId=111)
-
-    data = await gql(
-        client,
-        "query($id: ID!) { show(id: $id) { relatedShows { edges { node { displayTitle } } } } }",
-        {"id": show["id"]},
-        headers=auth_headers(),
-    )
-    titles = {e["node"]["displayTitle"] for e in data["show"]["relatedShows"]["edges"]}
-    assert titles == {"Ascendance of a Bookworm Part 2"}  # not the romaji title
+    assert len(all_shows["shows"]["edges"]) == 1
 
 
 async def test_add_show_anilist_fetch_relation_reuses_existing_show(client, monkeypatch):
@@ -687,7 +616,7 @@ async def test_add_show_anilist_fetch_relation_reuses_existing_show(client, monk
         "query { shows(first: 10) { edges { node { id } } } }",
         headers=auth_headers(),
     )
-    assert len(all_shows["shows"]["edges"]) == 3  # existing + the new show + the one real stub
+    assert len(all_shows["shows"]["edges"]) == 2  # existing + the new show, no stub
 
 
 FAKE_ANILIST_MEDIA_WITH_SEQUEL = {
@@ -708,57 +637,40 @@ FAKE_ANILIST_MEDIA_WITH_SEQUEL = {
 }
 
 
-async def test_sequel_relation_opens_pending_review_for_unmapped_sequel(client, monkeypatch):
-    """B.4.2 — when a SEQUEL relation edge points to an AniList id that
-    isn't mapped to any season anywhere, open a pending_review suggesting
-    the user add it as a new season. The review must not duplicate on a
-    second refresh, and must not reopen after being resolved."""
+async def test_sequel_tvdb_doesnt_list_yet_goes_to_you_once(client, monkeypatch):
+    """Phase 5 (R3.7a): a SEQUEL with no TVDB id yet is proposed as the next
+    piece of this show, in one actionable review — not duplicated on a
+    refresh, not reopened once you resolved it."""
     monkeypatch.setattr(
         anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_SEQUEL
     )
     monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
     show = await add_show(client, anilistId=111)
 
-    # First fetch (addShow) should create a pending_review for the unmapped sequel
-    reviews = await _pending_reviews_for(client, show["id"])
-    sequel_reviews = [r for r in reviews if r["field"] == "sequel_season:777"]
-    assert len(sequel_reviews) == 1
-    assert sequel_reviews[0]["entityType"] == "show"
-    assert sequel_reviews[0]["source"] == "anilist"
-    import json as _json
-    prev = _json.loads(sequel_reviews[0]["previousValue"])
-    assert prev["title"] == "Golden Kamuy 2"  # actionable title
-    assert prev["mal"] == 877  # MAL id for one-click season mapping
-    assert sequel_reviews[0]["proposedValueChain"] == ["anilist:777"]
+    async def open_reviews():
+        rows = db.get_connection().execute(
+            "SELECT id, proposed_value_chain FROM pending_review"
+            " WHERE entity_id = 'anilist:777' AND field = 'add_check:needs_user'"
+            " AND resolved_at IS NULL"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
-    # Second refresh must NOT append a duplicate entry to the chain
+    first = await open_reviews()
+    assert len(first) == 1
+    assert "after AniList 111" in first[0]["proposed_value_chain"]
+
+    refresh = "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }"
+    await gql(client, refresh, {"id": show["id"]}, headers=auth_headers())
+    assert await open_reviews() == first  # no duplicate entry
+
     await gql(
         client,
-        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
-        {"id": show["id"]},
-        headers=auth_headers(),
-    )
-    reviews2 = await _pending_reviews_for(client, show["id"])
-    sequel_reviews2 = [r for r in reviews2 if r["field"] == "sequel_season:777"]
-    assert len(sequel_reviews2) == 1
-    assert sequel_reviews2[0]["proposedValueChain"] == ["anilist:777"]  # still one entry
-
-    # Resolve the review, then refresh again — must NOT reopen
-    await gql(
-        client,
-        'mutation($id: ID!) { resolvePendingReview(id: $id, resolutionNote: "not needed") { id } }',
-        {"id": sequel_reviews2[0]["id"]},
+        'mutation($id: ID!) { resolvePendingReview(id: $id, resolutionNote: "no") { id } }',
+        {"id": first[0]["id"]},
         headers=auth_headers("captains_log"),
     )
-    await gql(
-        client,
-        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
-        {"id": show["id"]},
-        headers=auth_headers(),
-    )
-    reviews3 = await _pending_reviews_for(client, show["id"])
-    sequel_reviews3 = [r for r in reviews3 if r["field"] == "sequel_season:777"]
-    assert len(sequel_reviews3) == 0  # no new unresolved review
+    await gql(client, refresh, {"id": show["id"]}, headers=auth_headers())
+    assert await open_reviews() == []  # not reopened
 
 
 async def test_sequel_relation_suppressed_when_already_mapped_to_season(client, monkeypatch):
@@ -779,76 +691,30 @@ async def test_sequel_relation_suppressed_when_already_mapped_to_season(client, 
     assert len(sequel_reviews) == 0
 
 
-async def test_add_show_promotes_an_existing_untracked_stub_instead_of_duplicating(
-    client, monkeypatch
-):
-    """B.11d follow-up, real bug found in the live backfill run: a
-    relation walk (A.21, previous test) can auto-create a tracked=false
-    stub for an id a *later*, independent addShow/backfill call also
-    targets. That second call must promote the existing stub in place
-    (SCOPE.md §5.1's own documented path) — not insert a second `show`
-    row for the same AniList id (confirmed live: 86 such collision
-    pairs, one show's own show_external_id.anilist_id shared by two
-    separate show rows)."""
-    monkeypatch.setattr(
-        anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_RELATIONS
+async def test_add_show_takes_a_show_off_the_skip_list_instead_of_duplicating(client):
+    """The skip list (untracked, skipped — browse's filter) is the one kind
+    of untracked row left (phase 5.2). Adding that show turns the same row
+    into a tracked show, not a second row."""
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO show (id, media_shape, tracking_space, title_romaji, primary_title,"
+        " status, tracked, created_at, updated_at) VALUES ('s-skip01', 'episodic', 'anime',"
+        " 'Golden Kamuy 2', 'romaji', 'skipped', 0, 'x', 'x')"
     )
-    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
-    await add_show(client, anilistId=111)
-
-    before = await gql(
-        client, "query { shows(first: 10) { edges { node { id } } } }", headers=auth_headers()
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES ('s-skip01', 'anilist', '333', '', 'x')"
     )
-    stub_data = await gql(
-        client,
-        """
-        query {
-          shows(first: 10) {
-            edges {
-              node {
-                id displayTitle tracked
-                externalIds { edges { node { service externalId } } }
-              }
-            }
-          }
-        }
-        """,
-        headers=auth_headers(),
-    )
-    stub = next(
-        e["node"]
-        for e in stub_data["shows"]["edges"]
-        if e["node"]["displayTitle"] == "Golden Kamuy 2"
-    )
-    assert stub["tracked"] is False
-
+    conn.commit()
     promoted = await add_show(
         client, anilistId=333, tvdbId=98765, titleRomaji="Golden Kamuy 2 (direct add)"
     )
-    assert promoted["id"] == stub["id"]  # same row, not a new one
+    assert promoted["id"] == "s-skip01"
     assert promoted["tracked"] is True
-
-    after = await gql(
+    all_shows = await gql(
         client, "query { shows(first: 10) { edges { node { id } } } }", headers=auth_headers()
     )
-    assert len(after["shows"]["edges"]) == len(before["shows"]["edges"])  # no new row appeared
-
-    links_data = await gql(
-        client,
-        """
-        query($id: ID!) {
-          show(id: $id) { externalIds { edges { node { service externalId } } } }
-        }
-        """,
-        {"id": stub["id"]},
-        headers=auth_headers(),
-    )
-    links = {
-        e["node"]["service"]: e["node"]["externalId"]
-        for e in links_data["show"]["externalIds"]["edges"]
-    }
-    assert links["anilist"] == "333"  # carried over from the stub, untouched
-    assert links["tvdb"] == "98765"  # added by the promoting call, the stub never had one
+    assert len(all_shows["shows"]["edges"]) == 1
 
 
 async def test_add_show_rejects_a_duplicate_external_id_already_tracked(client):
@@ -910,56 +776,6 @@ FAKE_ANILIST_MEDIA_WITH_MAL_COLLIDING_RELATIONS = {
         ]
     },
 }
-
-
-async def test_add_show_anilist_fetch_relations_sharing_one_mal_id_reuse_one_stub(
-    client, monkeypatch
-):
-    """B.11d/B.11e follow-up, real bug found in the second deployed
-    backfill run: two AniList relation entries can be genuinely
-    distinct Media (different anilist_id) while AniList reports the
-    *same* idMal for both — the old anilist_id-only existing-show check
-    let each one create its own stub, producing two show rows sharing
-    one mal_id. The second edge must reuse the first edge's own stub
-    instead of creating a duplicate."""
-    monkeypatch.setattr(
-        anilist_client,
-        "fetch_media",
-        lambda *a, **kw: FAKE_ANILIST_MEDIA_WITH_MAL_COLLIDING_RELATIONS,
-    )
-    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda *a, **kw: None)
-    show = await add_show(client, anilistId=111)
-
-    stub_data = await gql(
-        client,
-        """
-        query {
-          shows(first: 10) {
-            edges { node { displayTitle externalIds { edges { node { service externalId } } } } }
-          }
-        }
-        """,
-        headers=auth_headers(),
-    )
-    stubs = [
-        e["node"]
-        for e in stub_data["shows"]["edges"]
-        if e["node"]["displayTitle"] in ("Split Part A", "Split Part B")
-    ]
-    assert len(stubs) == 1  # not two — the second edge reused the first's own stub
-    links = {
-        e["node"]["service"]: e["node"]["externalId"] for e in stubs[0]["externalIds"]["edges"]
-    }
-    assert links["anilist"] == "501"  # the first edge's own id, created first
-    assert links["mal"] == "601"
-
-    related = await gql(
-        client,
-        "query($id: ID!) { show(id: $id) { relatedShows { edges { node { id } } } } }",
-        {"id": show["id"]},
-        headers=auth_headers(),
-    )
-    assert len(related["show"]["relatedShows"]["edges"]) == 1  # both edges point at one show
 
 
 async def test_add_show_anilist_fetch_no_media_found_leaves_show_bare(client, monkeypatch):

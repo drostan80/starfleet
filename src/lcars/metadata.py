@@ -54,6 +54,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from lcars import (
+    add_check,
     airdate_priority,
     anilist_client,
     art,
@@ -386,14 +387,8 @@ def _fetch_anilist(conn, show: dict) -> None:
         is_trackable = node.get("format") in anilist_client.ANIME_RELATION_FORMATS
         if node.get("id") is not None and is_trackable:
             _link_relation(conn, show["id"], node, edge.get("relationType"))
-
-    # B.4.2 — sequel-season review queue.  Season-aware guard: if the
-    # sequel's AniList id is already a season on *this* show, skip.
-    # If on *another* show that shares a Sonarr/Radarr slug, that show
-    # is an orphan stub (same arr series = same episodes) — proceed.
-    # If on an unrelated show, skip (DIFF case).
-    if show.get("tracked"):
-        _propose_sequel_seasons(conn, show, media)
+            if show.get("tracked"):
+                _add_related(conn, int(anilist_id_str), node, edge.get("relationType"))
 
 
 def _fetch_mal_fallback(conn, show: dict) -> None:
@@ -865,7 +860,9 @@ def _link_relation(
     related_anilist_id = str(related_media["id"])
     related_show_id = _existing_related_show(conn, related_anilist_id, related_media.get("idMal"))
     if related_show_id is None:
-        related_show_id = _create_relation_stub(conn, related_media, related_anilist_id)
+        # Phase 5.2 (R3.5a): no untracked stub for a related entry any more;
+        # whether it's added is the add check's call (`_add_related`).
+        return
 
     now = util.now_utc_iso()
     conn.execute(
@@ -878,159 +875,29 @@ def _link_relation(
     )
 
 
-def _propose_sequel_seasons(conn, show: dict, media: dict) -> None:
-    """B.4.2 — sequel-season review queue.
-
-    For each SEQUEL relation edge, if the sequel's AniList id isn't
-    already mapped to any season anywhere in LCARS, open a pending_review
-    suggesting the user add it as a new season on this show.  The global
-    season lookup (not show-scoped) suppresses both "same show" cases
-    (already mapped as S2+) and "DIFF" cases (sequel is S1 on a
-    *different* show — proposing it here would be wrong advice).
-
-    Guards:
-    - Season-aware ``already_mapped`` — checks whether the sequel's
-      AniList id is mapped to a season on another show.  If that show
-      shares a Sonarr/Radarr slug with this one it's an orphan stub
-      (same arr series = same episodes), and the check is skipped so
-      the proposal can proceed.
-    - Existing unresolved review for this (show, sequel) — prevents
-      ``open_or_extend`` from appending an identical entry on every
-      refresh cycle.
-    - ``already_resolved_with`` — prevents re-opening after the user
-      resolved the review (sequel edges are permanent facts).
-    """
-    for edge in (media.get("relations") or {}).get("edges") or []:
-        if edge.get("relationType") != "SEQUEL":
-            continue
-        node = edge.get("node") or {}
-        sequel_al_id = node.get("id")
-        if sequel_al_id is None:
-            continue
-        if node.get("format") not in anilist_client.ANIME_RELATION_FORMATS:
-            continue
-
-        sequel_al_id_str = str(sequel_al_id)
-
-        # Already mapped as a season on THIS show? Nothing to propose.
-        on_self = conn.execute(
-            "SELECT 1 FROM season WHERE anilist_id = ? AND show_id = ?",
-            (sequel_al_id, show["id"]),
-        ).fetchone()
-        if on_self is not None:
-            continue
-
-        # Mapped on another show — skip unless that show shares an arr
-        # slug with this one (orphan stub: same Sonarr/Radarr series =
-        # same episodes, so the stub is a wrongly-split copy).
-        mapped_elsewhere = conn.execute(
-            "SELECT show_id FROM season"
-            " WHERE anilist_id = ? AND show_id != ?",
-            (sequel_al_id, show["id"]),
-        ).fetchone()
-        if mapped_elsewhere is not None:
-            shared_arr = conn.execute(
-                "SELECT 1 FROM show_external_id a"
-                " JOIN show_external_id b"
-                "   ON a.service = b.service"
-                "  AND a.external_id = b.external_id"
-                " WHERE a.show_id = ? AND b.show_id = ?"
-                "   AND a.service IN ('sonarr', 'radarr')",
-                (show["id"], mapped_elsewhere["show_id"]),
-            ).fetchone()
-            if shared_arr is None:
-                # Mapped on an unrelated show — DIFF case, skip.
-                continue
-
-        field = f"sequel_season:{sequel_al_id_str}"
-        value = f"anilist:{sequel_al_id_str}"
-
-        # Already an unresolved review for this exact sequel? Skip —
-        # open_or_extend would blindly append the same value again.
-        existing_unresolved = conn.execute(
-            "SELECT 1 FROM pending_review"
-            " WHERE entity_type = 'show' AND entity_id = ? AND field = ?"
-            "   AND resolved_at IS NULL",
-            (show["id"], field),
-        ).fetchone()
-        if existing_unresolved is not None:
-            continue
-
-        # Previously resolved with the same value? Don't reopen.
-        if pending_review.already_resolved_with(
-            conn, "show", show["id"], field, value
-        ):
-            continue
-
-        # previous_value carries a JSON blob with the sequel's title and
-        # MAL id so the web review queue can create the season mapping in
-        # one click without a manual lookup.  Not used by
-        # already_resolved_with (that reads only chain[-1]), so it's
-        # safe even if the title changes upstream.
-        sequel_title = (node.get("title") or {}).get("romaji") or sequel_al_id_str
-        sequel_mal = node.get("idMal")
-        prev_blob = json.dumps(
-            {"title": sequel_title, "mal": sequel_mal},
-            ensure_ascii=False,
-        )
-        pending_review.open_or_extend(
-            conn, "show", show["id"], field, "anilist", prev_blob, value,
-        )
-
-
-def _create_relation_stub(conn, related_media: dict, related_anilist_id: str) -> str:
-    title = related_media.get("title") or {}
-    romaji, english, native = title.get("romaji"), title.get("english"), title.get("native")
-    # 2026-08-19 — real live bug, user-caught (Ascendance of a Bookworm: 4 of
-    # its 5 parts came into LCARS through this exact function, this exact
-    # relation graph): this used to prefer `romaji` whenever it existed at
-    # all, `english` only as a fallback for when romaji was missing — so a
-    # stub with a perfectly good English title still got stuck displaying/
-    # searching under its Japanese romaji one ("Honzuki no Gekokujou:
-    # Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen 2nd Season"
-    # instead of "Ascendance of a Bookworm Part 2") the instant that romaji
-    # field happened to be non-empty, which AniList populates for nearly
-    # everything. `primary_title` is a write-once choice — `_promote_stub`
-    # (shows.py) deliberately never revisits it, and no metadata refresh
-    # does either — so this was the one place to get it right. English,
-    # when AniList actually provides one, is what a user searching/browsing
-    # in English types and recognizes; romaji is the honest fallback for
-    # the (common, legitimate) case where no official English title exists
-    # at all, not the default over one that does.
-    if english:
-        primary_title = "english"
-    elif romaji:
-        primary_title = "romaji"
-    elif native:
-        primary_title = "native"
-    else:
-        # AniList's own schema guarantees at least a romaji title exists for
-        # any real Media — an edge with none at all isn't a usable stub.
-        raise ValueError(f"AniList relation {related_anilist_id} has no title at all")
-
-    show_id = ids.generate_id(conn, "s")
-    now = util.now_utc_iso()
-    media_shape = "movie" if related_media.get("format") == "MOVIE" else "episodic"
-    conn.execute(
-        "INSERT INTO show"
-        " (id, media_shape, tracking_space, title_romaji, title_english, title_native,"
-        "  primary_title, status, tracked, created_at, updated_at)"
-        " VALUES (?, ?, 'anime', ?, ?, ?, ?, 'planned', 0, ?, ?)",
-        (show_id, media_shape, romaji, english, native, primary_title, now, now),
+def _add_related(conn, anilist_id: int, node: dict, relation_type: str | None) -> None:
+    """Phase 5 (R3.4, R3.5, R3.5a): a related entry goes through the add
+    check. Relation type decides nothing; it's added automatically only when
+    it belongs to a tracked show by TVDB id; a link LCARS derives itself
+    goes to you (R3.7a)."""
+    title = node.get("title") or {}
+    candidate = add_check.Candidate(
+        add_check.RELATION,
+        anilist_id=node["id"],
+        mal_id=node.get("idMal"),
+        titles=[t for t in (title.get("english"), title.get("romaji")) if t],
+        media_type=node.get("format"),
+        prequel_anilist_ids=[anilist_id] if relation_type == "SEQUEL" else [],
     )
-    conn.execute(
-        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
-        " VALUES (?, 'anilist', ?, ?, ?)",
-        (show_id, related_anilist_id, f"https://anilist.co/anime/{related_anilist_id}", now),
-    )
-    if related_media.get("idMal") is not None:
-        mal_id = str(related_media["idMal"])
-        conn.execute(
-            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
-            " VALUES (?, 'mal', ?, ?, ?)",
-            (show_id, mal_id, f"https://myanimelist.net/anime/{mal_id}", now),
-        )
-    return show_id
+    try:
+        decision = add_check.classify(conn, candidate, fribb.load_dataset())
+    except Exception:  # no Fribb dataset (network, no cache): tried on the next fetch
+        log.warning("add check skipped for AniList %s: no Fribb dataset", node["id"])
+        return
+    if decision.kind in add_check.AUTOMATIC:
+        add_check.apply_decision(conn, decision, candidate)
+    elif decision.kind == "needs_user":
+        add_check.review(conn, f"anilist:{node['id']}", decision, "anilist_relation")
 
 
 def _upsert_season(
@@ -1043,7 +910,8 @@ def _upsert_season(
     same protection reconcileSeasonMapping (A.4) gives it."""
     now = util.now_utc_iso()
     existing = conn.execute(
-        "SELECT id, manual_override FROM season WHERE show_id = ? AND season_number = ?",
+        "SELECT id, manual_override FROM season WHERE show_id = ? AND season_number = ?"
+        " AND kind = 'tvdb_season'",
         (show_id, season_number),
     ).fetchone()
     if existing is not None:
@@ -1476,7 +1344,8 @@ def _ensure_seasons(
     # nullable column is for.
     for season_number in sorted(n for n in season_numbers if n is not None and n > 0):
         row = conn.execute(
-            "SELECT id FROM season WHERE show_id = ? AND season_number = ?",
+            "SELECT id FROM season WHERE show_id = ? AND season_number = ?"
+            " AND kind = 'tvdb_season'",
             (show_id, season_number),
         ).fetchone()
         if row is not None:

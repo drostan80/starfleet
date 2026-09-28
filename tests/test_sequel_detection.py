@@ -49,6 +49,7 @@ def conn(tmp_path):
             source TEXT,
             matched INTEGER DEFAULT 0,
             manual_override INTEGER DEFAULT 0,
+            kind TEXT NOT NULL DEFAULT 'tvdb_season',
             created_at TEXT NOT NULL DEFAULT '2026-01-01',
             updated_at TEXT NOT NULL DEFAULT '2026-01-01'
         );
