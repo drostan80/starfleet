@@ -261,6 +261,10 @@ An episode can be unaired but watched (pre-air showing, leak…).
   - **Exception:** its episodes are fetched only when a later season is added as
     not skipped and the show needs them for absolute numbering.
   - **Never on external databases** (AniList/MAL): skipped is not mirrored.
+  - **Where skipped shows/seasons appear** `[clarified 2026-09-28]`: in **browse and
+    add**, where they can be filtered in or out, so the user can change a skipped
+    status to something else. **Nowhere else** (calendar, next-up, backlog, airing
+    lists…).
   - **Which seasons can be skipped automatically:** a not-yet-tracked season, or
     one auto-added as planned (Q-J3), or one you set planned, after a warning (Q-J4). A season **auto-added as planned** that the user then moves to
     skipped is **deleted from AniList/MAL**.
@@ -279,6 +283,10 @@ An episode can be unaired but watched (pre-air showing, leak…).
   `[clarified 2026-09-27, Q-H]`
 - **R2.13a Setting a status on the show** applies it to the **last non-skipped
   season**; the show is then derived per R2.13. `[clarified 2026-09-27, Q-B2]`
+- **R2.13b Skipped picked on the show** `[clarified 2026-09-28, Q-W]`: R2.13a applies
+  (the last non-skipped season becomes skipped), **but the show as a whole is
+  dropped** — the one exception to "a show has the status of its last non-skipped
+  season".
 - **R2.14** Season planned + one episode set watched → season watching. This is
   the **only** automatic path to watching (R2.6). `[clarified 2026-09-27, Q-B]`
 - **R2.15** All episodes of a level with an id watched → that level completed —
@@ -395,6 +403,13 @@ An episode can be unaired but watched (pre-air showing, leak…).
   `[clarified 2026-09-27, Q-J2]`
 - **R4.8 Changes propagate through LCARS.** E.g. an episode watched in MAL changes
   LCARS, and LCARS propagates it to AniList.
+- **R4.8a A season set completed on AniList/MAL** `[clarified 2026-09-28]` is mirrored
+  like R2.7: you watched all its episodes, so the season is completed and **all its
+  episodes are marked watched, aired or not**. When that marks unaired episodes
+  watched, a **review** is raised: accept the change, or revert to watching without
+  marking the episodes; it links to the show page so it can be corrected there too.
+- **R4.8b Every review is actionable** `[clarified 2026-09-28]`: it offers the choices
+  that resolve it, and links to the show page.
 - **R4.9 Flip-flop protection.** Checks of each external DB run separately. A change
   found triggers its propagation **first**, before a new check of the other
   database is made.
@@ -575,7 +590,7 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - **Q-V (R1.8b)** Frieren's ten 1–2 min minis between S1 and S2: whole numbers **[ANSWERED → R1.8d]**
   (S2 starts at 39) or decimals?
 
-- **Q-W (R2.13a, R2.10)** Picking **skipped on a show**: R2.13a puts it on the last **[OPEN]**
+- **Q-W (R2.13a, R2.10)** Picking **skipped on a show**: R2.13a puts it on the last **[ANSWERED → R2.13b]**
   non-skipped season only; the show is then derived from the season before it, so the
   show would read e.g. *completed*, not skipped. Should picking skipped on a show skip
   **every** season (the show then reads skipped), or follow R2.13a literally?
@@ -607,3 +622,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — R1.2d build model (TVDB-order first, reconcile with AniDB; ship before AniDB is complete; AniDB fetch priority); Q-U answered → R1.2b (single item → .5).
 - 2026-09-28 — Q-V answered → R1.8d (minis between seasons take decimals, in their decimal season; next season keeps its number).
 - 2026-09-28 — Q-W asked (skipped picked on a show).
+- 2026-09-28 — R2.10 (skipped appears in browse/add only, filterable), R2.13b (Q-W: skipped on a show → last season skipped, show dropped), R4.8a (remote completed mirrors R2.7, review for unaired), R4.8b (reviews actionable, link to show page).

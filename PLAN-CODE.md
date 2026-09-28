@@ -295,14 +295,17 @@ The UI showing it is phase 8.
 effect (e.g. "this will mark 4 unaired episodes watched", "this show has later
 seasons planned — skip all?"); UI shows it.
 
-**Not done in phase 4 (moved):** browse/add still show skipped seasons (greyed, hidden
-only by a filter) — R2.10 says they don't appear there: **phase 8** (UI).
+**Browse/add and skipped (R2.10, clarified 09-28):** skipped shows/seasons stay in
+browse/add, filterable in or out, so their status can be changed — that is today's
+behaviour; nothing to move to phase 8.
 `inherit_season_status` / `is_users_own_season` still decide the status of the season a
 show is added for, so Sonarr-added shows don't follow R5.3 yet: **phase 5**.
 **Phase 7 depends on** `status_set_manually` being set by the rebuild (PLAN-DATA §3)
 before the R2.10 delete-from-AniList/MAL runs; and on the watch_reconcile guard above
-(remote COMPLETED over aired, unwatched episodes → watching) being settled against
-R2.7/R4.8/R4.10.
+(remote COMPLETED over aired, unwatched episodes → watching) being replaced by
+**R4.8a**: a remote COMPLETED marks every episode watched; if that includes unaired
+ones, an actionable review (accept / revert to watching without marking, link to the
+show page — R4.8b).
 **AniDB fetching in prod after cutover** must use a per-IP daily cap well under ~250
 requests (two bans at ~250, at 3.5 s and 5 s pacing) — proposed 200/day, user to confirm.
 
@@ -333,6 +336,9 @@ found goes to review, never auto-merged. `pollShowMerges` stays review-only.
 not in LCARS goes through 5.1 as a season with the list's status.
 - **Consequence:** on first run every list entry not in LCARS gets added — the
   dry run (phase 9) shows the list first.
+
+**APPROVED 2026-09-28**, with 3.4 films and **R2.13b** (skipped picked on a show →
+last season skipped, show dropped) added.
 
 ## Phase 6 — Sonarr (R5.x; F2–F5, G6)
 
