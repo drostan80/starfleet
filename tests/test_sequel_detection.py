@@ -693,6 +693,8 @@ class TestAutoAttachSequel:
                 created_at TEXT NOT NULL DEFAULT '2026-01-01',
                 updated_at TEXT NOT NULL DEFAULT '2026-01-01',
                 list_sync INTEGER NOT NULL DEFAULT 1,
+                kind TEXT NOT NULL DEFAULT 'tvdb_season',
+                status_set_manually INTEGER NOT NULL DEFAULT 0,
                 UNIQUE (show_id, season_number, part_number)
             );
             CREATE TABLE episode (
@@ -803,11 +805,13 @@ class TestAutoAttachSequel:
         assert review["entity_type"] == "season"
         assert review["source"] == "backfill"
 
-    def test_auto_attach_inherits_dropped_status(self, attach_conn):
+    def test_auto_attach_after_a_dropped_season_is_skipped(self, attach_conn):
+        # RULEBOOK R2.16 (phase 4): a new season after a dropped one is skipped.
         from lcars import show_backfill
         attach_conn.execute(
             "UPDATE show SET status = 'dropped' WHERE id = 's-parent'"
         )
+        attach_conn.execute("UPDATE season SET status = 'dropped' WHERE show_id = 's-parent'")
         attach_conn.commit()
 
         err = shows.SequelDetectedError(
@@ -820,7 +824,7 @@ class TestAutoAttachSequel:
         row = attach_conn.execute(
             "SELECT status FROM season WHERE show_id = 's-parent' AND season_number = 2",
         ).fetchone()
-        assert row["status"] == "dropped"
+        assert row["status"] == "skipped"
 
 
 class TestCheckLaterSeasonPreAdd:

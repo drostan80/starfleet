@@ -26,7 +26,7 @@ Two responsibilities, both inert until S3 switches reconcile reads:
 import logging
 import sqlite3
 
-from lcars import anilist_client, ids, pending_review, util
+from lcars import anilist_client, ids, pending_review, status_rules, util
 
 log = logging.getLogger(__name__)
 
@@ -59,53 +59,6 @@ def inherit_season_status(conn: sqlite3.Connection, show_id: str) -> str:
     return "planned"
 
 
-def _previous_season_status(conn: sqlite3.Connection, show_id: str, season_number: int):
-    row = conn.execute(
-        "SELECT status FROM season WHERE show_id = ? AND season_number > 0"
-        " AND season_number < ? AND status IS NOT NULL"
-        " ORDER BY season_number DESC LIMIT 1",
-        (show_id, season_number),
-    ).fetchone()
-    if row is not None:
-        return row["status"]
-    row = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
-    return row["status"] if row is not None else None
-
-
-def season_finished_locally(conn: sqlite3.Connection, show_id: str, season_number: int):
-    """True when every episode of this season has aired, False when one
-    hasn't (future or undated), None when LCARS has no episodes for it."""
-    row = conn.execute(
-        "SELECT COUNT(*) AS n,"
-        " SUM(air_date_utc IS NOT NULL AND air_date_utc <= ?) AS aired"
-        " FROM episode WHERE show_id = ? AND season = ?",
-        (util.now_utc_iso(), show_id, season_number),
-    ).fetchone()
-    if not row["n"]:
-        return None
-    return row["aired"] == row["n"]
-
-
-def new_season_status(
-    conn: sqlite3.Connection, show_id: str, season_number: int, finished: bool | None
-) -> str:
-    """Status of a season LCARS creates on its own (user rule, 2026-09-25):
-      - not finished airing (future or currently airing) -> planned
-      - finished (or unknown), previous season watching/completed/paused
-        -> paused
-      - finished (or unknown), previous season dropped -> dropped
-      - anything else -> planned
-    Such seasons are also never pushed to AniList/MAL (`list_sync = 0`)."""
-    if finished is False:
-        return "planned"
-    previous = _previous_season_status(conn, show_id, season_number)
-    if previous in ("watching", "completed", "paused"):
-        return "paused"
-    if previous == "dropped":
-        return "dropped"
-    return "planned"
-
-
 def is_users_own_season(
     conn: sqlite3.Connection, show_id: str, season_number: int, anilist_id
 ) -> bool:
@@ -134,19 +87,12 @@ def auto_season_fields(
     anilist_id=None, finished: bool | None = None,
 ) -> tuple[str, int]:
     """(status, list_sync) for a season row LCARS is creating on its own.
-    `finished` falls back to the season's own episodes when not given."""
+    The season the show was added for keeps the show's status; any other
+    follows RULEBOOK R2.16/R2.19 (`status_rules.new_season_status`).
+    `finished` is no longer used (the old "finished → paused" rule is gone)."""
     if is_users_own_season(conn, show_id, season_number, anilist_id):
         return inherit_season_status(conn, show_id), 1
-    if finished is None:
-        finished = season_finished_locally(conn, show_id, season_number)
-    if finished is None and anilist_id is not None:
-        try:
-            status = anilist_client.fetch_media_statuses([anilist_id]).get(int(anilist_id))
-            if status is not None:
-                finished = status in ("FINISHED", "CANCELLED")
-        except anilist_client.AniListError:
-            finished = None
-    return new_season_status(conn, show_id, season_number, finished), 0
+    return status_rules.new_season_status(conn, show_id, season_number), 0
 
 
 # ---------------------------------------------------------------------------

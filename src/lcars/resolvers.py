@@ -54,13 +54,13 @@ from lcars import (
     score_sync,
     season_mapping,
     season_ranges,
-    season_status_log,
     service_health,
     service_presence,
     show_backfill,
     show_merge,
     shows,
     sonarr_client,
+    status_rules,
     tvdb_backfill,
     untracked_sweep,
     util,
@@ -434,10 +434,10 @@ def _stamp_season_started_at(
     watch event (season is None, movies have no season row) or a
     season LCARS doesn't have a row for yet.
 
-    `push=False` (only `_bulk_mark_all_aired_episodes_watched` passes
-    this) covers a real corruption risk found in review: that caller's
-    `watched_at` is a synthesized "now" (the moment a show got manually
-    marked completed today), not a real historical watch date — pushing
+    `push=False` (`_apply_status_effects` passes this) covers a real
+    corruption risk found in review: a season set completed marks its
+    episodes watched with a synthesized "now", not a real historical
+    watch date — pushing
     that as `startedAt` would overwrite AniList's own, possibly-genuine
     value with today's date for every season that had none locally yet.
     LCARS still captures its own local value either way (this function's
@@ -469,8 +469,8 @@ def _stamp_season_started_at(
 def _push_season_completed_at(
     conn, season_id: str, anilist_id: int | None, completed_at: str
 ) -> None:
-    """AniList push half of `_stamp_completed_at_if_highest_season`/
-    `_try_complete_season` below — same todo.md FuzzyDateInput gap
+    """AniList push half of `_apply_status_effects`'s `completed_at` stamp —
+    same todo.md FuzzyDateInput gap
     `_push_season_started_at` closes, for the other of the two fields.
     Same no-op-before-login/no-op-unlinked/best-effort/pending_review-
     on-failure shape."""
@@ -491,386 +491,53 @@ def _push_season_completed_at(
         )
 
 
-def _stamp_completed_at_if_highest_season(conn, show_id: str, new_status: str) -> None:
-    """Write-mirror function set, todo.md (2026-08-16) — the date
-    `show.status` became 'completed', per the user's own rule. Written
-    onto this show's highest-numbered season only, any-status/
-    any-link (not restricted to AniList-linked seasons — a different,
-    narrower "highest linked season" concept watch_reconcile.py's own
-    reconcile_watch_progress uses for a genuinely different purpose,
-    deciding which season's AniList status is authoritative to *read*
-    from; the local write itself needs no AniList entry to pick a
-    target, but the push below — `_push_season_completed_at` — is a
-    genuine no-op on an unlinked highest season). `show.status` is
-    show-wide but `completed_at` is per-season (§5.5's split-cour
-    model), so only the season that's actually finishing gets stamped
-    — a multi-season show's earlier, already-finished seasons keep
-    whatever completed_at they already have, untouched. Written once
-    (`WHERE completed_at IS NULL`); a later drop-then-complete-again
-    doesn't move an already-recorded date or re-push it."""
-    if new_status != "completed":
-        return
-    highest = conn.execute(
-        "SELECT id, anilist_id, completed_at FROM season WHERE show_id = ?"
-        " ORDER BY season_number DESC LIMIT 1",
-        (show_id,),
-    ).fetchone()
-    if highest is None or highest["completed_at"] is not None:
-        return
-    now = util.now_utc_iso()
-    conn.execute(
-        "UPDATE season SET completed_at = ?, updated_at = ? WHERE id = ?",
-        (now, now, highest["id"]),
-    )
-    _push_season_completed_at(conn, highest["id"], highest["anilist_id"], now)
-
-
-# -- bidirectional completion auto-sync (write-mirror, todo.md 2026-08-16) --
-#
-# User's own rule, verbatim: "season are marked complete when all episodes
-# are watched, same for show, complete when all seasons are marked watched,
-# if a new season is added then move back to watching." Plus: a skipped
-# episode counts as done for this purpose (stays 'skipped' in the DB,
-# never rewritten to 'watched' — same distinction _compute_season_episode_
-# progress already draws); and a still-airing show needs a warning/confirm
-# gate before a *manual* completion bulk-marks episodes, per the user's own
-# "y/n" framing (setStatus's own confirmed argument, below).
-#
-# Two independent triggers, deliberately not unified into one function:
-#   - Forward (episode watched/skipped -> season complete -> show complete):
-#     _try_complete_season/_try_complete_show, called from every mutation
-#     that changes episode.state.
-#   - Reverse (show set completed -> bulk-mark aired episodes watched):
-#     _bulk_mark_all_aired_episodes_watched, called from setStatus only.
-# The forward direction naturally never fires early on an airing show (the
-# "last" episode isn't actually last yet), so the warning/confirm gate is
-# only needed on the reverse/manual path.
-
-
-def _season_still_airing(conn, show_id: str, season_number: int) -> bool:
-    """Season-scoped version of `_show_is_airing` above — that check is
-    whole-show, which would wrongly block a finished earlier season
-    from ever completing just because a later, still-airing season
-    exists under the same show (an ordinary, common case for an
-    ongoing multi-cour show, e.g. Ascendance of a Bookworm this
-    same week)."""
-    row = conn.execute(
-        "SELECT 1 FROM episode"
-        " WHERE show_id = ? AND season = ? AND (air_date_utc IS NULL OR air_date_utc > ?) LIMIT 1",
-        (show_id, season_number, util.now_utc_iso()),
-    ).fetchone()
-    return row is not None
-
-
-def _try_complete_season(conn, show_id: str, season_number: int, completed_at: str) -> bool:
-    """Stamps this one season's `completed_at` if every one of its
-    episodes is 'watched' or 'skipped', it has at least one episode
-    row (an empty/never-fetched season is never "complete"), it isn't
-    still airing (season-scoped, above), and it isn't already stamped
-    (write-once, same guard `_stamp_completed_at_if_highest_season`
-    already uses). Returns whether it actually stamped anything, so a
-    caller can tell "already complete" apart from "just completed" if
-    it ever needs to. Also pushes the new completed_at on to AniList
-    (`_push_season_completed_at`) whenever it actually stamps — this is
-    the forward/auto-complete path, so unlike
-    `_stamp_completed_at_if_highest_season` (setStatus's manual path)
-    it fires for every completing season, not just the highest one."""
-    season = conn.execute(
-        "SELECT id, anilist_id, completed_at, status FROM season"
-        " WHERE show_id = ? AND season_number = ?",
-        (show_id, season_number),
-    ).fetchone()
-    if season is None or season["completed_at"] is not None:
-        return False
-    # Don't override a deliberate PAUSED/DROPPED set by the user
-    if season["status"] in ("paused", "dropped"):
-        return False
-    episodes = conn.execute(
-        "SELECT state FROM episode WHERE show_id = ? AND season = ?", (show_id, season_number)
-    ).fetchall()
-    if not episodes or any(e["state"] not in ("watched", "skipped") for e in episodes):
-        return False
-    if _season_still_airing(conn, show_id, season_number):
-        return False
-    now = util.now_utc_iso()
-    conn.execute(
-        "UPDATE season SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
-        (completed_at, now, season["id"]),
-    )
-    season_status_log.record(
-        conn, season["id"], show_id, season["status"], "completed", "auto_complete", now
-    )
-    _push_season_completed_at(conn, season["id"], season["anilist_id"], completed_at)
-    return True
-
-
-def _try_complete_show(conn, show_id: str, completed_at: str) -> None:
-    """DEPRECATED (2.1c) — superseded by _recompute_show_status +
-    _compute_show_status.  Retained as reference; no callers remain.
-
-    Original: The show-wide half: every episode across every season is
-    'watched'/'skipped', there's at least one episode row, and nothing
-    more is expected (`_show_is_airing`, whole-show — deliberately
-    the unscoped check here, unlike `_try_complete_season`'s own: the
-    *show* genuinely isn't done if anything anywhere is still airing).
-    Tests episode state directly rather than "every season has
-    completed_at set" — every pre-existing season in production has
-    `completed_at IS NULL` (this field is brand new, no historical
-    backfill), so that test would never fire for a single real show
-    that existed before today. Stamps every season it can first (so a
-    multi-season show's own seasons genuinely reflect "marked complete"
-    too, per the user's literal framing), then promotes `show.status`
-    — its own real `status_change` row and AniList/MAL push, same
-    shape `setStatus` itself uses, since nothing else in this code path
-    goes through that resolver. No-ops entirely if the show is already
-    `completed` (guards against a duplicate status_change on a second,
-    harmless trigger — e.g. marking an already-fully-watched season's
-    stray rewatch episode) or has zero episode rows at all."""
-    show = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
-    if show is None or show["status"] == "completed":
-        return
-    has_episodes = conn.execute(
-        "SELECT 1 FROM episode WHERE show_id = ? LIMIT 1", (show_id,)
-    ).fetchone()
-    if has_episodes is None:
-        return
-    any_unwatched = conn.execute(
-        "SELECT 1 FROM episode WHERE show_id = ? AND state = 'unwatched' LIMIT 1", (show_id,)
-    ).fetchone()
-    if any_unwatched is not None:
-        return
-    if _show_is_airing(conn, show_id):
-        return
-    for season_row in conn.execute(
-        "SELECT season_number FROM season WHERE show_id = ?", (show_id,)
-    ).fetchall():
-        _try_complete_season(conn, show_id, season_row["season_number"], completed_at)
-    now = util.now_utc_iso()
-    conn.execute(
-        "UPDATE show SET status = 'completed', updated_at = ? WHERE id = ?", (now, show_id)
-    )
-    conn.execute(
-        "INSERT INTO status_change"
-        " (id, show_id, previous_status, new_status, changed_at, changed_by)"
-        " VALUES (?, ?, ?, 'completed', ?, 'auto_complete')",
-        (ids.generate_id(conn, "c"), show_id, show["status"], now),
-    )
-    _push_show_status(conn, show_id, "completed")
-    _push_mal_show_status(conn, show_id, "completed")
-
-
-def _compute_show_status(conn, show_id: str) -> str | None:
-    """Derive what show.status should be from episode state and season
-    statuses.  Returns the status string, or None if it can't determine
-    one (no seasons / no episodes → caller should keep current status).
-
-    Rules (user's own, 2026-09-02):
-    1. COMPLETED — episode-derived: every episode across every season is
-       'watched' or 'skipped', at least one episode exists, and the show
-       is not airing (same preconditions as _try_complete_show).
-    2. Otherwise — season-status-derived: the highest-numbered season's
-       status, with one exception: if the highest season is PLANNED and
-       at least one other season exists, the show is WATCHING (the user
-       is watching the show overall, just planning the next season).
-
-    **2026-09-20 fix**: Rule 2 alone had no defense against a season's own
-    `status` being wrong — found live via `anilist_reconcile`/
-    `mal_reconcile` repeatedly writing a remote-reported "completed" onto
-    a season that genuinely still had real, already-aired, unwatched
-    episodes (both platforms can flip a currently-airing entry's own
-    status as their episode-count metadata catches up). Rule 1 already
-    guards the *episode-derived* completion this way; Rule 2 needs the
-    same guard for the *season-status-derived* path, or a stale/wrong
-    season.status can claim completion Rule 1 would never have granted —
-    and worse, a resulting show.status='completed' auto-marks every aired
-    episode watched (_bulk_mark_all_aired_episodes_watched), fabricating
-    watch history for episodes the user hasn't actually seen."""
-    # Gather non-special seasons (season 0 = specials, excluded from
-    # status derivation — specials don't represent show progress).
-    seasons = conn.execute(
-        "SELECT season_number, status FROM season"
-        " WHERE show_id = ? AND season_number > 0"
-        " ORDER BY season_number",
-        (show_id,),
-    ).fetchall()
-    if not seasons:
-        return None
-
-    # Rule 1: episode-derived COMPLETED (single authority for completion)
-    has_episodes = conn.execute(
-        "SELECT 1 FROM episode WHERE show_id = ? LIMIT 1", (show_id,)
-    ).fetchone()
-    if has_episodes is not None:
-        any_unwatched = conn.execute(
-            "SELECT 1 FROM episode WHERE show_id = ? AND state = 'unwatched' LIMIT 1",
-            (show_id,),
-        ).fetchone()
-        if any_unwatched is None and not _show_is_airing(conn, show_id):
-            return "completed"
-
-    # Rule 2: highest season's status, with PLANNED exception
-    highest = seasons[-1]
-    highest_status = highest["status"] or "planned"  # null = inherits, treat as planned
-    if highest_status == "planned" and len(seasons) > 1:
-        return "watching"
-    if highest_status == "completed":
-        real_gap = conn.execute(
-            "SELECT 1 FROM episode WHERE show_id = ? AND season = ?"
-            " AND state = 'unwatched' AND air_date_utc IS NOT NULL AND air_date_utc <= ?"
-            " LIMIT 1",
-            (show_id, highest["season_number"], util.now_utc_iso()),
-        ).fetchone()
-        if real_gap is not None:
-            return "watching"
-    return highest_status
+# -- completion: the status engine (status_rules.py, phase 4) decides every
+# automatic season/show status; _apply_status_effects below does the rest.
 
 
 def _recompute_show_status(
-    conn, show_id: str, changed_by: str, *, _from_bulk_mark: bool = False, _skip_push: bool = False
+    conn, show_id: str, changed_by: str, *, _skip_push: bool = False, at: str | None = None
+):
+    """Runs the status engine after episodes changed (RULEBOOK R2.13–R2.15,
+    R2.18 — `status_rules.after_episodes_changed`) and applies the effects.
+    _skip_push: watch_reconcile's own remote-sourced changes (2026-09-20) —
+    that caller pushes onward itself, never back to where it came from."""
+    fx = status_rules.after_episodes_changed(conn, show_id, changed_by)
+    _apply_status_effects(conn, show_id, fx, push=not _skip_push, at=at)
+    return fx
+
+
+def _apply_status_effects(
+    conn, show_id: str, fx, *, push: bool = True, at: str | None = None
 ) -> None:
-    """Derive show.status from seasons/episodes and apply side effects
-    when it changes.  The single place that updates show.status after
-    the initial setStatus/setSeasonStatus write — all callers converge
-    here instead of maintaining separate writers.
-
-    _from_bulk_mark: True when called from inside _bulk_mark_all_aired_
-    episodes_watched's call tree, to prevent the cycle: recompute →
-    COMPLETED → bulk-mark → recompute.  When True, skips the bulk-mark
-    and per-season _try_complete_season calls (the caller already handled
-    episode state).
-
-    _skip_push: True when called from watch_reconcile.py's own
-    _apply_remote_list (2026-09-20) — a real incident, not theoretical:
-    that caller already does its own one-directional "hub" push onward
-    to the *other* service (never back to the one the change came from),
-    the correct behavior for a remote-sourced change. Without this flag,
-    this function's own unconditional _push_show_status/
-    _push_mal_show_status ran *again* on top of that — a pointless
-    self-push back to the service the status was just read from, plus a
-    genuine duplicate push to the other one. On the first real run after
-    this module's status-derivation fix landed, a backlog of shows
-    corrected all at once, and each one paid for 2-3x the throttled
-    AniList calls it needed (anilist_client's rate limiter sleeps
-    synchronously, blocking LCARS's single worker) — enough to make the
-    whole server unresponsive for several minutes, not just this feature.
-    Every other caller (setSeasonStatus, addWatchEvent, etc.) still needs
-    the push here, since none of them push anywhere themselves."""
-    show = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
-    if show is None:
-        return
-    old_status = show["status"]
-    if old_status == "skipped":
-        return  # tombstone — never overwrite via derivation
-    new_status = _compute_show_status(conn, show_id)
-    if new_status is None or new_status == old_status:
-        return
-
+    """What follows the status engine's changes (phase 4): a season that
+    became completed gets its `completed_at`; each changed season's status
+    is pushed to its own AniList/MAL entry (AniList is season level, R1.23 —
+    the show's status is never fanned out to every season any more); watched
+    episodes get `started_at` and their progress pushed. Skipped is never
+    pushed (R4.6). `at`: when it happened (the watch that completed a season),
+    else now."""
     now = util.now_utc_iso()
-    conn.execute(
-        "UPDATE show SET status = ?, updated_at = ? WHERE id = ?",
-        (new_status, now, show_id),
-    )
-    conn.execute(
-        "INSERT INTO status_change"
-        " (id, show_id, previous_status, new_status, changed_at, changed_by)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
-        (ids.generate_id(conn, "c"), show_id, old_status, new_status, now, changed_by),
-    )
-    if not _skip_push:
-        _push_show_status(conn, show_id, new_status)
-        _push_mal_show_status(conn, show_id, new_status)
-
-    if new_status == "completed" and not _from_bulk_mark:
-        _stamp_completed_at_if_highest_season(conn, show_id, new_status)
-        _bulk_mark_all_aired_episodes_watched(conn, show_id)
-        for season_row in conn.execute(
-            "SELECT season_number FROM season WHERE show_id = ?", (show_id,)
-        ).fetchall():
-            _try_complete_season(conn, show_id, season_row["season_number"], now)
-
-
-def _bulk_mark_all_aired_episodes_watched(conn, show_id: str) -> None:
-    """Reverse direction — user's own rule: "if show is marked as
-    completed then mark all episodes watched." Only touches episodes
-    that have genuinely aired (a real, past `air_date_utc`) and are
-    currently `unwatched` — never an already-`skipped` episode (stays
-    skipped, counts as done for completion purposes without being
-    rewritten — same rule `_try_complete_season` applies) and never an
-    episode with no air date or a future one, unconditionally,
-    regardless of `confirmed`: marking something "watched" that hasn't
-    aired would be false no matter how the caller answered the warning
-    prompt (setStatus's own `confirmed` argument only gates *whether
-    the status change itself proceeds*, not what this function is
-    willing to mark). Pushes each touched season's progress, same as
-    every other real watch mutation — an auto-completed show whose
-    AniList entry still shows old progress would be its own new
-    inconsistency otherwise. `started_at` is captured locally
-    (`_stamp_season_started_at`) but deliberately NOT pushed to AniList
-    from here (`push=False`) — `now` is a synthesized "marked completed
-    today" timestamp, not a real historical watch date, and pushing it
-    would silently overwrite AniList's own possibly-genuine `startedAt`
-    with today's date for every season that had none locally yet.
-
-    No equivalent suppression for `completed_at`, deliberately: this
-    same `now` (passed on as `completed_at` to the `_try_complete_season`
-    calls setStatus's own caller loop makes right after this function
-    returns) genuinely *is* the correct value there, not a guess — the
-    migration's own definition is "the date show.status became
-    'completed'", and that's exactly what just happened, this instant.
-    `started_at` and `completed_at` differ in kind here: one estimates a
-    past event this function has no real record of, the other stamps
-    the event this function's own caller is causing right now."""
-    now = util.now_utc_iso()
-    to_mark = conn.execute(
-        "SELECT id, season, episode FROM episode"
-        " WHERE show_id = ? AND state = 'unwatched'"
-        " AND air_date_utc IS NOT NULL AND air_date_utc <= ?",
-        (show_id, now),
-    ).fetchall()
-    touched_seasons = set()
-    for ep in to_mark:
-        conn.execute(
-            "INSERT INTO watch_event (id, show_id, season, episode, watched_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (ids.generate_id(conn, "w"), show_id, ep["season"], ep["episode"], now, now),
-        )
-        conn.execute(
-            "UPDATE episode SET state = 'watched', updated_at = ? WHERE id = ?", (now, ep["id"])
-        )
-        touched_seasons.add(ep["season"])
-    for season_number in touched_seasons:
+    at = at or now
+    for season_id, _old, new in fx.seasons:
+        season = season_mapping.get_season(conn, season_id)
+        if season is None:
+            continue
+        if new == "completed" and season.get("completed_at") is None:
+            conn.execute(
+                "UPDATE season SET completed_at = ?, updated_at = ? WHERE id = ?",
+                (at, now, season_id),
+            )
+            if push:
+                _push_season_completed_at(conn, season_id, season.get("anilist_id"), at)
+        if push and new and new != "skipped":
+            _push_season_status(conn, season, new)
+            _push_mal_season_status(conn, season, new)
+    for season_number in sorted({s for s, _ in fx.watched}):
         _stamp_season_started_at(conn, show_id, season_number, now, push=False)
-        _push_show_episode_progress(conn, show_id, season_number)
-        _push_mal_show_episode_progress(conn, show_id, season_number)  # MAL mirror
-
-
-def _reopen_show_if_completed(conn, show_id: str, changed_by: str) -> None:
-    """Forward-direction counterpart to the above, triggered from the
-    *addition* of a new season rather than a watch event: "if a new
-    season is added then move back to watching," user's own words.
-    Wired into `setSeasonMapping`'s own new-season-row branch only —
-    checked the other four `INSERT INTO season` call sites
-    (`season_mapping.py` x2, `metadata.py` x2, both automated
-    Sonarr/Fribb discovery paths) and deliberately left them
-    un-hooked: an automated background sweep silently flipping
-    `show.status` and pushing to AniList is a materially different,
-    riskier kind of unattended write than the client-driven mutations
-    this whole write-mirror already covers, and isn't what was asked
-    for. Logged as a known boundary, same treatment as `started_at`'s
-    own watch_reconcile.py boundary above."""
-    show = conn.execute("SELECT status FROM show WHERE id = ?", (show_id,)).fetchone()
-    if show is None or show["status"] != "completed":
-        return
-    now = util.now_utc_iso()
-    conn.execute("UPDATE show SET status = 'watching', updated_at = ? WHERE id = ?", (now, show_id))
-    conn.execute(
-        "INSERT INTO status_change"
-        " (id, show_id, previous_status, new_status, changed_at, changed_by)"
-        " VALUES (?, ?, 'completed', 'watching', ?, ?)",
-        (ids.generate_id(conn, "c"), show_id, now, changed_by),
-    )
-    _push_show_status(conn, show_id, "watching")
-    _push_mal_show_status(conn, show_id, "watching")
+        if push:
+            _push_show_episode_progress(conn, show_id, season_number)
+            _push_mal_show_episode_progress(conn, show_id, season_number)
 
 
 def _push_season_rewatch(conn, season: dict, repeat_count: int) -> None:
@@ -3347,21 +3014,22 @@ def resolve_set_status(_, info, show_id, status, confirmed=False):
     apply a status change with the exact same side effects — AniList/MAL
     push, season fanout, completed-episode auto-mark — as this resolver,
     same shape resolve_add_show's own docstring already established for
-    shows.create_show). `confirmed` — auto-sync warning gate, todo.md
-    2026-08-16, user's own "y/n" framing: setting COMPLETED on a show
-    that's still airing (`_show_is_airing`) refuses with a GraphQLError
-    unless `confirmed: true` is also passed."""
+    shows.create_show). `confirmed` — the status engine's warnings
+    (RULEBOOK R3.4: unaired episodes marked watched; R2.16/Q-J4: later
+    seasons you set planned get skipped) refuse with a GraphQLError unless
+    `confirmed: true` is also passed."""
     conn = db.get_connection()
     client = require_client(info)
-    if status == "completed" and not confirmed and _show_is_airing(conn, show_id):
-        raise GraphQLError(
-            f"{show_id} still has an episode with no known air date, or one that hasn't aired "
-            "yet — mark it completed anyway? pass confirmed: true to proceed"
-        )
-    return _apply_status_change(conn, show_id, status, client)
+    try:
+        return _apply_status_change(conn, show_id, status, client, confirmed=confirmed)
+    except status_rules.NeedsConfirmation as e:
+        conn.rollback()
+        raise GraphQLError(str(e)) from None
 
 
-def _apply_status_change(conn, show_id: str, status: str, changed_by: str):
+def _apply_status_change(
+    conn, show_id: str, status: str, changed_by: str, *, confirmed: bool = True
+):
     """The real work behind resolve_set_status above — factored out so
     the Sonarr/Radarr reconcile mutation (B.5.1 follow-up, NEXT_UP.md)
     can drive a status change with `changed_by="sonarr"`/`"radarr"` and
@@ -3406,36 +3074,13 @@ def _apply_status_change(conn, show_id: str, status: str, changed_by: str):
         )
         conn.commit()
         return _get_show(conn, show_id)
-    # Fanout: only stomp the highest season's status — earlier seasons
-    # keep their own deliberate per-season status (user rule: "show
-    # level only stomp last season if needed").
-    for last_season in conn.execute(
-        "SELECT id FROM season WHERE show_id = ? AND season_number = ("
-        "   SELECT MAX(season_number) FROM season"
-        "   WHERE show_id = ? AND season_number > 0"
-        " )",
-        (show_id, show_id),
-    ).fetchall():
-        season_status_log.set_status(conn, last_season["id"], status, changed_by)
-    # Write show.status directly (this is the explicit-set path, not derived)
-    conn.execute(
-        "UPDATE show SET status = ?, updated_at = ? WHERE id = ?", (status, now, show_id)
-    )
-    conn.execute(
-        "INSERT INTO status_change"
-        " (id, show_id, previous_status, new_status, changed_at, changed_by)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
-        (ids.generate_id(conn, "c"), show_id, previous_status, status, now, changed_by),
-    )
-    _push_show_status(conn, show_id, status)  # §6.1/§6.8, A.9 — best-effort
-    _push_mal_show_status(conn, show_id, status)  # §6.1/§6.9, B.10 — best-effort
-    _stamp_completed_at_if_highest_season(conn, show_id, status)  # write-mirror, todo.md
-    if status == "completed":
-        _bulk_mark_all_aired_episodes_watched(conn, show_id)  # auto-sync, todo.md
-        for season_row in conn.execute(
-            "SELECT season_number FROM season WHERE show_id = ?", (show_id,)
-        ).fetchall():
-            _try_complete_season(conn, show_id, season_row["season_number"], now)
+    # RULEBOOK R2.13a (phase 4): the status goes on the last non-skipped
+    # season; the show's own status is then derived from it (R2.13).
+    fx = status_rules.set_show_status(conn, show_id, status, changed_by, confirmed=confirmed)
+    _apply_status_effects(conn, show_id, fx)
+    now_paused = conn.execute(
+        "SELECT status FROM show WHERE id = ?", (show_id,)
+    ).fetchone()["status"] in ("paused", "dropped")
     conn.commit()
     if now_paused and not was_paused:
         _unmonitor_in_arr_on_drop(conn, show_id)
@@ -3543,24 +3188,15 @@ def resolve_set_season_status(_, info, season_id, status=None, confirmed=False):
     season = season_mapping.get_season(conn, season_id)
     if season is None:
         raise GraphQLError(f"no such season: {season_id}")
-    if status == "completed" and not confirmed:
-        if _season_still_airing(conn, season["show_id"], season["season_number"]):
-            raise GraphQLError(
-                f"Season {season['season_number']} of {season['show_id']} still has an episode "
-                "with no known air date, or one that hasn't aired yet — mark it completed anyway? "
-                "pass confirmed: true to proceed"
-            )
-    season_status_log.set_status(conn, season_id, status, client)
     _enable_list_sync(conn, season)
-    # Push this season's own status to AniList/MAL
-    effective = status or conn.execute(
-        "SELECT status FROM show WHERE id = ?", (season["show_id"],)
-    ).fetchone()["status"]
-    if effective:
-        _push_season_status(conn, season, effective)
-        _push_mal_season_status(conn, season, effective)
-    # Recompute derived show.status
-    _recompute_show_status(conn, season["show_id"], client)
+    try:
+        # RULEBOOK R2.7, R2.15–R2.18 (phase 4): warnings (R3.4, Q-J4) come
+        # back as a GraphQLError asking for confirmed: true.
+        fx = status_rules.set_level_status(conn, season_id, status, client, confirmed=confirmed)
+    except status_rules.NeedsConfirmation as e:
+        conn.rollback()
+        raise GraphQLError(str(e)) from None
+    _apply_status_effects(conn, season["show_id"], fx)
     conn.commit()
     return season_mapping.get_season(conn, season_id)
 
@@ -4008,6 +3644,8 @@ def resolve_confirm_hard_delete(_, info, show_id, retyped_title):
         " (SELECT id FROM season WHERE show_id = ?)",
         (show_id,),
     )
+    conn.execute("DELETE FROM absolute_number_change WHERE show_id = ?", (show_id,))
+    conn.execute("DELETE FROM season_status_change WHERE show_id = ?", (show_id,))
     conn.execute("DELETE FROM season WHERE show_id = ?", (show_id,))
     conn.execute("DELETE FROM show_external_id WHERE show_id = ?", (show_id,))
     conn.execute("DELETE FROM show_synonym WHERE show_id = ?", (show_id,))
@@ -4062,8 +3700,7 @@ def resolve_add_watch_event(
         )
     _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
     if season is not None:
-        _try_complete_season(conn, show_id, season, watched_at)  # auto-sync, todo.md
-        _recompute_show_status(conn, show_id, "auto_complete")  # derived status, 2.1c
+        _recompute_show_status(conn, show_id, "auto_complete", at=watched_at)  # phase 4
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
@@ -4152,8 +3789,7 @@ def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
             (now, show_id, season, now),
         )
         _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
-        _try_complete_season(conn, show_id, season, watched_at)  # auto-sync, todo.md
-        _recompute_show_status(conn, show_id, "auto_complete")  # derived status, 2.1c
+        _recompute_show_status(conn, show_id, "auto_complete", at=watched_at)  # phase 4
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
@@ -4191,8 +3827,7 @@ def resolve_mark_episode_range_watched(
         (now, show_id, season, from_episode, to_episode),
     )
     _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
-    _try_complete_season(conn, show_id, season, watched_at)  # auto-sync, todo.md
-    _recompute_show_status(conn, show_id, "auto_complete")  # derived status, 2.1c
+    _recompute_show_status(conn, show_id, "auto_complete", at=watched_at)  # phase 4
     conn.commit()
     _push_show_episode_progress(conn, show_id, season)  # write-mirror gap #2, todo.md
     _push_mal_show_episode_progress(conn, show_id, season)  # MAL mirror
@@ -4575,8 +4210,8 @@ def resolve_set_season_mapping(_, info, show_id, season_number, anilist_id=None,
         )
         # auto-sync, todo.md — "if a new season is added then move back to
         # watching" (user's own rule); only this one of the five real
-        # season-INSERT call sites, see _reopen_show_if_completed's docstring.
-        _reopen_show_if_completed(conn, show_id, client)
+        # season-INSERT call sites.
+        _recompute_show_status(conn, show_id, client)  # R2.17: a new season
         # Ensure Sonarr/Radarr is monitoring this series so the new
         # season's episodes actually get grabbed. If already monitored
         # this is a no-op; if unmonitored it flips monitoring on; if
@@ -4623,7 +4258,7 @@ def resolve_split_season(
     One transaction, all-or-nothing. Uses PRAGMA defer_foreign_keys for the
     same chicken-and-egg composite-FK reason setEpisodeNumber documents.
 
-    Does NOT call _reopen_show_if_completed — a split re-partitions
+    Does NOT recompute the show — a split re-partitions
     already-watched episodes, not a genuinely new season airing. Deliberately
     diverges from setSeasonMapping's sibling behavior here."""
     conn = db.get_connection()

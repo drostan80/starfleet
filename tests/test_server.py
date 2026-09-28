@@ -6496,7 +6496,7 @@ async def test_last_episode_watched_auto_completes_season_and_show(client, migra
         headers=auth_headers(),
     )
     assert (await _season_dates(client, season_id))["completedAt"] is None
-    assert (await _show_status(client, show["id"])) == "PLANNED"
+    assert (await _show_status(client, show["id"])) == "WATCHING"  # R2.14
 
     await gql(
         client,
@@ -6515,12 +6515,13 @@ async def test_last_episode_watched_auto_completes_season_and_show(client, migra
     ).fetchone()
     assert dict(change) == {
         "changed_by": "auto_complete",
-        "previous_status": "planned",
+        "previous_status": "watching",
         "new_status": "completed",
     }
 
 
-async def test_auto_complete_does_not_fire_while_still_airing(client, migrated_db):
+async def test_every_episode_watched_completes_even_an_undated_one(client, migrated_db):
+    # RULEBOOK R2.15 (phase 4): all episodes of the level watched → completed.
     show = await add_show(client)
     await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
     # episode 3 has no air date at all — "still airing" per _show_is_airing
@@ -6556,8 +6557,8 @@ async def test_auto_complete_does_not_fire_while_still_airing(client, migrated_d
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    assert (await _season_dates(client, season_id))["completedAt"] is None
-    assert (await _show_status(client, show["id"])) == "PLANNED"
+    assert (await _season_dates(client, season_id))["completedAt"] is not None
+    assert (await _show_status(client, show["id"])) == "COMPLETED"
 
 
 async def test_multi_season_show_only_completes_once_every_season_is_done(client, migrated_db):
@@ -6574,8 +6575,8 @@ async def test_multi_season_show_only_completes_once_every_season_is_done(client
         headers=auth_headers(),
     )
     assert (await _season_dates(client, season1))["completedAt"] is not None
-    # 2.1c: highest season PLANNED + len>1 → WATCHING
-    assert (await _show_status(client, show["id"])) == "WATCHING"
+    # R2.13 (phase 4): the show follows its last season, still planned.
+    assert (await _show_status(client, show["id"])) == "PLANNED"
 
     await gql(
         client,
@@ -6616,6 +6617,7 @@ async def test_set_status_completed_warns_when_still_airing_without_confirmation
     client, migrated_db
 ):
     show = await add_show(client)
+    await _create_season(client, show["id"], 1)
     db.get_connection().execute(
         "INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)"
         " VALUES ('e-wrn001', ?, 1, 1, 'regular', 'unwatched', 'x', 'x')",
@@ -6639,8 +6641,11 @@ async def test_set_status_completed_warns_when_still_airing_without_confirmation
     assert (await _show_status(client, show["id"])) == "PLANNED"  # unchanged
 
 
-async def test_set_status_completed_confirmed_bulk_marks_aired_episodes_only(client, migrated_db):
+async def test_set_status_completed_confirmed_marks_every_episode(client, migrated_db):
+    # RULEBOOK R2.7 (phase 4): a level set completed → all its episodes
+    # watched, unaired included (after the R3.4 warning).
     show = await add_show(client)
+    await _create_season(client, show["id"], 1)
     await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))  # aired, past
     db.get_connection().execute(
         "INSERT INTO episode (id, show_id, season, episode, kind, state, created_at, updated_at)"
@@ -6662,7 +6667,7 @@ async def test_set_status_completed_confirmed_bulk_marks_aired_episodes_only(cli
     assert ep1["state"] == "watched"
     assert ep2["state"] == "watched"
     assert conn.execute("SELECT state FROM episode WHERE id = 'e-noair1'").fetchone()["state"] == (
-        "unwatched"
+        "watched"
     )
 
 
@@ -6705,14 +6710,14 @@ async def test_bulk_mark_all_aired_stamps_started_at_locally_but_does_not_push_i
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    # Captured locally on both seasons either way.
-    assert (await _season_dates(client, season1))["startedAt"] is not None
+    # R2.13a (phase 4): the show's status goes on its last season only.
+    assert (await _season_dates(client, season1))["startedAt"] is None
     assert (await _season_dates(client, season2))["startedAt"] is not None
-    # Never pushed for either season...
+    # started_at is never pushed from a synthesized "now"...
     assert [c for c in calls if "started_at" in c[1]] == []
-    # ...but completed_at genuinely is pushed for both (own docstring above).
+    # ...completed_at is (it really is now).
     completed_at_ids = {c[0] for c in calls if "completed_at" in c[1]}
-    assert completed_at_ids == {111, 222}
+    assert completed_at_ids == {222}
 
 
 async def test_set_season_mapping_new_season_reopens_a_completed_show(client, migrated_db):
@@ -6727,14 +6732,14 @@ async def test_set_season_mapping_new_season_reopens_a_completed_show(client, mi
     assert (await _show_status(client, show["id"])) == "COMPLETED"
 
     await _create_season(client, show["id"], 2)  # a genuinely new season row
-    assert (await _show_status(client, show["id"])) == "WATCHING"
+    assert (await _show_status(client, show["id"])) == "PLANNED"  # R2.17
 
     change = db.get_connection().execute(
         "SELECT previous_status, new_status FROM status_change"
         " WHERE show_id = ? ORDER BY rowid DESC LIMIT 1",
         (show["id"],),
     ).fetchone()
-    assert dict(change) == {"previous_status": "completed", "new_status": "watching"}
+    assert dict(change) == {"previous_status": "completed", "new_status": "planned"}
 
 
 async def test_set_season_mapping_update_of_existing_season_does_not_reopen(client, migrated_db):
@@ -6840,7 +6845,7 @@ async def test_set_season_status_completion_guard_blocks_airing_season(
         headers=auth_headers(),
     )
     body = resp.json()
-    assert "still has an episode" in body["errors"][0]["message"]
+    assert "unaired" in body["errors"][0]["message"]  # R3.4 warning (phase 4)
     assert "confirmed: true" in body["errors"][0]["message"]
     # With confirmed: true — should succeed
     data = await gql(
@@ -6854,7 +6859,7 @@ async def test_set_season_status_completion_guard_blocks_airing_season(
     assert data["setSeasonStatus"]["status"] == "COMPLETED"
 
 
-async def test_show_status_never_derives_completed_over_a_real_unwatched_aired_episode(
+async def test_season_set_completed_marks_its_aired_unwatched_episodes_watched(
     client, migrated_db
 ):
     """2026-09-20 fix, live-caught: `setSeasonStatus`'s own completion guard
@@ -6893,18 +6898,17 @@ async def test_show_status_never_derives_completed_over_a_real_unwatched_aired_e
     # jobs are supposed to mirror the remote at this level.
     assert data["setSeasonStatus"]["status"] == "COMPLETED"
 
-    # But show.status must not follow it into 'completed' while a real gap
-    # exists — Rule 2's new guard should hold it at 'watching' instead.
-    assert (await _show_status(client, show["id"])) == "WATCHING"
-    # And nothing should have fabricated a watch for the unwatched episode.
+    # Phase 4, RULEBOOK R2.7: you set it completed, so every episode of the
+    # season is watched and the show follows its last season (R2.13).
+    # (A list flipping a season to completed by itself is guarded in
+    # watch_reconcile instead.)
+    assert (await _show_status(client, show["id"])) == "COMPLETED"
     assert (
         db.get_connection()
-        .execute("SELECT * FROM watch_event WHERE show_id = ?", (show["id"],))
-        .fetchone()
-        is None
+        .execute("SELECT state FROM episode WHERE id = 'e-air001'")
+        .fetchone()["state"]
+        == "watched"
     )
-    ep = db.get_connection().execute("SELECT state FROM episode WHERE id = 'e-air001'").fetchone()
-    assert ep["state"] == "unwatched"
 
 
 async def test_reconcile_watch_progress_is_a_no_op_right_after_auto_completing(

@@ -580,9 +580,11 @@ def test_remote_completed_season_never_promotes_show_status_over_a_real_gap(conn
 
     result = watch_reconcile.reconcile_watch_progress(conn)
 
-    # Season status mirrors the remote — legitimate, matches setSeasonStatus.
+    # Phase 4: the show follows its last season (R2.13), so the guard sits
+    # on the season — a remote COMPLETED over an aired, unwatched episode
+    # is read as watching.
     season = conn.execute("SELECT status FROM season WHERE id = 'z-gap001'").fetchone()
-    assert season["status"] == "completed"
+    assert season["status"] != "completed"
     # Show status must NOT follow it — a real gap exists.
     show = conn.execute("SELECT status FROM show WHERE id = 's-gap001'").fetchone()
     assert show["status"] == "watching"

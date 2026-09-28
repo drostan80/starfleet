@@ -1,6 +1,5 @@
-"""Seasons LCARS creates on its own (user rule, 2026-09-25): status follows
-the previous season, future seasons are planned, and none of them is ever
-written to AniList/MAL (`season.list_sync = 0`)."""
+"""Seasons LCARS creates on its own: RULEBOOK R2.16/R2.19 (phase 4), and
+none of them is written to AniList/MAL until acted on (`season.list_sync = 0`)."""
 
 import os
 import sqlite3
@@ -48,30 +47,29 @@ def _season(conn, season_id, show_id, n, status, anilist_id=None, mal_id=None, l
 
 
 @pytest.mark.parametrize("previous,expected", [
-    ("completed", "paused"),
-    ("watching", "paused"),
-    ("paused", "paused"),
-    ("dropped", "dropped"),
+    ("completed", "planned"),
+    ("watching", "planned"),
     ("planned", "planned"),
+    ("paused", "skipped"),
+    ("dropped", "skipped"),
+    ("skipped", "skipped"),
 ])
-def test_finished_season_follows_the_previous_season(conn, previous, expected):
+def test_new_season_follows_r2_16(conn, previous, expected):
     _show(conn, "s-rule01", "watching")
     _season(conn, "z-rule01", "s-rule01", 1, previous, anilist_id=1)
     conn.commit()
-    status, list_sync = season_ranges.auto_season_fields(
-        conn, "s-rule01", 2, anilist_id=2, finished=True
-    )
+    status, list_sync = season_ranges.auto_season_fields(conn, "s-rule01", 2, anilist_id=2)
     assert (status, list_sync) == (expected, 0)
 
 
-def test_future_season_is_planned_even_after_a_dropped_one(conn):
-    _show(conn, "s-rule02", "dropped")
-    _season(conn, "z-rule02", "s-rule02", 1, "dropped", anilist_id=1)
+def test_earlier_season_found_late_is_skipped(conn):
+    # R2.19: S2 found after S3 is tracked.
+    _show(conn, "s-rule02", "watching")
+    _season(conn, "z-rule02", "s-rule02", 1, "completed", anilist_id=1)
+    _season(conn, "z-rule03", "s-rule02", 3, "watching", anilist_id=3)
     conn.commit()
-    status, list_sync = season_ranges.auto_season_fields(
-        conn, "s-rule02", 2, anilist_id=2, finished=False
-    )
-    assert (status, list_sync) == ("planned", 0)
+    status, list_sync = season_ranges.auto_season_fields(conn, "s-rule02", 2, anilist_id=2)
+    assert (status, list_sync) == ("skipped", 0)
 
 
 def test_a_new_shows_first_season_is_the_users_and_stays_synced(conn):
@@ -79,16 +77,6 @@ def test_a_new_shows_first_season_is_the_users_and_stays_synced(conn):
     conn.commit()
     status, list_sync = season_ranges.auto_season_fields(conn, "s-rule03", 1, anilist_id=10)
     assert list_sync == 1
-
-
-def test_release_status_comes_from_anilist_when_there_are_no_episodes(conn, monkeypatch):
-    monkeypatch.setattr(
-        anilist_client, "fetch_media_statuses", lambda ids, client=None: {2: "FINISHED"}
-    )
-    _show(conn, "s-rule04", "completed")
-    _season(conn, "z-rule04", "s-rule04", 1, "completed", anilist_id=1)
-    conn.commit()
-    assert season_ranges.auto_season_fields(conn, "s-rule04", 2, anilist_id=2) == ("paused", 0)
 
 
 def test_show_status_change_never_pushes_a_list_sync_0_season(conn, monkeypatch):

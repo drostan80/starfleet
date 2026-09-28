@@ -1760,6 +1760,14 @@ def poll_memory_alpha(conn) -> dict:
         with db.undo_on_error(conn):
             from lcars import numbering
             result["shows_numbered"] = numbering.renumber_all(conn)["shows"]
+            # R2.17 (phase 4): seasons created above move the derived show
+            # status. Local only: nothing is pushed.
+            from lcars import status_rules
+            for (show_id,) in conn.execute(
+                "SELECT id FROM show WHERE tracked = 1"
+            ).fetchall():
+                status_rules.recompute_show(conn, show_id, status_rules.AUTO)
+            conn.commit()
     except Exception:
         log.exception("Numbering pass failed")
 

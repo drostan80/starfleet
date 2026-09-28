@@ -267,6 +267,14 @@ consolidation it shares its merge work with).
   watched (with the R3.4 warning first).
 - external: status changes feed phase 7/8 pushes (off until phase 9).
 
+**4.1 done 2026-09-28:** `lcars/status_rules.py` (R2.7, R2.13–R2.19), migration
+`c7d8e9f0a1b2` (`season.status_set_manually`; show history accepts `skipped`). Replaced
+the eleven old functions; `setStatus` → last non-skipped season; `setSeasonStatus`,
+watch mutations and Memory Alpha/Sonarr season creation go through the engine. Show
+status is no longer fanned out to every season on AniList: each changed season pushes
+its own. Kept (for phase 7): watch_reconcile reads a remote COMPLETED over aired,
+unwatched episodes as watching (live 09-20 flip-flop).
+
 **4.2 Skipped = not followed (R2.10; G1).** Skipped seasons excluded from:
 metadata/episode fetch (except R2.19 numbering fetch), availability, calendar,
 next-up, backlog, airing lists, browse/add "future seasons".

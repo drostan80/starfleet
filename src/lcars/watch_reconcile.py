@@ -350,6 +350,16 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
             effective = remote_status
             if effective == "completed" and unaired_episodes:
                 effective = "watching"
+            if effective == "completed" and conn.execute(
+                "SELECT 1 FROM episode WHERE show_id = ? AND season = ? AND state = 'unwatched'"
+                " AND air_date_utc IS NOT NULL AND air_date_utc <= ? LIMIT 1",
+                (show_id, season_number, now),
+            ).fetchone():
+                # A list flipping a season to COMPLETED by itself while LCARS
+                # has aired, unwatched episodes (live 09-20): the show now
+                # follows its last season (R2.13), so the season must not
+                # take it. Phase 7 settles remote changes (R2.7, R4.8, R4.10).
+                effective = "watching"
             if not seeded:
                 # First run writes nothing. Agreement is recorded; for a
                 # disagreement the list's value becomes the baseline, so
@@ -360,6 +370,11 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
                 # Edited on the list (or AniList moved it itself): LCARS takes it.
                 if lcars_status != effective:
                     season_status_log.set_status(conn, season["id"], effective, source)
+                    # Your own edit on the list (phase 4: R2.16 tells it apart
+                    # from automation). Its cascades are phase 7's (R4.8).
+                    conn.execute(
+                        "UPDATE season SET status_set_manually = 1 WHERE id = ?", (season["id"],)
+                    )
                     changed_status[season["id"]] = effective
                     touched_shows.add(show_id)
                 list_baseline.record(conn, service, ext_id, status=remote_status)
