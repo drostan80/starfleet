@@ -483,6 +483,16 @@ verified (the Maria Mercedes failure). Approved plan, in this order:
   Korean; first-air year more than a year off (new show only); episode count where
   comparable. A mismatch needs a separate "link despite" choice, checked by the server;
   never bulk-resolvable.
+- **Done 2026-09-28 (8.8.1, 8.8.2, 8.8.4):** `tvdb_vetting.py`, run before anything is
+  written on both add paths (Sonarr included — `addShowWithArr` used to add to Sonarr
+  before any check). Browse sends its Sonarr hit as `tvdbCandidateId`. Episode counts are
+  **not compared**: Sonarr's lookup has none per season (checked live on prod, read-only).
+  A `tvdb_link` review can't be dismissed without a choice (server-side). **Found and
+  fixed:** an individual season's status change failed (migration `f0a1b2c3d4e5`); the
+  reviews page crashed on any review about an individual season (label code). The review
+  page already shows the facts side by side (a start on 8.8.3). Checked: 12 server tests;
+  reviews page in headless Firefox (evidence, tick gating). Browse/add evidence dialog:
+  syntax-checked, not clicked through (needs a live Sonarr lookup).
 - **After cutover:** 8.8.3 side-by-side evidence page (posters, years, counts,
   language, network); 8.8.5 every link keeps its provenance and is re-checked when a real
   source (Fribb) later has data — disagreement opens a review.

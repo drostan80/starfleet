@@ -4475,9 +4475,11 @@ def resolve_resolve_pending_review(_, info, id, resolution_note=None):
             f"{client!r} cannot resolve a pending_review — only "
             f"{sorted(RESOLVING_CLIENTS)} can (§5.6)"
         )
-    row = conn.execute("SELECT id FROM pending_review WHERE id = ?", (id,)).fetchone()
+    row = conn.execute("SELECT id, field FROM pending_review WHERE id = ?", (id,)).fetchone()
     if row is None:
         raise GraphQLError(f"no such pending_review: {id}")
+    if row["field"] == "tvdb_link":  # PLAN-CODE 8.8: decided by a choice, never dismissed
+        raise GraphQLError("a TVDB link review is resolved by one of its choices")
     now = util.now_utc_iso()
     conn.execute(
         "UPDATE pending_review"

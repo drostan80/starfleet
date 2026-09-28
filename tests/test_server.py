@@ -12061,3 +12061,14 @@ async def test_another_tvdb_id_that_does_not_fit_becomes_the_reviews_candidate(
     assert still["id"] == review["id"]
     assert json.loads(still["payload"])["tvdbId"] == 276151
     assert json.loads(still["choices"])[0]["id"] == "link_tvdb_despite"
+
+
+async def test_a_tvdb_link_review_cannot_be_dismissed_without_a_choice(client, monkeypatch):
+    _vetting_env(monkeypatch, lookup=_FRIEREN_LOOKUP, facts=_FRIEREN_FACTS)
+    await _add_raw(client, anilistId=154587, tvdbCandidateId=424536)
+    review = _open_link_review()
+    resp = await client.post("/", json={
+        "query": "mutation($id: ID!) { resolvePendingReview(id: $id) { id } }",
+        "variables": {"id": review["id"]}}, headers=auth_headers())
+    assert "resolved by one of its choices" in resp.json()["errors"][0]["message"]
+    assert _open_link_review() is not None

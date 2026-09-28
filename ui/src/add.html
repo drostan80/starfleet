@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=23">
+  <link rel="stylesheet" href="css/main.css?v=24">
   <style>
     /* Force hidden attribute to work even on elements with explicit display */
     [hidden] { display: none !important; }
@@ -969,6 +969,7 @@ import { withConfirmation } from './js/status-picker.js?v=2';
 import {
   initBrowse, teardownBrowse, setBrowseType,
   parseSequelError, parseIndividualSeason, confirmSequelAttach, attachSequel,
+  parseTvdbCheck, confirmTvdbCheck,
   parseLaterSeasonError, confirmAddSeason1,
   pickCorrectParent, attachSequelToChosenParent,
 } from './js/browse.js?v=16';
@@ -1190,6 +1191,17 @@ function renderCandidates(cands) {
  *                `err` as a real failure.
  */
 async function handleSequelOrLaterSeason(err, card, status) {
+  // PLAN-CODE 8.8: the TVDB show doesn't fit what you're adding — look first.
+  const check = parseTvdbCheck(err.message);
+  if (check) {
+    card.classList.remove('loading');
+    if (!(await confirmTvdbCheck(check))) {
+      showBanner('Not added', 'info');
+      return 'handled';
+    }
+    card.classList.add('loading');
+    return { retry: { tvdbId: check.tvdbId, tvdbMismatchAcknowledged: true } };
+  }
   // PLAN-CODE 8.4: no TVDB id yet → saved as an individual season.
   const indiv = parseIndividualSeason(err.message);
   if (indiv) {
@@ -1318,6 +1330,8 @@ async function onChipClick(card, cand, status) {
         if (outcome === 'handled') { card.classList.remove('loading'); return; }
         if (outcome === 'separate') {
           show = await addShow({ ...input, skipSequelCheck: true });
+        } else if (outcome?.retry) {
+          show = await addShow({ ...input, ...outcome.retry });
         } else {
           throw err;
         }
@@ -1349,6 +1363,8 @@ async function onChipClick(card, cand, status) {
         if (outcome === 'handled') { card.classList.remove('loading'); return; }
         if (outcome === 'separate') {
           result = await addShowWithArr({ ...input, skipSequelCheck: true });
+        } else if (outcome?.retry) {
+          result = await addShowWithArr({ ...input, ...outcome.retry });
         } else {
           throw err;
         }

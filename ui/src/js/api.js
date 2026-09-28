@@ -550,7 +550,7 @@ export async function fetchPendingReviews(includeResolved = false, first = 50, a
           id entityType entityId field
           previousValue proposedValueChain
           source createdAt resolvedAt resolvedByClient resolutionNote
-          choices { id label } showId
+          choices { id label } showId payload
         }}
         pageInfo { hasNextPage endCursor }
       }

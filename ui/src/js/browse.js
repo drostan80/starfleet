@@ -178,6 +178,62 @@ export function parseSequelError(msg) {
  * directly, rather than being stuck choosing between "attach to the
  * wrong show" and "lose the season relationship entirely."
  */
+/** PLAN-CODE 8.8: "tvdb_check:{json}" — a TVDB link nothing confirmed,
+ * on an add with no AniList/MAL id. Returns the evidence or null. */
+export function parseTvdbCheck(msg) {
+  if (!msg?.startsWith('tvdb_check:')) return null;
+  try {
+    return JSON.parse(msg.slice('tvdb_check:'.length));
+  } catch {
+    return null;
+  }
+}
+
+const _esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/**
+ * PLAN-CODE 8.8 (R3.7): show what the TVDB show is before it's linked —
+ * title, year, language, genres, network — next to what you're adding.
+ * With mismatches, "Link" stays disabled until you tick that you know
+ * they differ. Resolves true (link it) or false.
+ */
+export function confirmTvdbCheck(ev) {
+  return new Promise(resolve => {
+    const t = ev.tvdb || {};
+    const e = ev.entry || {};
+    const mism = ev.mismatches || [];
+    const overlay = document.createElement('div');
+    overlay.className = 'sequel-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="sequel-confirm-dialog tvdb-check-dialog">
+        <p><strong>Is this the right TVDB show?</strong><br>
+           <span style="color:var(--muted)">${_esc(ev.reason)}</span></p>
+        <table class="tvdb-check-table">
+          <tr><th></th><th>TVDB ${_esc(ev.tvdbId)}</th><th>You're adding</th></tr>
+          <tr><td>Title</td><td>${_esc(t.title || 'unknown')}</td><td>${_esc((e.titles || [])[0] || '')}</td></tr>
+          <tr><td>First aired</td><td>${_esc(t.year || 'unknown')}</td><td>${_esc(e.year || 'unknown')}</td></tr>
+          <tr><td>Language</td><td>${_esc(t.language || 'unknown')}</td><td>${_esc(e.country || '')}</td></tr>
+          <tr><td>Genres</td><td>${_esc((t.genres || []).join(', ') || 'unknown')}</td><td></td></tr>
+          <tr><td>Network</td><td>${_esc(t.network || 'unknown')}</td><td></td></tr>
+        </table>
+        ${mism.length ? `<ul class="tvdb-check-mismatches">${mism.map(m => `<li>${_esc(m)}</li>`).join('')}</ul>
+          <label class="tvdb-check-ack"><input type="checkbox"> Yes, I know they differ — it's the right show</label>` : ''}
+        <div class="sequel-confirm-btns">
+          <button class="btn-confirm"${mism.length ? ' disabled' : ''}>Link TVDB ${_esc(ev.tvdbId)}</button>
+          <button class="btn-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const ok = overlay.querySelector('.btn-confirm');
+    const ack = overlay.querySelector('.tvdb-check-ack input');
+    if (ack) ack.onchange = () => { ok.disabled = !ack.checked; };
+    ok.onclick = () => { overlay.remove(); resolve(true); };
+    overlay.querySelector('.btn-cancel').onclick = () => { overlay.remove(); resolve(false); };
+  });
+}
+
 export function confirmSequelAttach(sequel) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -1178,7 +1234,8 @@ async function onAnimeChipClick(card, item, status) {
         }
         const match = bestMatchingCandidate(title, candidates);
         if (match) {
-          if (match.tvdbId) arrInput.tvdbId = match.tvdbId;
+          // A title-search hit is a guess (R3.7): LCARS confirms it or asks you.
+          if (match.tvdbId) arrInput.tvdbCandidateId = match.tvdbId;
           if (match.tmdbId) arrInput.tmdbId = match.tmdbId;
         }
       } catch {
@@ -1189,7 +1246,7 @@ async function onAnimeChipClick(card, item, status) {
         const result = await addShowWithArr(arrInput);
         show = result.show;
       } catch (err) {
-        const handled = await handleAddError(err, card, item, input, status);
+        const handled = await handleAddError(err, card, item, arrInput, status);
         if (handled) return;
         throw err;
       }
@@ -1218,6 +1275,30 @@ async function onAnimeChipClick(card, item, status) {
  * false if the error should be re-thrown.
  */
 async function handleAddError(err, card, item, input, status) {
+  // PLAN-CODE 8.8: a TVDB link nothing confirmed — you look, then it's yours.
+  const check = parseTvdbCheck(err.message);
+  if (check) {
+    card.classList.remove('loading');
+    if (!(await confirmTvdbCheck(check))) {
+      showBanner('Not added', 'info');
+      return true;
+    }
+    card.classList.add('loading');
+    const { tvdbCandidateId, ...rest } = input;
+    const retry = { ...rest, tvdbId: check.tvdbId };
+    if (check.mismatches?.length) retry.tvdbMismatchAcknowledged = true;
+    const result = await addShowWithArr(retry);
+    const show = result.show;
+    if (show.status !== status && status !== 'PLANNED') {
+      await withConfirmation((c) => setStatus(show.id, status, c));
+    }
+    item.lcarsShowId = show.id;
+    item.lcarsStatus = status;
+    refreshCard(card, item);
+    showBanner(`Added: ${show.displayTitle} [${STATUS_LABELS[status]}]`, 'ok');
+    card.classList.remove('loading');
+    return true;
+  }
   // No TVDB id yet → saved as an individual season: a success.
   const indiv = parseIndividualSeason(err.message);
   if (indiv) {
@@ -1414,7 +1495,8 @@ async function onTmdbChipClick(card, item, status) {
           }
           const match = bestMatchingCandidate(item.title, candidates);
           if (match) {
-            if (match.tvdbId) arrInput.tvdbId = match.tvdbId;
+            // A title-search hit is a guess (R3.7): LCARS confirms it or asks you.
+            if (match.tvdbId) arrInput.tvdbCandidateId = match.tvdbId;
             if (match.tmdbId) arrInput.tmdbId = match.tmdbId;
           }
         } catch {
@@ -1426,7 +1508,7 @@ async function onTmdbChipClick(card, item, status) {
         const result = await addShowWithArr(arrInput);
         show = result.show;
       } catch (err) {
-        const handled = await handleAddError(err, card, item, input, status);
+        const handled = await handleAddError(err, card, item, arrInput, status);
         if (handled) return;
         throw err;
       }

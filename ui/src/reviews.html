@@ -6,7 +6,7 @@
   <title>STARFLEET — Reviews</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=23">
+  <link rel="stylesheet" href="css/main.css?v=24">
   <style>
     /* ── Reviews page ────────────────────────────────────────── */
     .reviews-controls {
@@ -614,6 +614,8 @@
       border-top: 1px solid var(--border);
       padding-top: 6px;
     }
+    /* PLAN-CODE 8.8: a choice waiting for its tick */
+    .btn-choice:disabled { opacity: .35; cursor: not-allowed; filter: grayscale(1); }
   </style>
 </head>
 <body>
@@ -691,7 +693,7 @@
       parts.push(`e${i}: episode(id: "${id}") { id season episode title airDateUtc show { id displayTitle posterUrl } }`);
     });
     seasonIds.forEach((id, i) => {
-      parts.push(`z${i}: season(id: "${id}") { id seasonNumber anilistId malId show { id displayTitle posterUrl status tracked totalEpisodes mediaShape externalIds(first:20) { edges { node { service externalId url } } } seasons(first:20) { edges { node { id seasonNumber anilistId malId } } } } }`);
+      parts.push(`z${i}: season(id: "${id}") { id seasonNumber decimalSeasonNumber kind label anilistId malId show { id displayTitle posterUrl status tracked totalEpisodes mediaShape externalIds(first:20) { edges { node { service externalId url } } } seasons(first:20) { edges { node { id seasonNumber anilistId malId } } } } }`);
     });
     if (!parts.length) return new Map();
     const data = await gql(`query ResolveLabels { ${parts.join('\n')} }`);
@@ -722,14 +724,23 @@
     });
     seasonIds.forEach((id, i) => {
       const z = data[`z${i}`];
-      if (z) {
+      if (z && !z.show) {
+        // An individual season (no TVDB show yet, R3.6c) — no show to label it by.
+        result.set(id, {
+          label: `Individual season — ${z.label || `AniList ${z.anilistId ?? '?'}`}`,
+          showTitle: z.label || 'Individual season', anilistId: z.anilistId, malId: z.malId,
+        });
+      } else if (z) {
+        const levelName = z.kind === 'tvdb_season' || z.kind == null
+          ? `Season ${z.seasonNumber}`
+          : (z.label || `Season ${z.decimalSeasonNumber >= 5000 ? 'x' : z.decimalSeasonNumber}`);
         const showExtIds = {};
         for (const e of (z.show.externalIds?.edges || [])) {
           showExtIds[e.node.service] = { id: e.node.externalId, url: e.node.url };
         }
         const showSeasons = (z.show.seasons?.edges || []).map(e => e.node);
         result.set(id, {
-          label: `${z.show.displayTitle} — Season ${z.seasonNumber}`,
+          label: `${z.show.displayTitle} — ${levelName}`,
           showTitle: z.show.displayTitle, seasonNumber: z.seasonNumber,
           anilistId: z.anilistId, malId: z.malId,
           posterUrl: z.show.posterUrl, showId: z.show.id,
@@ -1665,7 +1676,35 @@
       `;
     }
 
-    detailEl.innerHTML = headerHtml + metaHtml + diffHtml + chainHtml + actionsHtml;
+    // PLAN-CODE 8.8: a TVDB link review shows its evidence side by side.
+    let evidenceHtml = '';
+    if (r.field === 'tvdb_link' && r.payload) {
+      let ev = {};
+      try { ev = JSON.parse(r.payload); } catch {}
+      const t = ev.tvdb || {};
+      const e = ev.entry || {};
+      const row = (k, a, b) => `<span class="dg-key">${esc(k)}</span><span class="dg-val">${esc(a ?? 'unknown')}</span><span class="dg-val">${esc(b ?? '')}</span>`;
+      evidenceHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">TVDB ${esc(ev.tvdbId)} — ${esc(ev.reason || '')}</div>
+          <div class="detail-grid" style="grid-template-columns:auto 1fr 1fr">
+            <span class="dg-key"></span><span class="dg-val"><strong>TVDB</strong></span><span class="dg-val"><strong>This entry</strong></span>
+            ${row('Title', t.title, (e.titles || [])[0])}
+            ${row('First aired', t.year, e.year)}
+            ${row('Language / country', t.language, e.country)}
+            ${row('Genres', (t.genres || []).join(', ') || null, e.format)}
+            ${row('Network', t.network, e.episodes != null ? `${e.episodes} episodes` : '')}
+            ${row('TVDB seasons', (t.seasons || []).join(', ') || null, '')}
+          </div>
+          ${(ev.mismatches || []).length ? `<ul style="color:var(--st-dropped);font-size:12px;margin:8px 0 0">${ev.mismatches.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
+          <div style="font-size:11px;color:var(--muted);margin-top:8px">
+            <a href="https://thetvdb.com/dereferrer/series/${esc(ev.tvdbId)}" target="_blank" rel="noopener" style="color:var(--accent)">Open on TVDB →</a>
+            · In the note: another TVDB id for "Link the TVDB id in my note", or "season 2" to say which season.
+          </div>
+        </div>`;
+    }
+
+    detailEl.innerHTML = headerHtml + metaHtml + diffHtml + chainHtml + evidenceHtml + actionsHtml;
 
     // Wire up chain toggle
     const chainToggle = document.getElementById('chain-toggle');
@@ -2088,6 +2127,17 @@
         if (el) { el.textContent = msg; el.className = `action-status ${type}`; }
       }
 
+      // PLAN-CODE 8.8: "despite" stays off until you tick that you know they differ.
+      const despite = detailEl.querySelector('.btn-choice[data-choice="link_tvdb_despite"]');
+      if (despite) {
+        despite.disabled = true;
+        const ack = document.createElement('label');
+        ack.style.cssText = 'display:flex;gap:6px;align-items:center;font-size:12px;margin:6px 0';
+        ack.innerHTML = '<input type="checkbox"> Yes, I know they differ — it\'s the right show';
+        ack.querySelector('input').addEventListener('change', (e) => { despite.disabled = !e.target.checked; });
+        despite.parentElement.before(ack);
+      }
+
       // R4.8b choice buttons
       for (const btn of detailEl.querySelectorAll('.btn-choice')) {
         btn.addEventListener('click', async () => {
@@ -2104,8 +2154,15 @@
             const nextOpen = filteredReviews().find(x => !x.resolvedAt && x.id !== r.id);
             if (nextOpen) selectReview(nextOpen); else renderDetail(r);
           } catch (err) {
+            if (r.field === 'tvdb_link') {
+              // The review may carry a new candidate now (your note's TVDB id).
+              await loadReviews();
+              const again = _reviews.find(x => x.id === r.id);
+              if (again) selectReview(again);
+            } else {
+              for (const b of detailEl.querySelectorAll('.btn-choice')) b.disabled = false;
+            }
             setStatus(`Error: ${err.message}`, 'err');
-            for (const b of detailEl.querySelectorAll('.btn-choice')) b.disabled = false;
           }
         });
       }
