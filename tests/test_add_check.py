@@ -183,3 +183,35 @@ def test_anidb_drip_stops_at_the_daily_cap(conn, monkeypatch):
     monkeypatch.setattr(anidb, "fetch_anime_episodes", lambda *a, **kw: called.append(a))
     stats = anidb.drip_fetch_episodes(conn, limit=5)
     assert (stats["fetched"], called) == (0, [])
+
+
+def _user_add(conn, monkeypatch, **input):
+    from lcars import shows
+
+    monkeypatch.setattr(shows, "_try_load_fribb_dataset", lambda: DATASET)
+    base = {"media_shape": "episodic", "tracking_space": "anime", "primary_title": "romaji",
+            "title_romaji": "Mushoku Tensei"}
+    return shows.add_checked(conn, {**base, **input})
+
+
+def test_your_add_of_a_new_tvdb_season_asks_to_add_it_as_season_n(conn, monkeypatch):
+    from lcars import shows
+
+    conn.execute("DELETE FROM season WHERE id = 'z-mush03'")
+    with pytest.raises(shows.SequelDetectedError) as err:
+        _user_add(conn, monkeypatch, anilist_id=178789)
+    assert (err.value.parent_show_id, err.value.next_season) == ("s-mush01", 3)
+
+
+def test_your_add_of_another_cour_is_added_to_the_show(conn, monkeypatch):
+    assert _user_add(conn, monkeypatch, anilist_id=127720) == "s-mush01"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM season WHERE parent_id = 'z-mush01' AND kind = 'part'"
+    ).fetchone()[0] == 2
+
+
+def test_your_add_of_something_tracked_is_refused(conn, monkeypatch):
+    from lcars import shows
+
+    with pytest.raises(shows.ShowInputError, match="already tracked"):
+        _user_add(conn, monkeypatch, anilist_id=108465)

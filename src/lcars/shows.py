@@ -624,6 +624,50 @@ def _link_list_ids_to_season(conn, show_id: str, input: dict) -> None:
     )
 
 
+def add_checked(conn, input: dict) -> str:
+    """Your own add (browse/add, addShowWithArr) through the one add check
+    (phase 5, R3.1), mapped onto what the clients handle until phase 8:
+    a new TVDB season, or the season's missing AniList id → the "add as
+    season N?" dialog (SequelDetectedError); another cour or a season-0 piece
+    of a show you track → added to it (returns that show); something you must
+    settle → an error with the proposal; a new show → created. No TVDB id yet
+    keeps today's path until individual seasons land."""
+    from lcars import add_check  # deferred: add_check imports this module lazily
+
+    if input.get("skip_sequel_check") or input.get("media_shape") == "movie":
+        return create_show(conn, input)
+    title_keys = ("title_english", "title_romaji", "title_native")
+    candidate = add_check.Candidate(
+        add_check.USER,
+        anilist_id=int(input["anilist_id"]) if input.get("anilist_id") is not None else None,
+        mal_id=int(input["mal_id"]) if input.get("mal_id") is not None else None,
+        tvdb_id=int(input["tvdb_id"]) if input.get("tvdb_id") is not None else None,
+        titles=[input[k] for k in title_keys if input.get(k)],
+    )
+    dataset = _try_load_fribb_dataset() or []
+    d = add_check.classify(conn, candidate, dataset)
+    if d.kind == "already_tracked":
+        raise ShowInputError(
+            f"this season is already tracked (show {d.show_id}) — refusing to add it twice"
+        )
+    if d.kind in ("new_season", "link_season"):
+        parent = conn.execute("SELECT * FROM show WHERE id = ?", (d.show_id,)).fetchone()
+        raise SequelDetectedError(
+            d.show_id, parent["title_english"] or parent["title_romaji"] or d.show_id,
+            d.season_number, sequel_anilist_id=candidate.anilist_id,
+            sequel_mal_id=candidate.mal_id,
+        )
+    if d.kind in ("part", "special"):
+        add_check.apply_decision(conn, d, candidate)
+        conn.commit()
+        return d.show_id
+    if d.kind == "needs_user":
+        raise ShowInputError(f"{d.reason} — {d.proposal}" if d.proposal else d.reason)
+    if d.kind == "new_show":
+        return create_show(conn, {**input, "skip_sequel_check": True})
+    return create_show(conn, input)  # individual season: today's path (phase 5 to do)
+
+
 def create_show(conn, input: dict) -> str:
     """§5.1, A.4/A.8 — inserts the `show` row, its external-id links,
     then runs the on-demand metadata fetch (A.8: episodes, AniList
@@ -1643,7 +1687,7 @@ def create_show_with_arr_add(conn, input: dict) -> tuple[str, dict]:
             )
         show_id = _promote_stub(conn, existing_show_id, resolved_input)
     else:
-        show_id = create_show(conn, resolved_input)
+        show_id = add_checked(conn, resolved_input)
     if title_slug:
         write_arr_external_id(conn, show_id, input["media_shape"], title_slug)
     if arr_result.pop("needs_tvdb_link", False):

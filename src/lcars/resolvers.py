@@ -2116,7 +2116,7 @@ def resolve_add_show(_, info, input):
     without any change here)."""
     conn = db.get_connection()
     try:
-        show_id = shows.create_show(conn, input)
+        show_id = shows.add_checked(conn, input)  # phase 5: the one add check
     except shows.ShowInputError as e:
         raise GraphQLError(str(e)) from e
     show = _get_show(conn, show_id)
