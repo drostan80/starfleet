@@ -200,8 +200,8 @@ class TestRealign:
         _episode(conn, "e-mini01", "s-kaiju1", 0, 4, title="Narumi's Week at Work #1")
         conn.execute("UPDATE episode SET state = 'watched' WHERE id = 'e-real01'")
         conn.execute("INSERT INTO watch_event (id, show_id, season, episode, watched_at,"
-                     " created_at) VALUES ('w-wrong1', 's-kaiju1', 3, 1, '2026-09-05T22:18:57Z', ?)",
-                     (NOW,))
+                     " created_at) VALUES ('w-wrong1', 's-kaiju1', 3, 1,"
+                     " '2026-09-05T22:18:57Z', ?)", (NOW,))
         conn.commit()
         c = {"realign_watches": [{"show": "s-kaiju1", "from": {"season": 3, "episode": 1},
                                   "to_title": "Narumi's Week at Work #1",
