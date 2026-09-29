@@ -131,6 +131,68 @@ class TestInsert:
         assert got == {1: ("2020-01-05T20:00:00Z", "tvmaze"), 2: ("2020-01-12T00:00:00Z", "tvdb")}
 
 
+class TestSeasonsFromEpisodes:
+    def _season(self, conn, sid, show_id, number, status):
+        conn.execute(
+            "INSERT INTO season (id, show_id, season_number, status, source, matched,"
+            " manual_override, created_at, updated_at) VALUES (?, ?, ?, ?, 'manual', 0, 0,"
+            " 'x', 'x')", (sid, show_id, number, status))
+
+    def _episodes(self, conn, show_id, season, count, state="unwatched"):
+        for i in range(1, count + 1):
+            conn.execute(
+                "INSERT INTO episode (id, show_id, season, episode, kind, state, created_at,"
+                " updated_at) VALUES (?, ?, ?, ?, 'regular', ?, 'x', 'x')",
+                (f"e-{show_id[2:4]}{season}{i:03d}", show_id, season, i, state))
+
+    def test_no_watch_data_leaves_the_rules_to_decide(self, conn, monkeypatch):
+        """R2.16/R2.19: the season rows made for TVDB's episodes are not
+        overridden to planned — S2 after a dropped S1 is skipped."""
+        from lcars import fribb
+
+        monkeypatch.setattr(fribb, "load_dataset", lambda *a, **k: [])
+        _show(conn, "s-aaaaaa", 1)
+        self._season(conn, "z-000001", "s-aaaaaa", 1, "dropped")
+        self._episodes(conn, "s-aaaaaa", 1, 2)
+        self._episodes(conn, "s-aaaaaa", 2, 2)
+        conn.commit()
+        assert rebuild._seasons_from_episodes(conn) == 1
+        status = conn.execute("SELECT status FROM season WHERE show_id = 's-aaaaaa'"
+                              " AND season_number = 2").fetchone()[0]
+        assert status == "skipped"
+
+    def test_after_a_completed_season_the_new_one_is_planned(self, conn, monkeypatch):
+        from lcars import fribb
+
+        monkeypatch.setattr(fribb, "load_dataset", lambda *a, **k: [])
+        _show(conn, "s-aaaaaa", 1)
+        self._season(conn, "z-000001", "s-aaaaaa", 1, "completed")
+        self._episodes(conn, "s-aaaaaa", 1, 2, "watched")
+        self._episodes(conn, "s-aaaaaa", 2, 2)
+        conn.commit()
+        rebuild._seasons_from_episodes(conn)
+        assert conn.execute("SELECT status FROM season WHERE show_id = 's-aaaaaa'"
+                            " AND season_number = 2").fetchone()[0] == "planned"
+
+    def test_watch_data_still_decides_your_own_history(self, conn, monkeypatch):
+        from lcars import fribb
+
+        monkeypatch.setattr(fribb, "load_dataset", lambda *a, **k: [])
+        _show(conn, "s-aaaaaa", 1)
+        self._season(conn, "z-000001", "s-aaaaaa", 1, "dropped")
+        self._episodes(conn, "s-aaaaaa", 1, 2, "watched")
+        self._episodes(conn, "s-aaaaaa", 2, 2, "watched")
+        self._episodes(conn, "s-aaaaaa", 3, 2)
+        conn.execute("UPDATE episode SET state = 'unwatched' WHERE show_id = 's-aaaaaa'"
+                     " AND season = 3")
+        conn.execute("UPDATE episode SET state = 'unwatched' WHERE season = 2 AND episode = 2")
+        conn.commit()
+        rebuild._seasons_from_episodes(conn)
+        got = {r[0]: r[1] for r in conn.execute(
+            "SELECT season_number, status FROM season WHERE show_id = 's-aaaaaa'")}
+        assert got[2] == "watching"
+
+
 class TestPriority:
     def test_tvdb_is_a_weak_source(self):
         # A finer source may correct TVDB's date-only value in either direction.

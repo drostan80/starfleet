@@ -603,6 +603,17 @@ Read back from the page's `decisions` collection (228 entries).
    later. Consequence accepted with the choice: completed seasons get their episodes
    marked watched (R2.7).
 
+6. **Step A built** (user approved 2026-09-29): episode lists read from TVDB in stage 4
+   (`tvdb_episodes.py`, `air_date_source = 'tvdb'` migration `b2c3d4e5f6a8`; TVDB key read
+   from tiny's `lcars.ini` into an env var, never printed or stored). Run 1 stages 4–6 re-run:
+   23,774 episode rows for 772 of 776 shows. Rulecheck after: R1.11 1,133 → 179; up: R1.8
+   90 → 236, R1.12 9 → 38, R1.10 1 → 5, R2.7 1 → 5, R2.16 0 → 63.
+7. **R2.16 fix in stage 4** (user approved 2026-09-29): a season row made for TVDB's episodes
+   keeps the engine's R2.16/R2.19 status unless episodes are watched (then completed /
+   watching); it was overridden to planned (63 seasons after a dropped/paused/skipped one).
+8. **Pause and sanity check** (user, 2026-09-29) before stage 7: expand rulecheck; review the
+   new code and the whole database for rules being *enforced*, not only followed.
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must

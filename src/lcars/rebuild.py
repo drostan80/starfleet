@@ -763,7 +763,7 @@ def stage_sonarr(run: Run) -> None:
     episodes at TVDB season/episode, `tvdb_absolute`, files — `_fetch_sonarr`
     alone (no AniList, art or synopsis fetch). Shows not in Sonarr keep the
     episodes the 09-06 base has."""
-    from lcars import anidb, metadata, sonarr_client
+    from lcars import metadata, sonarr_client
 
     conn = _connect(run.work())
     rows = conn.execute(
@@ -791,8 +791,17 @@ def stage_sonarr(run: Run) -> None:
     if failed:
         raise RebuildError(f"{failed} Sonarr reads failed — see the ledger")
     tvdb_dates = _tvdb_episodes(run, conn)
-    # Every episode's TVDB season has its season row (R1.13b): shows Sonarr
-    # doesn't hold (the Trakt import, finished shows) never got theirs.
+    created = _seasons_from_episodes(conn)
+    run.record("seasons_from_episodes", "all shows", "applied",
+               f"{created} TVDB season rows created for episodes that had none")
+    _fill_air_dates(run, conn, tvdb_dates, read, absent)
+
+
+def _seasons_from_episodes(conn) -> int:
+    """Every episode's TVDB season has its season row (R1.13b): shows Sonarr
+    doesn't hold (the Trakt import, finished shows) never got theirs."""
+    from lcars import metadata
+
     created = 0
     for show in conn.execute("SELECT id FROM show WHERE tracked = 1 AND"
                              " media_shape = 'episodic'").fetchall():
@@ -810,18 +819,25 @@ def stage_sonarr(run: Run) -> None:
                          (season_id, show[0], n))
             if n not in missing:
                 continue
-            # A season of your own history, not a newly found one: its status
-            # comes from what you watched (the rules apply on top in stage 6).
+            # A season of your own history: what you watched decides its status
+            # (the rules apply on top in stage 6). With nothing watched the
+            # status `_ensure_seasons` gave it stands — R2.16/R2.19 (skipped
+            # after a dropped/paused/skipped season or before a tracked later
+            # one), never an override to planned.
             total, watched = conn.execute(
                 "SELECT COUNT(*), SUM(state = 'watched') FROM episode WHERE show_id = ?"
                 " AND season = ?", (show[0], n)).fetchone()
-            status = ("completed" if watched and watched == total
-                      else "watching" if watched else "planned")
-            conn.execute("UPDATE season SET status = ? WHERE id = ?", (status, season_id))
+            if watched:
+                conn.execute("UPDATE season SET status = ? WHERE id = ?",
+                             ("completed" if watched == total else "watching", season_id))
         created += len(missing)
         conn.commit()
-    run.record("seasons_from_episodes", "all shows", "applied",
-               f"{created} TVDB season rows created for episodes that had none")
+    return created
+
+
+def _fill_air_dates(run: Run, conn, tvdb_dates: dict, read: int, absent: int) -> None:
+    from lcars import anidb, tvdb_episodes
+
     # Air dates for episodes that have none (the Trakt import, shows never in
     # Sonarr): TVmaze by TVDB season/episode, then AniDB — numbering orders by
     # them (R1.2) and "last aired season" needs them. NULL-only.
@@ -838,8 +854,6 @@ def stage_sonarr(run: Run) -> None:
              AND (te.airstamp IS NOT NULL OR (te.airdate IS NOT NULL AND te.airdate != ''))"""
     ).rowcount
     # TVDB's own date-only value takes what TVmaze's air time left empty (R1.2e).
-    from lcars import tvdb_episodes
-
     tvdb_filled = sum(tvdb_episodes.fill_air_dates(conn, sid, dates)
                       for sid, dates in tvdb_dates.items())
     anidb_filled = anidb.fill_airdate_gaps_anidb(conn)
