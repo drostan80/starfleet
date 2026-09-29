@@ -150,5 +150,5 @@ This machine's `lcars.ini` has tiny's old IP: never edit it, pass the URLs as ab
 
 TVDB-id guard (R1.14a), R3.7c/d/e, expanded rulecheck/enforcement audit, Data TUI rework,
 rotate Sonarr/Radarr/TMDB keys, MAL client_id, AniList client_secret (memory: rotate at
-project end). **AniDB: remind the user to resume at max 200 requests/day** (asked 09-29, not
-resumed yet).
+project end). **AniDB: resume only after go-live** (user, 09-29): remind once when live, max 200
+requests/day, restart on their yes.
