@@ -362,6 +362,9 @@ def stage_replay(run) -> None:
 
     realign_watches(run, conn, rebuild_cleanup.load_inputs(run), touched)
     replay_watches(run, conn, live, d, mapper, touched)
+    from lcars import rebuild_history
+
+    rebuild_history.replay_history(run, conn)  # your AniList history (GDPR export, 09-29)
     replay_statuses(run, conn, d, mapper, touched)
     replay_manual(run, conn, d, touched)
     replay_scores(run, conn, live, mapper)
