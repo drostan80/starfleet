@@ -221,6 +221,11 @@ An episode can be unaired but watched (pre-air showing, leak…).
 
 - **R2.1 aired / not aired** — automatic.
 - **R2.2 watched / not watched** — manual.
+  - **Addendum (not an active rule)** `[clarified 2026-09-29]`: no episode is ever
+    skipped and no mechanism to skip one exists. The `skipped` episode state stays
+    allowed in the database only so that, if the rule changes later (e.g. skipping filler
+    episodes), marking a season watched would then mark all its episodes watched
+    **except those explicitly skipped**. Until then: watched or not watched, nothing else.
 - **R2.3 available / not available** — the episode exists as a file on the server.
 
 ### 2.2 Season and show level
@@ -406,6 +411,20 @@ An episode can be unaired but watched (pre-air showing, leak…).
 - **R3.7c** An entry that will **never be on TVDB** but is a piece of a show you track
   (e.g. a special of an AniList-only show) is attached to that show as one of its
   levels, when you confirm it. `[clarified 2026-09-28]`
+  `[clarified 2026-09-29]` First there is a check: **if two sources agree on the TVDB
+  id, it attaches** by itself; only otherwise does it wait for you.
+- **R3.7d Manual TVDB id** `[clarified 2026-09-29]`: whether or not a show is attached to
+  a TVDB id, **its page has a way to enter a TVDB id**, so you can attach it by hand.
+- **R3.7e Unconfirmed TVDB id** `[clarified 2026-09-29]`: a TVDB id that is found but not
+  confirmed independently by another source becomes a **review**: *does this show's link
+  to TVmaze / AniList correspond to the show linked to this TVDB id?* Answers: **yes**
+  (you confirm it), **no** (not confirmed), or **no, here is the correct TVDB id** (that
+  one is now confirmed, with the usual double check in the background).
+- **R1.14a Enforced** `[approved 2026-09-29]`: one show per TVDB id and a TVDB id on every
+  tracked show are **enforced, not only checked** — no show without one unless it is
+  specifically agreed (R3.3) or is an individual season (R3.2), so a missed new season can
+  never make its own show. Until a better system exists, some Radarr movies may end up
+  as individual seasons; that is fine.
 - **R3.7a** A TVDB id that LCARS derived but no other source confirms is shown in
   **browse** (and the add confirmation) for the user to confirm: the user is then
   the second independent source. `[clarified 2026-09-27]`
@@ -458,9 +477,21 @@ An episode can be unaired but watched (pre-air showing, leak…).
 - **R4.9 Flip-flop protection.** Checks of each external DB run separately. A change
   found triggers its propagation **first**, before a new check of the other
   database is made.
+  - `[clarified 2026-09-29]` The order (AniList first, then MAL…) was only an example;
+    the principle is R4.10's timestamps. **To be built.**
 - **R4.10** If a propagation is blocked (API down or other), **propagation calls
   take precedence over checks**. Remote changes are compared by timestamp: a remote
   change later than the reconciliation supersedes it; an earlier one is moot.
+  - **How it works** `[clarified 2026-09-29]`: every change is timestamped. A change
+    made in LCARS is written to every external database straight away, and each write is
+    timestamped. A change made on an external database (AniList, MAL, others may be
+    added later) is timestamped by that database when it provides one (MAL), else by the
+    moment LCARS notices it; it is written to LCARS (timestamped) and from there to the
+    other external databases accordingly (timestamped). Any disagreement is settled on
+    timestamps: e.g. LCARS marks an episode watched but cannot write to AniList → AniList's
+    last real change is earlier, so AniList is written to; but if on AniList you then mark
+    that episode watched **and another one** by hand, the second episode is later there,
+    so LCARS takes it. **To be built.**
 
 ---
 
@@ -691,3 +722,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — Q-W2 answered → R2.13b (a)–(d).
 - 2026-09-28 — R1.0a (no air date → placeholder shown as x), R1.13b (every episode in a level; mini sub-seasons; art per level), R3.7b (match on the Japanese title), R3.7c (pieces never on TVDB attach to their show).
 - 2026-09-28 — R1.0a: placeholder stored as 5000.1, 5000.2… (shown as x).
+- 2026-09-29 — R2.2 addendum (skipped episode state kept, not an active rule: no episode is skipped; if ever used, marking a season watched would mark all its episodes except the skipped ones); R4.9/R4.10 clarified (timestamps decide; the AniList-then-MAL order was an example; to be built); R3.7c (two sources agreeing on a TVDB id attach it), R3.7d (show page can add a TVDB id by hand), R3.7e (unconfirmed TVDB id → review with yes / no / no-here-is-the-right-one), R1.14a (one show per TVDB id and a TVDB id on every tracked show are enforced; some Radarr movies may be individual seasons for now).
