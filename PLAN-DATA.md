@@ -614,6 +614,31 @@ Read back from the page's `decisions` collection (228 entries).
 8. **Pause and sanity check** (user, 2026-09-29) before stage 7: expand rulecheck; review the
    new code and the whole database for rules being *enforced*, not only followed.
 
+9. **Cleanup review** (user, 2026-09-29; review page K1BDJ2H8AHJCy6bP73iUvc, decisions saved in
+   `~/starfleet-review-2026-09-27/decisions-cleanup-0929/`; OK by default). Agreed with no marks:
+   - remove the untracked stubs (R3.5): 236 merge leftovers, 193 duplicates of a kept season, 887
+     discovered entries not on the AniList list; a stub with watch history (Kaiju Girl) moves first;
+     export before deleting. Basis: 1,292 of the 1,335 existed on 26 Aug (`old/pre-0826.db`), 220 of
+     the 236 merge leftovers appear in earlier reviews;
+   - remove the 1,323 show-level list ids a season of the same show already holds (R1.23);
+   - delete the 40 orphaned watch events; count `tvdb_movie` as a TVDB link for R3.2 (rulecheck);
+   - Witch on the Holy Night: create its season, put anilist 143103 + mal 50668 there;
+   - delete the duplicate shows Tantei wa mou, Shindeiru. Season 2 and Sasaki and Peeps Season 2;
+   - clear the wrong Sonarr links (Voices of a Distant Star → Oshi no Ko, THE UROTSUKI → The Rookie);
+   - the 16 list entries + 53 specials go to the proposed parent show, except the answers below.
+   **Answers (homes):** Patlabor: The New Files → OK, status **paused**; Sekai Saikou no Ansatsusha …
+   2nd Season (anilist 169579) → second season of anilist 129898; Akane-banashi 2nd Season → tvdb series
+   466488; R.O.D -THE TV- → tvdb 82319; Ghost in the Shell SAC 2nd GIG → **delete** ("I will see
+   separately, I accept the loss"); Narumi's Week at Work → part of Kaiju No. 8 (tvdb 423075);
+   Shangri-La Frontier → tvdb 421855, "2 seasons should be watched". **Answers (specials):** Railgun:
+   Motto Marutto → tvdb 114921; Arifureta Prologue → tvdb 357019; Milky Byway Spring Special → tvdb series
+   465427 (a movie 375859 also exists; "all in one id or 3 separate shows, I can live with both"; no
+   Milky Byway id yet); AkaKill! Theater → tvdb 280329 (Akame ga Kill!); Odekake Kozame × Chiba-ken Kuro
+   Ajillo → special of tvdb 435306; ROOM CAMP → part of tvdb 330692 (Laid-Back Camp).
+   **Stub marks made on an earlier page version (to confirm):** 24 stubs marked Not OK with a status
+   note (skip / skip-drop / drop / paused / completed), e.g. A Certain Magical Index II skip, Air Gear
+   Special Trick completed, ALDNOAH.ZERO Season 2 completed (AniList says PLANNING).
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
