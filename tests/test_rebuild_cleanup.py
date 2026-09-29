@@ -228,6 +228,14 @@ class TestStructure:
                 {"stub": "s-stub01", "into_tvdb": "471878"}]))
 
 
+def _stage_inputs(run, on_list=(), **kw):
+    (run.inputs / "rebuild-inputs").mkdir(exist_ok=True)
+    (run.inputs / "rebuild-inputs" / "cleanup.json").write_text(json.dumps(_inputs(**kw)))
+    entries = [{"mediaId": i} for i in on_list]
+    (run.inputs / "anilist_list.json").write_text(json.dumps(
+        {"data": {"MediaListCollection": {"lists": [{"entries": entries}]}}}))
+
+
 class TestStageCleanup:
     def test_stubs_go_but_a_list_entry_no_season_holds_and_history_stay(self, run, conn):
         _show(conn, "s-keep01", "Kept")
@@ -245,8 +253,7 @@ class TestStageCleanup:
                      " VALUES ('s-keep01', 'anilist', '1', '', ?)", (NOW,))
         conn.commit()
         conn.close()
-        (run.inputs / "anilist_list.json").write_text(json.dumps(
-            {"data": {"MediaListCollection": {"lists": [{"entries": [{"mediaId": 3}]}]}}}))
+        _stage_inputs(run, on_list=(3,))
         run.stage = "cleanup"
         rebuild_cleanup.stage_cleanup(run)
         c = sqlite3.connect(run.work())
@@ -271,8 +278,7 @@ class TestStageCleanup:
         _event(conn, "w-orph01", "s-keep01", 1, 54)
         conn.commit()
         conn.close()
-        (run.inputs / "anilist_list.json").write_text(json.dumps(
-            {"data": {"MediaListCollection": {"lists": []}}}))
+        _stage_inputs(run)
         run.stage = "cleanup"
         rebuild_cleanup.stage_cleanup(run)
         c = sqlite3.connect(run.work())
@@ -282,8 +288,7 @@ class TestStageCleanup:
         _show(conn, "s-disc01", "Discovered", tracked=0)
         conn.commit()
         conn.close()
-        (run.inputs / "anilist_list.json").write_text(json.dumps(
-            {"data": {"MediaListCollection": {"lists": []}}}))
+        _stage_inputs(run)
         run.stage = "cleanup"
         rebuild_cleanup.stage_cleanup(run)
         rebuild_cleanup.stage_cleanup(run)
