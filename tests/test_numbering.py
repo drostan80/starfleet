@@ -344,3 +344,91 @@ def test_writer_puts_the_minis_under_their_season(conn):
         "SELECT parent_id, label FROM season WHERE show_id = 's-test01' AND kind = 'special'"
     ).fetchone()
     assert row == ("z-test01", "Season 1 minis")
+
+
+# ── R1.13b: a piece with its own AniDB entry but no level in LCARS ─────────
+
+
+def _shorts(conn, groups=None):
+    """2-minute shorts with their own AniDB entries inside S2 (b1 ends day 10, b2 day 11),
+    as plan items with their episode rows written. `groups`: {anidb id: [air day or None]}."""
+    items = [Item(r[0], r[1], r[2], r[3], 2) for r in conn.execute(
+        "SELECT id, season, episode, air_date_utc FROM episode")]
+    n = 30
+    for entry, days in (groups or {900: [10, 11]}).items():
+        for i, day in enumerate(days):
+            n += 1
+            air = f"2020-01-{day:02d}T20:00:00Z" if day else None
+            it = Item(f"e-sh{n:04d}", 0, n, air, 2, anidb=(entry, 1, i + 1))
+            conn.execute(
+                "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc,"
+                " created_at, updated_at) VALUES (?, 's-test01', 0, ?, 'special', ?, ?, ?)",
+                (it.id, it.tvdb_episode, air, NOW, NOW))
+            items.append(it)
+    return items
+
+
+def _group_levels(conn):
+    """The special levels other than the fixture's own "Season 1 minis"."""
+    return conn.execute(
+        "SELECT z.id, z.label, z.parent_id, z.status, z.list_sync, z.anilist_id FROM season z"
+        " WHERE z.show_id = 's-test01' AND z.kind = 'special'"
+        " AND COALESCE(z.label, '') NOT LIKE 'Season % minis' ORDER BY z.label").fetchall()
+
+
+def test_pieces_of_one_anidb_entry_are_one_mini_sub_season_in_the_plan(conn):
+    plan = numbering.plan_show("s-test01", _shorts(conn, {900: [10, 11, None]}), "anidb")
+    season, spans = plan.anidb_groups["anidb:900"]
+    assert season == 2  # the first piece sits in S2's run
+    assert spans[0] == (3.5, 3.5) and spans[-1][0] >= numbering.PLACEHOLDER  # undated too
+
+
+def test_two_anidb_entries_are_two_groups(conn):
+    plan = numbering.plan_show("s-test01", _shorts(conn, {900: [10], 901: [11]}), "anidb")
+    assert set(plan.anidb_groups) == {"anidb:900", "anidb:901"}
+
+
+def test_writer_makes_the_entry_a_mini_sub_season_named_after_it(conn, monkeypatch):
+    monkeypatch.setattr(numbering, "_anilist_ids_for_anidb", lambda a: set())
+    conn.execute("INSERT INTO anidb_anime (anidb_id, main_title, type, fetched_at)"
+                 " VALUES (900, 'Show Break Time', 'OVA', ?)", (NOW,))
+    items = _shorts(conn)
+    numbering.apply_plan(conn, numbering.plan_show("s-test01", items, "anidb"))
+    [(zid, label, parent, status, sync, al)] = _group_levels(conn)
+    assert (label, parent, sync, al) == ("Show Break Time", "z-test02", 0, None)
+    assert conn.execute("SELECT abs_from, abs_to FROM season_span WHERE season_id = ?"
+                        " ORDER BY abs_from", (zid,)).fetchall() == [(3.5, 3.5), (4.5, 4.5)]
+    numbering.apply_plan(conn, numbering.plan_show("s-test01", items, "anidb"))
+    assert len(_group_levels(conn)) == 1  # idempotent: no second level
+
+
+def test_an_existing_level_with_the_anilist_id_wins(conn, monkeypatch):
+    monkeypatch.setattr(numbering, "_anilist_ids_for_anidb", lambda a: {9000})
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, kind, anilist_id, source, status,"
+        " created_at, updated_at) VALUES ('z-mini01', 's-test01', NULL, 'special', 9000,"
+        " 'auto', 'planned', ?, ?)", (NOW, NOW))
+    numbering.apply_plan(conn, numbering.plan_show("s-test01", _shorts(conn), "anidb"))
+    assert [r[0] for r in _group_levels(conn)] == ["z-mini01"]
+
+
+def test_no_fribb_dataset_creates_nothing_yet(conn, monkeypatch):
+    monkeypatch.setattr(numbering, "_anilist_ids_for_anidb", lambda a: None)
+    numbering.apply_plan(conn, numbering.plan_show("s-test01", _shorts(conn), "anidb"))
+    assert _group_levels(conn) == []  # it waits for the next pass, not a duplicate later
+
+
+def test_three_digit_specials_do_not_share_a_level(conn):
+    """S00E10 and S00E100 both start "S00E10": each is its own level."""
+    for ep, day in ((10, 10), (100, 11)):  # both inside S2: same parent
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc,"
+            " runtime_minutes, created_at, updated_at)"
+            " VALUES (?, 's-test01', 0, ?, 'special', ?, 30, ?, ?)",
+            (f"e-sp{ep:04d}"[:8], ep, f"2020-01-{day:02d}T20:00:00Z", NOW, NOW))
+    numbering.renumber_show(conn, "s-test01")
+    levels = [r for r in _group_levels(conn) if r[1].startswith("S00E10")]
+    assert sorted(r[1] for r in levels) == ["S00E10", "S00E100"]
+    for zid, *_ in levels:
+        assert conn.execute("SELECT COUNT(*) FROM season_span WHERE season_id = ?",
+                            (zid,)).fetchone()[0] == 1

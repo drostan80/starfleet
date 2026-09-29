@@ -84,6 +84,10 @@ class Plan:
     level_spans: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
     # side piece key ("side:<season>") → AniDB ids of its items, to find its level
     side_anidb: dict[str, set[int]] = field(default_factory=dict)
+    # "anidb:<id>" → (TVDB season the group sits in, spans): the mini sub-season made
+    # for a season-0 piece's AniDB entry when LCARS holds no level for it (R1.13b)
+    anidb_groups: dict[str, tuple[int | None, list[tuple[float, float]]]] = field(
+        default_factory=dict)
     flags: list[dict] = field(default_factory=list)
 
 
@@ -283,16 +287,40 @@ def plan_show(
         plan.side_anidb[f"side:{season}"] = {
             it.anidb[0] for it in side if between.get(it.id) == season and it.anidb
         }
+    def add_to(spans: list, n: float) -> None:
+        if spans and spans[-1][1] < n and not any(
+            m.id in main_set and spans[-1][1] < plan.numbers[m.id] < n for m in main_order
+        ):
+            spans[-1] = (spans[-1][0], n)  # nothing of another level between: one run
+        else:
+            spans.append((n, n))
+
     for it in side:
         if plan.numbers.get(it.id) is None or it.id in between:
             continue
         if it.anidb and it.anidb[0] not in main_ids:
-            key = f"anidb:{it.anidb[0]}"
+            aid = it.anidb[0]
+            key = f"anidb:{aid}"
             if key not in plan.level_spans:
                 plan.level_spans[key] = runs(
-                    lambda x, aid=it.anidb[0]: x.anidb is not None and x.anidb[0] == aid
+                    lambda x, aid=aid: x.anidb is not None and x.anidb[0] == aid
                     and x.id not in main_set
                 )
+                # R1.13b: with no level of its own in LCARS, the pieces of one AniDB
+                # entry are one mini sub-season (undated ones included: their
+                # placeholder numbers are in no run).
+                members = sorted(
+                    (x for x in side if x.anidb is not None and x.anidb[0] == aid
+                     and x.id not in between and plan.numbers.get(x.id) is not None),
+                    key=lambda x: plan.numbers[x.id])
+                group: list[tuple[float, float]] = []
+                for x in members:
+                    add_to(group, plan.numbers[x.id])
+                seasons_of = {inside.get(x.id) for x in members} - {None}
+                if len(seasons_of) > 1:
+                    _flag(plan, "anidb_group_spans_seasons", anidb_id=aid,
+                          seasons=sorted(seasons_of))
+                plan.anidb_groups[key] = (inside.get(members[0].id), group)
             continue
         # R1.13b: every episode belongs to a level. Minis inside a season's
         # run are that season's mini sub-season; anything else is a level of
@@ -303,13 +331,7 @@ def plan_show(
             key = f"minis:{season}"
         else:
             key = f"piece:{it.tvdb_season}:{it.tvdb_episode}:{season or 0}"
-        spans = plan.level_spans.setdefault(key, [])
-        if spans and spans[-1][1] < n and not any(
-            m.id in main_set and spans[-1][1] < plan.numbers[m.id] < n for m in main_order
-        ):
-            spans[-1] = (spans[-1][0], n)  # nothing of another level between: one run
-        else:
-            spans.append((n, n))
+        add_to(plan.level_spans.setdefault(key, []), n)
     return plan
 
 
@@ -441,11 +463,13 @@ def apply_plan(conn: sqlite3.Connection, plan: Plan) -> dict:
     return {"changed": changed, "missing_seasons": missing_seasons}
 
 
-def _anilist_ids_for_anidb(anidb_id: int) -> set[int]:
+def _anilist_ids_for_anidb(anidb_id: int) -> set[int] | None:
+    """The AniList ids Fribb gives an AniDB entry; None when there is no dataset
+    (those levels wait for the next pass — never read as "has no AniList id")."""
     try:
         dataset = fribb.load_dataset()
-    except Exception:  # no dataset: those levels wait for the next pass
-        return set()
+    except Exception:
+        return None
     return {e["anilist_id"] for e in fribb.build_anidb_index(dataset).get(anidb_id, [])
             if e.get("anilist_id") not in (None, "")}
 
@@ -475,16 +499,22 @@ def _apply_level_spans(conn, plan: Plan, now: str) -> None:
         kind, *rest = key.split(":")
         if kind in ("part", "anidb"):
             ids = _anilist_ids_for_anidb(int(rest[-1]))
-            if not ids:
+            if ids is None or (kind == "part" and not ids):
                 continue
-            marks = ",".join("?" * len(ids))
-            level = "part" if kind == "part" else "special"
-            row = conn.execute(
-                f"SELECT id FROM season WHERE show_id = ? AND kind = ? AND anilist_id IN ({marks})",
-                (plan.show_id, level, *ids),
-            ).fetchone()
+            row = None
+            if ids:
+                marks = ",".join("?" * len(ids))
+                level = "part" if kind == "part" else "special"
+                row = conn.execute(
+                    f"SELECT id FROM season WHERE show_id = ? AND kind = ?"
+                    f" AND anilist_id IN ({marks})",
+                    (plan.show_id, level, *ids),
+                ).fetchone()
             if row is not None:
                 _write_spans(conn, row[0], spans, now)
+            elif kind == "anidb" and key in plan.anidb_groups:
+                season_number, group = plan.anidb_groups[key]
+                _apply_anidb_group(conn, plan.show_id, int(rest[-1]), season_number, group, now)
         elif kind in ("minis", "piece"):
             _apply_own_level(conn, plan.show_id, kind, rest, spans, now)
         elif kind == "side":
@@ -494,7 +524,7 @@ def _apply_level_spans(conn, plan: Plan, now: str) -> None:
             # level — never a second one beside it.
             list_ids = set()
             for anidb_id in plan.side_anidb.get(key, ()):
-                list_ids |= _anilist_ids_for_anidb(anidb_id)
+                list_ids |= _anilist_ids_for_anidb(anidb_id) or set()
             if list_ids:
                 marks = ",".join("?" * len(list_ids))
                 row = conn.execute(
@@ -592,8 +622,6 @@ def main(argv=None) -> int:
 def _apply_own_level(conn, show_id: str, kind: str, rest: list[str], spans, now: str) -> None:
     """R1.13b: a season's mini sub-season, or one special's own level — found
     by its label, created when missing (status follows its season, R2.16)."""
-    from lcars import status_rules
-
     if kind == "minis":
         season_number = int(rest[0])
         label = f"Season {season_number} minis"
@@ -604,7 +632,20 @@ def _apply_own_level(conn, show_id: str, kind: str, rest: list[str], spans, now:
             " AND COALESCE(sonarr_episode, episode) = ?",
             (show_id, tvdb_s, tvdb_e),
         ).fetchone()
-        label = f"S{tvdb_s:02d}E{tvdb_e:02d}" + (f" {title[0]}" if title and title[0] else "")
+        code = f"S{tvdb_s:02d}E{tvdb_e:02d}"
+        label = code + (f" {title[0]}" if title and title[0] else "")
+    # Found by the whole code (a piece is "S00E106 …", never a level whose code
+    # merely starts the same: S00E10 …), a mini sub-season by its exact label.
+    _write_spans(conn, _special_level(conn, show_id, season_number, label,
+                                      label if kind == "minis" else code, now), spans, now)
+
+
+def _special_level(conn, show_id: str, season_number, label: str, match: str, now: str) -> str:
+    """The id-less `special` level labelled `match` (alone, or as the first word)
+    under the TVDB season `season_number`, created when missing (R1.13b; its
+    status follows the season before it, R2.16)."""
+    from lcars import status_rules
+
     parent = None
     if season_number:
         parent = conn.execute(
@@ -612,22 +653,31 @@ def _apply_own_level(conn, show_id: str, kind: str, rest: list[str], spans, now:
             " AND kind = 'tvdb_season'",
             (show_id, season_number),
         ).fetchone()
-    prefix = label if kind == "minis" else label[:6]
     row = conn.execute(
         "SELECT id FROM season WHERE show_id = ? AND kind = 'special' AND anilist_id IS NULL"
-        " AND parent_id IS ? AND substr(label, 1, ?) = ?",
-        (show_id, parent[0] if parent else None, len(prefix), prefix),
+        " AND parent_id IS ? AND (label = ? OR substr(label, 1, ?) = ?)",
+        (show_id, parent[0] if parent else None, match, len(match) + 1, match + " "),
     ).fetchone()
-    if row is None:
-        status = ("skipped" if parent is not None
-                  and parent[1] in status_rules.STOP_FOLLOWING else "planned")
-        season_id = ids_module.generate_id(conn, "z")
-        conn.execute(
-            "INSERT INTO season (id, show_id, season_number, kind, parent_id,"
-            " decimal_season_number, label, source, status, list_sync, created_at, updated_at)"
-            " VALUES (?, ?, NULL, 'special', ?, ?, ?, 'auto', ?, 0, ?, ?)",
-            (season_id, show_id, parent[0] if parent else None,
-             season_number if parent else 0.5, label, status, now, now),
-        )
-        row = (season_id,)
-    _write_spans(conn, row[0], spans, now)
+    if row is not None:
+        return row[0]
+    status = ("skipped" if parent is not None
+              and parent[1] in status_rules.STOP_FOLLOWING else "planned")
+    season_id = ids_module.generate_id(conn, "z")
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, kind, parent_id,"
+        " decimal_season_number, label, source, status, list_sync, created_at, updated_at)"
+        " VALUES (?, ?, NULL, 'special', ?, ?, ?, 'auto', ?, 0, ?, ?)",
+        (season_id, show_id, parent[0] if parent else None,
+         season_number if parent else 0.5, label, status, now, now),
+    )
+    return season_id
+
+
+def _apply_anidb_group(conn, show_id: str, anidb_id: int, season_number, spans, now: str) -> None:
+    """R1.13b: the pieces of one AniDB entry that LCARS holds no level for are that
+    entry's mini sub-season, named after it (under the season they sit in)."""
+    title = conn.execute(
+        "SELECT main_title FROM anidb_anime WHERE anidb_id = ?", (anidb_id,)).fetchone()
+    label = title[0] if title else f"AniDB {anidb_id}"
+    _write_spans(conn, _special_level(conn, show_id, season_number, label, label, now),
+                 spans, now)
