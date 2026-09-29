@@ -660,6 +660,17 @@ Read back from the page's `decisions` collection (228 entries).
     Known limit: TV shows not in Sonarr have no series status yet, so their latest season completes
     only when a later season exists or you set it.
 
+12. **Replay built and run (2026-09-29), stage 8** — `rebuild_replay.py`. 128 valid live watch
+    events replayed (0 for review), 30 status finals applied (10 discarded, 9 invalid watch groups
+    skipped), 5 manual watches (Mushoku S3E14 = last aired, S3 completed; Overgeared S1E1 →
+    watching under R2.15a), score 16.0 on The Frontier Lord, Kaiju minis S0E5–7 on the same-titled
+    episodes (confirm). Slime: its "S6" (Visions of Coleus, AniList 161802) is a special level
+    (`as_special`, your 09-27 answer), the show is watching. **Open (Kaiju No. 8 S3):** planned on
+    live and in your 09-06 note ("next real season planned") but watching in the accepted season
+    statuses, because of one watch on an unaired episode (S3E1, 09-05, before the base).
+    Rulecheck after stage 8: R2.15 now enforces R2.15a (0); open R1.8 28, R1.11 166, R1.12 15,
+    R1.22 25, R2.7 5.
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
