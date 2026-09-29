@@ -3,11 +3,12 @@
 Two halves, split by what they do to the numbering that comes after:
 
 - `structure_actions` (the tail of stage 3): things that change which show a level
-  belongs to — folds into a parent show, statuses you gave, a film's season, Kaiju
-  Girl's history. They run before the episode read (4),
+  belongs to — folds into a parent show (with the status you gave), a film's season,
+  Kaiju Girl's history, the skip list. They run before the episode read (4),
   numbering (5) and statuses (6), so those shows get their episodes, numbers and
   derived statuses.
-- `stage_cleanup` (stage 7): only removals — the duplicate shows (checked once the season
+- `stage_cleanup` (stage 7): the statuses you gave to seasons that other shows' ids point at
+  (through the status engine), then removals — the duplicate shows (checked once the season
   that holds their ids exists), the untracked stubs, the show-level list ids a season
   already holds, orphaned watch events. Every removed row is exported
   per table under `<run>/removed/`, and every removed or folded show is written to
@@ -156,7 +157,6 @@ def _season_holding(conn, service: str, ext_id: int, tracked_only: bool = True):
 
 def structure_actions(run, conn, c: dict) -> None:
     """Stage 3's tail. Order matters: links, duplicate shows, folds, statuses, the rest."""
-    from lcars import status_rules
 
     rb = _rebuild()
     export = run.dir / "removed"
@@ -186,26 +186,7 @@ def structure_actions(run, conn, c: dict) -> None:
         run.record("cleanup_fold", f["loser"], "applied",
                    f"→ {parent['id']} {f.get('status') or ''} ({f['why']})".strip())
 
-    # 3. statuses you gave.
-    for s in c.get("season_status", []):
-        season = _season_holding(conn, s["service"], s["id"])
-        if season is None:
-            raise rb_error(f"status {s['status']}: no tracked season holds "
-                           f"{s['service']} {s['id']}")
-        rb._mine(conn, season["id"], s["status"])
-        run.record("cleanup_status", season["id"], "applied",
-                   f"{s['status']} ({s['service']} {s['id']}: {s['why']})")
-    for s in c.get("show_status", []):
-        show = rb._tracked_tvdb_show(conn, s["tvdb"])
-        if show is None:
-            raise rb_error(f"show status: no tracked show with tvdb {s['tvdb']}")
-        status_rules.set_show_status(conn, show["id"], s["status"], "rebuild", confirmed=True)
-        for r in conn.execute("SELECT id FROM season WHERE show_id = ? AND kind = 'tvdb_season'"
-                              " AND status = ?", (show["id"], s["status"])).fetchall():
-            conn.execute("UPDATE season SET status_set_manually = 1 WHERE id = ?", (r[0],))
-        run.record("cleanup_show_status", show["id"], "applied", f"{s['status']} ({s['why']})")
-
-    # 4. entries you skip stay as skip-list entries (R2.10: untracked, status skipped).
+    # 3. entries you skip stay as skip-list entries (R2.10: untracked, status skipped).
     for sid in c.get("skip_list", []):
         row = conn.execute("SELECT * FROM show WHERE id = ?", (sid,)).fetchone()
         if row is None:
@@ -215,7 +196,7 @@ def structure_actions(run, conn, c: dict) -> None:
             rb._mine(conn, zid, "skipped")
         run.record("cleanup_skip", sid, "applied", "kept on the skip list")
 
-    # 5. explicit deletes (an entry you will look at separately).
+    # 4. explicit deletes (an entry you will look at separately).
     for d in c.get("delete_shows", []):
         if conn.execute("SELECT 1 FROM show WHERE id = ?", (d["show"],)).fetchone() is None:
             raise rb_error(f"delete {d['show']}: not in the database")
@@ -223,7 +204,7 @@ def structure_actions(run, conn, c: dict) -> None:
         record_redirect(run, d["show"], None)
         run.record("cleanup_delete", d["show"], "applied", d["why"])
 
-    # 6. a film show with no season: its season holds the list ids (R1.23).
+    # 5. a film show with no season: its season holds the list ids (R1.23).
     for m in c.get("movie_seasons", []):
         show = conn.execute("SELECT * FROM show WHERE id = ?", (m["show"],)).fetchone()
         if show is None:
@@ -244,10 +225,37 @@ def structure_actions(run, conn, c: dict) -> None:
                              " created_at) VALUES (?, ?, ?, ?)", (zid, service, str(ext), now))
         run.record("cleanup_movie_season", m["show"], "applied", f"season {zid} holds the list ids")
 
-    # 7. a stub that holds watch history: mapped onto the right show, episode by episode.
+    # 6. a stub that holds watch history: mapped onto the right show, episode by episode.
     for k in c.get("history_moves", []):
         _move_history(run, conn, k, export)
     conn.commit()
+
+
+def apply_statuses(run, conn, c: dict) -> None:
+    """The statuses you gave to seasons and shows that other shows' ids point at. They
+    go through the status engine (its cascades, R2.7's watched marks, R2.16), after
+    stage 6, when the seasons that hold those ids exist."""
+    from lcars import status_rules
+
+    rb = _rebuild()
+    for s in c.get("season_status", []):
+        season = _season_holding(conn, s["service"], s["id"])
+        if season is None:
+            raise rb_error(f"status {s['status']}: no tracked season holds "
+                           f"{s['service']} {s['id']}")
+        status_rules.set_level_status(conn, season["id"], s["status"], "rebuild",
+                                      confirmed=True, manual=True)
+        run.record("cleanup_status", season["id"], "applied",
+                   f"{s['status']} ({s['service']} {s['id']}: {s['why']})")
+    for s in c.get("show_status", []):
+        show = rb._tracked_tvdb_show(conn, s["tvdb"])
+        if show is None:
+            raise rb_error(f"show status: no tracked show with tvdb {s['tvdb']}")
+        status_rules.set_show_status(conn, show["id"], s["status"], "rebuild", confirmed=True)
+        for r in conn.execute("SELECT id FROM season WHERE show_id = ? AND kind = 'tvdb_season'"
+                              " AND status = ?", (show["id"], s["status"])).fetchall():
+            conn.execute("UPDATE season SET status_set_manually = 1 WHERE id = ?", (r[0],))
+        run.record("cleanup_show_status", show["id"], "applied", f"{s['status']} ({s['why']})")
 
 
 def remove_duplicate_shows(run, conn, c: dict) -> None:
@@ -341,7 +349,9 @@ def stage_cleanup(run) -> None:
     if export.exists():  # a re-run of this stage replaces its own export
         for f in export.glob("*.jsonl"):
             f.unlink()
-    remove_duplicate_shows(run, conn, load_inputs(run))
+    inputs = load_inputs(run)
+    apply_statuses(run, conn, inputs)
+    remove_duplicate_shows(run, conn, inputs)
     mine = _list_ids(run)
     deleter = Deleter(conn, export)
     kept: dict[str, int] = {}

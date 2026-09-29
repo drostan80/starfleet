@@ -179,19 +179,29 @@ class TestStructure:
             rebuild_cleanup.remove_duplicate_shows(run, conn, _inputs(duplicate_shows=[
                 {"show": "s-dup001", "anilist_held_by": 77}]))
 
-    def test_statuses_and_the_skip_list_are_yours(self, conn, run):
-        _show(conn, "s-show01", "Show", tvdb="700")
-        _season(conn, "z-show01", "s-show01", anilist=5)
+    def test_a_status_you_gave_goes_through_the_engine(self, conn, run):
+        _show(conn, "s-show01", "Show", tvdb="700", status="watching")
+        _season(conn, "z-show01", "s-show01", anilist=5, status="completed")
         _season(conn, "z-show02", "s-show01", n=2, anilist=6)
+        _season(conn, "z-show03", "s-show01", n=3, anilist=7)
+        conn.commit()
+        rebuild_cleanup.apply_statuses(run, conn, _inputs(
+            season_status=[{"service": "anilist", "id": 6, "status": "dropped", "why": "t"}]))
+        got = {r[0]: tuple(r[1:]) for r in conn.execute(
+            "SELECT id, status, status_set_manually FROM season WHERE show_id = 's-show01'")}
+        assert got["z-show02"] == ("dropped", 1)
+        assert got["z-show03"][0] == "skipped"  # R2.16: after a dropped season
+
+    def test_a_status_for_an_id_no_season_holds_stops_the_run(self, conn, run):
+        with pytest.raises(rebuild.RebuildError):
+            rebuild_cleanup.apply_statuses(run, conn, _inputs(
+                season_status=[{"service": "anilist", "id": 999, "status": "dropped", "why": "t"}]))
+
+    def test_the_skip_list_is_yours(self, conn, run):
         _show(conn, "s-skip01", "Skip Me", tracked=0)
         _season(conn, "z-skip01", "s-skip01", anilist=8)
         conn.commit()
-        rebuild_cleanup.structure_actions(run, conn, _inputs(
-            season_status=[{"service": "anilist", "id": 6, "status": "dropped", "why": "t"}],
-            skip_list=["s-skip01"]))
-        got = conn.execute("SELECT status, status_set_manually FROM season WHERE id ="
-                           " 'z-show02'").fetchone()
-        assert tuple(got) == ("dropped", 1)
+        rebuild_cleanup.structure_actions(run, conn, _inputs(skip_list=["s-skip01"]))
         assert tuple(conn.execute("SELECT tracked, status FROM show WHERE id = 's-skip01'"
                                   ).fetchone()) == (0, "skipped")
         assert conn.execute("SELECT status FROM season WHERE id = 'z-skip01'"
