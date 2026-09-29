@@ -218,13 +218,16 @@ def apply_list_decisions(run, conn) -> None:
         if z is None:
             run.record("list_decision", ext, "review", f"no level holds it ({d['why']})")
             continue
-        status_rules.set_level_status(conn, z["id"], d["status"], "rebuild", confirmed=True,
-                                      manual=True)
+        # the episodes first: the status engine reads them when the status is set
         eps = list_sync.level_episodes_ordered(conn, z)
         for i, e in enumerate(eps):
             state = "watched" if i < d["progress"] else "unwatched"
             conn.execute("UPDATE episode SET state = ?, updated_at = ? WHERE id = ?",
                          (state, now, e["id"]))
+        status_rules.set_level_status(conn, z["id"], d["status"], "rebuild", confirmed=True,
+                                      manual=True)
+        conn.execute("UPDATE season SET status = ?, status_set_manually = 1 WHERE id = ?",
+                     (d["status"], z["id"]))  # yours, whatever the engine derived after
         run.record("list_decision", ext, "applied",
                    f"{d['status']} at {d['progress']} ({d['why']})")
 
