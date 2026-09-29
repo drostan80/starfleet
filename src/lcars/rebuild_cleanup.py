@@ -21,6 +21,7 @@ AniList ids); an id that no longer resolves raises `RebuildError`.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from lcars import ids as ids_module
@@ -177,14 +178,19 @@ def structure_actions(run, conn, c: dict) -> None:
             raise rb_error(f"fold {f['loser']}: parent {f['parent']} isn't a tracked show")
         seasons = [r[0] for r in conn.execute("SELECT id FROM season WHERE show_id = ?",
                                               (f["loser"],)).fetchall()]
+        list_ids = {r[0]: r[1] for r in conn.execute(
+            "SELECT service, external_id FROM show_external_id WHERE show_id = ? AND"
+            " service IN ('anilist','mal')", (f["loser"],)).fetchall()}
         rb._fold_into(conn, parent["id"], f["loser"], f"cleanup 09-29: {f['why']}")
         record_redirect(run, f["loser"], parent["id"])
-        if f.get("status"):
-            for sid in seasons:
-                if conn.execute("SELECT 1 FROM season WHERE id = ?", (sid,)).fetchone():
-                    rb._mine(conn, sid, f["status"])
+        homed = _home_for_list_ids(conn, parent["id"], list_ids, f.get("status") or loser["status"])
+        for sid in [*seasons, *homed]:
+            if f.get("status") and conn.execute("SELECT 1 FROM season WHERE id = ?",
+                                                (sid,)).fetchone():
+                rb._mine(conn, sid, f["status"])
         run.record("cleanup_fold", f["loser"], "applied",
-                   f"→ {parent['id']} {f.get('status') or ''} ({f['why']})".strip())
+                   f"→ {parent['id']} {f.get('status') or ''} ({f['why']})"
+                   + (f"; list ids homed on {homed}" if homed else "").strip())
 
     # 3. entries you skip stay as skip-list entries (R2.10: untracked, status skipped).
     for sid in c.get("skip_list", []):
@@ -229,6 +235,46 @@ def structure_actions(run, conn, c: dict) -> None:
     for k in c.get("history_moves", []):
         _move_history(run, conn, k, export)
     conn.commit()
+
+
+def _holder(conn, service: str, ext) -> sqlite3.Row | None:
+    column = "anilist_id" if service == "anilist" else "mal_id"
+    return conn.execute(
+        f"SELECT z.* FROM season z WHERE z.{column} = ? OR EXISTS (SELECT 1 FROM"
+        " season_external_id s WHERE s.season_id = z.id AND s.service = ? AND s.external_id = ?)"
+        " ORDER BY z.show_id IS NULL LIMIT 1", (ext, service, str(ext))).fetchone()
+
+
+def _home_for_list_ids(conn, parent_id: str, list_ids: dict, status: str) -> list[str]:
+    """A folded stub's AniList/MAL ids must not vanish with it: an individual season that
+    holds them joins the parent as a level; if no season holds them at all, a level of the
+    parent is made for them (a special level, placed by Memory Alpha and linked to its
+    AniList level by start date in stage 6). Returns the ids of the levels touched."""
+    touched: list[str] = []
+    missing: dict[str, str] = {}
+    for service, ext in list_ids.items():
+        held = _holder(conn, service, ext)
+        if held is None:
+            missing[service] = ext
+        elif held["kind"] == "individual_season":
+            conn.execute("UPDATE season SET show_id = ?, kind = 'special', season_number = NULL,"
+                         " parent_id = NULL, updated_at = ? WHERE id = ?",
+                         (parent_id, util.now_utc_iso(), held["id"]))
+            touched.append(held["id"])
+    if missing:
+        now = util.now_utc_iso()
+        zid = ids_module.generate_id(conn, "z")
+        conn.execute(
+            "INSERT INTO season (id, show_id, season_number, part_number, anilist_id, mal_id,"
+            " source, matched, manual_override, status, list_sync, kind, created_at, updated_at)"
+            " VALUES (?, ?, NULL, 1, ?, ?, 'manual', 1, 0, ?, 1, 'special', ?, ?)",
+            (zid, parent_id, int(missing["anilist"]) if "anilist" in missing else None,
+             int(missing["mal"]) if "mal" in missing else None, status, now, now))
+        for service, ext in missing.items():
+            conn.execute("INSERT INTO season_external_id (season_id, service, external_id,"
+                         " created_at) VALUES (?, ?, ?, ?)", (zid, service, str(ext), now))
+        touched.append(zid)
+    return touched
 
 
 def apply_statuses(run, conn, c: dict) -> None:

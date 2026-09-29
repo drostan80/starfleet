@@ -132,6 +132,38 @@ class TestStructure:
         redirects = json.loads((run.dir / "redirects.json").read_text())
         assert redirects == {"s-stub01": "s-paren1"}
 
+    def test_a_stub_with_only_show_level_ids_gets_a_level_holding_them(self, conn, run):
+        _show(conn, "s-par001", "Parent", tvdb="500")
+        _season(conn, "z-par001", "s-par001", anilist=1)
+        _show(conn, "s-stub01", "Parent 2nd Season", tracked=0)
+        for service, ext in (("anilist", "20853"), ("mal", "27655")):
+            conn.execute("INSERT INTO show_external_id (show_id, service, external_id, url,"
+                         " created_at) VALUES ('s-stub01', ?, ?, '', ?)", (service, ext, NOW))
+        conn.commit()
+        rebuild_cleanup.structure_actions(run, conn, _inputs(folds=[
+            {"loser": "s-stub01", "parent": {"tvdb": "500"}, "status": "completed", "why": "t"}]))
+        z = conn.execute("SELECT * FROM season WHERE anilist_id = 20853").fetchone()
+        assert (z["show_id"], z["kind"], z["mal_id"], z["status"]) == (
+            "s-par001", "special", 27655, "completed")
+        assert _count(conn, "season_external_id", "season_id = ?", (z["id"],)) == 2
+
+    def test_an_individual_season_holding_the_stubs_id_joins_the_parent(self, conn, run):
+        _show(conn, "s-par001", "Parent", tvdb="500")
+        _season(conn, "z-par001", "s-par001", anilist=1)
+        conn.execute(
+            "INSERT INTO season (id, show_id, season_number, anilist_id, source, status, kind,"
+            " created_at, updated_at) VALUES ('z-indiv1', NULL, NULL, 185657, 'manual',"
+            " 'planned', 'individual_season', ?, ?)", (NOW, NOW))
+        _show(conn, "s-stub01", "Parent 2nd Season", tracked=0)
+        conn.execute("INSERT INTO show_external_id (show_id, service, external_id, url,"
+                     " created_at) VALUES ('s-stub01', 'anilist', '185657', '', ?)", (NOW,))
+        conn.commit()
+        rebuild_cleanup.structure_actions(run, conn, _inputs(folds=[
+            {"loser": "s-stub01", "parent": {"tvdb": "500"}, "why": "t"}]))
+        z = conn.execute("SELECT show_id, kind FROM season WHERE id = 'z-indiv1'").fetchone()
+        assert tuple(z) == ("s-par001", "special")
+        assert _count(conn, "season", "anilist_id = 185657") == 1  # no duplicate level
+
     def test_a_parent_that_is_not_there_stops_the_run(self, conn, run):
         _show(conn, "s-stub01", "Orphan", tracked=0)
         conn.commit()
