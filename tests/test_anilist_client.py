@@ -212,7 +212,7 @@ def test_fetch_my_anime_list_flattens_every_list_into_one():
             "progress": 12,
             "score": 85,
             "updated_at": None,
-            "title": "A",
+            "title": "A", "episodes": None,
         },
         {
             "anilist_id": 102,
@@ -221,7 +221,7 @@ def test_fetch_my_anime_list_flattens_every_list_into_one():
             "progress": 0,
             "score": 0,
             "updated_at": None,
-            "title": "B",
+            "title": "B", "episodes": None,
         },
     ]
     # userId came from the Viewer call's own id, not hardcoded
