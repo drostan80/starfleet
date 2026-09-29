@@ -83,9 +83,7 @@ def _connect(path: Path) -> sqlite3.Connection:
 # ── stage 1: base ────────────────────────────────────────────────────────
 
 
-def stage_base(run: Run) -> None:
-    """The 09-06 snapshot, upgraded to the current schema."""
-    _backup(run.snapshot, run.work())
+def _upgrade_schema(run: Run) -> None:
     done = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=Path(__file__).resolve().parents[2],
@@ -94,6 +92,12 @@ def stage_base(run: Run) -> None:
     )
     if done.returncode != 0:
         raise RebuildError("schema upgrade failed:\n" + done.stderr[-2000:])
+
+
+def stage_base(run: Run) -> None:
+    """The 09-06 snapshot, upgraded to the current schema."""
+    _backup(run.snapshot, run.work())
+    _upgrade_schema(run)
     run.record("stage", "base", "applied", str(run.snapshot))
 
 
@@ -697,6 +701,63 @@ def _structure_adds(run: Run, conn, d: dict) -> None:
 # ── stage 4: the Sonarr read (episodes, files, TVDB numbering) ────────────
 
 
+def _tvdb_episodes(run: Run, conn, client=None) -> dict:
+    """Every tracked episodic show with a TVDB id and no episode rows (never in
+    Sonarr, R1.2e): its episode list read straight from TVDB — reads only.
+    The raw answers are cached in the run dir (a re-run of stages 4-6 doesn't
+    read them again). Returns {show_id: {(season, episode): aired}} for the
+    date fill once TVmaze has had its turn."""
+    from lcars import config, tvdb_client, tvdb_episodes
+
+    cache_file = run.dir / "tvdb_episodes.json"
+    cache = json.loads(cache_file.read_text()) if cache_file.exists() else {}
+    rows = conn.execute(
+        "SELECT sh.id, x.external_id FROM show sh JOIN show_external_id x ON x.show_id = sh.id"
+        " AND x.service = 'tvdb' WHERE sh.tracked = 1 AND sh.media_shape = 'episodic'"
+        " AND NOT EXISTS (SELECT 1 FROM episode e WHERE e.show_id = sh.id) ORDER BY sh.id"
+    ).fetchall()
+    if not rows:
+        return {}
+    own_client = client is None
+    if own_client:
+        key = config.get_current().tvdb_api_key
+        if not key:
+            raise RebuildError("no TVDB api key (set LCARS_TVDB_API_KEY)")
+        client = tvdb_client.TvdbClient(key)
+    dates: dict = {}
+    inserted = missing = failed = 0
+    try:
+        for sid, tvdb_id in rows:
+            if tvdb_id not in cache:
+                try:
+                    cache[tvdb_id] = client.series_episodes(int(tvdb_id))
+                except tvdb_client.TvdbError as e:
+                    failed += 1
+                    run.record("tvdb_episodes", sid, "skipped", f"TVDB error: {e}")
+                    continue
+                cache_file.write_text(json.dumps(cache))
+            episodes = cache[tvdb_id]
+            if not episodes:
+                missing += 1
+                run.record("tvdb_episodes", sid, "review",
+                           f"TVDB {tvdb_id} has no episode list" if episodes is None
+                           else f"TVDB {tvdb_id} lists no episodes")
+                continue
+            n, show_dates = tvdb_episodes.insert_missing(conn, sid, episodes)
+            inserted += n
+            dates[sid] = show_dates
+            conn.commit()
+    finally:
+        if own_client:
+            client.close()
+    if failed:
+        raise RebuildError(f"{failed} TVDB reads failed — see the ledger")
+    run.record("tvdb_episodes", "all shows", "applied",
+               f"{inserted} episode rows from TVDB for {len(rows) - missing} of {len(rows)} shows"
+               f" with none ({missing} not on TVDB / empty)")
+    return dates
+
+
 def stage_sonarr(run: Run) -> None:
     """Every tracked episodic show whose TVDB series is in the Sonarr library:
     episodes at TVDB season/episode, `tvdb_absolute`, files — `_fetch_sonarr`
@@ -729,6 +790,7 @@ def stage_sonarr(run: Run) -> None:
         conn.commit()
     if failed:
         raise RebuildError(f"{failed} Sonarr reads failed — see the ledger")
+    tvdb_dates = _tvdb_episodes(run, conn)
     # Every episode's TVDB season has its season row (R1.13b): shows Sonarr
     # doesn't hold (the Trakt import, finished shows) never got theirs.
     created = 0
@@ -775,10 +837,15 @@ def stage_sonarr(run: Run) -> None:
              AND episode.air_date_utc IS NULL AND episode.kind = 'regular'
              AND (te.airstamp IS NOT NULL OR (te.airdate IS NOT NULL AND te.airdate != ''))"""
     ).rowcount
+    # TVDB's own date-only value takes what TVmaze's air time left empty (R1.2e).
+    from lcars import tvdb_episodes
+
+    tvdb_filled = sum(tvdb_episodes.fill_air_dates(conn, sid, dates)
+                      for sid, dates in tvdb_dates.items())
     anidb_filled = anidb.fill_airdate_gaps_anidb(conn)
     conn.commit()
     run.record("air_dates", "all shows", "applied",
-               f"{tvmaze} from TVmaze, {anidb_filled} from AniDB")
+               f"{tvmaze} from TVmaze, {tvdb_filled} from TVDB, {anidb_filled} from AniDB")
     run.record("stage", "sonarr", "applied",
                f"{read} shows read from Sonarr, {absent} not in the Sonarr library")
 
@@ -1077,6 +1144,7 @@ def main(argv=None) -> int:
     run.dir.mkdir(parents=True, exist_ok=True)
     if args.from_stage > 1:
         _backup(run.checkpoint(args.from_stage - 1), run.work())
+        _upgrade_schema(run)  # a checkpoint older than a migration made since
     for name in ("pending.jsonl",):  # later-stage work a re-run recomputes
         f = run.dir / name
         if f.exists():

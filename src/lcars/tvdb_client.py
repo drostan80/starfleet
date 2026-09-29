@@ -5,8 +5,9 @@ from the TVDB v4 API.  Auth is JWT-based: ``POST /v4/login`` with the
 API key mints a token (exp ~1 month); the client caches it in-process
 and re-authenticates on 401.
 
-Only artwork endpoints are used here — episode/series metadata comes
-from AniList and Sonarr/Radarr.
+Artwork and episode-synopsis endpoints, plus (2026-09-29, R1.2e) the
+aired-order episode list for shows Sonarr doesn't hold.  Other
+episode/series metadata comes from AniList and Sonarr/Radarr.
 
 TVDB artwork type IDs (from ``/v4/artwork/types``):
   Series: 1=banner, 2=poster, 3=background, 5=icon, 22=clearart, 23=clearlogo
@@ -203,6 +204,43 @@ class TvdbClient:
             if page > 50:  # safety cap
                 break
         return results
+
+    def series_episodes(self, tvdb_id: int, lang: str = "eng") -> list[dict] | None:
+        """The aired-order episode list of a series, straight from TVDB
+        (RULEBOOK R1.2e — Sonarr is only a proxy for this).
+
+        Returns ``[{season, episode, aired, title, absolute, runtime}]`` for
+        every episode with a season and an episode number (season 0 included);
+        ``aired`` is TVDB's date-only ``YYYY-MM-DD`` or None, ``absolute`` is
+        TVDB's absolute number or None.  ``None`` (not ``[]``) when TVDB has no
+        such series.  Read-only; paginates until the last page.  ``lang`` picks the
+        title translation (English, like Sonarr's titles; TVDB falls back to the
+        original where there is none).
+        """
+        results: list[dict] = []
+        page = 0
+        while True:
+            data = self._get(f"/series/{tvdb_id}/episodes/default/{lang}", params={"page": page})
+            if not data:
+                return results if page else None
+            episodes = (data.get("data") or {}).get("episodes") or []
+            for ep in episodes:
+                season, number = ep.get("seasonNumber"), ep.get("number")
+                if season is None or number is None:
+                    continue
+                results.append({
+                    "season": season,
+                    "episode": number,
+                    "aired": (ep.get("aired") or "").strip() or None,
+                    "title": (ep.get("name") or "").strip() or None,
+                    "absolute": ep.get("absoluteNumber"),
+                    "runtime": ep.get("runtime"),
+                })
+            if not episodes or not (data.get("links") or {}).get("next"):
+                return results
+            page += 1
+            if page > 100:  # safety cap
+                return results
 
     def series_synopsis(self, tvdb_id: int, lang: str = "eng") -> str | None:
         """Fetch the series-level overview from TVDB.

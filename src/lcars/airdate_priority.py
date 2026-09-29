@@ -34,7 +34,8 @@ Two rules now, in order:
    *own* value can move a date later — a different source proposing a
    later date is a competing slot, not new information, and loses.
 
-One exception to rule 3: `sonarr`. Sonarr's own raw date is usually a
+One exception to rule 3: `sonarr` (and `tvdb`, the date-only value read
+straight from TVDB, 2026-09-29). Sonarr's own raw date is usually a
 bare TVDB placeholder, not a confirmed broadcast — it isn't "a real
 competing slot" the way Syoboi/AniDB/AniList/animeschedule are to each
 other, it's closer to "no real data yet." Any of those curated sources
@@ -51,7 +52,7 @@ PROTECTED_SOURCES: frozenset[str] = frozenset({"manual"})
 # A source whose own raw date is treated as "no real data yet" rather
 # than a genuine competing broadcast — any different source may replace
 # it in either direction. See module docstring's exception to rule 3.
-_WEAK_SOURCES: frozenset[str] = frozenset({"sonarr"})
+_WEAK_SOURCES: frozenset[str] = frozenset({"sonarr", "tvdb"})
 
 
 def should_apply(
