@@ -709,6 +709,24 @@ Stage 9 (checks) on run 1 found five kinds of thing; your answers and what was b
   place in a series (standalone movies and list-only entries exempt); Monster Eater, Chainsmoker
   Cat, The Duke's Son, Tomb Raider King: the unmatched part and the AniList entry are one part.
 
+## Your AniList history (user, 2026-09-29 evening)
+
+- **Write list, first cut, would have erased history**: 227 entries (mostly dropped shows, last
+  changed 2023–2026) hold a progress LCARS never recorded (Hunter x Hunter 118 → 0). Your answer:
+  LCARS takes the list's progress; an entry last changed before the mess (08-15) is never lowered.
+- **The 11 mess-era entries** (changed 08-15..09-27 and going down): the value before the mess
+  (08-26 snapshot) wins. It agrees with the rebuilt copy for all but Mob Psycho 100 S3 → dropped
+  at 3 (`rebuild-inputs/list_decisions.json`); You and I Are Polar Opposites S2 ep 12 is your
+  09-27 watch (run 2 takes it).
+- **GDPR export** (your download, 09-29): "get everything you can from AniList and map it; if it
+  gives new information trust it; only discard what is likely an artefact of the late mess and
+  what conflicts with what I explicitly confirmed today". Extracted without personal data to
+  `rebuild-inputs/anilist_history.json` (1,608 anime entries, 10,056 activities from 2023-01-08;
+  times are Japan time). Built: `rebuild_history` in stage 8 — watch events at their real times
+  (7,173, none overlapping Trakt's), rewatches, start/finish dates, scores where LCARS had none;
+  activity after 08-15, unaired episodes and the levels you set today are left out; 52 entries
+  that don't map are reviewed.
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
