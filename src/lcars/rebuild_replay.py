@@ -138,6 +138,55 @@ def _events_for(live, g: dict):
     return out
 
 
+def realign_watches(run, conn, c: dict, touched: set) -> None:
+    """A watch that was put on the wrong episode (your answers): it moves to the episode it
+    really was — found by its exact title — with its original time; the wrong episode goes
+    back to unwatched, and the level you name takes the status you gave (Kaiju No. 8: the
+    09-05 watch on the unaired S3E1 was Narumi's Week at Work #1; S3 is planned)."""
+    from lcars import status_rules
+
+    for r in c.get("realign_watches", []):
+        show = r["show"]
+        wrong = r["from"]
+        event = conn.execute(
+            "SELECT * FROM watch_event WHERE show_id = ? AND season = ? AND episode = ?",
+            (show, wrong["season"], wrong["episode"])).fetchone()
+        if event is None:
+            run.record("realign_watch", show, "skipped",
+                       f"no watch on S{wrong['season']}E{wrong['episode']} any more")
+            continue
+        target = conn.execute("SELECT * FROM episode WHERE show_id = ? AND title = ?",
+                              (show, r["to_title"])).fetchall()
+        if len(target) != 1:
+            raise _rebuild().RebuildError(
+                f"realign {show}: {len(target)} episodes titled {r['to_title']!r}")
+        target = target[0]
+        conn.execute("DELETE FROM watch_event WHERE id = ?", (event["id"],))
+        conn.execute("UPDATE episode SET state = 'unwatched', updated_at = ? WHERE show_id = ?"
+                     " AND season = ? AND episode = ?",
+                     (util.now_utc_iso(), show, wrong["season"], wrong["episode"]))
+        if conn.execute("SELECT 1 FROM watch_event WHERE show_id = ? AND season = ? AND"
+                        " episode = ?", (show, target["season"], target["episode"])).fetchone():
+            conn.execute("UPDATE episode SET state = 'watched' WHERE id = ?", (target["id"],))
+        else:
+            replay_watch(conn, show, target, event["watched_at"], event["platform"],
+                         event["created_at"])
+        then = r.get("then")
+        if then:
+            level = conn.execute("SELECT id FROM season WHERE show_id = ? AND season_number = ?"
+                                 " AND kind = 'tvdb_season'", (show, then["season_number"])
+                                 ).fetchone()
+            if level is None:
+                raise _rebuild().RebuildError(f"realign {show}: no season {then['season_number']}")
+            status_rules.set_level_status(conn, level[0], then["status"], "rebuild",
+                                          confirmed=True, manual=True)
+        touched.add(show)
+        moved = (f"S{wrong['season']}E{wrong['episode']} → "
+                 f"S{target['season']}E{target['episode']} '{r['to_title']}'")
+        after = f"; S{then['season_number']} {then['status']}" if then else ""
+        run.record("realign_watch", show, "applied", f"{moved}{after} ({r['why']})")
+
+
 def replay_watches(run, conn, live, d: dict, mapper: Mapper, touched: set) -> None:
     done = review = 0
     seen: set = set()
@@ -302,6 +351,9 @@ def stage_replay(run) -> None:
     d = rb.decisions(run)
     mapper = Mapper(run, conn, live)
     touched: set[str] = set()
+    from lcars import rebuild_cleanup
+
+    realign_watches(run, conn, rebuild_cleanup.load_inputs(run), touched)
     replay_watches(run, conn, live, d, mapper, touched)
     replay_statuses(run, conn, d, mapper, touched)
     replay_manual(run, conn, d, touched)

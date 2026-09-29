@@ -191,6 +191,44 @@ class TestStatuses:
         assert [e["outcome"] for e in _ledger(run)] == ["review"]
 
 
+class TestRealign:
+    def test_a_watch_on_the_wrong_episode_moves_to_the_right_one_and_the_season_is_planned(
+            self, run, conn):
+        _show(conn, "s-kaiju1", "Kaiju No. 8")
+        _season(conn, "z-kaiju3", "s-kaiju1", 3, "watching")
+        _episode(conn, "e-real01", "s-kaiju1", 3, 1, air="2026-12-01T00:00:00Z")
+        _episode(conn, "e-mini01", "s-kaiju1", 0, 4, title="Narumi's Week at Work #1")
+        conn.execute("UPDATE episode SET state = 'watched' WHERE id = 'e-real01'")
+        conn.execute("INSERT INTO watch_event (id, show_id, season, episode, watched_at,"
+                     " created_at) VALUES ('w-wrong1', 's-kaiju1', 3, 1, '2026-09-05T22:18:57Z', ?)",
+                     (NOW,))
+        conn.commit()
+        c = {"realign_watches": [{"show": "s-kaiju1", "from": {"season": 3, "episode": 1},
+                                  "to_title": "Narumi's Week at Work #1",
+                                  "then": {"season_number": 3, "status": "planned"}, "why": "t"}]}
+        rebuild_replay.realign_watches(run, conn, c, set())
+        assert conn.execute("SELECT state FROM episode WHERE id = 'e-real01'"
+                            ).fetchone()[0] == "unwatched"
+        assert conn.execute("SELECT state FROM episode WHERE id = 'e-mini01'"
+                            ).fetchone()[0] == "watched"
+        w = conn.execute("SELECT season, episode, watched_at FROM watch_event").fetchall()
+        assert [tuple(x) for x in w] == [(0, 4, "2026-09-05T22:18:57Z")]  # the original time
+        assert conn.execute("SELECT status FROM season WHERE id = 'z-kaiju3'"
+                            ).fetchone()[0] == "planned"
+
+    def test_two_episodes_with_that_title_stop_the_run(self, run, conn):
+        _show(conn, "s-kaiju1", "Kaiju No. 8")
+        _episode(conn, "e-mini01", "s-kaiju1", 0, 4, title="Mini")
+        _episode(conn, "e-mini02", "s-kaiju1", 0, 5, title="Mini")
+        conn.execute("INSERT INTO watch_event (id, show_id, season, episode, watched_at,"
+                     " created_at) VALUES ('w-wrong1', 's-kaiju1', 0, 4, ?, ?)", (NOW, NOW))
+        conn.commit()
+        with pytest.raises(rebuild.RebuildError):
+            rebuild_replay.realign_watches(run, conn, {"realign_watches": [
+                {"show": "s-kaiju1", "from": {"season": 0, "episode": 4}, "to_title": "Mini",
+                 "why": "t"}]}, set())
+
+
 class TestManualAndKaiju:
     def test_a_manual_watch_finds_the_show_by_a_unique_title_prefix(self, run, conn):
         _show(conn, "s-mush01", "Mushoku Tensei: Jobless Reincarnation")
