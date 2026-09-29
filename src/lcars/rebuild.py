@@ -786,7 +786,7 @@ def stage_sonarr(run: Run) -> None:
         before = conn.execute("SELECT COUNT(*) FROM episode WHERE show_id = ?",
                               (show["id"],)).fetchone()[0]
         try:
-            metadata._fetch_sonarr(conn, dict(show))
+            metadata._fetch_sonarr(conn, dict(show), derive=False)
         except sonarr_client.SonarrError as e:
             failed += 1
             run.record("sonarr", show["id"], "skipped", f"Sonarr error: {e}")

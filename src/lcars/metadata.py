@@ -1132,7 +1132,7 @@ def _availability_from_sonarr_episode(ep: dict) -> tuple[str, str | None]:
     return "unavailable", None
 
 
-def _fetch_sonarr(conn, show: dict) -> None:
+def _fetch_sonarr(conn, show: dict, derive: bool = True) -> None:
     tvdb_id_str = _external_id(conn, show["id"], "tvdb")
     if tvdb_id_str is None:
         return  # §5.1 — Sonarr's link is optional; nothing to fetch without it
@@ -1334,8 +1334,12 @@ def _fetch_sonarr(conn, show: dict) -> None:
     conn.execute("UPDATE show SET series_status = ? WHERE id = ?",
                  ((series.get("status") or "").lower() or None, show["id"]))
     # R2.17 (phase 4): a new season found here moves the show's derived
-    # status (e.g. completed → planned). Local only: nothing is pushed.
-    status_rules.after_episodes_changed(conn, show["id"], status_rules.AUTO)
+    # status (e.g. completed → planned). Local only: nothing is pushed. `derive` off (the
+    # rebuild's read stage): the levels' statuses are derived later, in their own stage.
+    if derive:
+        status_rules.after_episodes_changed(conn, show["id"], status_rules.AUTO)
+    else:
+        status_rules.recompute_show(conn, show["id"], status_rules.AUTO)
 
 
 def _ensure_seasons(
