@@ -512,6 +512,24 @@ An episode can be unaired but watched (pre-air showing, leak…).
       starts only after the approved write list has been sent and verified.
     - A write that could not be sent is retried before any check, and re-reads the service's
       update time immediately before sending: an outside edit made after our change wins.
+  - **Settle lock (per row)** `[clarified 2026-09-29]`: a *row* is one level (season or
+    part) with its AniList and MAL entries; status and progress travel together (score is
+    separate). LCARS can always change a row, and its newest decision replaces any
+    propagation still in flight. Once an external change on a row has been taken, **no
+    change from any external database is taken on that row until LCARS has propagated it
+    and confirmed every external database agrees** ("settled"); then external changes
+    resume.
+    - A change made on an external database while the row is settling is **deferred, not
+      dropped**: when the row unlocks it is judged as a new change by the timestamp rules,
+      using its **real** update time (never the time it was noticed, where the service
+      gives one). If it loses, a line is written in the change log so an overridden edit is
+      never invisible.
+    - **Settled** = every write was sent and its read-back stored, with no retry pending;
+      a later poll that shows the read-back means no outside change (services change values
+      themselves: completing an entry at the last episode, clamping progress). A service
+      with no update time is settled when the next poll shows the value LCARS wrote.
+    - **Limit and visibility:** a row not settled after **15 minutes** (a service down, a
+      write failing) is shown as not settled with a review; nothing hangs silently.
 
 ---
 

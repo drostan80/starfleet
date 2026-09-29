@@ -411,6 +411,12 @@ added.
   delete reviews; a tie → LCARS; a failed write is retried first and re-checks the update
   time before sending; **no external → LCARS until the whole setup is live** (after the
   approved write list is sent and verified).
+  **Settle lock (user, 2026-09-29):** per row (level with its AniList + MAL entries): once
+  an external change is taken, no external change on that row until LCARS has propagated
+  and every external agrees (read-backs stored, nothing pending); blocked edits are
+  deferred with their real update time and judged as new changes when the row unlocks
+  (an overridden edit is logged); 15 minute limit → "not settled" review. Replaces most of
+  the fixed time block (kept for services without an update time).
 - **7.6** AniList ↔ MAL mirror everywhere possible (R4.4): entry on one, missing on
   the other → added there.
 
