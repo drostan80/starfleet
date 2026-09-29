@@ -478,7 +478,7 @@ An episode can be unaired but watched (pre-air showing, leak…).
   found triggers its propagation **first**, before a new check of the other
   database is made.
   - `[clarified 2026-09-29]` The order (AniList first, then MAL…) was only an example;
-    the principle is R4.10's timestamps. **To be built.**
+    the principle is R4.10's timestamps. **Built 2026-09-29 (PLAN-CODE 7.5).**
 - **R4.10** If a propagation is blocked (API down or other), **propagation calls
   take precedence over checks**. Remote changes are compared by timestamp: a remote
   change later than the reconciliation supersedes it; an earlier one is moot.
@@ -491,7 +491,7 @@ An episode can be unaired but watched (pre-air showing, leak…).
     timestamps: e.g. LCARS marks an episode watched but cannot write to AniList → AniList's
     last real change is earlier, so AniList is written to; but if on AniList you then mark
     that episode watched **and another one** by hand, the second episode is later there,
-    so LCARS takes it. **To be built.**
+    so LCARS takes it. **Built 2026-09-29 (PLAN-CODE 7.5).**
   - **Design decisions** `[clarified 2026-09-29]`:
     - LCARS is the truth and is written first; it remembers **when it last wrote to each
       external entry and what** (the value the service actually holds after the write,
@@ -512,6 +512,9 @@ An episode can be unaired but watched (pre-air showing, leak…).
       starts only after the approved write list has been sent and verified.
     - A write that could not be sent is retried before any check, and re-reads the service's
       update time immediately before sending: an outside edit made after our change wins.
+    - **Not built:** the fixed ~2 minute time block for a service that gives no update
+      time — AniList and MAL both do, so it would be dead code. It is the rule for a
+      future service without one. `[2026-09-29]`
   - **Settle lock (per row)** `[clarified 2026-09-29]`: a *row* is one level (season or
     part) with its AniList and MAL entries; status and progress travel together (score is
     separate). LCARS can always change a row, and its newest decision replaces any

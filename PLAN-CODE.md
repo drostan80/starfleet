@@ -417,6 +417,23 @@ added.
   deferred with their real update time and judged as new changes when the row unlocks
   (an overridden edit is logged); 15 minute limit → "not settled" review. Replaces most of
   the fixed time block (kept for services without an update time).
+  **Built 2026-09-29 (commits b21cc09, 476bb00, + wrappers/docs):** `list_hub.py`,
+  migration `c3d4e5f6a7b9` (`list_baseline` write memory, `list_row_lock`,
+  `list_sync_log`); `anilist_save`/`mal_save` remember the read-back and the service's
+  own update time; `_apply_remote_list` takes an outside change only when the update time
+  moved, the row isn't settling and `list_intake_enabled` is on; both-changed by real
+  time, tie → LCARS; lower progress ≤ 2 episodes applies (never on a completed season),
+  else a review; a vanished entry → review; propagation guarded (an entry edited on the
+  other list is held, judged next poll); one corrective write, then a review, when a
+  service holds another value than written; reviews `list_entry_removed`,
+  `remote_progress_lower`, `list_not_settled`, `list_readback_differs`. **Not built:** the
+  fixed time block (both services give an update time); a strict "retry queue before any
+  check" across services — each service's reconcile retries its own pending LCARS writes
+  in its own pass. **Under capture (9.0)** nothing is locked or recorded (no read-backs);
+  the hub only logs. **`list_intake_enabled` defaults to False:** until the setup is live
+  nothing an outside list holds is taken into LCARS; LCARS → lists follows
+  `external_writes`. Set `list_intake_enabled = true` in prod `lcars.ini` at go-live,
+  after the approved write list is sent and verified.
 - **7.6** AniList ↔ MAL mirror everywhere possible (R4.4): entry on one, missing on
   the other → added there.
 

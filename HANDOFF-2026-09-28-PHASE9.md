@@ -162,6 +162,9 @@ the 2 note differences. Then deploy with the user, following §5.
   capped batches (`lcars captured <db> send --limit N`), verifying each batch.
 - The list-progress guard is in (progress only on a list change), so the list polls may run
   after the approved sends; still: send the corrected progress first.
+- **`list_intake_enabled = true`** in prod `lcars.ini` (7.5, default **off**) only once the
+  approved write list has been sent and verified and `list_baseline` is seeded from the
+  lists: until then nothing an outside list holds is taken into LCARS.
 - Two runs: run 1 (now, `run1/`) for review; run 2 at cutover with a fresh live `.backup`.
 
 ## 6. Traps (each one bit or nearly bit this project)

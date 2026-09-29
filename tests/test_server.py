@@ -4089,7 +4089,7 @@ async def _link_season_anilist(client, show_id, season_number, anilist_id):
 
 
 def _authenticated_config():
-    return config.Config(anilist_access_token="tok-123")
+    return config.Config(anilist_access_token="tok-123", list_intake_enabled=True)
 
 
 async def test_set_score_pushes_show_score_to_every_linked_season(client, monkeypatch):
@@ -4260,7 +4260,7 @@ async def _link_season_mal(client, show_id, season_number, mal_id):
 
 
 def _mal_authenticated_config():
-    return config.Config(mal_access_token="mal-tok-123")
+    return config.Config(mal_access_token="mal-tok-123", list_intake_enabled=True)
 
 
 async def test_set_score_pushes_show_score_to_every_mal_linked_season(client, monkeypatch):
@@ -10704,7 +10704,7 @@ async def test_poll_anilist_activity_no_op_when_anilist_not_configured(client):
 
 
 async def test_poll_anilist_activity_first_call_seeds_without_reconciling(client, monkeypatch):
-    config.set_current(config.Config(anilist_access_token="tok-123"))
+    config.set_current(config.Config(anilist_access_token="tok-123", list_intake_enabled=True))
     monkeypatch.setattr(anilist_client, "fetch_viewer_id", lambda token: 24011)
     monkeypatch.setattr(
         anilist_client, "fetch_latest_activity_marker", lambda token, uid: (999, 1700000000)
@@ -10725,7 +10725,7 @@ async def test_poll_anilist_activity_new_activity_returns_nested_reconcile_resul
         {"id": show["id"]},
         headers=auth_headers(),
     )
-    config.set_current(config.Config(anilist_access_token="tok-123"))
+    config.set_current(config.Config(anilist_access_token="tok-123", list_intake_enabled=True))
     monkeypatch.setattr(anilist_client, "fetch_viewer_id", lambda token: 24011)
     # A checkpoint already exists (the "not first call" path) — seed it
     # directly rather than via a second mutation round-trip.
