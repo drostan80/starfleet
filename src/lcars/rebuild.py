@@ -960,6 +960,25 @@ def _link_list_levels(run: Run, conn) -> None:
     run.record("level_links", "all", "applied", f"{linked} linked, {unmatched} to review")
 
 
+def _runs(nums: list, every: list) -> list[tuple]:
+    """A level's spans (R1.12): runs of its own numbers, broken wherever an episode
+    of another level falls between two of them (S2 = 13–16 and 18–24, the film 17).
+    `every`: all the show's absolute numbers, sorted."""
+    import bisect
+
+    nums = sorted(nums)
+    out: list[tuple] = []
+    for n in nums:
+        if out:
+            # any episode strictly between the run's end and n belongs to another level
+            between = bisect.bisect_left(every, n) - bisect.bisect_right(every, out[-1][1])
+            if between == 0:
+                out[-1] = (out[-1][0], n)
+                continue
+        out.append((n, n))
+    return out
+
+
 def _part_spans(run: Run, conn) -> None:
     """Parts (cours) divide their TVDB season (R1.10, R1.11): each part's
     span runs from its first episode — Fribb's episode offset within the TVDB
@@ -977,6 +996,9 @@ def _part_spans(run: Run, conn) -> None:
             "SELECT absolute_number FROM episode WHERE show_id = ? AND season = ?"
             " AND absolute_number IS NOT NULL ORDER BY episode",
             (parent["show_id"], parent["season_number"]))]
+        every = sorted(r[0] for r in conn.execute(
+            "SELECT absolute_number FROM episode WHERE show_id = ?"
+            " AND absolute_number IS NOT NULL", (parent["show_id"],)))
         parts = conn.execute("SELECT * FROM season WHERE parent_id = ? AND kind = 'part'"
                              " ORDER BY part_number", (parent["id"],)).fetchall()
         starts, running, ok = [], 0, bool(eps)
@@ -998,11 +1020,10 @@ def _part_spans(run: Run, conn) -> None:
             continue
         for i, part in enumerate(parts):
             end = starts[i + 1] if i + 1 < len(starts) else len(eps)
-            nums = eps[starts[i]:end]
             conn.execute("DELETE FROM season_span WHERE season_id = ?", (part["id"],))
-            if nums:
-                conn.execute("INSERT INTO season_span (season_id, abs_from, abs_to)"
-                             " VALUES (?, ?, ?)", (part["id"], nums[0], nums[-1]))
+            conn.executemany(
+                "INSERT INTO season_span (season_id, abs_from, abs_to) VALUES (?, ?, ?)",
+                [(part["id"], a, b) for a, b in _runs(eps[starts[i]:end], every)])
         done += 1
     conn.commit()
     run.record("part_spans", "all", "applied", f"{done} seasons divided, {review} to review")
