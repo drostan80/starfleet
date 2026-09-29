@@ -1060,6 +1060,12 @@ def _part_spans(run: Run, conn) -> None:
             " AND absolute_number IS NOT NULL", (parent["show_id"],)))
         parts = conn.execute("SELECT * FROM season WHERE parent_id = ? AND kind = 'part'"
                              " ORDER BY part_number", (parent["id"],)).fetchall()
+        # in air order: a part's place comes from Fribb, and part numbers can be out of it
+        # (Dr. STONE S4, Bookworm S1)
+        placed = {p["id"]: consolidation._fribb_place(index, p["anilist_id"]) for p in parts}
+        parts = sorted(parts, key=lambda p: (
+            placed[p["id"]][0] != parent["season_number"], placed[p["id"]][1] or 0,
+            p["part_number"]))
         starts, running, ok = [], 0, bool(eps)
         for part in parts:
             n, offset = consolidation._fribb_place(index, part["anilist_id"])

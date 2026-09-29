@@ -554,7 +554,10 @@ def film_ids(run, conn) -> None:
                              " ('tvdb', 'tvmaze')", (sid,)).fetchone() is not None
         rb._set_link(conn, sid, "tvdb", None)
         rb._set_link(conn, sid, "tvmaze", None)
-        want = (found.get(sid) or {}).get("tvdb_movie")
+        tmdb = conn.execute("SELECT external_id FROM show_external_id WHERE show_id = ? AND"
+                            " service = 'tmdb'", (sid,)).fetchone()
+        by_tmdb = {str(v.get("tmdb")): v for v in found.values() if v.get("tmdb")}
+        want = (found.get(sid) or by_tmdb.get(tmdb[0] if tmdb else "") or {}).get("tvdb_movie")
         if want is not None and has is None:
             rb._set_link(conn, sid, "tvdb_movie", want)
             set_ += 1
