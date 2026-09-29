@@ -322,16 +322,35 @@ def _season_episode_counts(conn):
     )
 
 
+def _level_counts(conn):
+    """Per level (season, part, special) of a tracked show: (id, show, label, status, episodes,
+    watched) counted the way the engine counts them — the level's own episodes by its spans
+    (R1.11–R1.13), not every episode of its TVDB season number."""
+    from lcars import status_rules
+
+    if not _has(conn, "season_span"):
+        return []
+    out = []
+    for lvl in conn.execute(
+            f"SELECT z.*, {_TITLE} AS show_title FROM season z JOIN show sh ON sh.id = z.show_id"
+            " WHERE sh.tracked = 1").fetchall():
+        eps = status_rules.level_episodes(conn, lvl)
+        if not eps:
+            continue
+        label = (f"S{lvl['season_number']}" if lvl["season_number"] is not None
+                 else lvl["label"] or lvl["kind"])
+        if lvl["kind"] == "part":
+            label += f" part {lvl['part_number']}"
+        out.append((lvl, lvl["show_title"], label, len(eps),
+                    sum(1 for e in eps if e["state"] == "watched")))
+    return out
+
+
 def check_planned_with_watched_episode(conn):
-    return _finding(
-        conn,
-        "R2.14",
-        "A planned season with an episode watched is watching",
-        "violation",
-        f"SELECT * FROM ({_season_episode_counts(conn)})"
-        " WHERE status = 'planned' AND w > 0 AND w < n",
-        fmt=lambda r: f"{r['show']} S{r['season_number']} ({r['w']}/{r['n']} watched)",
-    )
+    title = "A planned season with an episode watched is watching"
+    bad = [f"{show} {label} ({w}/{n} watched)" for lvl, show, label, n, w in _level_counts(conn)
+           if lvl["status"] == "planned" and 0 < w < n]
+    return Finding("R2.14", title, "violation", len(bad), bad[:SAMPLE_SIZE])
 
 
 def check_all_watched_is_completed(conn):
@@ -340,37 +359,20 @@ def check_all_watched_is_completed(conn):
     from lcars import status_rules
 
     title = "A season with every episode watched is completed (its count confirmed, R2.15a)"
-    note = "Before phase 2 counted per TVDB season number; per level (part, special) after."
-    if not _has(conn, "season", "episode_total"):  # a database from before R2.15a
-        return _finding(
-            conn, "R2.15", title, "violation",
-            f"SELECT * FROM ({_season_episode_counts(conn)}) WHERE n > 0 AND w = n"
-            " AND COALESCE(status, '') <> 'completed'",
-            fmt=lambda r: f"{r['show']} S{r['season_number']} is {r['status']} ({r['w']}/{r['n']})",
-            note=note)
-    rows = conn.execute(
-        f"SELECT z.id AS zid, {_TITLE} AS show, z.season_number, z.status, COUNT(e.id) AS n,"
-        " SUM(e.state = 'watched') AS w FROM season z JOIN show sh ON sh.id = z.show_id"
-        " JOIN episode e ON e.show_id = z.show_id AND e.season = z.season_number"
-        " WHERE sh.tracked = 1 AND z.season_number > 0 AND COALESCE(z.status, '') NOT IN"
-        " ('completed', 'skipped') GROUP BY z.id HAVING n > 0 AND w = n").fetchall()
     bad = []
-    for r in rows:
-        level = conn.execute("SELECT * FROM season WHERE id = ?", (r["zid"],)).fetchone()
-        if status_rules.episode_count_confirmed(conn, level, r["n"]):
-            bad.append(f"{r['show']} S{r['season_number']} is {r['status']} ({r['w']}/{r['n']})")
-    return Finding("R2.15", title, "violation", len(bad), bad[:SAMPLE_SIZE], note)
+    for lvl, show, label, n, w in _level_counts(conn):
+        if w != n or (lvl["status"] or "") in ("completed", "skipped"):
+            continue
+        if "episode_total" not in lvl.keys() or status_rules.episode_count_confirmed(conn, lvl, n):
+            bad.append(f"{show} {label} is {lvl['status']} ({w}/{n})")
+    return Finding("R2.15", title, "violation", len(bad), bad[:SAMPLE_SIZE])
 
 
 def check_completed_has_all_watched(conn):
-    return _finding(
-        conn,
-        "R2.7",
-        "A completed season has every episode watched",
-        "violation",
-        f"SELECT * FROM ({_season_episode_counts(conn)}) WHERE status = 'completed' AND w < n",
-        fmt=lambda r: f"{r['show']} S{r['season_number']} ({r['w']}/{r['n']} watched)",
-    )
+    title = "A completed season has every episode watched"
+    bad = [f"{show} {label} ({w}/{n} watched)" for lvl, show, label, n, w in _level_counts(conn)
+           if lvl["status"] == "completed" and w < n]
+    return Finding("R2.7", title, "violation", len(bad), bad[:SAMPLE_SIZE])
 
 
 def check_after_paused_dropped_skipped(conn):

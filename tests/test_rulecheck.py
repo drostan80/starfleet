@@ -95,9 +95,8 @@ def test_planted_violations_are_found(db_path):
     _season(db_path, "z-bbbbb1", "s-bbbbbb", 1, "completed", 1, 2)
     _season(db_path, "z-bbbbb2", "s-bbbbbb", 2, "planned", 3, 3)
     _episode(db_path, "e-bbbbb1", "s-bbbbbb", "z-bbbbb1", 1, 1, 1)
-    _episode(
-        db_path, "e-bbbbb2", "s-bbbbbb", "z-bbbbb1", 1, 2, None, state="unwatched"
-    )  # R1.0, R2.7
+    _episode(db_path, "e-bbbbb2", "s-bbbbbb", "z-bbbbb1", 1, 2, 2, state="unwatched")  # R2.7
+    _episode(db_path, "e-bbbbb4", "s-bbbbbb", None, 9, 9, None, state="unwatched")  # R1.0
     _episode(db_path, "e-bbbbb3", "s-bbbbbb", None, 0, 1, 1.1)  # R1.8: season 0, no season link
     found = _by_rule(db_path)
     assert found["R1.0"].count == 1
@@ -194,3 +193,14 @@ def test_r215_a_confirmed_count_that_is_not_completed_is_one(db_path):
     finding = next(f for f in rulecheck.run(rulecheck.open_readonly(str(db_path)))
                    if f.rule == "R2.15")
     assert finding.count == 1 and "Airing Show S1" in finding.samples[0]
+
+
+def test_r27_counts_a_levels_own_episodes_not_every_episode_of_its_tvdb_season(db_path):
+    # K-ON! S1: episode 12.1 carries TVDB season 1 but is another level's (R1.13a)
+    _show(db_path, "s-konkon", "K-ON")
+    _season(db_path, "z-konkon", "s-konkon", 1, "completed", 1, 2)
+    _episode(db_path, "e-kon001", "s-konkon", "z-konkon", 1, 1, 1)
+    _episode(db_path, "e-kon002", "s-konkon", "z-konkon", 1, 2, 2)
+    _episode(db_path, "e-kon003", "s-konkon", None, 1, 3, 1.5, state="unwatched")
+    found = _by_rule(db_path)
+    assert found["R2.7"].count == 0
