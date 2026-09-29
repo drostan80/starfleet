@@ -727,6 +727,22 @@ Stage 9 (checks) on run 1 found five kinds of thing; your answers and what was b
   activity after 08-15, unaired episodes and the levels you set today are left out; 52 entries
   that don't map are reviewed.
 
+## Write list review (user, 2026-09-29, review page "Write List Review")
+
+37 values corrected by the user, applied as explicit per-entry decisions
+(`rebuild-inputs/list_decisions.json`, stage 10; they win over the 08-26 snapshot): the 14 announced
+seasons whose only episode was a watched "TBA" placeholder are planned at 0 (Witch Hat Atelier S2,
+Makeine S2, Shield Hero S5, Gushing S2, Sentenced S2, Akane-banashi S2, Lycoris Recoil S2, Tune In S2,
+Delicious in Dungeon S2, Hotel Inhumans S2, KILL BLUE S2, A Star Brighter S2, Unaware Atelier S2,
+Jack-of-All-Trades S2) + 'Tis Time for "Torture" S2 and Dangers in My Heart (level "S4", TVDB counts
+the film; numbering kept); completed: SAO S3, Made in Abyss S2, Saint Seiya S6/S7/S9, SNAFU S2, Amagi
+Brilliant Park special, Kill la Kill side piece; dropped: Natsume S1 at 13, Hanaori-san at 6, KAMUI S1
+at 8 and its minis at 6, Lazarus at 2, FLCL S2, Duke of Death S1 at 1, Cyberpunk at 1; paused:
+Dorohedoro S2 at 7, Hunter x Hunter S4; skipped: FLCL S3; watching: Tomb Raider King at 11; Chitose
+cour 2 (198727) planned at 0. Watch dates: the user doesn't mind dates not matching (the 08-12
+burst and the rebuild's own R2.7 events stay). Result: AniList 70 changes + 11 adds, MAL 58 + 12,
+5 deletes, 67 Sonarr shows; every decided entry verified to end at the value given.
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
