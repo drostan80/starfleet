@@ -213,12 +213,14 @@ def test_a_list_edit_reaches_lcars_and_the_other_list_once(conn, lists):
     ("CURRENT", "watching", 2, "COMPLETED", "completed"),   # AniList completes it
     ("PLANNING", "planned", 1, "CURRENT", "watching"),      # AniList starts it
 ])
-def test_anilist_moving_status_itself_is_taken_not_reverted(
+def test_a_status_the_service_moves_itself_is_a_read_back_not_a_change(
     conn, lists, start, lcars_before, watched, expect_status, expect_lcars
 ):
-    # A progress push makes AniList change the status on its own. The next
-    # reconcile must bring that status into LCARS (and on to MAL) — not see
-    # "LCARS differs" and push the old status back.
+    # R4.10 (7.5, 2026-09-29): a progress push makes AniList move the status on its
+    # own. LCARS derives the same status itself (R2.14/R2.15, the engine), the
+    # service's move is remembered as the read-back, and nothing bounces either way.
+    from lcars import list_sync, status_rules
+
     state, calls, _ = lists
     _season_show(conn, season_status=lcars_before, episodes=2)
     state["episodes"][100] = 2
@@ -231,19 +233,20 @@ def test_anilist_moving_status_itself_is_taken_not_reverted(
         "UPDATE episode SET state = 'watched' WHERE show_id = 's-hub001' AND episode <= ?",
         (watched,),
     )
-    season = dict(conn.execute("SELECT * FROM season WHERE id='z-hub001'").fetchone())
-    resolvers._push_season_progress(conn, season)
+    status_rules.after_episodes_changed(conn, "s-hub001", "test")
+    list_sync.push(conn, "z-hub001")
     conn.commit()
     if start == "PLANNING":
         state["anilist"][100]["status"] = "CURRENT"  # what AniList does on first progress
     assert state["anilist"][100]["status"] == expect_status
-
-    _run_both(conn)
     assert _season_status(conn) == expect_lcars
-    assert state["anilist"][100]["status"] == expect_status  # not pushed back
+    assert list_baseline.get(conn, "anilist", 100)["status"] == expect_lcars  # the read-back
 
     calls.clear()
     _run_both(conn)
+    _run_both(conn)
+    assert _season_status(conn) == expect_lcars
+    assert state["anilist"][100]["status"] == expect_status  # not pushed back
     assert calls == []
 
 
@@ -260,3 +263,48 @@ def test_an_lcars_unwatch_is_pushed_not_re_marked_from_the_list(conn, lists):
     ep = conn.execute("SELECT state FROM episode WHERE id = 'e-hub001'").fetchone()[0]
     assert ep == "unwatched"
     assert state["anilist"][100]["progress"] == 0
+
+
+# ── 7.5: the write memory (R4.10) ──────────────────────────────────────────
+
+
+def test_anilist_write_is_remembered_with_the_services_own_update_time(conn, monkeypatch):
+    stamp = 1_760_000_000  # what AniList reports; the fetch converts it the same way
+    monkeypatch.setattr(
+        anilist_client, "save_media_list_entry",
+        lambda token, media_id, **kw: {"id": 1, "status": "COMPLETED", "progress": 12,
+                                       "updatedAt": stamp})
+    list_baseline.anilist_save(conn, "t", 100, status="CURRENT", progress=12)
+    got = list_baseline.get(conn, "anilist", 100)
+    assert got["remote_updated_at"] == anilist_client._unix_to_iso(stamp)  # echo compares equal
+    assert (got["status"], got["progress"]) == ("completed", 12)  # what the service holds
+    assert (got["lcars_status"], got["lcars_progress"]) == ("watching", 12)  # what LCARS sent
+    assert got["written_at"]
+
+
+def test_mal_write_is_remembered_with_the_services_own_update_time(conn, monkeypatch):
+    monkeypatch.setattr(
+        mal_client, "update_my_list_status",
+        lambda token, mal_id, **kw: {"status": "watching", "num_episodes_watched": 5,
+                                     "updated_at": "2026-09-29T10:15:04+02:00"})
+    list_baseline.mal_save(conn, "t", 200, status="watching", num_watched_episodes=9)
+    got = list_baseline.get(conn, "mal", 200)
+    assert got["remote_updated_at"] == mal_client._iso_utc("2026-09-29T10:15:04+02:00")
+    assert got["remote_updated_at"] == "2026-09-29T08:15:04Z"
+    assert (got["progress"], got["lcars_progress"]) == (5, 9)  # clamped by MAL, LCARS sent 9
+
+
+def test_a_progress_only_write_keeps_the_last_pushed_status(conn, monkeypatch):
+    monkeypatch.setattr(
+        anilist_client, "save_media_list_entry",
+        lambda token, media_id, **kw: {"status": "CURRENT", "progress": kw.get("progress"),
+                                       "updatedAt": 1_760_000_100})
+    list_baseline.record(conn, "anilist", 100, lcars_status="planned")
+    list_baseline.anilist_save(conn, "t", 100, progress=1)
+    got = list_baseline.get(conn, "anilist", 100)
+    assert got["lcars_status"] == "planned" and got["status"] == "watching"
+
+
+def test_record_rejects_an_unknown_field(conn):
+    with pytest.raises(TypeError):
+        list_baseline.record(conn, "anilist", 1, colour="red")

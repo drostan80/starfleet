@@ -34,41 +34,38 @@ MAL_TO_STATUS = {
     "dropped": "dropped",
 }
 
-_UNSET = object()
 
 
 def get(conn, service: str, external_id) -> dict | None:
     row = conn.execute(
-        "SELECT status, progress, lcars_progress FROM list_baseline"
+        "SELECT status, progress, lcars_progress, lcars_status, written_at, remote_updated_at,"
+        " deferred_status, deferred_progress, deferred_updated_at FROM list_baseline"
         " WHERE service = ? AND external_id = ?",
         (service, int(external_id)),
     ).fetchone()
     return dict(row) if row is not None else None
 
 
-def record(
-    conn, service: str, external_id, *, status=_UNSET, progress=_UNSET, lcars_progress=_UNSET
-) -> None:
+_FIELDS = ("status", "progress", "lcars_progress", "lcars_status", "written_at",
+           "remote_updated_at", "deferred_status", "deferred_progress", "deferred_updated_at")
+
+
+def record(conn, service: str, external_id, **fields) -> None:
     """Upsert the fields given; a field not passed keeps its stored value."""
-    now = util.now_utc_iso()
-    current = get(conn, service, external_id) or {
-        "status": None, "progress": None, "lcars_progress": None
-    }
-    if status is not _UNSET:
-        current["status"] = status
-    if progress is not _UNSET:
-        current["progress"] = progress
-    if lcars_progress is not _UNSET:
-        current["lcars_progress"] = lcars_progress
+    unknown = set(fields) - set(_FIELDS)
+    if unknown:
+        raise TypeError(f"unknown list_baseline field(s): {sorted(unknown)}")
+    current = get(conn, service, external_id) or {name: None for name in _FIELDS}
+    current.update(fields)
+    columns = ", ".join(_FIELDS)
+    marks = ", ".join("?" for _ in _FIELDS)
+    updates = ", ".join(f"{name} = excluded.{name}" for name in _FIELDS)
     conn.execute(
-        "INSERT INTO list_baseline"
-        " (service, external_id, status, progress, lcars_progress, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?)"
-        " ON CONFLICT (service, external_id) DO UPDATE SET"
-        " status = excluded.status, progress = excluded.progress,"
-        " lcars_progress = excluded.lcars_progress, updated_at = excluded.updated_at",
-        (service, int(external_id), current["status"], current["progress"],
-         current["lcars_progress"], now),
+        f"INSERT INTO list_baseline (service, external_id, {columns}, updated_at)"
+        f" VALUES (?, ?, {marks}, ?)"
+        f" ON CONFLICT (service, external_id) DO UPDATE SET {updates},"
+        " updated_at = excluded.updated_at",
+        (service, int(external_id), *(current[name] for name in _FIELDS), util.now_utc_iso()),
     )
 
 
@@ -86,41 +83,44 @@ def mark_seeded(conn, service: str) -> None:
 
 
 def anilist_save(conn, token: str, anilist_id: int, **fields) -> dict:
-    """`anilist_client.save_media_list_entry` + record what was agreed.
-    Raises exactly like the client; nothing is recorded on failure.
+    """`anilist_client.save_media_list_entry` + remember what LCARS wrote and what
+    the service actually holds afterwards (R4.10): the read-back status and
+    progress, the service's own update time (same converter as the list fetch,
+    so an unchanged entry compares equal), and when LCARS wrote. Raises exactly
+    like the client; nothing is recorded on failure.
 
-    Only the fields this push wrote are recorded. In particular a progress
-    push does *not* record status even though AniList may have moved it
-    (PLANNING -> CURRENT -> COMPLETED): LCARS hasn't taken that status yet,
-    so the next reconcile must see it as a list change and bring it in —
-    recording it here would make LCARS look changed and push the old
-    status straight back."""
+    A status the service moved by itself (PLANNING -> CURRENT -> COMPLETED when
+    progress reaches the end) is part of the read-back, not an outside change."""
     saved = anilist_client.save_media_list_entry(token, anilist_id, **fields) or {}
     if external_writes.capturing():
         return saved  # recorded for review, not sent: nothing is agreed yet (9.0)
-    kw = {}
+    kw = {"written_at": util.now_utc_iso(),
+          "remote_updated_at": anilist_client._unix_to_iso(saved.get("updatedAt"))}
+    if saved.get("status") in ANILIST_TO_STATUS:
+        kw["status"] = ANILIST_TO_STATUS[saved["status"]]
     if fields.get("status") in ANILIST_TO_STATUS:
-        kw["status"] = ANILIST_TO_STATUS[fields["status"]]
+        kw["lcars_status"] = ANILIST_TO_STATUS[fields["status"]]
     if "progress" in fields:
         kw["progress"] = saved.get("progress", fields["progress"])
         kw["lcars_progress"] = fields["progress"]
-    if kw:
-        record(conn, "anilist", anilist_id, **kw)
+    record(conn, "anilist", anilist_id, **kw)
     return saved
 
 
 def mal_save(conn, token: str, mal_id: int, **fields) -> dict:
-    """`mal_client.update_my_list_status` + record what was agreed (same
-    only-what-was-written rule as `anilist_save`)."""
+    """`mal_client.update_my_list_status` + the same write memory (MAL returns its
+    `my_list_status`: read-back status, progress and its own `updated_at`)."""
     saved = mal_client.update_my_list_status(token, mal_id, **fields) or {}
     if external_writes.capturing():
         return saved  # recorded for review, not sent: nothing is agreed yet (9.0)
-    kw = {}
+    kw = {"written_at": util.now_utc_iso(),
+          "remote_updated_at": mal_client._iso_utc(saved.get("updated_at"))}
+    if saved.get("status") in MAL_TO_STATUS:
+        kw["status"] = MAL_TO_STATUS[saved["status"]]
     if fields.get("status") in MAL_TO_STATUS:
-        kw["status"] = MAL_TO_STATUS[fields["status"]]
+        kw["lcars_status"] = MAL_TO_STATUS[fields["status"]]
     if "num_watched_episodes" in fields:
         kw["progress"] = saved.get("num_episodes_watched", fields["num_watched_episodes"])
         kw["lcars_progress"] = fields["num_watched_episodes"]
-    if kw:
-        record(conn, "mal", mal_id, **kw)
+    record(conn, "mal", mal_id, **kw)
     return saved

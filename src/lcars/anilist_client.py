@@ -788,6 +788,7 @@ def save_media_list_entry(
         score
         progress
         repeat
+        updatedAt
       }}
     }}
     """
