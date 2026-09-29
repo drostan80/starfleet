@@ -181,6 +181,19 @@ def structure_actions(run, conn, c: dict) -> None:
                          (u["show"], u["service"])).rowcount
         run.record("cleanup_unlink", u["show"], "applied", f"{u['service']} link removed ({n})")
 
+    # 1b. a show that is not what its shape says (Memories is a series of three episodes, not
+    #     a film): its shape and TVDB series id are yours (2026-09-29).
+    for x in c.get("shape_changes", []):
+        n = conn.execute("UPDATE show SET media_shape = ? WHERE id = ?",
+                         (x["media_shape"], x["show"])).rowcount
+        if n != 1:
+            raise rb_error(f"shape change {x['show']}: the show isn't in the database")
+        if x.get("tvdb"):
+            rb._set_link(conn, x["show"], "tvdb", x["tvdb"])
+            rb._set_link(conn, x["show"], "tvdb_movie", None)
+        run.record("cleanup_shape", x["show"], "applied",
+                   f"{x['media_shape']}, tvdb {x.get('tvdb')} ({x['why']})")
+
     # 2. folds: a stub or a special becomes levels of its parent show.
     for f in c.get("folds", []):
         loser = conn.execute("SELECT * FROM show WHERE id = ?", (f["loser"],)).fetchone()

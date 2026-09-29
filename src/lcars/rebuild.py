@@ -452,12 +452,17 @@ def _source_ids_from_live(run: Run, conn) -> None:
         for service, ext in by_show.get(sid, {}).items():
             by_tvdb.setdefault(tvdb, {}).setdefault(service, ext)
     live.close()
+    from lcars import rebuild_cleanup
+
+    purged = {(u["show"], u["service"]) for u in rebuild_cleanup.load_inputs(run).get("unlink", [])}
     added = 0
     for show in conn.execute("SELECT id FROM show WHERE tracked = 1").fetchall():
         tvdb = conn.execute("SELECT external_id FROM show_external_id WHERE show_id = ? AND"
                             " service = 'tvdb'", (show[0],)).fetchone()
         links = (by_tvdb.get(tvdb[0]) if tvdb else None) or by_show.get(show[0]) or {}
         for service, ext in links.items():
+            if (show[0], service) in purged:  # a link you had removed stays removed
+                continue
             if conn.execute("SELECT 1 FROM show_external_id WHERE show_id = ? AND service = ?",
                             (show[0], service)).fetchone() is None and ext not in ("-1", ""):
                 _set_link(conn, show[0], service, ext)
