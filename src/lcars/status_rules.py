@@ -207,8 +207,35 @@ def _parent_from_parts(conn, parent, changed_by: str, fx: Effects) -> None:
     _set(conn, parent, new, changed_by, False, fx)
 
 
-def after_episodes_changed(conn, show_id: str, changed_by: str = AUTO) -> Effects:
-    """R2.14, R2.15 on every level of the show, then R2.18 and R2.13."""
+def episode_count_confirmed(conn, level, count: int) -> bool:
+    """R2.15a: is the level's episode count known to be complete? An AniList (or MAL)
+    total that equals the episodes LCARS holds (its release status is beside the point);
+    with an entry that gives no total yet, no; a level with no list entry: its series has
+    ended (Sonarr) or a later season exists."""
+    if level["episode_total"] is not None:
+        return level["episode_total"] == count
+    if level["anilist_id"] is not None or level["mal_id"] is not None:
+        return False  # an entry that hasn't said how long it is (airing, announced)
+    show = conn.execute("SELECT series_status FROM show WHERE id = ?",
+                        (level["show_id"],)).fetchone()
+    if show is not None and (show["series_status"] or "").lower() == "ended":
+        return True
+    number = level["season_number"]
+    if number is None:
+        return False
+    return conn.execute(
+        "SELECT 1 FROM season z WHERE z.show_id = ? AND z.kind = 'tvdb_season'"
+        " AND z.season_number > ? AND EXISTS (SELECT 1 FROM episode e WHERE"
+        " e.show_id = z.show_id AND e.season = z.season_number) LIMIT 1",
+        (level["show_id"], number)).fetchone() is not None
+
+
+def after_episodes_changed(
+    conn, show_id: str, changed_by: str = AUTO, require_confirmed: bool = True
+) -> Effects:
+    """R2.14, R2.15 on every level of the show, then R2.18 and R2.13. R2.15a: a level
+    completes by itself only with a confirmed episode count (`require_confirmed`; the
+    rebuild's derivation of historical data turns it off — past seasons aren't reviewed)."""
     fx = Effects()
     levels = conn.execute(
         "SELECT * FROM season WHERE show_id = ? ORDER BY kind = 'tvdb_season'", (show_id,)
@@ -220,7 +247,9 @@ def after_episodes_changed(conn, show_id: str, changed_by: str = AUTO) -> Effect
         if not eps:
             continue
         watched = [e for e in eps if e["state"] == "watched"]
-        if len(watched) == len(eps):
+        if len(watched) == len(eps) and (
+            not require_confirmed or episode_count_confirmed(conn, level, len(eps))
+        ):
             if level["status"] != "completed":
                 _set(conn, level, "completed", changed_by, False, fx)
         elif watched and (level["status"] or "planned") == "planned":

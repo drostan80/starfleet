@@ -260,6 +260,7 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
 
     intake = list_hub.intake_enabled()  # R4.10: nothing an outside list holds is taken until live
     capturing = external_writes.capturing()
+    total_changed: set[str] = set()  # shows whose entry gave a new episode total (R2.15a)
     for season in seasons:
         if season["id"] in conflicted_season_ids:
             continue
@@ -289,6 +290,14 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
             continue
         stats["seasons_checked"] += 1
         show_id = season["show_id"]
+        # R2.15a: the entry's episode total is a source fact, kept whatever intake says.
+        # AniList's wins; MAL's fills in only where AniList has none.
+        total = entry.get("episodes")
+        if (service == "anilist" or (season["anilist_id"] is None and total is not None)) \
+                and total != season["episode_total"]:
+            conn.execute("UPDATE season SET episode_total = ? WHERE id = ?", (total, season["id"]))
+            if show_id:
+                total_changed.add(show_id)
         base = base_row or {
             "status": None, "progress": None, "lcars_progress": None, "lcars_status": None,
             "remote_updated_at": None,
@@ -485,6 +494,9 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     # Deferred import: resolvers.py imports this module at load time.
     from lcars import resolvers
 
+    if intake:  # a new total may confirm a fully watched level: LCARS derives, and pushes
+        for show_id in total_changed - touched_shows:
+            resolvers._recompute_show_status(conn, show_id, source)
     for show_id in touched_shows:
         fx = resolvers._recompute_show_status(conn, show_id, source, _skip_push=True)
         fx_all.extend(fx.seasons)
@@ -563,6 +575,7 @@ def reconcile_watch_progress(conn) -> dict:
             "lcars_status": _ANILIST_TO_STATUS.get(entry["status"]),
             "progress": entry.get("progress") or 0,
             "updated_at": entry.get("updated_at"),
+            "episodes": entry.get("episodes"),
         }
         for entry in my_list
     }

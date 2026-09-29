@@ -487,7 +487,7 @@ def fetch_my_list(token: str, client: httpx.Client | None = None) -> list[dict]:
     list on a cadence and diffs (mal_reconcile.py)."""
     owns_client = client is None
     client = client or httpx.Client(timeout=30.0)
-    url = f"{API_BASE_URL}/users/@me/animelist?fields=list_status&limit=1000&nsfw=true"
+    url = f"{API_BASE_URL}/users/@me/animelist?fields=list_status,num_episodes&limit=1000&nsfw=true"
     entries: list[dict] = []
     try:
         while url:
@@ -518,6 +518,8 @@ def fetch_my_list(token: str, client: httpx.Client | None = None) -> list[dict]:
                         "num_watched_episodes": status_obj.get("num_episodes_watched") or 0,
                         # Phase 7 (R4.10): when the entry last changed (ISO 8601).
                         "updated_at": _iso_utc(status_obj.get("updated_at")),
+                        # R2.15a: MAL's episode total; 0 means unknown there.
+                        "episodes": node.get("num_episodes") or None,
                     }
                 )
             url = (payload.get("paging") or {}).get("next")

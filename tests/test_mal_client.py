@@ -255,9 +255,9 @@ def test_fetch_my_list_maps_fields():
     result = mal_client.fetch_my_list("tok", client=fake)
     assert result == [
         {"mal_id": 1, "status": "watching", "score": 7, "num_watched_episodes": 5,
-         "updated_at": None},
+         "updated_at": None, "episodes": 12},
         {"mal_id": 2, "status": "completed", "score": 0, "num_watched_episodes": 24,
-         "updated_at": None},
+         "updated_at": None, "episodes": None},
     ]
 
 

@@ -1076,11 +1076,27 @@ def _show_by_title(conn, title: str):
         " OR display_title_override = ?)", (title, title, title)).fetchone()
 
 
+def _episode_totals(run: Run, conn) -> None:
+    """R2.15a: each level's AniList episode total, from your list export (null = unknown),
+    so the first live watch after go-live has the data to confirm a count."""
+    entries = json.load(open(run.inputs / "anilist_entries.json"))
+    n = 0
+    for z in conn.execute("SELECT id, anilist_id FROM season WHERE anilist_id IS NOT NULL"
+                          " AND episode_total IS NULL").fetchall():
+        total = ((entries.get(str(z["anilist_id"])) or {}).get("media") or {}).get("episodes")
+        if total:
+            conn.execute("UPDATE season SET episode_total = ? WHERE id = ?", (total, z["id"]))
+            n += 1
+    conn.commit()
+    run.record("episode_totals", "all", "applied", f"{n} levels got their AniList episode total")
+
+
 def stage_statuses(run: Run) -> None:
     from lcars import status_rules
 
     conn = _connect(run.work())
     d = decisions(run)
+    _episode_totals(run, conn)
     _part_spans(run, conn)
     _link_list_levels(run, conn)
 
@@ -1158,7 +1174,9 @@ def stage_statuses(run: Run) -> None:
 
     # R2.14/R2.15/R2.18 per level, R2.13 per show, for every tracked show.
     for sid in [r[0] for r in conn.execute("SELECT id FROM show WHERE tracked = 1")]:
-        status_rules.after_episodes_changed(conn, sid, "rebuild")
+        # Historical data: what the levels' watch state says (R2.15a governs new watches;
+        # past seasons and episodes aren't reviewed for it, user 09-29).
+        status_rules.after_episodes_changed(conn, sid, "rebuild", require_confirmed=False)
     conn.commit()
     run.record("stage", "statuses", "applied", "")
 

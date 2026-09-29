@@ -101,6 +101,7 @@ def test_planned_season_with_a_watched_episode_becomes_watching(conn):
 @pytest.mark.parametrize("status", ["paused", "dropped", "watching"])
 def test_every_episode_watched_completes_the_level(conn, status):
     _season(conn, "z-s10000", 1, status)
+    conn.execute("UPDATE season SET episode_total = 2 WHERE id = 'z-s10000'")  # R2.15a: confirmed
     _eps(conn, 1, 2, state="watched")
     status_rules.after_episodes_changed(conn, "s-stat01")
     assert _status(conn, "z-s10000") == "completed"  # R2.15, paused/dropped included
@@ -187,6 +188,7 @@ def test_tvdb_season_status_comes_from_its_parts(conn):
     _span(conn, "z-s20000", 1, 4)
     _span(conn, "z-p10000", 1, 2)
     _span(conn, "z-p20000", 3, 4)
+    conn.execute("UPDATE season SET episode_total = 2 WHERE id = 'z-p10000'")  # R2.15a
     _eps(conn, 2, 4, start_abs=1)
     _watch(conn, 2, 1)
     _watch(conn, 2, 2)
@@ -278,3 +280,91 @@ def test_watching_an_episode_of_a_skipped_season_makes_it_watching(conn):
     statuses = [_status(conn, z) for z in ("z-s10000", "z-s20000", "z-s30000")]
     assert statuses == ["skipped", "watching", "skipped"]  # (d): later stays skipped
     assert _show(conn) == "watching"
+
+
+# ── R2.15a: a level completes by itself only with a confirmed episode count ─────
+
+
+def _list_id(conn, zid, anilist=100):
+    conn.execute("UPDATE season SET anilist_id = ? WHERE id = ?", (anilist, zid))
+
+
+def test_overgeared_one_known_episode_watched_does_not_complete_the_show(conn):
+    # Live 09-27: S1E1 was the only episode row; AniList had no total yet.
+    _season(conn, "z-s10000", 1, "planned")
+    _list_id(conn, "z-s10000")
+    _eps(conn, 1, 1, state="watched")
+    status_rules.after_episodes_changed(conn, "s-stat01")
+    assert _status(conn, "z-s10000") == "watching"  # R2.14 still applies
+    assert _show(conn) == "watching"
+
+
+def test_an_entry_with_no_total_never_completes_by_itself(conn):
+    _season(conn, "z-s10000", 1, "watching")
+    _list_id(conn, "z-s10000")
+    _eps(conn, 1, 3, state="watched")
+    status_rules.after_episodes_changed(conn, "s-stat01")
+    assert _status(conn, "z-s10000") == "watching"
+
+
+def test_a_total_that_differs_from_the_known_episodes_is_not_confirmed(conn):
+    _season(conn, "z-s10000", 1, "watching")
+    _list_id(conn, "z-s10000")
+    conn.execute("UPDATE season SET episode_total = 12 WHERE id = 'z-s10000'")
+    _eps(conn, 1, 11, state="watched")
+    status_rules.after_episodes_changed(conn, "s-stat01")
+    assert _status(conn, "z-s10000") == "watching"
+
+
+def test_an_equal_total_confirms_even_before_the_season_finishes_airing(conn):
+    # leaked or early episodes: every episode LCARS holds is watched, some not yet aired
+    _season(conn, "z-s10000", 1, "watching")
+    _list_id(conn, "z-s10000")
+    conn.execute("UPDATE season SET episode_total = 3 WHERE id = 'z-s10000'")
+    _eps(conn, 1, 2, state="watched")
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, state,"
+        " created_at, updated_at) VALUES ('e-early1', 's-stat01', 1, 3, 'regular', ?,"
+        " 'watched', ?, ?)", (FUTURE, NOW, NOW))
+    status_rules.after_episodes_changed(conn, "s-stat01")
+    assert _status(conn, "z-s10000") == "completed"
+
+
+def test_a_level_with_no_list_entry_completes_when_its_series_has_ended(conn):
+    _season(conn, "z-s10000", 1, "watching")
+    _eps(conn, 1, 2, state="watched")
+    status_rules.after_episodes_changed(conn, "s-stat01")
+    assert _status(conn, "z-s10000") == "watching"  # nothing says it is over
+    conn.execute("UPDATE show SET series_status = 'continuing'")
+    status_rules.after_episodes_changed(conn, "s-stat01")
+    assert _status(conn, "z-s10000") == "watching"
+    conn.execute("UPDATE show SET series_status = 'ended'")
+    status_rules.after_episodes_changed(conn, "s-stat01")
+    assert _status(conn, "z-s10000") == "completed"
+
+
+def test_a_level_with_no_list_entry_completes_when_a_later_season_exists(conn):
+    _season(conn, "z-s10000", 1, "watching")
+    _season(conn, "z-s20000", 2, "planned")
+    _eps(conn, 1, 2, state="watched")
+    _eps(conn, 2, 2)
+    status_rules.after_episodes_changed(conn, "s-stat01")
+    assert _status(conn, "z-s10000") == "completed"
+    assert _status(conn, "z-s20000") == "planned"
+
+
+def test_without_the_gate_the_old_derivation_stands(conn):
+    # the rebuild derives historical data this way; past seasons aren't reviewed
+    _season(conn, "z-s10000", 1, "planned")
+    _list_id(conn, "z-s10000")
+    _eps(conn, 1, 1, state="watched")
+    status_rules.after_episodes_changed(conn, "s-stat01", require_confirmed=False)
+    assert _status(conn, "z-s10000") == "completed"
+
+
+def test_a_level_you_set_completed_stays_completed(conn):
+    _season(conn, "z-s10000", 1, "completed", manual=1)
+    _list_id(conn, "z-s10000")
+    _eps(conn, 1, 1, state="watched")
+    status_rules.after_episodes_changed(conn, "s-stat01")
+    assert _status(conn, "z-s10000") == "completed"

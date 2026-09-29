@@ -67,6 +67,7 @@ def reconcile_mal_progress(conn) -> dict:
             "lcars_status": watch_reconcile._MAL_TO_STATUS.get(entry["status"]),
             "progress": entry.get("num_watched_episodes") or 0,
             "updated_at": entry.get("updated_at"),
+            "episodes": entry.get("episodes"),
         }
         for entry in my_list
     }

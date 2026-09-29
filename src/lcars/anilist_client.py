@@ -457,7 +457,7 @@ query ($userId: Int) {
         progress
         score
         updatedAt
-        media { id format title { romaji } }
+        media { id episodes format title { romaji } }
       }
     }
   }
@@ -534,6 +534,8 @@ def fetch_my_anime_list(token: str, client: httpx.Client | None = None) -> list[
                 # Phase 7 (R4.10): when the entry last changed, for conflicts.
                 "updated_at": _unix_to_iso(entry.get("updatedAt")),
                 "title": media["title"]["romaji"],
+                # R2.15a: the entry's announced episode total; null while unknown.
+                "episodes": media.get("episodes"),
             }
     return list(by_id.values())
 

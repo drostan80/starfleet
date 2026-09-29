@@ -1329,9 +1329,13 @@ def _fetch_sonarr(conn, show: dict) -> None:
     # Phase 3.2 (R1.2c): Memory Alpha numbers the show and sets its seasons'
     # spans — never Sonarr's absolute number (a mapping, `tvdb_absolute`).
     numbering.renumber_show(conn, show["id"])
+    # R2.15a: Sonarr's series status (continuing / ended) is one of the ways an episode
+    # count is confirmed; a series that has ended can complete levels already fully watched.
+    conn.execute("UPDATE show SET series_status = ? WHERE id = ?",
+                 ((series.get("status") or "").lower() or None, show["id"]))
     # R2.17 (phase 4): a new season found here moves the show's derived
     # status (e.g. completed → planned). Local only: nothing is pushed.
-    status_rules.recompute_show(conn, show["id"], status_rules.AUTO)
+    status_rules.after_episodes_changed(conn, show["id"], status_rules.AUTO)
 
 
 def _ensure_seasons(

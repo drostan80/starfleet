@@ -97,7 +97,7 @@ def world(monkeypatch):
     monkeypatch.setattr(mal_client, "update_my_list_status", mal_save)
     monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token: [
         {"anilist_id": k, "status": v["status"], "progress": v["progress"], "format": "TV",
-         "updated_at": anilist_client._unix_to_iso(v["t"])}
+         "updated_at": anilist_client._unix_to_iso(v["t"]), "episodes": v.get("episodes")}
         for k, v in w.state["anilist"].items()])
     monkeypatch.setattr(mal_client, "fetch_my_list", lambda token: [
         {"mal_id": k, "status": v["status"], "num_watched_episodes": v["progress"],
@@ -391,3 +391,24 @@ def test_a_dry_run_takes_the_change_but_locks_and_records_nothing(conn, world, m
     assert _status(conn) == "paused"  # LCARS took it (a copy is safe to change)
     assert conn.execute("SELECT COUNT(*) FROM list_row_lock").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM list_sync_log").fetchone()[0] == 0
+
+
+
+# ── R2.15a: the entry's total is stored and can confirm a fully watched level ─────
+
+
+def test_a_new_episode_total_completes_a_fully_watched_level(conn, world):
+    _seeded(conn, world, watched=5, progress=5)  # every known episode watched, total unknown
+    assert _status(conn) == "watching"
+    world.state["anilist"][100]["episodes"] = 5
+    _poll(conn)
+    assert conn.execute("SELECT episode_total FROM season WHERE id = 'z-hub001'"
+                        ).fetchone()[0] == 5
+    assert _status(conn) == "completed"
+
+
+def test_a_total_that_does_not_match_leaves_it_watching(conn, world):
+    _seeded(conn, world, watched=5, progress=5)
+    world.state["anilist"][100]["episodes"] = 12
+    _poll(conn)
+    assert _status(conn) == "watching"

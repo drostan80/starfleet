@@ -5942,6 +5942,21 @@ async def _season_dates(client, season_id: str) -> dict:
     return data["season"]
 
 
+def _episode_total(anilist_id: int, total: int) -> None:
+    """R2.15a: AniList's episode total for the level's entry — the count is confirmed."""
+    conn = db.get_connection()
+    conn.execute("UPDATE season SET episode_total = ? WHERE anilist_id = ?", (total, anilist_id))
+    conn.commit()
+
+
+def _series_ended(show_id: str) -> None:
+    """R2.15a: a level with no list entry completes by itself only once its count is
+    confirmed — here, by its series having ended."""
+    conn = db.get_connection()
+    conn.execute("UPDATE show SET series_status = 'ended' WHERE id = ?", (show_id,))
+    conn.commit()
+
+
 async def _create_season(client, show_id: str, season_number: int) -> str:
     """No mutation creates a bare, unlinked season row on its own — reuse
     setSeasonMapping with no anilistId/malId, same upsert-creates-the-row
@@ -6248,8 +6263,10 @@ async def test_forward_auto_complete_pushes_completed_at_to_anilist(
         lambda token, anilist_id, **kw: calls.append((anilist_id, kw)),
     )
     show = await add_show(client)
+    _series_ended(show["id"])
     await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 4))
     await _link_season_anilist(client, show["id"], 1, 111)
+    _episode_total(111, 3)
 
     await gql(
         client,
@@ -6326,6 +6343,7 @@ async def _show_status(client, show_id: str) -> str:
 
 async def test_last_episode_watched_auto_completes_season_and_show(client, migrated_db):
     show = await add_show(client)
+    _series_ended(show["id"])
     await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 4))
     season_id = await _create_season(client, show["id"], 1)
     await gql(
@@ -6370,6 +6388,7 @@ async def test_last_episode_watched_auto_completes_season_and_show(client, migra
 async def test_every_episode_watched_completes_even_an_undated_one(client, migrated_db):
     # RULEBOOK R2.15 (phase 4): all episodes of the level watched → completed.
     show = await add_show(client)
+    _series_ended(show["id"])
     await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
     # episode 3 has no air date at all — "still airing" per _show_is_airing
     db.get_connection().execute(
@@ -6410,6 +6429,7 @@ async def test_every_episode_watched_completes_even_an_undated_one(client, migra
 
 async def test_multi_season_show_only_completes_once_every_season_is_done(client, migrated_db):
     show = await add_show(client)
+    _series_ended(show["id"])
     await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
     await _insert_aired_episode_range(migrated_db, show["id"], 2, range(1, 3))
     season1 = await _create_season(client, show["id"], 1)
@@ -6440,6 +6460,7 @@ async def test_delete_watch_event_does_not_reverse_auto_completion(client, migra
     already-completed show doesn't un-stamp completed_at or flip status back
     — same never-moves-once-set posture completed_at already has."""
     show = await add_show(client)
+    _series_ended(show["id"])
     await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 2))
     season_id = await _create_season(client, show["id"], 1)
     added = await gql(
@@ -6768,8 +6789,10 @@ async def test_reconcile_watch_progress_is_a_no_op_right_after_auto_completing(
     config.set_current(_authenticated_config())
     monkeypatch.setattr(anilist_client, "save_media_list_entry", lambda *a, **kw: {"id": 1})
     show = await add_show(client)
+    _series_ended(show["id"])
     await _insert_aired_episode_range(migrated_db, show["id"], 1, range(1, 3))
     await _link_season_anilist(client, show["id"], 1, 777)
+    _episode_total(777, 2)
 
     await gql(
         client,

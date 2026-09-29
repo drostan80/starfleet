@@ -337,6 +337,17 @@ An episode can be unaired but watched (pre-air showing, leak…).
 - **R2.15** All episodes of a level with an id watched → that level completed —
   also when that level is paused or dropped. `[clarified 2026-09-27, Q-K2]`
   Conversely, a level set completed → all episodes mapped to it watched.
+  - **R2.15a Only with a confirmed episode count** `[clarified 2026-09-29]` (Overgeared
+    S01E01 watched completed the whole show while its length was still unknown): a level
+    completes **by itself** only when every episode is watched **and** its episode count is
+    confirmed: (a) **AniList's episode total** for the level's entry is known and **equals
+    the number of episodes LCARS holds** for the level — AniList's release status does not
+    matter, so early or leaked episodes and air-time gaps still count; (b) for a level with
+    no list entry, its series has **ended** (Sonarr) or a **later season** exists;
+    (c) **you** set it completed (R2.7, unchanged). Otherwise the level stays **watching**
+    (R2.14 still turns planned into watching on the first watched episode) and is checked
+    again whenever a source reports a total or an end. Past seasons and episodes are not
+    reviewed for this: it applies to new watches and refreshes.
 - **R2.16 New season found** gets:
   - previous season completed / watching / planned → **planned**;
   - previous season paused / dropped / skipped → **skipped**.
@@ -764,3 +775,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — R1.0a (no air date → placeholder shown as x), R1.13b (every episode in a level; mini sub-seasons; art per level), R3.7b (match on the Japanese title), R3.7c (pieces never on TVDB attach to their show).
 - 2026-09-28 — R1.0a: placeholder stored as 5000.1, 5000.2… (shown as x).
 - 2026-09-29 — R2.2 addendum (skipped episode state kept, not an active rule: no episode is skipped; if ever used, marking a season watched would mark all its episodes except the skipped ones); R4.9/R4.10 clarified (timestamps decide; the AniList-then-MAL order was an example; to be built); R3.7c (two sources agreeing on a TVDB id attach it), R3.7d (show page can add a TVDB id by hand), R3.7e (unconfirmed TVDB id → review with yes / no / no-here-is-the-right-one), R1.14a (one show per TVDB id and a TVDB id on every tracked show are enforced; some Radarr movies may be individual seasons for now).
+- 2026-09-29 — R2.15a: a level completes by itself only with a confirmed episode count (AniList total = the episodes LCARS holds, or an ended series / later season, or set by you); past seasons not reviewed.

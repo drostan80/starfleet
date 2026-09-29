@@ -234,6 +234,7 @@ def test_a_status_the_service_moves_itself_is_a_read_back_not_a_change(
         "UPDATE episode SET state = 'watched' WHERE show_id = 's-hub001' AND episode <= ?",
         (watched,),
     )
+    conn.execute("UPDATE season SET episode_total = 2")  # R2.15a: AniList's total, confirmed
     status_rules.after_episodes_changed(conn, "s-hub001", "test")
     list_sync.push(conn, "z-hub001")
     conn.commit()
