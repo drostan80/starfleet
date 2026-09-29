@@ -117,6 +117,14 @@ def _inputs(**kw):
     return base
 
 
+class TestStatusOverride:
+    def test_a_later_answer_replaces_an_accepted_status(self):
+        inputs = {"season_status_overrides": [{"season": "z-b53vt7", "status": "planned"}]}
+        assert rebuild_cleanup.status_for(inputs, "z-b53vt7", "completed") == "planned"
+        assert rebuild_cleanup.status_for(inputs, "z-other1", "completed") == "completed"
+        assert rebuild_cleanup.status_for({}, "z-b53vt7", "completed") == "completed"
+
+
 class TestStructure:
     def test_a_stub_folds_into_its_parent_by_tvdb_id_with_your_status(self, conn, run):
         _show(conn, "s-paren1", "Parent", tvdb="500")
@@ -163,6 +171,18 @@ class TestStructure:
         z = conn.execute("SELECT show_id, kind FROM season WHERE id = 'z-indiv1'").fetchone()
         assert tuple(z) == ("s-par001", "special")
         assert _count(conn, "season", "anilist_id = 185657") == 1  # no duplicate level
+
+    def test_a_moved_season_with_no_status_takes_the_stubs(self, conn, run):
+        _show(conn, "s-par001", "Parent", tvdb="500")
+        _season(conn, "z-par001", "s-par001", anilist=1)
+        _show(conn, "s-stub01", "Parent Special", tracked=0, status="completed")
+        _season(conn, "z-stub01", "s-stub01", anilist=2, status=None)
+        conn.commit()
+        rebuild_cleanup.structure_actions(run, conn, _inputs(folds=[
+            {"loser": "s-stub01", "parent": {"tvdb": "500"}, "why": "t"}]))
+        row = conn.execute("SELECT status, status_set_manually FROM season WHERE id ="
+                           " 'z-stub01'").fetchone()
+        assert tuple(row) == ("completed", 1)
 
     def test_a_parent_that_is_not_there_stops_the_run(self, conn, run):
         _show(conn, "s-stub01", "Orphan", tracked=0)

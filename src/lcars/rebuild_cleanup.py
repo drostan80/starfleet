@@ -123,6 +123,16 @@ def load_inputs(run) -> dict:
     return json.loads(path.read_text())
 
 
+def status_for(inputs: dict, season_id: str, accepted: str) -> str:
+    """The status of a 09-06 season accepted in an earlier review, unless you have since
+    said otherwise (an accepted 'completed' marks every episode watched, R2.7, so the
+    later answer has to replace it at the start, not be applied over it)."""
+    for o in inputs.get("season_status_overrides", []):
+        if o["season"] == season_id:
+            return o["status"]
+    return accepted
+
+
 # ── stage 3 tail: structure ──────────────────────────────────────────────
 
 
@@ -185,9 +195,12 @@ def structure_actions(run, conn, c: dict) -> None:
         record_redirect(run, f["loser"], parent["id"])
         homed = _home_for_list_ids(conn, parent["id"], list_ids, f.get("status") or loser["status"])
         for sid in [*seasons, *homed]:
-            if f.get("status") and conn.execute("SELECT 1 FROM season WHERE id = ?",
-                                                (sid,)).fetchone():
-                rb._mine(conn, sid, f["status"])
+            row = conn.execute("SELECT status FROM season WHERE id = ?", (sid,)).fetchone()
+            if row is None:
+                continue
+            status = f.get("status") or (loser["status"] if row["status"] is None else None)
+            if status:
+                rb._mine(conn, sid, status)
         run.record("cleanup_fold", f["loser"], "applied",
                    f"→ {parent['id']} {f.get('status') or ''} ({f['why']})"
                    + (f"; list ids homed on {homed}" if homed else "").strip())

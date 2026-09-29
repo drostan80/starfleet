@@ -300,11 +300,16 @@ def stage_structure(run: Run) -> None:
 
     # a) the 1,700 accepted season statuses, by their 09-06 season ids (before
     #    anything changes ids — merges and numbering carry them forward).
+    from lcars import rebuild_cleanup
+
+    cleanup_inputs = rebuild_cleanup.load_inputs(run)
     for s in d["season_statuses"]:
         if conn.execute("SELECT 1 FROM season WHERE id = ?", (s["season"],)).fetchone() is None:
             raise RebuildError(f"season status for a season not in 09-06: {s['key']}")
-        _mine(conn, s["season"], s["status"])
-        run.record("season_status", s["key"], "applied", s["status"])
+        status = rebuild_cleanup.status_for(cleanup_inputs, s["season"], s["status"])
+        _mine(conn, s["season"], status)
+        run.record("season_status", s["key"], "applied",
+                   status if status == s["status"] else f"{status} (was {s['status']}: 09-29 answer)")
     conn.commit()
 
     # b0) Show-level TVDB ids come from today's data — the latest fixes (PLAN-DATA
