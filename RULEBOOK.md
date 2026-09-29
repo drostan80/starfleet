@@ -492,6 +492,26 @@ An episode can be unaired but watched (pre-air showing, leak…).
     last real change is earlier, so AniList is written to; but if on AniList you then mark
     that episode watched **and another one** by hand, the second episode is later there,
     so LCARS takes it. **To be built.**
+  - **Design decisions** `[clarified 2026-09-29]`:
+    - LCARS is the truth and is written first; it remembers **when it last wrote to each
+      external entry and what** (the value the service actually holds after the write,
+      read back, and the service's own update time).
+    - An external update time equal to the remembered one means no outside change, whatever
+      the values look like. Where a service gives no update time, a **time block** (about 2
+      minutes) after an LCARS write applies instead: a disagreement inside it is LCARS's.
+    - An external change is taken only for a field (status, progress) that differs from
+      what LCARS last wrote; it goes through the status engine, is then propagated to the
+      other external databases, and each of those starts its own time block.
+    - **Progress corrected downward** on an external database, later than LCARS's last
+      change: up to **2 episodes** LCARS applies it; **more than 2** creates a review.
+    - **An entry deleted on an external database** creates a review (LCARS does not
+      silently re-add or follow it).
+    - **A tie: LCARS wins.**
+    - **Until the whole new setup is live, nothing written on an external database is taken
+      into LCARS** (the rebuilt LCARS already holds the correct values); external → LCARS
+      starts only after the approved write list has been sent and verified.
+    - A write that could not be sent is retried before any check, and re-reads the service's
+      update time immediately before sending: an outside edit made after our change wins.
 
 ---
 

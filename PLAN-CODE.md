@@ -402,6 +402,15 @@ added.
   a remote change later than the last reconciliation wins, an earlier one is moot.
 - **7.5** Ordering (R4.9; E2): one list-hub loop — check AniList → propagate →
   check MAL → propagate; propagation calls first when an API was down.
+  **Redesigned 2026-09-29 (user) — build before cutover** (RULEBOOK R4.9/R4.10 "Design
+  decisions"): LCARS is written first and remembers, per external entry, when it last wrote
+  and what the service holds after a read-back plus its own update time; an unchanged
+  update time = no outside change; a ~2 minute time block covers services without one;
+  external changes are taken per field (status, progress) via the engine and propagated
+  (starting new blocks); downward progress ≤ 2 episodes applies, > 2 reviews; a remote
+  delete reviews; a tie → LCARS; a failed write is retried first and re-checks the update
+  time before sending; **no external → LCARS until the whole setup is live** (after the
+  approved write list is sent and verified).
 - **7.6** AniList ↔ MAL mirror everywhere possible (R4.4): entry on one, missing on
   the other → added there.
 
