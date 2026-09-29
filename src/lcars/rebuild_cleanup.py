@@ -357,6 +357,13 @@ def apply_statuses(run, conn, c: dict) -> None:
         show = rb._tracked_tvdb_show(conn, s["tvdb"])
         if show is None:
             raise rb_error(f"show status: no tracked show with tvdb {s['tvdb']}")
+        if s["status"] == "skipped":  # not followed at all: the skip list (R3.5), every level
+            conn.execute("UPDATE show SET tracked = 0, status = 'skipped' WHERE id = ?",
+                         (show["id"],))
+            conn.execute("UPDATE season SET status = 'skipped', status_set_manually = 1"
+                         " WHERE show_id = ?", (show["id"],))
+            run.record("cleanup_show_status", show["id"], "applied", f"skip list ({s['why']})")
+            continue
         status_rules.set_show_status(conn, show["id"], s["status"], "rebuild", confirmed=True)
         for r in conn.execute("SELECT id FROM season WHERE show_id = ? AND kind = 'tvdb_season'"
                               " AND status = ?", (show["id"], s["status"])).fetchall():
