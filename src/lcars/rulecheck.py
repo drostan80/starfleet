@@ -405,7 +405,8 @@ def check_tracked_shows_have_tvdb(conn):
         "violation",
         f"SELECT {_TITLE} AS show, sh.tracking_space FROM show sh"
         " WHERE sh.tracked = 1 AND sh.media_shape = 'episodic' AND NOT EXISTS ("
-        "  SELECT 1 FROM show_external_id x WHERE x.show_id = sh.id AND x.service = 'tvdb')"
+        "  SELECT 1 FROM show_external_id x WHERE x.show_id = sh.id"
+        "  AND x.service IN ('tvdb', 'tvdb_movie'))"  # a film's TVDB movie id is its TVDB link
         " ORDER BY show",
         fmt=lambda r: f"{r['show']} ({r['tracking_space']})",
     )

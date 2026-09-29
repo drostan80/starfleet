@@ -159,3 +159,13 @@ def test_levels_overlaps_and_stray_parts_are_found(db_path):
     found = _by_rule(db_path)
     assert found["R1.12"].count == 2  # S1 × S2, part 1 × part 2
     assert found["R1.10"].count == 1  # part 2 runs past S2's end
+
+
+def test_a_films_tvdb_movie_id_is_its_tvdb_link(db_path):
+    _show(db_path, "s-film01", "A Film", tvdb=None)
+    _show(db_path, "s-none01", "No Link", tvdb=None)
+    _write(db_path, "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+           " VALUES ('s-film01', 'tvdb_movie', '9702', '', ?)", (NOW,))
+    conn = rulecheck.open_readonly(str(db_path))
+    finding = next(f for f in rulecheck.run(conn) if f.rule == "R3.2")
+    assert finding.count == 1 and "No Link" in finding.samples[0]

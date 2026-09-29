@@ -29,8 +29,8 @@ from pathlib import Path
 from lcars import util
 
 STAGES = [
-    "base", "sources", "structure", "sonarr", "numbering", "statuses", "replay", "checks",
-    "writes",
+    "base", "sources", "structure", "sonarr", "numbering", "statuses", "cleanup", "replay",
+    "checks", "writes",
 ]
 SOURCE_TABLES = [
     "anidb_anime", "anidb_title", "anidb_episode", "anime_list_entry", "anime_list_mapping",
@@ -415,6 +415,12 @@ def stage_structure(run: Run) -> None:
                    "" if outcome == "applied" else "no longer shares its TVDB id")
     conn.commit()
     _structure_adds(run, conn, d)
+    from lcars import rebuild_cleanup
+
+    redirects = rebuild_cleanup.redirects_path(run)
+    if redirects.exists():  # a re-run of stage 3 rebuilds the map
+        redirects.unlink()
+    rebuild_cleanup.structure_actions(run, conn, rebuild_cleanup.load_inputs(run))
     _source_ids_from_live(run, conn)
     run.record("stage", "structure", "applied", "")
 
@@ -1152,9 +1158,15 @@ def stage_statuses(run: Run) -> None:
     run.record("stage", "statuses", "applied", "")
 
 
+def stage_cleanup(run: Run) -> None:
+    from lcars import rebuild_cleanup
+
+    rebuild_cleanup.stage_cleanup(run)
+
+
 STAGE_FUNCS = {"base": stage_base, "sources": stage_sources, "structure": stage_structure,
                "sonarr": stage_sonarr, "numbering": stage_numbering,
-               "statuses": stage_statuses}
+               "statuses": stage_statuses, "cleanup": stage_cleanup}
 
 
 def main(argv=None) -> int:
