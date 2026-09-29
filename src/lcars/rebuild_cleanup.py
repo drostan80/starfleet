@@ -3,12 +3,13 @@
 Two halves, split by what they do to the numbering that comes after:
 
 - `structure_actions` (the tail of stage 3): things that change which show a level
-  belongs to — folds into a parent show, statuses you gave, a film's season, the two
-  duplicate shows, Kaiju Girl's history. They run before the episode read (4),
+  belongs to — folds into a parent show, statuses you gave, a film's season, Kaiju
+  Girl's history. They run before the episode read (4),
   numbering (5) and statuses (6), so those shows get their episodes, numbers and
   derived statuses.
-- `stage_cleanup` (stage 7): only removals — the untracked stubs, the show-level list
-  ids a season already holds, orphaned watch events. Every removed row is exported
+- `stage_cleanup` (stage 7): only removals — the duplicate shows (checked once the season
+  that holds their ids exists), the untracked stubs, the show-level list ids a season
+  already holds, orphaned watch events. Every removed row is exported
   per table under `<run>/removed/`, and every removed or folded show is written to
   `<run>/redirects.json` (removed show → survivor) for the replay.
 
@@ -166,25 +167,7 @@ def structure_actions(run, conn, c: dict) -> None:
                          (u["show"], u["service"])).rowcount
         run.record("cleanup_unlink", u["show"], "applied", f"{u['service']} link removed ({n})")
 
-    # 2. duplicate shows: the season inside the main show wins.
-    for d in c.get("duplicate_shows", []):
-        row = conn.execute("SELECT * FROM show WHERE id = ?", (d["show"],)).fetchone()
-        if row is None:
-            raise rb_error(f"duplicate show {d['show']} isn't in the database")
-        held = _season_holding(conn, "anilist", d["anilist_held_by"])
-        if held is None or held["show_id"] == d["show"]:
-            raise rb_error(f"{d['show']}: no other show's season holds anilist "
-                           f"{d['anilist_held_by']}")
-        events = conn.execute("SELECT COUNT(*) FROM watch_event WHERE show_id = ?",
-                              (d["show"],)).fetchone()[0]
-        if events:
-            raise rb_error(f"{d['show']}: has {events} watch events; not a plain duplicate")
-        Deleter(conn, export).show(d["show"])
-        record_redirect(run, d["show"], held["show_id"])
-        run.record("cleanup_duplicate_show", d["show"], "applied",
-                   f"deleted; {held['show_id']} holds it")
-
-    # 3. folds: a stub or a special becomes levels of its parent show.
+    # 2. folds: a stub or a special becomes levels of its parent show.
     for f in c.get("folds", []):
         loser = conn.execute("SELECT * FROM show WHERE id = ?", (f["loser"],)).fetchone()
         if loser is None:
@@ -203,7 +186,7 @@ def structure_actions(run, conn, c: dict) -> None:
         run.record("cleanup_fold", f["loser"], "applied",
                    f"→ {parent['id']} {f.get('status') or ''} ({f['why']})".strip())
 
-    # 4. statuses you gave.
+    # 3. statuses you gave.
     for s in c.get("season_status", []):
         season = _season_holding(conn, s["service"], s["id"])
         if season is None:
@@ -222,7 +205,7 @@ def structure_actions(run, conn, c: dict) -> None:
             conn.execute("UPDATE season SET status_set_manually = 1 WHERE id = ?", (r[0],))
         run.record("cleanup_show_status", show["id"], "applied", f"{s['status']} ({s['why']})")
 
-    # 5. entries you skip stay as skip-list entries (R2.10: untracked, status skipped).
+    # 4. entries you skip stay as skip-list entries (R2.10: untracked, status skipped).
     for sid in c.get("skip_list", []):
         row = conn.execute("SELECT * FROM show WHERE id = ?", (sid,)).fetchone()
         if row is None:
@@ -232,7 +215,7 @@ def structure_actions(run, conn, c: dict) -> None:
             rb._mine(conn, zid, "skipped")
         run.record("cleanup_skip", sid, "applied", "kept on the skip list")
 
-    # 6. explicit deletes (an entry you will look at separately).
+    # 5. explicit deletes (an entry you will look at separately).
     for d in c.get("delete_shows", []):
         if conn.execute("SELECT 1 FROM show WHERE id = ?", (d["show"],)).fetchone() is None:
             raise rb_error(f"delete {d['show']}: not in the database")
@@ -240,7 +223,7 @@ def structure_actions(run, conn, c: dict) -> None:
         record_redirect(run, d["show"], None)
         run.record("cleanup_delete", d["show"], "applied", d["why"])
 
-    # 7. a film show with no season: its season holds the list ids (R1.23).
+    # 6. a film show with no season: its season holds the list ids (R1.23).
     for m in c.get("movie_seasons", []):
         show = conn.execute("SELECT * FROM show WHERE id = ?", (m["show"],)).fetchone()
         if show is None:
@@ -261,10 +244,32 @@ def structure_actions(run, conn, c: dict) -> None:
                              " created_at) VALUES (?, ?, ?, ?)", (zid, service, str(ext), now))
         run.record("cleanup_movie_season", m["show"], "applied", f"season {zid} holds the list ids")
 
-    # 8. a stub that holds watch history: mapped onto the right show, episode by episode.
+    # 7. a stub that holds watch history: mapped onto the right show, episode by episode.
     for k in c.get("history_moves", []):
         _move_history(run, conn, k, export)
     conn.commit()
+
+
+def remove_duplicate_shows(run, conn, c: dict) -> None:
+    """Shows whose list ids a season of another show already holds: the season inside the
+    main show wins (checked after stage 6, when that season exists), so the duplicate goes."""
+    export = run.dir / "removed"
+    for d in c.get("duplicate_shows", []):
+        row = conn.execute("SELECT * FROM show WHERE id = ?", (d["show"],)).fetchone()
+        if row is None:
+            raise rb_error(f"duplicate show {d['show']} isn't in the database")
+        held = _season_holding(conn, "anilist", d["anilist_held_by"])
+        if held is None or held["show_id"] == d["show"]:
+            raise rb_error(f"{d['show']}: no other show's season holds anilist "
+                           f"{d['anilist_held_by']}")
+        events = conn.execute("SELECT COUNT(*) FROM watch_event WHERE show_id = ?",
+                              (d["show"],)).fetchone()[0]
+        if events:
+            raise rb_error(f"{d['show']}: has {events} watch events; not a plain duplicate")
+        Deleter(conn, export).show(d["show"])
+        record_redirect(run, d["show"], held["show_id"])
+        run.record("cleanup_duplicate_show", d["show"], "applied",
+                   f"deleted; {held['show_id']} holds it")
 
 
 def _move_history(run, conn, k: dict, export: Path) -> None:
@@ -336,6 +341,7 @@ def stage_cleanup(run) -> None:
     if export.exists():  # a re-run of this stage replaces its own export
         for f in export.glob("*.jsonl"):
             f.unlink()
+    remove_duplicate_shows(run, conn, load_inputs(run))
     mine = _list_ids(run)
     deleter = Deleter(conn, export)
     kept: dict[str, int] = {}

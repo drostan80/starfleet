@@ -161,7 +161,7 @@ class TestStructure:
         _season(conn, "z-dup001", "s-dup001", anilist=77)
         _episode(conn, "e-dup001", "s-dup001", 1, 1)
         conn.commit()
-        rebuild_cleanup.structure_actions(run, conn, _inputs(duplicate_shows=[
+        rebuild_cleanup.remove_duplicate_shows(run, conn, _inputs(duplicate_shows=[
             {"show": "s-dup001", "anilist_held_by": 77}]))
         assert _count(conn, "show", "id = 's-dup001'") == 0
         assert _count(conn, "season", "id = 'z-main02'") == 1  # the season inside the show wins
@@ -176,7 +176,7 @@ class TestStructure:
         _event(conn, "w-dup001", "s-dup001", 1, 1)
         conn.commit()
         with pytest.raises(rebuild.RebuildError):
-            rebuild_cleanup.structure_actions(run, conn, _inputs(duplicate_shows=[
+            rebuild_cleanup.remove_duplicate_shows(run, conn, _inputs(duplicate_shows=[
                 {"show": "s-dup001", "anilist_held_by": 77}]))
 
     def test_statuses_and_the_skip_list_are_yours(self, conn, run):
