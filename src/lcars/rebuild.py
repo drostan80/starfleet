@@ -774,7 +774,7 @@ def stage_sonarr(run: Run) -> None:
     episodes at TVDB season/episode, `tvdb_absolute`, files — `_fetch_sonarr`
     alone (no AniList, art or synopsis fetch). Shows not in Sonarr keep the
     episodes the 09-06 base has."""
-    from lcars import metadata, sonarr_client
+    from lcars import metadata, rebuild_reanchor, sonarr_client
 
     conn = _connect(run.work())
     rows = conn.execute(
@@ -786,6 +786,9 @@ def stage_sonarr(run: Run) -> None:
         before = conn.execute("SELECT COUNT(*) FROM episode WHERE show_id = ?",
                               (show["id"],)).fetchone()[0]
         try:
+            # rows the numbering change of TVDB left on another episode's coordinates go to
+            # their own episode (title + air date) before the read stamps the coordinates
+            rebuild_reanchor.reanchor_show(run, conn, show["id"])
             metadata._fetch_sonarr(conn, dict(show), derive=False)
         except sonarr_client.SonarrError as e:
             failed += 1
