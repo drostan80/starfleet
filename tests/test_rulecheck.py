@@ -198,7 +198,9 @@ def test_r215_a_confirmed_count_that_is_not_completed_is_one(db_path):
 def test_r27_counts_a_levels_own_episodes_not_every_episode_of_its_tvdb_season(db_path):
     # K-ON! S1: episode 12.1 carries TVDB season 1 but is another level's (R1.13a)
     _show(db_path, "s-konkon", "K-ON")
-    _season(db_path, "z-konkon", "s-konkon", 1, "completed", 1, 2)
+    _season(db_path, "z-konkon", "s-konkon", 1, "completed", None, None)
+    _write(db_path, "INSERT INTO season_span (season_id, abs_from, abs_to) VALUES"
+           " ('z-konkon', 1, 1), ('z-konkon', 2, 2)")  # broken around the special (R1.12)
     _episode(db_path, "e-kon001", "s-konkon", "z-konkon", 1, 1, 1)
     _episode(db_path, "e-kon002", "s-konkon", "z-konkon", 1, 2, 2)
     _episode(db_path, "e-kon003", "s-konkon", None, 1, 3, 1.5, state="unwatched")

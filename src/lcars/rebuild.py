@@ -1102,8 +1102,10 @@ def stage_statuses(run: Run) -> None:
 
     # R2.7 on the statuses you decided: a completed season has its episodes watched.
     marked = 0
+    # (Yours, or an AniList/MAL entry that says completed: R4.8a marks its episodes too.)
     for z in conn.execute("SELECT * FROM season WHERE status = 'completed' AND"
-                          " status_set_manually = 1").fetchall():
+                          " (status_set_manually = 1 OR anilist_id IS NOT NULL"
+                          "  OR mal_id IS NOT NULL)").fetchall():
         eps = status_rules.level_episodes(conn, z)
         if any(e["state"] != "watched" for e in eps):
             status_rules._mark_watched(conn, z["show_id"], eps, status_rules.Effects())
