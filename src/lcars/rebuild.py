@@ -1033,7 +1033,9 @@ def _part_spans(run: Run, conn) -> None:
                      if part["anilist_id"] else None)
             starts.append(start)
             running = start + (count or 0)
-            ok = ok and (count or n == parent["season_number"])
+            # the last cour runs to the season's end: its own count isn't needed (an airing
+            # cour 2 has none yet, Chitose 198727)
+            ok = ok and (count or n == parent["season_number"] or part is parts[-1])
         if not ok or starts != sorted(starts) or len(set(starts)) != len(starts):
             review += 1
             run.record("part_spans", parent["id"], "review",
@@ -1101,6 +1103,33 @@ def _episode_totals(run: Run, conn) -> None:
     run.record("episode_totals", "all", "applied", f"{n} levels got their AniList episode total")
 
 
+def _unaired(conn, show_id: str, eps: list, today: str) -> list:
+    """R2.7 (2026-09-29): episodes that have not aired — dated after today; or undated, never
+    watched, and after the level's last aired episode when that one aired within the past year
+    (an airing cour whose next episode has no date yet: Chitose S1E14). An old show's undated
+    episodes are not unaired."""
+    import datetime
+
+    number = {r[0]: r[1] for r in conn.execute(
+        "SELECT id, absolute_number FROM episode WHERE show_id = ?", (show_id,))}
+    past = [e for e in eps if e["air_date_utc"] and e["air_date_utc"][:10] <= today]
+    last = max(past, key=lambda e: e["air_date_utc"], default=None)
+    recent = last is not None and (datetime.date.fromisoformat(today) - datetime.date.fromisoformat(
+        last["air_date_utc"][:10])).days <= 365
+    out = []
+    for e in eps:
+        if e["air_date_utc"]:
+            if e["air_date_utc"][:10] > today:
+                out.append(e)
+            continue
+        if not recent or (number.get(e["id"]) or 0) <= (number.get(last["id"]) or 0):
+            continue
+        if not conn.execute("SELECT 1 FROM watch_event WHERE show_id = ? AND season = ? AND"
+                            " episode = ?", (show_id, e["season"], e["episode"])).fetchone():
+            out.append(e)
+    return out
+
+
 def stage_statuses(run: Run) -> None:
     from lcars import status_rules
 
@@ -1132,7 +1161,7 @@ def stage_statuses(run: Run) -> None:
                           " (status_set_manually = 1 OR anilist_id IS NOT NULL"
                           "  OR mal_id IS NOT NULL)").fetchall():
         eps = status_rules.level_episodes(conn, z)
-        unaired = [e for e in eps if e["air_date_utc"] and e["air_date_utc"][:10] > today]
+        unaired = _unaired(conn, z["show_id"], eps, today)
         aired = [e for e in eps if e not in unaired]
         if any(e["state"] != "watched" for e in aired):
             status_rules._mark_watched(conn, z["show_id"], aired, status_rules.Effects())
@@ -1235,10 +1264,16 @@ def stage_checks(run: Run) -> None:
     rebuild_checks.stage_checks(run)
 
 
+def stage_writes(run: Run) -> None:
+    from lcars import rebuild_writes
+
+    rebuild_writes.stage_writes(run)
+
+
 STAGE_FUNCS = {"base": stage_base, "sources": stage_sources, "structure": stage_structure,
                "sonarr": stage_sonarr, "numbering": stage_numbering,
                "statuses": stage_statuses, "cleanup": stage_cleanup, "replay": stage_replay,
-               "checks": stage_checks}
+               "checks": stage_checks, "writes": stage_writes}
 
 
 def main(argv=None) -> int:

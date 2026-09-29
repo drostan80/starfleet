@@ -194,6 +194,25 @@ def structure_actions(run, conn, c: dict) -> None:
         run.record("cleanup_shape", x["show"], "applied",
                    f"{x['media_shape']}, tvdb {x.get('tvdb')} ({x['why']})")
 
+    # 1c. two AniList entries that are one TVDB season (Chitose Is in the Ramune Bottle: cour 2
+    #     sits on an empty S2 while TVDB holds both cours in S1): the entry's level becomes a
+    #     part of that season, and the season's own entry its first part (R1.13b, R1.22).
+    from lcars import rebuild_reanchor
+
+    for x in c.get("fold_levels", []):
+        target = conn.execute("SELECT * FROM season WHERE show_id = ? AND kind = 'tvdb_season'"
+                              " AND season_number = ?", (x["show"], x["into_season"])).fetchone()
+        loser = conn.execute("SELECT * FROM season WHERE show_id = ? AND anilist_id = ?"
+                             " AND kind = 'tvdb_season' AND season_number != ?",
+                             (x["show"], x["anilist"], x["into_season"])).fetchone()
+        if target is None or loser is None:
+            raise rb_error(f"fold levels {x['show']}: season {x['into_season']} or the level of"
+                           f" {x['anilist']} isn't there")
+        rebuild_reanchor._fold(conn, dict(loser), dict(target), x["into_season"],
+                               util.now_utc_iso(), Deleter(conn, run.dir / "removed"))
+        run.record("cleanup_fold_levels", x["show"], "applied",
+                   f"{x['anilist']} is a part of season {x['into_season']} ({x['why']})")
+
     # 2. folds: a stub or a special becomes levels of its parent show.
     for f in c.get("folds", []):
         loser = conn.execute("SELECT * FROM show WHERE id = ?", (f["loser"],)).fetchone()
