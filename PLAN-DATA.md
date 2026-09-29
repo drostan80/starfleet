@@ -665,9 +665,10 @@ Read back from the page's `decisions` collection (228 entries).
     skipped), 5 manual watches (Mushoku S3E14 = last aired, S3 completed; Overgeared S1E1 →
     watching under R2.15a), score 16.0 on The Frontier Lord, Kaiju minis S0E5–7 on the same-titled
     episodes (confirm). Slime: its "S6" (Visions of Coleus, AniList 161802) is a special level
-    (`as_special`, your 09-27 answer), the show is watching. **Open (Kaiju No. 8 S3):** planned on
-    live and in your 09-06 note ("next real season planned") but watching in the accepted season
-    statuses, because of one watch on an unaired episode (S3E1, 09-05, before the base).
+    (`as_special`, your 09-27 answer), the show is watching. **Kaiju No. 8 (settled, user 09-29):**
+    the 09-05 watch on the unaired S3E1 was episode 1 of Narumi's Week at Work (AniList 204431):
+    moved to that mini with its original time (`realign_watches`), S3 planned, show planned, minis
+    level watching.
     Rulecheck after stage 8: R2.15 now enforces R2.15a (0); open R1.8 28, R1.11 166, R1.12 15,
     R1.22 25, R2.7 5.
 
