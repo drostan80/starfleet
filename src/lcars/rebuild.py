@@ -1195,9 +1195,16 @@ def stage_replay(run: Run) -> None:
     rebuild_replay.stage_replay(run)
 
 
+def stage_checks(run: Run) -> None:
+    from lcars import rebuild_checks
+
+    rebuild_checks.stage_checks(run)
+
+
 STAGE_FUNCS = {"base": stage_base, "sources": stage_sources, "structure": stage_structure,
                "sonarr": stage_sonarr, "numbering": stage_numbering,
-               "statuses": stage_statuses, "cleanup": stage_cleanup, "replay": stage_replay}
+               "statuses": stage_statuses, "cleanup": stage_cleanup, "replay": stage_replay,
+               "checks": stage_checks}
 
 
 def main(argv=None) -> int:
