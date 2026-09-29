@@ -101,11 +101,16 @@ its copy only**. Stage times: 3 ≈ 5 min, 4 ≈ 2 min, 5 ≈ 10 s, 6 ≈ 5 min 
 | 4 | sonarr | ✅ | `_fetch_sonarr` for every tracked show in the Sonarr library (705); TVDB season rows for episodes that had none (856; status from watch data); air dates from TVmaze by TVDB S/E (10,106) + AniDB |
 | 5 | numbering | ✅ | Memory Alpha on 1,798 shows (tvdb 1,213 / anidb 152 / tvmaze 433); flags in ledger |
 | 6 | statuses | ✅ | cour spans from Fribb offsets / AniList counts (9 done, 21 review); list-id levels linked to Memory Alpha's levels by start date (17 linked, 129 review); R2.7 marks on your completed seasons (74); 216 Trakt drops on the last aired season; snapshot follow-ups; Urusei Yatsura films → skipped levels (10 done, 7 review); `after_episodes_changed` on every show |
-| 7 | replay | ⏳ **next** | see §4 |
-| 8 | checks | ⏳ | rulecheck + show pages load + reconciliation list (PLAN-DATA §2.0) + 08-26 cross-check |
-| 9 | writes | ⏳ | see §4 |
+| 7 | cleanup | ✅ | 09-29 cleanup review (PLAN-DATA decision 9): **structure** goes in stage 3's tail (`rebuild_cleanup.structure_actions`: 82 folds by TVDB/AniList id, the skip list, a film's season, Kaiju Girl's history mapped by episode, wrong Sonarr links); **removals** in stage 7 (`stage_cleanup`: your statuses through the engine, the 2 duplicate shows, 1,379 untracked stubs, 1,245 show-level list ids, 40 orphaned watches). Every removed row exported per table in `<run>/removed/`, `redirects.json` maps each removed/folded show to its survivor (the replay must use it). Inputs: `rebuild-inputs/cleanup.json` (built by `tools/build_cleanup_inputs.py`) |
+| 8 | replay | ⏳ **next** | see §4 B |
+| 9 | checks | ⏳ | rulecheck + show pages load + reconciliation list (PLAN-DATA §2.0) + 08-26 cross-check |
+| 10 | writes | ⏳ | see §4 D |
 
-**Rulecheck after stage 6** (`lcars rulecheck run1/06-statuses.db`): R1.0, R1.10*, R1.14,
+**Stages were renumbered 09-29** (cleanup inserted as 7). Run: `--from-stage 3 --until-stage 7` re-runs everything the cleanup touches (~25 min).
+
+**Rulecheck after stage 7 (09-29):** R1.23, R3.2, R3.5 now 0 (were 1,329 / 59 / 1,335); open: R1.8 28 (26 = Star Wars show, wrong TVDB link; 2 side pieces), R1.11 166, R1.12 15, R1.22 25 (10 are real mapping errors), R2.7 5, R2.15 2.
+
+**Rulecheck after stage 6 (older)** (`lcars rulecheck run1/06-statuses.db`): R1.0, R1.10*, R1.14,
 R2.2, §2.2, R2.13, R2.14, R2.16, R2.10 clean. Open: **R1.11 1,133** and R1.8 90 (missing
 episodes — §4 step A), R1.23 1,329 (list ids still on shows), R3.5 1,335 (untracked stubs),
 R3.2 59, R1.22 25, R1.12 9, R2.15 2, R2.7 1, R1.10 1 (a cour span to check).

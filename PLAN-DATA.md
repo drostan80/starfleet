@@ -639,6 +639,16 @@ Read back from the page's `decisions` collection (228 entries).
    note (skip / skip-drop / drop / paused / completed), e.g. A Certain Magical Index II skip, Air Gear
    Special Trick completed, ALDNOAH.ZERO Season 2 completed (AniList says PLANNING).
 
+10. **Cleanup built and run (2026-09-29).** `rebuild_cleanup.py`, stage 7 `cleanup`, inputs
+    `rebuild-inputs/cleanup.json`. User's further answers: merge leftovers are deleted with their
+    merge-audit rows (export + checkpoints are the history); Magical Index: drop the show (S1
+    dropped, later seasons skipped); Arifureta Miraculous Meeting → tvdb 357019; Shangri-La: three
+    seasons within tvdb 421855, S1/S2 completed, S3 **planned (not aired yet)** — replaces the
+    earlier accepted "completed" (`season_status_overrides`); Kaiju Girl stub mapped onto
+    tvdb 471878 (7 events, all already on the tracked show). Applied consequences: skip on a season
+    with a list id may delete it from AniList/MAL (R2.10); ALDNOAH.ZERO S2 completed → a COMPLETED
+    push in the write list.
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
