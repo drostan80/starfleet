@@ -56,8 +56,9 @@ class TestFilmShows:
         assert _count(conn, "watch_event", "show_id = 's-film02'") == 0
         assert (run.dir / "removed" / "episode.jsonl").exists()
 
-    def test_a_film_with_no_answer_is_left_for_review(self, run, conn):
-        _show(conn, "s-film01", "Memories", shape="movie")
+    def test_a_film_that_lost_a_wrong_id_and_has_no_answer_is_left_for_review(self, run, conn):
+        _show(conn, "s-film01", "Memories", shape="movie", tvdb="294395")
+        _show(conn, "s-film02", "Never had one", shape="movie")  # nothing lost: not asked
         rebuild_cleanup.film_ids(run, conn)
         assert (run.dir / "ledger.jsonl").read_text().count('"review"') == 1
 

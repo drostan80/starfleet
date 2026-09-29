@@ -1110,6 +1110,18 @@ def stage_statuses(run: Run) -> None:
     # not completed: 2026-09-29).
     marked = held = 0
     today = util.now_utc_iso()[:10]
+    # an episode that has not aired cannot have been watched: a watch on one (The Ramparts of Ice
+    # S2E1, 2026-10-01, "watched" 08-12) is removed
+    for e in conn.execute("SELECT e.id, e.show_id, e.season, e.episode FROM episode e"
+                          " JOIN show sh ON sh.id = e.show_id WHERE sh.tracked = 1 AND"
+                          " e.state = 'watched' AND substr(e.air_date_utc, 1, 10) > ?",
+                          (today,)).fetchall():
+        conn.execute("DELETE FROM watch_event WHERE show_id = ? AND season = ? AND episode = ?",
+                     (e["show_id"], e["season"], e["episode"]))
+        conn.execute("UPDATE episode SET state = 'unwatched', updated_at = ? WHERE id = ?",
+                     (util.now_utc_iso(), e["id"]))
+        run.record("unaired_watch", e["id"], "applied",
+                   f"{e['show_id']} S{e['season']}E{e['episode']}: not aired yet, watch removed")
     # (Yours, or an AniList/MAL entry that says completed: R4.8a marks its episodes too.)
     for z in conn.execute("SELECT * FROM season WHERE status = 'completed' AND"
                           " (status_set_manually = 1 OR anilist_id IS NOT NULL"

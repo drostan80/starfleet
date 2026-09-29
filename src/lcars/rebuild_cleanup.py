@@ -139,6 +139,9 @@ def status_for(inputs: dict, season_id: str, accepted: str) -> str:
 def _parent(conn, spec: dict, not_show: str | None = None):
     """The tracked show a fold goes into, by an id that survives a re-run."""
     rb = _rebuild()
+    if "show" in spec:  # a film show: its TVDB id is a movie id, found late (R3.2a)
+        return conn.execute("SELECT * FROM show WHERE id = ? AND tracked = 1",
+                            (spec["show"],)).fetchone()
     if "tvdb" in spec:
         return rb._tracked_tvdb_show(conn, spec["tvdb"], not_show)
     if "tvdb_movie" in spec:
@@ -515,6 +518,8 @@ def film_ids(run, conn) -> None:
         sid = show[0]
         has = conn.execute("SELECT external_id FROM show_external_id WHERE show_id = ? AND"
                            " service = 'tvdb_movie'", (sid,)).fetchone()
+        wrong = conn.execute("SELECT 1 FROM show_external_id WHERE show_id = ? AND service IN"
+                             " ('tvdb', 'tvmaze')", (sid,)).fetchone() is not None
         rb._set_link(conn, sid, "tvdb", None)
         rb._set_link(conn, sid, "tvmaze", None)
         want = (found.get(sid) or {}).get("tvdb_movie")
@@ -523,7 +528,7 @@ def film_ids(run, conn) -> None:
             set_ += 1
         elif has is not None:
             kept += 1
-        else:
+        elif wrong:  # it had a (wrong) series id and nothing to replace it: yours
             review += 1
             run.record("film_id", sid, "review", "no TMDB id to find its TVDB movie id: yours")
         if conn.execute("SELECT 1 FROM episode WHERE show_id = ?", (sid,)).fetchone():
@@ -582,14 +587,21 @@ def merge_part_duplicates(run, conn, deleter) -> None:
         entries = [p for p in parts if p["anilist_id"] is not None and not eps(p)
                    and spanless(p)]
         if len(loose) == 1 and len(entries) == 1:
-            lo, hi = conn.execute("SELECT MIN(absolute_number), MAX(absolute_number) FROM episode"
-                                  " WHERE season_id = ?", (loose[0]["id"],)).fetchone()
-            if lo is None:
+            nums = [r[0] for r in conn.execute(
+                "SELECT absolute_number FROM episode WHERE season_id = ? AND"
+                " absolute_number IS NOT NULL", (loose[0]["id"],))]
+            if not nums:
                 continue
+            every = sorted(r[0] for r in conn.execute(
+                "SELECT absolute_number FROM episode WHERE show_id = ? AND"
+                " absolute_number IS NOT NULL", (parent[1],)))
+            runs = _rebuild()._runs(nums, every)  # broken where a mini falls between (R1.12)
+            lo, hi = min(nums), max(nums)
             conn.execute("UPDATE episode SET season_id = ? WHERE season_id = ?",
                          (parent[0], loose[0]["id"]))
-            conn.execute("INSERT INTO season_span (season_id, abs_from, abs_to) VALUES (?, ?, ?)",
-                         (entries[0]["id"], lo, hi))
+            conn.executemany(
+                "INSERT INTO season_span (season_id, abs_from, abs_to) VALUES (?, ?, ?)",
+                [(entries[0]["id"], a, b) for a, b in runs])
             conn.execute("UPDATE season SET abs_start = ?, abs_end = ?, updated_at = ?"
                          " WHERE id = ?", (lo, hi, util.now_utc_iso(), entries[0]["id"]))
             deleter.delete("season", "id = ?", (loose[0]["id"],))
