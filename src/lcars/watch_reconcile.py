@@ -49,9 +49,12 @@ Scope, deliberately narrow:
 from lcars import (
     anilist_client,
     config,
+    external_writes,
     ids,
     list_baseline,
+    list_hub,
     pending_review,
+    reviews,
     season_status_log,
     util,
 )
@@ -137,6 +140,7 @@ _STATUS_TO_MAL = {
 
 
 MAX_PUSHES_PER_RUN = 25
+MAX_LOWER_PROGRESS = 2  # R4.10: a list's lower progress applies up to this many episodes
 
 
 def _last_lcars_change(conn, season_id: str) -> str | None:
@@ -179,7 +183,7 @@ def _apply_remote_status(conn, season, status, service, source, fx_all, unaired)
         )
     for season_id, old, new in fx.seasons:
         if season_id == season["id"]:
-            list_sync.push(conn, season_id, progress=False, services=(other,))
+            list_sync.push(conn, season_id, progress=False, services=(other,), guard=True)
         elif new == "skipped":
             list_sync.delete_if_auto_skipped(conn, season_id, old)
         else:
@@ -212,6 +216,7 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     from lcars import list_sync, sonarr_sync
 
     stats = {
+        "episodes_unwatched": 0,
         "seasons_checked": 0,
         "not_matched_remotely": 0,
         "shows_status_updated": 0,
@@ -253,23 +258,53 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     show_before: dict[str, str | None] = {}
     pushes_left = MAX_PUSHES_PER_RUN
 
+    intake = list_hub.intake_enabled()  # R4.10: nothing an outside list holds is taken until live
+    capturing = external_writes.capturing()
     for season in seasons:
         if season["id"] in conflicted_season_ids:
             continue
         ext_id = season["ext_id"]
         entry = entries_by_ext_id.get(ext_id)
+        base_row = list_baseline.get(conn, service, ext_id)
         if entry is None:
             stats["not_matched_remotely"] += 1
-            if seeded and pushes_left > 0 and list_sync.pushable(conn, season):
+            if not seeded:
+                continue
+            if base_row is not None and (base_row["status"] is not None
+                                         or base_row["progress"] is not None):
+                # It was on the list and is gone: a review, never a silent re-add (R4.10).
+                if intake:
+                    list_hub.log(conn, season["id"], service, "entry_removed", str(ext_id))
+                    reviews.open_review(
+                        conn, "season", season["id"], "list_entry_removed", source,
+                        f"the {service} entry {ext_id} is no longer on the list",
+                        ["re_add", "stop_mirroring"],
+                        {"season_id": season["id"], "service": service},
+                        show_id=season["show_id"])
+                continue
+            if pushes_left > 0 and list_sync.pushable(conn, season):
                 list_sync.push(conn, season["id"], services=(service,))  # R4.4/R4.5
                 pushes_left -= 1
                 stats["added_remotely"] += 1
             continue
         stats["seasons_checked"] += 1
         show_id = season["show_id"]
-        base = list_baseline.get(conn, service, ext_id) or {
-            "status": None, "progress": None, "lcars_progress": None
+        base = base_row or {
+            "status": None, "progress": None, "lcars_progress": None, "lcars_status": None,
+            "remote_updated_at": None,
         }
+        remote_updated = entry.get("updated_at")
+        # R4.10: the service's update time equal to the one LCARS remembered = nothing
+        # was edited there since (its own side effects are in the read-back); a locked
+        # row (an outside change still settling) takes no further outside change.
+        echo = bool(base["remote_updated_at"]) and remote_updated == base["remote_updated_at"]
+        row_locked = list_hub.locked(conn, season["id"])
+        take = intake and (not seeded or (not echo and not row_locked))
+        if intake and seeded and row_locked and not echo:
+            list_hub.log(conn, season["id"], service, "deferred",
+                         f"edited on the list ({remote_updated}) while the row settles")
+        pushed_here = False
+        took_here = False
         level_eps = list_sync.level_episodes_ordered(conn, season) if show_id else []
         air = {r[0]: r[1] for r in conn.execute(
             "SELECT id, air_date_utc FROM episode WHERE show_id = ?", (show_id,))}
@@ -286,40 +321,63 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
         # --- status -----------------------------------------------------
         remote_status = entry["lcars_status"]
         lcars_status = season["status"]
+        # What LCARS last pushed: a status the service then moved itself is not an
+        # LCARS change, and is not pushed again (R4.10).
+        lcars_pushed = base["lcars_status"] if base["lcars_status"] is not None else base["status"]
         if remote_status is not None:
             if not seeded:
-                list_baseline.record(conn, service, ext_id, status=remote_status)
-            elif remote_status != base["status"]:
-                # No baseline yet: the list's value is the edit (steady state).
-                lcars_changed = (base["status"] is not None and lcars_status is not None
-                                 and lcars_status != base["status"])
-                last_lcars = _last_lcars_change(conn, season["id"])
-                remote_later = (entry.get("updated_at") or "") > (last_lcars or "")
-                if lcars_status == remote_status:
-                    list_baseline.record(conn, service, ext_id, status=remote_status)
-                elif lcars_changed and not remote_later:
-                    # Both changed; LCARS's is later (R4.10): LCARS goes out.
-                    if pushes_left > 0 and list_sync.pushable(conn, season):
-                        list_sync.push(conn, season["id"], progress=False, services=(service,))
-                        pushes_left -= 1
-                        stats["lcars_pushed"] += 1
+                if intake:
+                    # the seed: the list's value is what both are taken to agree on
+                    list_baseline.record(conn, service, ext_id, status=remote_status,
+                                         lcars_status=remote_status,
+                                         remote_updated_at=remote_updated)
+            elif remote_status != base["status"] and not echo:
+                if not take:
+                    pass  # deferred: judged once the row is open (or intake is on)
                 else:
-                    if show_id and show_id not in show_before:
-                        show_before[show_id] = conn.execute(
-                            "SELECT status FROM show WHERE id = ?", (show_id,)
-                        ).fetchone()["status"]
-                    if _apply_remote_status(conn, season, remote_status, service, source,
-                                            fx_all, unaired):
-                        changed_status[season["id"]] = remote_status
-                        if show_id:
-                            touched_shows.add(show_id)
-                    list_baseline.record(conn, service, ext_id, status=remote_status)
-            elif lcars_status is not None and lcars_status != remote_status:
+                    # No baseline yet: the list's value is the edit (steady state).
+                    lcars_changed = (lcars_pushed is not None and lcars_status is not None
+                                     and lcars_status != lcars_pushed)
+                    last_lcars = _last_lcars_change(conn, season["id"])
+                    remote_later = (remote_updated or "") > (last_lcars or "")
+                    if lcars_status == remote_status:
+                        list_baseline.record(conn, service, ext_id, status=remote_status,
+                                             lcars_status=lcars_status)
+                    elif lcars_changed and not remote_later:
+                        # Both changed; LCARS's is later, or a tie (R4.10): LCARS goes out.
+                        list_hub.log(conn, season["id"], service, "lcars_wins",
+                                     f"status {lcars_status} over {remote_status}")
+                        if pushes_left > 0 and list_sync.pushable(conn, season):
+                            list_sync.push(conn, season["id"], progress=False,
+                                           services=(service,))
+                            pushes_left -= 1
+                            stats["lcars_pushed"] += 1
+                            pushed_here = True
+                    else:
+                        if show_id and show_id not in show_before:
+                            show_before[show_id] = conn.execute(
+                                "SELECT status FROM show WHERE id = ?", (show_id,)
+                            ).fetchone()["status"]
+                        if _apply_remote_status(conn, season, remote_status, service, source,
+                                                fx_all, unaired):
+                            changed_status[season["id"]] = remote_status
+                            took_here = True
+                            list_hub.log(conn, season["id"], service, "took_status",
+                                         f"{lcars_status} -> {remote_status}")
+                            if show_id:
+                                touched_shows.add(show_id)
+                        season_after = conn.execute(
+                            "SELECT status FROM season WHERE id = ?", (season["id"],)).fetchone()
+                        list_baseline.record(conn, service, ext_id, status=remote_status,
+                                             lcars_status=season_after["status"])
+            elif (lcars_status is not None and lcars_pushed is not None
+                  and lcars_status != lcars_pushed):
                 # Only LCARS changed: push it again (never skipped, R4.6).
                 if pushes_left > 0 and list_sync.pushable(conn, season):
                     list_sync.push(conn, season["id"], progress=False, services=(service,))
                     pushes_left -= 1
                     stats["lcars_pushed"] += 1
+                    pushed_here = True
 
         if not show_id:
             continue  # an individual season has no episodes yet (phase 8)
@@ -343,7 +401,45 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
         # list already had when LCARS and the list last agreed is not new —
         # it may be LCARS's own old push (PLAN-CODE 9.2, cutover guard).
         list_changed = base["progress"] is None or progress != base["progress"]
-        if progress > 0 and list_changed:
+        if not take:
+            list_changed = False
+        lower_handled = False
+        if progress > 0 and list_changed and progress < lcars_progress and seeded:
+            # The list went below LCARS: LCARS's own later change stands (tie: LCARS);
+            # else the list is right — up to 2 episodes unwatched, more is a review.
+            lcars_moved = (base["lcars_progress"] is not None
+                           and lcars_progress != base["lcars_progress"])
+            remote_later = (remote_updated or "") > (
+                list_hub.last_watch_change(conn, season_now) or "")
+            lower_handled = True
+            if lcars_moved and not remote_later:
+                list_hub.log(conn, season["id"], service, "lcars_wins",
+                             f"progress {lcars_progress} over {progress}")
+                if pushes_left > 0:
+                    list_sync.push(conn, season["id"], status=False, services=(service,))
+                    pushes_left -= 1
+                    stats["lcars_pushed"] += 1
+                    pushed_here = True
+            elif (lcars_progress - progress <= MAX_LOWER_PROGRESS
+                  and season_now["status"] != "completed"):
+                gone = list_hub.unwatch_last(conn, season_now, lcars_progress - progress)
+                list_hub.log(conn, season["id"], service, "took_lower_progress",
+                             f"{lcars_progress} -> {progress}")
+                stats["episodes_unwatched"] += gone
+                changed_progress_season_ids.add(season["id"])
+                touched_shows.add(show_id)
+                took_here = True
+            else:
+                reviews.open_review(
+                    conn, "season", season["id"], "remote_progress_lower", source,
+                    f"{service} says {progress}, LCARS has {lcars_progress} watched",
+                    ["accept_lower", "keep_lcars"],
+                    {"season_id": season["id"], "service": service, "progress": progress},
+                    show_id=show_id)
+                list_hub.log(conn, season["id"], service, "lower_progress_review",
+                             f"{lcars_progress} vs {progress}")
+                lower_handled = None  # nothing taken: the baseline keeps the old value
+        if progress > 0 and list_changed and not lower_handled:
             if show_id not in show_before:
                 show_before[show_id] = conn.execute(
                     "SELECT status FROM show WHERE id = ?", (show_id,)
@@ -356,7 +452,7 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
                     " (id, show_id, season, episode, watched_at, platform, created_at)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (ids.generate_id(conn, "w"), show_id, e["season"], e["episode"], now,
-                     None, now),
+                     source, now),
                 )
                 conn.execute(
                     "UPDATE episode SET state = 'watched', updated_at = ? WHERE id = ?",
@@ -365,11 +461,23 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
                 stats["episodes_backfilled"] += 1
                 changed_progress_season_ids.add(season["id"])
                 touched_shows.add(show_id)
+                took_here = True
             lcars_progress = list_sync.level_progress(conn, season_now)
-        if base["progress"] != progress or base["lcars_progress"] != lcars_progress:
+        if lower_handled is None:
+            continue  # a review is open: nothing recorded, the row isn't touched
+        if not pushed_here and (base["progress"] != progress
+                                or base["lcars_progress"] != lcars_progress):
             list_baseline.record(
                 conn, service, ext_id, progress=progress, lcars_progress=lcars_progress
             )
+        if took_here:
+            # R4.10: an outside change has been taken — the row settles (every list
+            # holds LCARS's decision) before another outside change is taken on it.
+            list_hub.lock(conn, season["id"], source, remote_updated)
+            list_hub.restamp(conn, season["id"], source, now, remote_updated)
+        if take and not pushed_here and remote_updated != base["remote_updated_at"] \
+                and not capturing:
+            list_baseline.record(conn, service, ext_id, remote_updated_at=remote_updated)
 
     if not seeded:
         list_baseline.mark_seeded(conn, service)
@@ -448,6 +556,7 @@ def reconcile_watch_progress(conn) -> dict:
     if not cfg.anilist_access_token:
         return result
 
+    list_hub.reset_snapshots()
     my_list = anilist_client.fetch_my_anime_list(cfg.anilist_access_token)
     entries = {
         entry["anilist_id"]: {
@@ -467,7 +576,8 @@ def reconcile_watch_progress(conn) -> dict:
     from lcars import list_sync
 
     for season_id in changed_progress_season_ids:
-        list_sync.push(conn, season_id, status=False, services=("mal",))
+        list_sync.push(conn, season_id, status=False, services=("mal",), guard=True)
+    list_hub.settle_locked(conn)
     conn.commit()
 
     result["seasons_checked"] = stats["seasons_checked"]

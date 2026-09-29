@@ -46,7 +46,8 @@ def conn(tmp_path, monkeypatch):
             " air_date_utc, created_at, updated_at) VALUES (?, 's-list01', 1, ?, 'regular', ?,"
             " ?, '2020-01-01T00:00:00Z', ?, ?)",
             (f"e-list0{e}", e, e, "watched" if e <= 3 else "unwatched", NOW, NOW))
-    config.set_current(config.Config(anilist_access_token="a", mal_access_token="m"))
+    config.set_current(config.Config(
+        anilist_access_token="a", mal_access_token="m", list_intake_enabled=True))
     yield c
     config.set_current(config.Config())
     c.close()

@@ -38,7 +38,8 @@ def conn(tmp_path) -> sqlite3.Connection:
     c = sqlite3.connect(db_path)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
-    config.set_current(config.Config(anilist_access_token="a", mal_access_token="m"))
+    config.set_current(config.Config(
+        anilist_access_token="a", mal_access_token="m", list_intake_enabled=True))
     return c
 
 

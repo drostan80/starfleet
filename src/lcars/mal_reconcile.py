@@ -33,7 +33,7 @@ best-effort no-op (service_health failure recorded, next cycle retries
 after the refresh loop has run) rather than raising.
 """
 
-from lcars import config, mal_client, service_health, util, watch_reconcile
+from lcars import config, list_hub, mal_client, service_health, util, watch_reconcile
 
 
 def reconcile_mal_progress(conn) -> dict:
@@ -53,6 +53,7 @@ def reconcile_mal_progress(conn) -> dict:
     if not cfg.mal_access_token:
         return result
 
+    list_hub.reset_snapshots()
     try:
         my_list = mal_client.fetch_my_list(cfg.mal_access_token)
     except mal_client.MALError as e:
@@ -79,7 +80,8 @@ def reconcile_mal_progress(conn) -> dict:
     from lcars import list_sync
 
     for season_id in changed_progress_season_ids:
-        list_sync.push(conn, season_id, status=False, services=("anilist",))
+        list_sync.push(conn, season_id, status=False, services=("anilist",), guard=True)
+    list_hub.settle_locked(conn)
     conn.commit()
 
     result["seasons_checked"] = stats["seasons_checked"]

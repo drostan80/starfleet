@@ -43,6 +43,7 @@ def conn(tmp_path) -> sqlite3.Connection:
 def _config():
     cfg = config.Config()
     cfg.mal_access_token = "mal-tok"
+    cfg.list_intake_enabled = True
     cfg.anilist_access_token = "ani-tok"  # so onward push to AniList is live
     config.set_current(cfg)
     yield

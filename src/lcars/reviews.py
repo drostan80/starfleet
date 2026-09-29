@@ -13,6 +13,15 @@ Kinds with choices:
   accept (every episode watched) / revert to watching;
 - `later_planned` — a remote pause/drop would skip seasons you planned (Q-J4):
   skip them too / keep them planned;
+- `list_entry_removed` — an entry that was on AniList/MAL is gone (R4.10): add it
+  back / stop mirroring that season to that list;
+- `remote_progress_lower` — a list's progress is below LCARS's by more than 2
+  episodes, or on a completed season (R4.10): unwatch the difference / keep
+  LCARS's and write it back;
+- `list_not_settled` — a list change hasn't reached every list after 15 minutes:
+  try the write again / release the lock;
+- `list_readback_differs` — a list holds another value than LCARS wrote (it
+  clamped or moved it itself): acknowledged, not pushed again;
 - `tvdb_link` — an add whose TVDB link nothing confirmed (PLAN-CODE 8.8): link
   it (or "despite" its mismatches) / link the TVDB id in your note / keep it an
   individual season.
@@ -38,6 +47,13 @@ LABELS = {
     "link_tvdb_despite": "Link this TVDB show despite the mismatches",
     "link_other_tvdb": "Link the TVDB id in my note instead",
     "keep_individual": "Keep it an individual season for now",
+    "re_add": "Add it back to the list",
+    "stop_mirroring": "Stop mirroring this season to that list",
+    "accept_lower": "Accept the list's lower progress (unwatch the difference)",
+    "keep_lcars": "Keep LCARS's progress and write it back to the list",
+    "retry_now": "Try to write it to the lists again now",
+    "unlock": "Release the lock without confirming",
+    "acknowledge": "Understood, leave it as it is",
 }
 
 
@@ -123,6 +139,47 @@ def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | N
         for sid, old, new in fx.seasons:
             if new == "skipped":
                 list_sync.delete_if_auto_skipped(conn, sid, old)
+    elif field == "list_entry_removed":
+        from lcars import list_sync
+
+        season_id, service = payload["season_id"], payload["service"]
+        if choice == "re_add":
+            list_sync.push(conn, season_id, services=(service,))
+        else:
+            ext = list_sync.list_ids(conn, season_id).get(service)
+            conn.execute("UPDATE season SET list_sync = 0 WHERE id = ?", (season_id,))
+            if ext is not None:
+                conn.execute("DELETE FROM list_baseline WHERE service = ? AND external_id = ?",
+                             (service, ext))
+    elif field == "remote_progress_lower":
+        from lcars import list_hub, list_sync, status_rules
+
+        season_id, service = payload["season_id"], payload["service"]
+        season = conn.execute("SELECT * FROM season WHERE id = ?", (season_id,)).fetchone()
+        if choice == "accept_lower":
+            list_hub.unwatch_last(conn, season, list_sync.level_progress(conn, season)
+                                  - int(payload["progress"]))
+            if season["status"] == "completed":  # no longer every episode watched (R2.7)
+                status_rules.set_level_status(conn, season_id, "watching", client)
+            list_sync.push(conn, season_id, services=tuple(
+                s for s in ("anilist", "mal") if s != service))
+            ext = list_sync.list_ids(conn, season_id).get(service)
+            if ext is not None:
+                from lcars import list_baseline
+
+                list_baseline.record(conn, service, ext, progress=int(payload["progress"]),
+                                     lcars_progress=int(payload["progress"]))
+        else:
+            list_sync.push(conn, season_id, status=False, services=(service,))
+    elif field == "list_not_settled":
+        from lcars import list_hub, list_sync
+
+        season_id = payload["season_id"]
+        if choice == "retry_now":
+            list_sync.push(conn, season_id)
+            list_hub.settle_locked(conn)
+        else:
+            list_hub.unlock(conn, season_id)
     elif field == "tvdb_link":
         from lcars import tvdb_vetting
 

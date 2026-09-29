@@ -172,6 +172,9 @@ class Config:
     # doesn't track are added through the add check. Off until the phase 9
     # dry run shows you the list first.
     list_adds_enabled: bool = False
+    # R4.10 (7.5): whether a change made on AniList/MAL is taken into LCARS. Off until the
+    # whole new setup is live (the rebuilt LCARS already holds the correct values).
+    list_intake_enabled: bool = False
     # PLAN-CODE 9.0: `capture` records every AniList/MAL/Sonarr/Radarr write
     # (and blocks the MAL token refresh) instead of sending it; `send` sends.
     # Capture unless `send` is set explicitly (external_writes.py).
@@ -266,6 +269,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.tmdb_api_key = parser["lcars"].get("tmdb_api_key", fallback=None)
             cfg.tvdb_api_key = parser["lcars"].get("tvdb_api_key", fallback=None)
             cfg.list_adds_enabled = parser["lcars"].getboolean("list_adds_enabled", fallback=False)
+            cfg.list_intake_enabled = parser["lcars"].getboolean(
+                "list_intake_enabled", fallback=False)
             cfg.external_writes = parser["lcars"].get("external_writes", fallback="capture")
             cfg.mal_client_id = parser["lcars"].get("mal_client_id", fallback=None)
             cfg.mal_client_secret = parser["lcars"].get("mal_client_secret", fallback=None)

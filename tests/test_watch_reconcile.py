@@ -96,7 +96,7 @@ def _watch_event(conn, event_id, show_id, season, episode):
 
 
 def _configure_anilist(monkeypatch, entries: list[dict]):
-    config.set_current(config.Config(anilist_access_token="tok"))
+    config.set_current(config.Config(anilist_access_token="tok", list_intake_enabled=True))
     monkeypatch.setattr(anilist_client, "fetch_my_anime_list", lambda token: entries)
 
 
@@ -267,7 +267,7 @@ def test_ignores_seasons_with_no_anilist_id_at_all(conn, monkeypatch):
 
 
 def _configure_anilist_activity(monkeypatch, *, marker=None, feed=None, reconcile_entries=None):
-    config.set_current(config.Config(anilist_access_token="tok"))
+    config.set_current(config.Config(anilist_access_token="tok", list_intake_enabled=True))
     monkeypatch.setattr(anilist_client, "fetch_viewer_id", lambda token: 24011)
     monkeypatch.setattr(anilist_client, "fetch_latest_activity_marker", lambda token, uid: marker)
     monkeypatch.setattr(
@@ -630,7 +630,8 @@ def test_anilist_reconcile_pushes_changes_onward_to_mal(conn, monkeypatch):
     conn.commit()
 
     # AniList says watching, progress 2 -> LCARS changes -> must mirror to MAL.
-    config.set_current(config.Config(anilist_access_token="atok", mal_access_token="mtok"))
+    config.set_current(config.Config(
+        anilist_access_token="atok", mal_access_token="mtok", list_intake_enabled=True))
     monkeypatch.setattr(
         anilist_client, "fetch_my_anime_list", lambda token: [_entry(100, "CURRENT", progress=2)]
     )
@@ -662,7 +663,8 @@ def test_anilist_reconcile_no_change_pushes_nothing_to_mal(conn, monkeypatch):
     _episode(conn, "e-hubp21", "s-hubma2", 1, 1, state="watched")
     conn.commit()
 
-    config.set_current(config.Config(anilist_access_token="atok", mal_access_token="mtok"))
+    config.set_current(config.Config(
+        anilist_access_token="atok", mal_access_token="mtok", list_intake_enabled=True))
     monkeypatch.setattr(
         anilist_client, "fetch_my_anime_list", lambda token: [_entry(101, "CURRENT", progress=1)]
     )
@@ -699,7 +701,8 @@ def test_status_change_pushes_to_mal_exactly_once_never_back_to_anilist(conn, mo
     )
     conn.commit()
 
-    config.set_current(config.Config(anilist_access_token="atok", mal_access_token="mtok"))
+    config.set_current(config.Config(
+        anilist_access_token="atok", mal_access_token="mtok", list_intake_enabled=True))
     monkeypatch.setattr(
         anilist_client, "fetch_my_anime_list", lambda token: [_entry(100, "CURRENT", progress=0)]
     )

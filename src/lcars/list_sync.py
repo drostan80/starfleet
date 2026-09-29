@@ -17,8 +17,10 @@ from lcars import (
     config,
     external_writes,
     list_baseline,
+    list_hub,
     mal_client,
     pending_review,
+    reviews,
 )
 
 STATUS_TO_ANILIST = {
@@ -82,9 +84,61 @@ def level_progress(conn, season) -> int:
     return furthest
 
 
+def _fields(service: str, season, count, status: bool) -> dict:
+    """What LCARS says for one service: its status (unless `status` is False) and
+    progress, in that service's own vocabulary."""
+    fields: dict = {}
+    if service == "anilist":
+        if status and season["status"] in STATUS_TO_ANILIST:
+            fields["status"] = STATUS_TO_ANILIST[season["status"]]
+        if count is not None:
+            fields["progress"] = count
+    else:
+        if status and season["status"] in STATUS_TO_MAL:
+            fields["status"] = STATUS_TO_MAL[season["status"]]
+        if count is not None:
+            fields["num_watched_episodes"] = count
+    return fields
+
+
+def _save(conn, cfg, service: str, ext: int, fields: dict) -> None:
+    if service == "anilist" and cfg.anilist_access_token:
+        list_baseline.anilist_save(conn, cfg.anilist_access_token, ext, **fields)
+    elif service == "mal" and cfg.mal_access_token:
+        list_baseline.mal_save(conn, cfg.mal_access_token, ext, **fields)
+
+
+def _read_back(conn, cfg, season, service: str, ext: int, count) -> None:
+    """R4.10: what the service holds after the write is compared with LCARS's
+    decision. A status it moved by itself gets one corrective, status-only write;
+    what still differs (or a progress it clamped) is not pushed again — the
+    baseline holds the read-back, so the reconcile leaves it — but one review says so."""
+    if external_writes.capturing():
+        return
+    base = list_baseline.get(conn, service, ext) or {}
+    wanted = _fields(service, season, None, True).get("status")
+    if wanted and base.get("status") not in (None, season["status"]):
+        _save(conn, cfg, service, ext, {"status": wanted})
+        base = list_baseline.get(conn, service, ext) or {}
+    differs = []
+    if wanted and base.get("status") not in (None, season["status"]):
+        differs.append(f"status {base.get('status')} (LCARS {season['status']})")
+    if count is not None and base.get("progress") not in (None, count):
+        differs.append(f"progress {base.get('progress')} (LCARS {count})")
+    if differs:
+        list_hub.log(conn, season["id"], service, "readback_differs", "; ".join(differs))
+        reviews.open_review(
+            conn, "season", season["id"], "list_readback_differs", service,
+            f"{service} holds {'; '.join(differs)} after LCARS wrote its value",
+            ["acknowledge"], {"season_id": season["id"], "service": service},
+            show_id=season["show_id"])
+
+
 def push(conn, season_id: str, *, status: bool = True, progress: bool = True,
-         services=("anilist", "mal")) -> None:
-    """Writes one level's status and/or progress to its AniList/MAL entries."""
+         services=("anilist", "mal"), guard: bool = False) -> None:
+    """Writes one level's status and/or progress to its AniList/MAL entries.
+    `guard`: this write propagates an outside change (R4.10) — an entry someone
+    edited on that list since LCARS last looked is not overwritten but held."""
     season = _season(conn, season_id)
     if not pushable(conn, season):
         return
@@ -96,22 +150,14 @@ def push(conn, season_id: str, *, status: bool = True, progress: bool = True,
         if ext is None:
             continue
         try:
-            if service == "anilist" and cfg.anilist_access_token:
-                fields = {}
-                if status and season["status"] in STATUS_TO_ANILIST:
-                    fields["status"] = STATUS_TO_ANILIST[season["status"]]
-                if count is not None:
-                    fields["progress"] = count
-                if fields:
-                    list_baseline.anilist_save(conn, cfg.anilist_access_token, ext, **fields)
-            elif service == "mal" and cfg.mal_access_token:
-                fields = {}
-                if status and season["status"] in STATUS_TO_MAL:
-                    fields["status"] = STATUS_TO_MAL[season["status"]]
-                if count is not None:
-                    fields["num_watched_episodes"] = count
-                if fields:
-                    list_baseline.mal_save(conn, cfg.mal_access_token, ext, **fields)
+            if guard and not external_writes.capturing() and list_hub.outside_edit_pending(
+                    conn, service, ext):
+                list_hub.defer(conn, season_id, service, ext)
+                continue
+            fields = _fields(service, season, count, status)
+            if fields:
+                _save(conn, cfg, service, ext, fields)
+                _read_back(conn, cfg, season, service, ext, count)
         except (anilist_client.AniListError, mal_client.MALError) as e:
             pending_review.open_or_extend(
                 conn, "season", season_id, f"{service}_push", service, None, str(e)
