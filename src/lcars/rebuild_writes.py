@@ -32,6 +32,10 @@ MAL_STATUS = {"watching": "watching", "plan_to_watch": "planned", "on_hold": "pa
               "completed": "completed", "dropped": "dropped"}
 
 
+# the September mess: list values changed from here on may be LCARS's wrong pushes (09-29)
+MESS_START = "2026-08-15"
+
+
 def _rebuild():
     from lcars import rebuild
 
@@ -98,6 +102,11 @@ def plan_level_writes(levels: list[dict], lists: dict[str, dict[int, dict]]) -> 
                     fields["status"] = want_status
                 if entry["progress"] != count:
                     fields["progress"] = count
+            if "progress" in fields and not lv.get("episodes", 1):
+                fields.pop("progress")  # a level with no episodes has no progress to give
+            if ("progress" in fields and entry is not None and count < entry["progress"]
+                    and (entry.get("updated_at") or "") < MESS_START):
+                fields.pop("progress")  # the list's own history is never lowered (09-29)
             if not fields:
                 continue
             note = _outcome_differs(service, want_status, count, entry, fields)
@@ -149,7 +158,7 @@ def levels_from(conn) -> list[dict]:
         label = z["label"] or (f"S{z['season_number']}" if z["season_number"] else z["kind"])
         out.append({"id": z["id"], "show": z["show_id"], "title": f"{z['show_title']} {label}",
                     "status": z["status"], "progress": list_sync.level_progress(conn, z),
-                    "ids": ids})
+                    "episodes": len(list_sync.level_episodes_ordered(conn, z)), "ids": ids})
     return out
 
 
@@ -159,6 +168,65 @@ def explicit_deletes(run) -> list[dict]:
         return []
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     return [r["data"] if "data" in r else r for r in rows if r.get("kind") == "list_delete"]
+
+
+def take_list_history(run, conn, lists) -> None:
+    """The list's progress is history LCARS never recorded (user, 09-29): a level whose entry
+    was last changed before the September mess and holds more progress than LCARS gets its
+    first N episodes marked watched (state only: no invented watch dates)."""
+    from lcars import list_sync
+
+    taken = episodes = 0
+    now = util.now_utc_iso()
+    for lv in levels_from(conn):
+        if lv["status"] in (None, "skipped"):
+            continue
+        service = "anilist" if "anilist" in lv["ids"] else "mal"
+        entry = lists[service].get(lv["ids"].get(service))
+        if (entry is None or (entry.get("updated_at") or "") >= MESS_START
+                or entry["progress"] <= lv["progress"]):
+            continue
+        z = conn.execute("SELECT * FROM season WHERE id = ?", (lv["id"],)).fetchone()
+        eps = list_sync.level_episodes_ordered(conn, z)[:entry["progress"]]
+        todo = [e["id"] for e in eps if e["state"] != "watched"]
+        if not todo:
+            continue
+        conn.executemany("UPDATE episode SET state = 'watched', updated_at = ? WHERE id = ?",
+                         [(now, i) for i in todo])
+        taken += 1
+        episodes += len(todo)
+        run.record("list_history", lv["id"], "applied",
+                   f"{lv['title']}: {service} progress {entry['progress']} (last changed"
+                   f" {entry.get('updated_at')}) taken, {len(todo)} episodes marked watched")
+    run.record("list_history", "all", "applied",
+               f"{taken} levels took their list's progress ({episodes} episodes)")
+
+
+def apply_list_decisions(run, conn) -> None:
+    """Your answers for single entries (input `list_decisions.json`, {anilist id: {status,
+    progress, why}}): the level takes that status and exactly that progress."""
+    from lcars import list_sync, status_rules
+
+    path = run.inputs / "rebuild-inputs" / "list_decisions.json"
+    if not path.exists():
+        return
+    now = util.now_utc_iso()
+    for ext, d in json.loads(path.read_text()).items():
+        z = conn.execute("SELECT * FROM season WHERE anilist_id = ? AND kind != 'tvdb_season'"
+                         " OR (anilist_id = ? AND kind = 'tvdb_season') ORDER BY kind = "
+                         "'tvdb_season' LIMIT 1", (int(ext), int(ext))).fetchone()
+        if z is None:
+            run.record("list_decision", ext, "review", f"no level holds it ({d['why']})")
+            continue
+        status_rules.set_level_status(conn, z["id"], d["status"], "rebuild", confirmed=True,
+                                      manual=True)
+        eps = list_sync.level_episodes_ordered(conn, z)
+        for i, e in enumerate(eps):
+            state = "watched" if i < d["progress"] else "unwatched"
+            conn.execute("UPDATE episode SET state = ?, updated_at = ? WHERE id = ?",
+                         (state, now, e["id"]))
+        run.record("list_decision", ext, "applied",
+                   f"{d['status']} at {d['progress']} ({d['why']})")
 
 
 # ── Sonarr ───────────────────────────────────────────────────────────────
@@ -233,6 +301,9 @@ def stage_writes(run) -> None:
                f"anilist {len(lists['anilist'])} entries, mal {len(lists['mal'])} entries; "
                f"{had} earlier captured writes cleared")
 
+    apply_list_decisions(run, conn)
+    take_list_history(run, conn, lists)
+    conn.commit()
     plan = plan_level_writes(levels_from(conn), lists)
     for w in plan["writes"]:
         fields = w["fields"]

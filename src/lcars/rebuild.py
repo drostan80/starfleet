@@ -1000,6 +1000,44 @@ def _runs(nums: list, every: list) -> list[tuple]:
     return out
 
 
+def _own_entry_as_part(run: Run, conn) -> None:
+    """R1.22: a TVDB season that has parts holds no list entry itself — its own entry is its
+    first part (Tonbo! S1: 164440 on the season beside the part 178729; Mushoku S2: 146065)."""
+    from lcars import ids as ids_module
+    from lcars import season_ranges
+
+    moved = 0
+    now = util.now_utc_iso()
+    for z in conn.execute(
+            "SELECT * FROM season z WHERE kind = 'tvdb_season' AND anilist_id IS NOT NULL AND"
+            " EXISTS (SELECT 1 FROM season p WHERE p.parent_id = z.id AND p.kind = 'part')"
+    ).fetchall():
+        if conn.execute("SELECT 1 FROM season WHERE parent_id = ? AND kind = 'part' AND"
+                        " anilist_id = ?", (z["id"], z["anilist_id"])).fetchone() is None:
+            conn.execute("UPDATE season SET part_number = part_number + 1 WHERE parent_id = ?"
+                         " AND kind = 'part'", (z["id"],))
+            first = ids_module.generate_id(conn, "z")
+            conn.execute(
+                "INSERT INTO season (id, show_id, season_number, part_number, kind, parent_id,"
+                " anilist_id, mal_id, source, status, status_set_manually, score, started_at,"
+                " completed_at, episode_total, created_at, updated_at) VALUES (?, ?, ?, 1,"
+                " 'part', ?, ?, ?, 'auto', ?, ?, ?, ?, ?, ?, ?, ?)",
+                (first, z["show_id"], z["season_number"], z["id"], z["anilist_id"], z["mal_id"],
+                 z["status"], z["status_set_manually"], z["score"], z["started_at"],
+                 z["completed_at"], z["episode_total"], now, now))
+            season_ranges.upsert_season_external_id(conn, first, z["anilist_id"], z["mal_id"],
+                                                    now)
+        conn.execute("UPDATE season SET anilist_id = NULL, mal_id = NULL, updated_at = ?"
+                     " WHERE id = ?", (now, z["id"]))
+        conn.execute("DELETE FROM season_external_id WHERE season_id = ? AND service IN"
+                     " ('anilist', 'mal')", (z["id"],))
+        moved += 1
+        run.record("own_entry_part", z["id"], "applied",
+                   f"{z['show_id']} S{z['season_number']}: {z['anilist_id']} is its first part")
+    conn.commit()
+    run.record("own_entry_parts", "all", "applied", f"{moved} seasons' own entry made a part")
+
+
 def _part_spans(run: Run, conn) -> None:
     """Parts (cours) divide their TVDB season (R1.10, R1.11): each part's
     span runs from its first episode — Fribb's episode offset within the TVDB
@@ -1136,6 +1174,11 @@ def stage_statuses(run: Run) -> None:
     conn = _connect(run.work())
     d = decisions(run)
     _episode_totals(run, conn)
+    _own_entry_as_part(run, conn)
+    from lcars import rebuild_cleanup
+
+    rebuild_cleanup.merge_part_duplicates(run, conn, rebuild_cleanup.Deleter(
+        conn, run.dir / "removed"))  # before the spans: a repeated cour hides the real ones
     _part_spans(run, conn)
     _link_list_levels(run, conn)
 

@@ -69,3 +69,18 @@ def test_the_stage_refuses_to_run_unless_writes_are_captured(tmp_path):
     run.dir.mkdir()
     with pytest.raises(rebuild.RebuildError, match="never sent"):
         rebuild_writes.stage_writes(run)  # the suite runs with writes on `send`
+
+
+def test_a_list_entry_changed_before_the_mess_is_never_lowered():
+    old = dict(entry("dropped", 118), updated_at="2024-01-01T00:00:00Z")
+    mess = dict(entry("dropped", 13), updated_at="2026-09-26T00:00:00Z")
+    lists = {"anilist": {1: old, 2: mess}, "mal": {}}
+    plan = rw.plan_level_writes([level("a", "dropped", 0, anilist=1),
+                                 level("b", "dropped", 0, anilist=2)], lists)
+    assert [(w["id"], w["fields"]) for w in plan["writes"]] == [(2, {"progress": 0})]
+
+
+def test_a_level_with_no_episodes_never_gets_a_progress():
+    lists = {"anilist": {1: entry("completed", 13, 13)}, "mal": {}}
+    lv = dict(level("a", "completed", 0, anilist=1), episodes=0)
+    assert rw.plan_level_writes([lv], lists)["writes"] == []
