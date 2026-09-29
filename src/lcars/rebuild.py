@@ -308,8 +308,8 @@ def stage_structure(run: Run) -> None:
             raise RebuildError(f"season status for a season not in 09-06: {s['key']}")
         status = rebuild_cleanup.status_for(cleanup_inputs, s["season"], s["status"])
         _mine(conn, s["season"], status)
-        run.record("season_status", s["key"], "applied",
-                   status if status == s["status"] else f"{status} (was {s['status']}: 09-29 answer)")
+        note = status if status == s["status"] else f"{status} (was {s['status']}: 09-29)"
+        run.record("season_status", s["key"], "applied", note)
     conn.commit()
 
     # b0) Show-level TVDB ids come from today's data — the latest fixes (PLAN-DATA
