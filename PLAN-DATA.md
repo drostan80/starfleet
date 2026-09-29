@@ -672,6 +672,43 @@ Read back from the page's `decisions` collection (228 entries).
     Rulecheck after stage 8: R2.15 now enforces R2.15a (0); open R1.8 28, R1.11 166, R1.12 15,
     R1.22 25, R2.7 5.
 
+## Stage 9 findings — your decisions (2026-09-29, review "Mapping Review")
+
+Stage 9 (checks) on run 1 found five kinds of thing; your answers and what was built:
+
+- **Root cause of the shared-id clashes: TVDB renumbered shows after 09-06, and stage 4 matched
+  old rows to Sonarr's episodes by number** (Slime S3E1 "The Visitors", 2021, was stamped TVDB
+  S3E1 "Demons and Strategies", 2024). Scope (703 shows compared against Sonarr): Slime, Re:ZERO,
+  SPY x FAMILY, Mushoku, Dr. STONE, Bookworm (one TVDB season of 60), Black Lagoon, Fire Force,
+  Tonbo! (+ Animal Control, one episode inserted). Built: `rebuild_reanchor` (R1.2f) — rows go to
+  their episode by title + air date, duplicates removed with their history, seasons follow
+  (Fribb's TVDB season for each entry), the replay finds an episode the same way.
+- **Your per-TVDB-season truth** (Fribb agrees in every case): Slime S1 101280, S2 108511+116742,
+  S3 156822, S4 182205; Re:ZERO S1 21355, S2 108632+119661, S3 163134 (16), S4 189046 (19); SPY x
+  FAMILY S1 140960+142838, S2 158927, S3 177937; Mushoku S1 108465+127720, S2 146065+166873,
+  S3 178789 (+217434 when its episodes come); Dr. STONE S3 131518+162670 (22), S4 172019+189117+
+  199221 (37; S04E01 "RYUSUI VS. SENKU"); Black Lagoon S1 889+1519 (24, the OVAs 4901 and the
+  Omake 8440 are specials); Bookworm S1 four parts (14+12+10+24 = 60).
+  Mushoku S2 also has the special "Guardian Fitz" (TVDB S00E02) that AniList counts as episode 0 of
+  146065 — **AniList progress for that entry is one off: to handle when the write list is built.**
+- **Chitose Is in the Ramune Bottle**: cour 1 is 13 episodes (180082, completed), cour 2 (198727)
+  starts at the 13th and shows one episode on AniList so far, more likely; its unaired episode stays
+  unwatched.
+- **Unaired episodes** (R2.7): never marked watched; a level with one is watching. Bookworm S1/S4,
+  Re:ZERO S4, Chitose S1. Seven levels with no aired episode are planned (Frieren S3, DAN DA DAN S3,
+  Undead Unluck S2, Bakemonogatari S7, Chained Soldier S3, The Dangers in My Heart S3, The Ramparts
+  of Ice S2 — starts 2026-10-01): `season_status_overrides`.
+- **Film shows** (R3.2a): 47 of 50 carried an unrelated series' `tvdb` id and TVmaze id, added on
+  live after 09-06 (Donnie Darko = Cheers). The TVDB movie id comes through the TMDB id
+  (`rebuild-inputs/film_tvdb.json`, 48 films); Time of Eve: The Movie and Memories have no TMDB id:
+  yours to review. Star Wars III lost its 26 episodes and 26 Trakt watches (they were "Are You Afraid
+  of the Dark?").
+- **Spans** (R1.11 amended, R1.12, R1.13c): minis nested in their group; a special or film inside
+  another film's span is not an overlap (Fullmetal Alchemist, Attack on Titan); Monogatari stays as
+  Memory Alpha + Fribb number it (named exception); a level has a span when it has episodes or a
+  place in a series (standalone movies and list-only entries exempt); Monster Eater, Chainsmoker
+  Cat, The Duke's Son, Tomb Raider King: the unmatched part and the AniList entry are one part.
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must

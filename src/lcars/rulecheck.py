@@ -106,35 +106,56 @@ def check_season_zero_redistributed(conn):
 
 
 def check_seasons_have_spans(conn):
-    if _has(conn, "season_span"):
-        sql = (
-            f"SELECT {_TITLE} AS show, z.season_number FROM season z"
-            " JOIN show sh ON sh.id = z.show_id WHERE sh.tracked = 1"
-            " AND NOT EXISTS (SELECT 1 FROM season_span sp WHERE sp.season_id = z.id)"
-        )
-    elif _has(conn, "season", "abs_start"):
-        sql = (
-            f"SELECT {_TITLE} AS show, z.season_number FROM season z"
-            " JOIN show sh ON sh.id = z.show_id WHERE sh.tracked = 1 AND z.season_number > 0"
-            " AND (z.abs_start IS NULL OR z.abs_end IS NULL)"
-        )
-    else:
+    """R1.11 (amended 2026-09-29): a level has a span when it has episodes or a place in a
+    series. A standalone movie and a list-only entry (no episodes, no number) are exempt."""
+    if not _has(conn, "season_span"):
         return _not_yet("R1.11", "Every season is defined by its span(s)", "no span columns")
     return _finding(
         conn,
         "R1.11",
-        "Every season is defined by its span(s)",
+        "Every level with episodes has a span",
         "violation",
-        sql,
-        fmt=lambda r: f"{r['show']} S{r['season_number']}",
+        f"SELECT {_TITLE} AS show, z.season_number, z.kind, z.label FROM season z"
+        " JOIN show sh ON sh.id = z.show_id WHERE sh.tracked = 1"
+        " AND NOT EXISTS (SELECT 1 FROM season_span sp WHERE sp.season_id = z.id)"
+        " AND EXISTS (SELECT 1 FROM episode e WHERE e.season_id = z.id)",
+        fmt=lambda r: f"{r['show']} S{r['season_number']} {r['kind']} {r['label'] or ''}".strip(),
     )
+
+
+def check_unplaced_extras(conn):
+    """The exempt levels of R1.11, listed as information: standalone movies, and a series'
+    OVAs/specials/parts that only hold a list entry. A film of a series with no place is the
+    one to look at."""
+    if not _has(conn, "season_span"):
+        return _not_yet("R1.11i", "Levels with no span", "no span columns")
+    return _finding(
+        conn,
+        "R1.11i",
+        "Levels with no span and no episodes (exempt): films of a series, for a look",
+        "check",
+        f"SELECT {_TITLE} AS show, z.kind, z.label, z.anilist_id FROM season z"
+        " JOIN show sh ON sh.id = z.show_id WHERE sh.tracked = 1 AND sh.media_shape = 'episodic'"
+        " AND z.kind IN ('special', 'individual_season') AND z.anilist_id IS NOT NULL"
+        " AND NOT EXISTS (SELECT 1 FROM season_span sp WHERE sp.season_id = z.id)"
+        " AND NOT EXISTS (SELECT 1 FROM episode e WHERE e.season_id = z.id)",
+        fmt=lambda r: f"{r['show']} · {r['label'] or r['kind']} · anilist {r['anilist_id']}",
+        note="exempt from R1.11; listed because a film with a place in a series needs a span",
+    )
+
+
+# Named exceptions of R1.12: shows numbered by Memory Alpha + Fribb as they are (TVDB ids).
+R1_12_ACCEPTED_TVDB = {"102261": "Monogatari series (Memory Alpha + Fribb)"}
 
 
 def check_spans_do_not_overlap(conn):
     if _has(conn, "season_span"):
         # Level-aware: a part sits inside its TVDB season (checked by
         # R1.10 below); levels side by side — same show, same parent, or
-        # both without one — must not share an absolute number.
+        # both without one — must not share an absolute number. Not overlaps
+        # (R1.12/R1.13a/R1.13c, 2026-09-29): a special or film inside another
+        # special's or film's span; the Monogatari series (named exception).
+        accepted = ",".join("?" * len(R1_12_ACCEPTED_TVDB))
         return _finding(
             conn,
             "R1.12",
@@ -148,7 +169,13 @@ def check_spans_do_not_overlap(conn):
             " JOIN season_span sa ON sa.season_id = a.id"
             " JOIN season_span sb ON sb.season_id = b.id"
             " JOIN show sh ON sh.id = a.show_id"
-            " WHERE sh.tracked = 1 AND sa.abs_from <= sb.abs_to AND sb.abs_from <= sa.abs_to",
+            " WHERE sh.tracked = 1 AND sa.abs_from <= sb.abs_to AND sb.abs_from <= sa.abs_to"
+            " AND NOT (a.kind = 'special' AND b.kind = 'special' AND"
+            "  ((sa.abs_from <= sb.abs_from AND sb.abs_to <= sa.abs_to)"
+            "   OR (sb.abs_from <= sa.abs_from AND sa.abs_to <= sb.abs_to)))"
+            " AND NOT EXISTS (SELECT 1 FROM show_external_id t WHERE t.show_id = sh.id"
+            f"  AND t.service = 'tvdb' AND t.external_id IN ({accepted}))",
+            tuple(R1_12_ACCEPTED_TVDB),
             fmt=lambda r: (
                 f"{r['show']} S{r['a_n']:g} ({r['a0']:g}–{r['a1']:g})"
                 f" × S{r['b_n']:g} ({r['b0']:g}–{r['b1']:g})"
@@ -212,6 +239,9 @@ def check_one_show_per_tvdb_id(conn):
 
 
 def check_list_ids_on_one_season(conn):
+    """R1.22: an AniList/MAL id belongs to one level. One id on several TVDB seasons is right
+    when their episodes add up to the entry's own count (Urusei Yatsura: 54 + 52 + 43 + 46 =
+    195), which is what the list says the entry is."""
     if not _has(conn, "season_external_id"):
         return _not_yet(
             "R1.22", "Each AniList/MAL id belongs to one season", "no season_external_id"
@@ -221,10 +251,14 @@ def check_list_ids_on_one_season(conn):
         "R1.22",
         "Each AniList/MAL id belongs to one season",
         "violation",
-        "SELECT sei.service, sei.external_id, COUNT(*) AS n FROM season_external_id sei"
-        " JOIN season z ON z.id = sei.season_id JOIN show sh ON sh.id = z.show_id"
+        "SELECT g.service, g.external_id, g.n FROM ("
+        " SELECT sei.service, sei.external_id, COUNT(*) AS n, MAX(z.episode_total) AS total,"
+        "  SUM((SELECT COUNT(*) FROM episode e WHERE e.season_id = z.id)) AS held"
+        " FROM season_external_id sei JOIN season z ON z.id = sei.season_id"
+        " JOIN show sh ON sh.id = z.show_id"
         " WHERE sh.tracked = 1 AND sei.service IN ('anilist', 'mal')"
-        " GROUP BY sei.service, sei.external_id HAVING COUNT(*) > 1",
+        " GROUP BY sei.service, sei.external_id HAVING COUNT(*) > 1) g"
+        " WHERE g.total IS NULL OR g.held != g.total",
         fmt=lambda r: f"{r['service']} {r['external_id']} on {r['n']} seasons",
     )
 
@@ -445,6 +479,7 @@ CHECKS: list[Callable[[sqlite3.Connection], Finding]] = [
     check_every_episode_numbered,
     check_season_zero_redistributed,
     check_seasons_have_spans,
+    check_unplaced_extras,
     check_spans_do_not_overlap,
     check_parts_inside_their_season,
     check_one_show_per_tvdb_id,

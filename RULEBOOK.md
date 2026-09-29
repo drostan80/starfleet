@@ -99,13 +99,24 @@ rule applies to TV series, ask — do not assume.
   AniList gives cour 1 and cour 2 of a season separate ids), the season may be
   organised into sub-seasons on its page, each named with that source's naming.
 - **R1.11 All seasons are defined, in the background, by their span of absolute
-  episode numbers.**
+  episode numbers.** `[amended 2026-09-29]` A level has a span when it **has episodes or a
+  place in a series**. Two kinds are exempt, and reported separately, not as violations:
+  a **standalone movie** (a film that is a show of its own, with no episodes of its own),
+  and a **list-only entry** (a special, OVA, part or season that only holds a list entry:
+  no episodes yet, and Memory Alpha has given it no number). **A film with a place in a
+  series is not exempt**: when Memory Alpha numbers it (a decimal such as 24.1, or a whole
+  number between two seasons) it needs its span.
 - **R1.12** A season is a span **or a list of spans** of absolute episode numbers:
   abs x → abs y, or abs a → abs d **and** abs f → abs k, where whatever lies
   between d and f is whichever episodes are mapped there by air date and other
   numbering. `[clarified 2026-09-27, Q-P]` Example: e.g. a film with a whole
   absolute number airing mid-season → season = abs 13–16 **and** abs 18–24, the
   film being abs 17.
+  `[amended 2026-09-29]` Two overlaps are not violations: a special or film may sit inside
+  another film's span (R1.13a covers a film inside a season's window; Fullmetal Alchemist,
+  Attack on Titan), and a mini sits inside its "Season N minis" group (R1.13b), which is its
+  parent. The Monogatari series stays as Memory Alpha and Fribb number it (a named exception,
+  not a loosened rule).
 - **R1.13** Minis can be set as sub-seasons interlocking with the main season,
   which lets them have their own cover art.
 - **R1.13b Every episode belongs to a level, so every cover can be set**:
@@ -114,6 +125,9 @@ rule applies to TV series, ask — do not assume.
   full-length piece is a level of its own (its own cover); minis between seasons are
   their decimal season (R1.8d). Art can be set per level, individually or for the
   decimal group. `[clarified 2026-09-28]`
+- **R1.13c Minis sit inside their group** `[decided 2026-09-29]`: each mini of a "Season N
+  minis" group has that group as its parent level (R1.13b), so the group and its members are
+  not siblings.
 - **R1.13a Film/mini inside a season's air window** `[clarified 2026-09-28, Q-R]`
   (e.g. S2 = abs 13–16 and 18–24, film abs 17): its **own level**. Sub-season or
   separate level are both acceptable technically; what matters is that it **appears
@@ -160,6 +174,13 @@ show X
   R1.8), then further divided and mapped to align and reconcile the other sources.
 - **R1.18** Absolute-numbering source of truth: **anime** — AniDB + Fribb…;
 - **R1.19** **TV** — TVmaze.
+- **R1.2f An episode is identified by its title and air date, not by its number**
+  `[decided 2026-09-29]`: when TVDB renumbers a show (seasons merged, shifted), the rows
+  follow their episode to its new season and episode; a row that repeats another is removed
+  and its history kept on the one that stays. Sonarr's numbers are read against this, never
+  trusted alone (Slime, Re:ZERO, SPY x FAMILY, Mushoku, Dr. STONE, Bookworm, Black Lagoon,
+  Fire Force, Tonbo!). An AniList entry belongs to the TVDB season Fribb gives it, and its
+  episode count and start date must agree.
 - **R1.2e Where TVDB episodes come from** `[clarified 2026-09-28]`: Sonarr is only a
   TVDB proxy. Reading episodes through Sonarr is the practical path for shows Sonarr
   follows, but it isn't a rule: episode lists may be read **straight from TVDB** — e.g.
@@ -253,6 +274,9 @@ An episode can be unaired but watched (pre-air showing, leak…).
   - automatic when all episodes within are watched;
   - may be set manually → **sets all its episodes watched** (mirrors AniList, which
     marks every episode of a season watched when the season is set completed);
+  - `[decided 2026-09-29]` an episode that **has not aired** (air date after today, or no
+    date and no watch) is never marked watched, and a level that holds one is
+    **watching, not completed**: it cannot complete before its last episode has aired;
   - specials and movies not in the season's list of mapped episodes — even inside
     its air-date window — are completed individually and separately;
   - **CAVEAT — any level with an id:** watch status applies at whatever level holds
@@ -379,6 +403,10 @@ An episode can be unaired but watched (pre-air showing, leak…).
 - **R3.1** Anything added (manually too) must pass tests deciding whether it is:
   a new season of an existing show, part of a season of an existing show, or the
   first season of a new show.
+- **R3.2a Film shows carry `tvdb_movie`** `[decided 2026-09-29]`: a film show has the TVDB
+  *movie* id under `tvdb_movie`, found through its TMDB id, and never a `tvdb` series id (47
+  of 50 film shows carried an unrelated series' id and TVmaze id, copied from live). A film
+  with no TMDB id is reviewed.
 - **R3.2** Every addition must be linked to a **TVDB id** (show level). With no TVDB
   id, the season may be added as an **individual season**, waiting to be linked to
   a show once a TVDB id exists.
@@ -776,3 +804,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-28 — R1.0a: placeholder stored as 5000.1, 5000.2… (shown as x).
 - 2026-09-29 — R2.2 addendum (skipped episode state kept, not an active rule: no episode is skipped; if ever used, marking a season watched would mark all its episodes except the skipped ones); R4.9/R4.10 clarified (timestamps decide; the AniList-then-MAL order was an example; to be built); R3.7c (two sources agreeing on a TVDB id attach it), R3.7d (show page can add a TVDB id by hand), R3.7e (unconfirmed TVDB id → review with yes / no / no-here-is-the-right-one), R1.14a (one show per TVDB id and a TVDB id on every tracked show are enforced; some Radarr movies may be individual seasons for now).
 - 2026-09-29 — R2.15a: a level completes by itself only with a confirmed episode count (AniList total = the episodes LCARS holds, or an ended series / later season, or set by you); past seasons not reviewed.
+- 2026-09-29 — R1.11 amended (span when the level has episodes or a place in a series; standalone movies and list-only entries exempt, a film with a place is not); R1.12 (a special/film inside another film's span, and a mini inside its group, are not overlaps; Monogatari a named exception); R1.13c (minis sit inside their group); R1.2f (episodes identified by title + air date; TVDB renumbering re-anchors rows); R2.7 (an unaired episode is never marked watched; a level with one is watching); R3.2a (film shows carry `tvdb_movie`, found through TMDB).

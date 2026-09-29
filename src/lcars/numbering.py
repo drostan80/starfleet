@@ -457,10 +457,46 @@ def apply_plan(conn: sqlite3.Connection, plan: Plan) -> dict:
             (min(a for a, _ in spans), max(b for _, b in spans), now, row[0]),
         )
     _apply_level_spans(conn, plan, now)
+    _nest_in_minis_groups(conn, plan.show_id, now)
     conn.execute(
         "UPDATE show SET absolute_numbering_source = ? WHERE id = ?", (plan.source, plan.show_id)
     )
     return {"changed": changed, "missing_seasons": missing_seasons}
+
+
+def _nest_in_minis_groups(conn, show_id: str, now: str) -> int:
+    """R1.13c: a mini sits inside its "Season N minis" group, which is its parent level, so the
+    group and its members are not siblings (and their spans, one inside the other, do not
+    overlap as siblings). A member is a level of the same parent whose spans all lie inside the
+    group's run (its first to its last number: the members sit in the gaps between its spans)."""
+    nested = 0
+    groups = conn.execute(
+        "SELECT id, parent_id FROM season WHERE show_id = ? AND kind = 'special'"
+        " AND label GLOB 'Season [0-9]* minis'",
+        (show_id,),
+    ).fetchall()
+    for g in groups:
+        gspans = conn.execute(
+            "SELECT abs_from, abs_to FROM season_span WHERE season_id = ?", (g[0],)
+        ).fetchall()
+        if not gspans:
+            continue
+        gmin, gmax = min(a for a, _ in gspans), max(b for _, b in gspans)
+        for m in conn.execute(
+            "SELECT id FROM season WHERE show_id = ? AND id != ? AND kind = 'special'"
+            " AND parent_id IS ? AND label IS NOT NULL AND label NOT GLOB 'Season [0-9]* minis'",
+            (show_id, g[0], g[1]),
+        ).fetchall():
+            mine = conn.execute(
+                "SELECT abs_from, abs_to FROM season_span WHERE season_id = ?", (m[0],)
+            ).fetchall()
+            if mine and all(gmin <= lo and hi <= gmax for lo, hi in mine):
+                conn.execute(
+                    "UPDATE season SET parent_id = ?, updated_at = ? WHERE id = ?",
+                    (g[0], now, m[0]),
+                )
+                nested += 1
+    return nested
 
 
 def _anilist_ids_for_anidb(anidb_id: int) -> set[int] | None:

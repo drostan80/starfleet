@@ -4,9 +4,9 @@ after TVDB renumbered a show go to their own episode, by title and air date."""
 import sqlite3
 
 import pytest
+from tests.test_rebuild_cleanup import _count, _episode, _event, _migrated, _season, _show
 
 from lcars import rebuild_reanchor as ra
-from tests.test_rebuild_cleanup import NOW, _count, _episode, _event, _migrated, _season, _show
 
 
 def ep(s, e, title, date):
@@ -22,7 +22,8 @@ def row(rid, s, e, title, date, created="2026-01-01", watched=False):
 
 
 def test_a_row_on_its_own_coordinates_is_stable():
-    p = ra.plan([row("a", 1, 1, "Pilot", "2020-01-01T00:00:00Z")], [ep(1, 1, "Pilot", "2020-01-01")])
+    p = ra.plan([row("a", 1, 1, "Pilot", "2020-01-01T00:00:00Z")],
+                [ep(1, 1, "Pilot", "2020-01-01")])
     assert p["stable"] == ["a"] and not ra.needs_reanchor(p)
 
 
@@ -97,7 +98,7 @@ def test_two_cours_become_one_season_with_parts_and_the_history_follows(conn):
     _season(conn, "z-bbbbbb", "s-aaaaaa", 3, anilist=20, status="completed")
     _titled(conn, "e-aaaaaa", "s-aaaaaa", 2, 1, "One", "2021-01-01T00:00:00Z", "watched")
     _titled(conn, "e-bbbbbb", "s-aaaaaa", 3, 1, "Two", "2021-07-01T00:00:00Z", "watched")
-    for eid, s, e in (("e-aaaaaa", 2, 1), ("e-bbbbbb", 3, 1)):
+    for eid, s in (("e-aaaaaa", 2), ("e-bbbbbb", 3)):
         conn.execute("UPDATE episode SET season_id = ? WHERE id = ?",
                      ("z-aaaaaa" if s == 2 else "z-bbbbbb", eid))
     _event(conn, "w-aaaaaa", "s-aaaaaa", 2, 1)

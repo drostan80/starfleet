@@ -425,6 +425,7 @@ def stage_cleanup(run) -> None:
     remove_duplicate_shows(run, conn, inputs)
     mine = _list_ids(run)
     deleter = Deleter(conn, export)
+    merge_part_duplicates(run, conn, deleter)
     kept: dict[str, int] = {}
     removed = 0
 
@@ -493,3 +494,112 @@ def stage_cleanup(run) -> None:
     run.record("cleanup_rows", "all", "applied",
                "removed rows per table: " + json.dumps(deleter.counts, sort_keys=True))
     run.record("stage", "cleanup", "applied", "")
+
+
+# ── film shows (R3.2a) ───────────────────────────────────────────────────
+
+
+def film_ids(run, conn) -> None:
+    """A film show carries `tvdb_movie`, found through its TMDB id (input `film_tvdb.json`,
+    {show id: {"tvdb_movie": id, "title": ...}}), never a `tvdb` series id or a TVmaze id: 47 of
+    50 film shows had an unrelated series' (Donnie Darko was Cheers), added on live after
+    09-06 and copied by the tvdb_from_live step. A film show has no episodes: a stray one (the
+    Star Wars III film had 26 episodes and 26 Trakt watches of another show) goes, exported."""
+    rb = _rebuild()
+    path = run.inputs / "rebuild-inputs" / "film_tvdb.json"
+    found = json.loads(path.read_text()) if path.exists() else {}
+    deleter = Deleter(conn, run.dir / "removed")
+    set_ = kept = review = 0
+    for show in conn.execute("SELECT id FROM show WHERE tracked = 1 AND media_shape = 'movie'"
+                             ).fetchall():
+        sid = show[0]
+        has = conn.execute("SELECT external_id FROM show_external_id WHERE show_id = ? AND"
+                           " service = 'tvdb_movie'", (sid,)).fetchone()
+        rb._set_link(conn, sid, "tvdb", None)
+        rb._set_link(conn, sid, "tvmaze", None)
+        want = (found.get(sid) or {}).get("tvdb_movie")
+        if want is not None and has is None:
+            rb._set_link(conn, sid, "tvdb_movie", want)
+            set_ += 1
+        elif has is not None:
+            kept += 1
+        else:
+            review += 1
+            run.record("film_id", sid, "review", "no TMDB id to find its TVDB movie id: yours")
+        if conn.execute("SELECT 1 FROM episode WHERE show_id = ?", (sid,)).fetchone():
+            n = conn.execute("SELECT COUNT(*) FROM episode WHERE show_id = ?", (sid,)).fetchone()[0]
+            w = conn.execute("SELECT COUNT(*) FROM watch_event WHERE show_id = ?", (sid,)
+                             ).fetchone()[0]
+            deleter.delete("episode", "show_id = ?", (sid,))
+            run.record("film_episodes", sid, "applied",
+                       f"{n} episodes and {w} watch events of another show removed")
+    conn.commit()
+    run.record("film_ids", "all films", "applied",
+               f"{set_} tvdb_movie ids set (via TMDB), {kept} already had one, {review} to review")
+
+
+# ── one cour, two parts (R1.11, 2026-09-29) ──────────────────────────────
+
+
+def merge_part_duplicates(run, conn, deleter) -> None:
+    """A TVDB season can hold two parts that are one: the AniList entry (an id, a list status,
+    no episodes) and a part nothing matched (no id, the episodes, no span): Monster Eater,
+    Chainsmoker Cat, The Duke's Son, Tomb Raider King. The entry keeps its id and status, takes
+    the span of the episodes, and the episodes go back on the season; the unmatched part goes.
+    Two parts holding the same entry are one too (Rich Girl Caretaker): the reviewed one stays."""
+    from lcars import status_rules
+
+    merged = same = 0
+    touched: set[str] = set()
+    for parent in conn.execute(
+            "SELECT DISTINCT parent_id, show_id FROM season WHERE kind = 'part'").fetchall():
+        parts = conn.execute("SELECT * FROM season WHERE parent_id = ? AND kind = 'part'"
+                             " ORDER BY status_set_manually DESC, (source = 'manual') DESC,"
+                             " part_number", (parent[0],)).fetchall()
+        seen: dict = {}
+        for p in parts:  # the same entry twice
+            if p["anilist_id"] is not None and p["anilist_id"] in seen:
+                conn.execute("UPDATE episode SET season_id = ? WHERE season_id = ?",
+                             (parent[0], p["id"]))
+                deleter.delete("season", "id = ?", (p["id"],))
+                same += 1
+                touched.add(parent[1])
+            elif p["anilist_id"] is not None:
+                seen[p["anilist_id"]] = p["id"]
+        parts = conn.execute("SELECT * FROM season WHERE parent_id = ? AND kind = 'part'",
+                             (parent[0],)).fetchall()
+
+        def spanless(p):
+            return conn.execute("SELECT 1 FROM season_span WHERE season_id = ?",
+                                (p["id"],)).fetchone() is None
+
+        def eps(p):
+            return conn.execute("SELECT COUNT(*) FROM episode WHERE season_id = ?",
+                                (p["id"],)).fetchone()[0]
+
+        loose = [p for p in parts if p["anilist_id"] is None and p["mal_id"] is None
+                 and eps(p) and spanless(p)]
+        entries = [p for p in parts if p["anilist_id"] is not None and not eps(p)
+                   and spanless(p)]
+        if len(loose) == 1 and len(entries) == 1:
+            lo, hi = conn.execute("SELECT MIN(absolute_number), MAX(absolute_number) FROM episode"
+                                  " WHERE season_id = ?", (loose[0]["id"],)).fetchone()
+            if lo is None:
+                continue
+            conn.execute("UPDATE episode SET season_id = ? WHERE season_id = ?",
+                         (parent[0], loose[0]["id"]))
+            conn.execute("INSERT INTO season_span (season_id, abs_from, abs_to) VALUES (?, ?, ?)",
+                         (entries[0]["id"], lo, hi))
+            conn.execute("UPDATE season SET abs_start = ?, abs_end = ?, updated_at = ?"
+                         " WHERE id = ?", (lo, hi, util.now_utc_iso(), entries[0]["id"]))
+            deleter.delete("season", "id = ?", (loose[0]["id"],))
+            merged += 1
+            touched.add(parent[1])
+            run.record("part_merge", entries[0]["id"], "applied",
+                       f"{parent[1]}: the unmatched part {loose[0]['id']} ({lo:g}–{hi:g}) and "
+                       f"the entry {entries[0]['anilist_id']} are one part")
+    for show in sorted(touched):  # the statuses of the two parts differed: the rules decide
+        status_rules.after_episodes_changed(conn, show, "rebuild", require_confirmed=False)
+    conn.commit()
+    run.record("part_duplicates", "all", "applied",
+               f"{merged} unmatched parts merged into their entry, {same} repeated entries removed")

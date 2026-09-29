@@ -24,7 +24,7 @@ import re
 import sqlite3
 
 from lcars import ids as ids_module
-from lcars import util
+from lcars import rebuild_reanchor, util
 
 GAP_START = "2026-09-06T08:53:00Z"
 EPISODE_TAG = re.compile(r"S(\d+)E(\d+)")
@@ -83,6 +83,13 @@ class Mapper:
         and air date when that is unique."""
         le = self.live.execute("SELECT * FROM episode WHERE show_id = ? AND season = ? AND"
                                " episode = ?", (live_show_id, season, episode)).fetchone()
+        if le is not None:  # the same episode by title and air date (R1.2f), wherever TVDB put it
+            same = [r for r in self.conn.execute(
+                "SELECT * FROM episode WHERE show_id = ? AND season > 0", (show_id,))
+                if rebuild_reanchor.same_episode(le["title"], le["air_date_utc"], r["title"],
+                                                 r["air_date_utc"])]
+            if len(same) == 1:
+                return same[0]
         cs = season if le is None or le["sonarr_season"] is None else le["sonarr_season"]
         ce = episode if le is None or le["sonarr_episode"] is None else le["sonarr_episode"]
         row = self.conn.execute("SELECT * FROM episode WHERE show_id = ? AND season = ? AND"

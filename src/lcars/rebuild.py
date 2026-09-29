@@ -324,7 +324,8 @@ def stage_structure(run: Run) -> None:
         " WHERE z.anilist_id IS NOT NULL"))
     conn.execute("DETACH DATABASE live")
     changed = gained = 0
-    for show in conn.execute("SELECT id FROM show WHERE tracked = 1").fetchall():
+    for show in conn.execute("SELECT id FROM show WHERE tracked = 1 AND"
+                             " media_shape != 'movie'").fetchall():  # films: R3.2a
         sid = show["id"]
         today = live_ids.get(sid)
         if today is None:
@@ -427,6 +428,7 @@ def stage_structure(run: Run) -> None:
         redirects.unlink()
     rebuild_cleanup.structure_actions(run, conn, rebuild_cleanup.load_inputs(run))
     _source_ids_from_live(run, conn)
+    rebuild_cleanup.film_ids(run, conn)
     run.record("stage", "structure", "applied", "")
 
 
@@ -1103,17 +1105,29 @@ def stage_statuses(run: Run) -> None:
     _part_spans(run, conn)
     _link_list_levels(run, conn)
 
-    # R2.7 on the statuses you decided: a completed season has its episodes watched.
-    marked = 0
+    # R2.7 on the statuses you decided: a completed season has its episodes watched (an
+    # episode that has not aired is never marked, and a level that holds one is watching,
+    # not completed: 2026-09-29).
+    marked = held = 0
+    today = util.now_utc_iso()[:10]
     # (Yours, or an AniList/MAL entry that says completed: R4.8a marks its episodes too.)
     for z in conn.execute("SELECT * FROM season WHERE status = 'completed' AND"
                           " (status_set_manually = 1 OR anilist_id IS NOT NULL"
                           "  OR mal_id IS NOT NULL)").fetchall():
         eps = status_rules.level_episodes(conn, z)
-        if any(e["state"] != "watched" for e in eps):
-            status_rules._mark_watched(conn, z["show_id"], eps, status_rules.Effects())
+        unaired = [e for e in eps if e["air_date_utc"] and e["air_date_utc"][:10] > today]
+        aired = [e for e in eps if e not in unaired]
+        if any(e["state"] != "watched" for e in aired):
+            status_rules._mark_watched(conn, z["show_id"], aired, status_rules.Effects())
             marked += 1
-    run.record("r2_7", "your completed seasons", "applied", f"{marked} seasons' episodes marked")
+        if unaired:
+            status_rules.set_level_status(
+                conn, z["id"], "watching" if any(e["state"] == "watched" for e in eps)
+                else "planned", "rebuild", confirmed=True, manual=bool(z["status_set_manually"]))
+            held += 1
+    run.record("r2_7", "your completed seasons", "applied",
+               f"{marked} seasons' episodes marked; {held} levels with an unaired episode are"
+               f" not completed")
     conn.commit()
 
     # The 216 Trakt drops: on the last season that has aired (decision 1).
