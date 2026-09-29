@@ -649,6 +649,17 @@ Read back from the page's `decisions` collection (228 entries).
     with a list id may delete it from AniList/MAL (R2.10); ALDNOAH.ZERO S2 completed → a COMPLETED
     push in the write list.
 
+11. **R2.15a — a confirmed episode count** (user, 2026-09-29, from Overgeared S01E01 completing the
+    whole show on live): a level completes by itself only when every episode is watched and its
+    count is confirmed (AniList total = the episodes LCARS holds, release status irrelevant; or, with
+    no list entry, an ended series (Sonarr) or a later season; or set by you). Built:
+    `season.episode_total`, `show.series_status`, `status_rules.episode_count_confirmed`, totals
+    from the AniList/MAL list poll. **Past seasons are not reviewed**: the rebuild's stage 6 derives
+    historical data with `require_confirmed=False` (output identical to before: 28,607 watched
+    episodes, same statuses); the gate applies to new watches, the replay (stage 8) and refreshes.
+    Known limit: TV shows not in Sonarr have no series status yet, so their latest season completes
+    only when a later season exists or you set it.
+
 ## Watches during the rebuild (keep until cutover)
 
 The user keeps watching while the rebuild runs (v0.2.70 still live). All of it must
