@@ -335,16 +335,31 @@ def check_planned_with_watched_episode(conn):
 
 
 def check_all_watched_is_completed(conn):
-    return _finding(
-        conn,
-        "R2.15",
-        "A season with every episode watched is completed",
-        "violation",
-        f"SELECT * FROM ({_season_episode_counts(conn)}) WHERE n > 0 AND w = n"
-        " AND COALESCE(status, '') <> 'completed'",
-        fmt=lambda r: f"{r['show']} S{r['season_number']} is {r['status']} ({r['w']}/{r['n']})",
-        note="Before phase 2 counted per TVDB season number; per level (part, special) after.",
-    )
+    """R2.15 with R2.15a: a level with every episode watched is completed — when its
+    episode count is confirmed (an unconfirmed one, an airing season, stays watching)."""
+    from lcars import status_rules
+
+    title = "A season with every episode watched is completed (its count confirmed, R2.15a)"
+    note = "Before phase 2 counted per TVDB season number; per level (part, special) after."
+    if not _has(conn, "season", "episode_total"):  # a database from before R2.15a
+        return _finding(
+            conn, "R2.15", title, "violation",
+            f"SELECT * FROM ({_season_episode_counts(conn)}) WHERE n > 0 AND w = n"
+            " AND COALESCE(status, '') <> 'completed'",
+            fmt=lambda r: f"{r['show']} S{r['season_number']} is {r['status']} ({r['w']}/{r['n']})",
+            note=note)
+    rows = conn.execute(
+        f"SELECT z.id AS zid, {_TITLE} AS show, z.season_number, z.status, COUNT(e.id) AS n,"
+        " SUM(e.state = 'watched') AS w FROM season z JOIN show sh ON sh.id = z.show_id"
+        " JOIN episode e ON e.show_id = z.show_id AND e.season = z.season_number"
+        " WHERE sh.tracked = 1 AND z.season_number > 0 AND COALESCE(z.status, '') NOT IN"
+        " ('completed', 'skipped') GROUP BY z.id HAVING n > 0 AND w = n").fetchall()
+    bad = []
+    for r in rows:
+        level = conn.execute("SELECT * FROM season WHERE id = ?", (r["zid"],)).fetchone()
+        if status_rules.episode_count_confirmed(conn, level, r["n"]):
+            bad.append(f"{r['show']} S{r['season_number']} is {r['status']} ({r['w']}/{r['n']})")
+    return Finding("R2.15", title, "violation", len(bad), bad[:SAMPLE_SIZE], note)
 
 
 def check_completed_has_all_watched(conn):

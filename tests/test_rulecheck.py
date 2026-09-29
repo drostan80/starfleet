@@ -169,3 +169,28 @@ def test_a_films_tvdb_movie_id_is_its_tvdb_link(db_path):
     conn = rulecheck.open_readonly(str(db_path))
     finding = next(f for f in rulecheck.run(conn) if f.rule == "R3.2")
     assert finding.count == 1 and "No Link" in finding.samples[0]
+
+
+def _watched_level(db_path, total, status="watching"):
+    _show(db_path, "s-r215a1", "Airing Show", status="watching", tvdb="900")
+    _write(db_path, "INSERT INTO season (id, show_id, season_number, source, status, kind,"
+           " episode_total, anilist_id, created_at, updated_at) VALUES ('z-r215a1', 's-r215a1', 1,"
+           " 'manual', ?, 'tvdb_season', ?, 5, ?, ?)", (status, total, NOW, NOW))
+    for n in (1, 2):
+        _write(db_path, "INSERT INTO episode (id, show_id, season, episode, kind, state,"
+               " absolute_number, created_at, updated_at) VALUES (?, 's-r215a1', 1, ?, 'regular',"
+               " 'watched', ?, ?, ?)", (f"e-r215a{n}", n, n, NOW, NOW))
+
+
+def test_r215_an_unconfirmed_count_is_not_a_violation(db_path):
+    _watched_level(db_path, total=None)  # an airing season: no total yet (R2.15a)
+    finding = next(f for f in rulecheck.run(rulecheck.open_readonly(str(db_path)))
+                   if f.rule == "R2.15")
+    assert finding.count == 0
+
+
+def test_r215_a_confirmed_count_that_is_not_completed_is_one(db_path):
+    _watched_level(db_path, total=2)
+    finding = next(f for f in rulecheck.run(rulecheck.open_readonly(str(db_path)))
+                   if f.rule == "R2.15")
+    assert finding.count == 1 and "Airing Show S1" in finding.samples[0]

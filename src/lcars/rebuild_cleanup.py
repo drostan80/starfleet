@@ -205,6 +205,18 @@ def structure_actions(run, conn, c: dict) -> None:
                    f"→ {parent['id']} {f.get('status') or ''} ({f['why']})"
                    + (f"; list ids homed on {homed}" if homed else "").strip())
 
+    # 2b. a level that is a side piece, not a season (your 09-27 answer: Slime's "S6",
+    #     Visions of Coleus): a special level, placed by air date with its own numbers.
+    for a in c.get("as_special", []):
+        season = _season_holding(conn, "anilist", a["anilist"])
+        if season is None:
+            raise rb_error(f"as special: no tracked season holds anilist {a['anilist']}")
+        conn.execute("UPDATE season SET kind = 'special', season_number = NULL,"
+                     " decimal_season_number = NULL, parent_id = NULL, updated_at = ?"
+                     " WHERE id = ?", (util.now_utc_iso(), season["id"]))
+        run.record("cleanup_as_special", season["id"], "applied",
+                   f"anilist {a['anilist']}: {a['why']}")
+
     # 3. entries you skip stay as skip-list entries (R2.10: untracked, status skipped).
     for sid in c.get("skip_list", []):
         row = conn.execute("SELECT * FROM show WHERE id = ?", (sid,)).fetchone()

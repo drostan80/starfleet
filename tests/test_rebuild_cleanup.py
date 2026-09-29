@@ -184,6 +184,17 @@ class TestStructure:
                            " 'z-stub01'").fetchone()
         assert tuple(row) == ("completed", 1)
 
+    def test_a_side_piece_that_was_numbered_as_a_season_becomes_a_special_level(self, conn, run):
+        _show(conn, "s-slime1", "Slime", tvdb="600")
+        _season(conn, "z-slime5", "s-slime1", n=5, anilist=182205)
+        _season(conn, "z-slime6", "s-slime1", n=6, anilist=161802)
+        conn.commit()
+        rebuild_cleanup.structure_actions(run, conn, _inputs(as_special=[
+            {"anilist": 161802, "why": "Visions of Coleus is a side piece"}]))
+        rows = {r[0]: tuple(r[1:]) for r in conn.execute(
+            "SELECT id, kind, season_number FROM season")}
+        assert rows["z-slime6"] == ("special", None) and rows["z-slime5"] == ("tvdb_season", 5)
+
     def test_a_parent_that_is_not_there_stops_the_run(self, conn, run):
         _show(conn, "s-stub01", "Orphan", tracked=0)
         conn.commit()
