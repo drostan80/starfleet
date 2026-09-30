@@ -802,3 +802,11 @@ isn't on an airing show goes on the review list.
   `lcars.db.bak-20260930-pre-v0.3.1`: 0 TVDB / AniList / MAL writes, ~80 correct film TMDB/IMDB ids, no status /
   watch / episode changes. Open clean-ups (not blockers): Returner's Magic S2 stub holds the show's TVDB id;
   VIRGIN PUNK and Ghost in the Shell each tracked twice (AniList show + Radarr show).
+- **Clean-ups and reviews (user 09-30).** Scores: AniList wins — 109 seasons set to AniList's score (LCARS half points, MAL
+  mirrored). 9 new shows added to Sonarr (R5.5). 20 skipped seasons deleted from AniList/MAL (39 entries; skipped is never
+  on the lists — don't ask again). Urusei Yatsura: AniList 1293 spans TVDB S1–S4 by absolute number; AniList had
+  Completed 54 since 08-26 → set to 195 (code gap queued: an entry spanning several TVDB seasons is skipped by the list
+  sync as a conflict). Kanojo no Tomodachi rechecked: same show on every source; numbering kept season_episode (Sonarr:
+  standard). Film pairs merged (VIRGIN PUNK, Ghost in the Shell), Returner's Magic stub's TVDB id removed; rule applied to
+  14 side pieces (R2.15/R2.14, no list entries). 15 shows' metadata refreshed. Open reviews left: 138 width checks (wait
+  for the AniDB drip), 131 Fribb-unmatched (information).
