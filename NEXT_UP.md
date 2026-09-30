@@ -1,7 +1,48 @@
 # Next up
 
-Current version: **v0.2.70** (deployed 2026-09-26). Start from **HANDOFF-2026-09-26.md**, then the
-2026-09-26 afternoon section below.
+Current version: **v0.3.2** (live since 2026-09-30, rebuilt DB). Record: PLAN-DATA.md "Cutover (2026-09-30)",
+HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
+
+## Open work — consolidated 2026-09-30
+
+### A. Left over from the rebuild
+- [ ] **AniDB drip** — running (v0.3.2). 09-30 13:50Z: 40 anime fetched since 10:53, no ban; queue 1,100 backlog + 125
+      refreshes (watching/planned data from 09-12) ≈ 6 days at 200/day.
+- [ ] **Every Memory Alpha pass times out in ops** (found 09-30): `pollMemoryAlpha` exceeds ops's 120 s timeout on all
+      8 passes in 4 h. LCARS finishes the pass anyway (fetches land), so ops logs a failure each time; unverified
+      whether the renumber at the end of the pass completes.
+- [ ] **identity-mismatch check crashes** on levels with no season number (`_resolve_by_position`, None < 1), and
+      `reconcileSeasonMapping` the same (specials; last step of the daily sweep).
+- [ ] **Part order** — Bookworm S1, Dr. STONE S4 (data patch, after the drip); re-audit 16 multi-part seasons with a
+      part with no span once the drip is done.
+- [ ] **138 width checks** (should clear as AniDB data arrives) and **131 Fribb-unmatched** (information) — re-look
+      after the drip.
+- [ ] **List sync: one AniList entry spanning several TVDB seasons** is skipped as a conflict (Urusei Yatsura 1293).
+- [ ] **ops daily sweep dropped-connection handling** — unverified whether it recurs.
+- [ ] **`_seed_baseline` step 0** — seed skipped levels too, before any future rebuild.
+- [ ] **R3.7c/d/e** — two sources agreeing on a TVDB id attach it; TVDB id entry on the show page; unconfirmed TVDB
+      id → yes / no / here's-the-right-one review.
+- [ ] **8.8.3 / 8.8.5** — side-by-side evidence page; link provenance re-checked when Fribb later has data.
+- [ ] **7.5 / R4.9–R4.10** — AniList and MAL polls as one ordered loop; fixed time block.
+- [ ] **Expanded rulecheck / enforcement audit** (code + DB against the rulebook).
+- [ ] **Cutover review leftovers** (handoff §5): Haruhi 2006/2009 cours spans; 5 Urusei Yatsura films/specials with no
+      level; Battle Angel OVA no TVDB movie id; 51 unmapped AniList history entries, 78 unlinked levels, 67 held back;
+      Mushoku 146065 ep 0.
+- [ ] **Data TUI rework.**
+- [ ] **Key rotation** (Sonarr/Radarr/TMDB, MAL client_id, AniList client_secret) — at project end.
+
+### B. Carried over from before the rebuild
+- [ ] Service icons white until hard refresh (never reproduced/fixed; needs the user to see it fixed).
+- [ ] Secrets out of plaintext config; AniList metadata fallback scalar-only; franchise function.
+- [ ] Ideas: unified list page, Discover, Statistics, season-level external ids, Memory Alpha browse prefill +
+      add confirmation, art-fetch leftovers, IMDB datasets, studio browse, direct TVDB search, livechart
+      headlines, Grabs screen tweaks, Data recent-downloads page.
+
+### C. New (user, 2026-09-30)
+- [ ] **Scoring idea** — to be explained by the user.
+- [ ] **Schedule setter** — see every known air-date schedule for a show, one per source (e.g. AniList: Fridays
+      17:00; Syoboi: a different station/time; streaming), and pick the one that fits; LCARS then uses that
+      schedule for the show's air dates. Example of the view: https://www.livechart.me/anime/13417/schedules
 Full build history archived to `~/repos/starfleet-archive`.
 
 > Full account of the 2026-09-23 session (changes, data operations, backups,
