@@ -734,6 +734,19 @@ def add_checked(conn, input: dict, *, add_to_sonarr: bool = True) -> str:
     raise ShowInputError(d.reason or f"not added ({d.kind})")
 
 
+def _check_tvdb_rules(input: dict) -> None:
+    """R1.14a (user, 2026-09-30): a tracked series is created only with its TVDB id — without
+    one it is an individual season (R3.2, add_check), or a show you agreed has none (R3.3,
+    `no_tvdb_ok`); a film never carries a TVDB series id (R3.2a)."""
+    if input["media_shape"] == "movie" and input.get("tvdb_id") is not None:
+        raise ShowInputError("a film carries its TVDB movie id, never a series id (R3.2a)")
+    if (input["media_shape"] == "episodic" and input.get("tvdb_id") is None
+            and not input.get("no_tvdb_ok")):
+        raise ShowInputError(
+            "a tracked series needs its TVDB id (R1.14a) — add it as an individual season"
+            " until TVDB has it")
+
+
 def create_show(conn, input: dict) -> str:
     """§5.1, A.4/A.8 — inserts the `show` row, its external-id links,
     then runs the on-demand metadata fetch (A.8: episodes, AniList
@@ -824,6 +837,7 @@ def create_show(conn, input: dict) -> str:
 
     if not skip_sequel_check:
         _check_later_season_pre_add(conn, input.get("anilist_id"))
+    _check_tvdb_rules(input)
 
     show_id = ids.generate_id(conn, "s")
     now = util.now_utc_iso()

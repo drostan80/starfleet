@@ -49,7 +49,7 @@ free — no separate due-tracking of its own — and a show this pass does
 resolve is never reconsidered.
 """
 
-from lcars import fribb, season_ranges, shows
+from lcars import fribb, season_ranges, tvdb_guard
 
 
 def backfill_tvdb_ids(conn) -> int:
@@ -83,7 +83,8 @@ def backfill_tvdb_ids(conn) -> int:
         tvdb_id = fribb.resolve_tvdb_id_for_anilist(index, anilist_id)
         if tvdb_id is None:
             continue
-        if shows.write_tvdb_id(conn, row["show_id"], tvdb_id):
+        # Fribb alone is one source: a review, never a blind link (R1.14a, R3.7e)
+        if tvdb_guard.offer(conn, row["show_id"], tvdb_id, "fribb") == tvdb_guard.WRITTEN:
             updated += 1
     conn.commit()
     return updated

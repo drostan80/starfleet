@@ -351,17 +351,23 @@ class TestWikidataTvPropagation:
         self.conn.commit()
 
     def test_propagates_tvdb_from_wikidata(self):
+        from unittest import mock
+
+        from lcars import tvdb_guard
         from lcars.anidb import propagate_cross_ids
 
+        # Wikidata alone is one source (R1.14a, R3.7e, 2026-09-30): offered to the guard
+        # (which opens a review), never written blind.
         wikidata = [{"tvdb": "123", "tmdb": "456", "imdb": "tt999"}]
-        counts = propagate_cross_ids(self.conn, [], wikidata)
-        assert counts["tvdb"] == 1
-
+        with mock.patch.object(tvdb_guard, "offer", return_value=tvdb_guard.REVIEW) as offer:
+            counts = propagate_cross_ids(self.conn, [], wikidata)
+        assert counts["tvdb"] == 0
+        offer.assert_called_once_with(self.conn, "s-tv001", "123", "wikidata")
         row = self.conn.execute(
             "SELECT external_id FROM show_external_id"
             " WHERE show_id = 's-tv001' AND service = 'tvdb'"
         ).fetchone()
-        assert row[0] == "123"
+        assert row is None
 
     def test_no_overwrite_existing_tvdb(self):
         from lcars.anidb import propagate_cross_ids
@@ -434,7 +440,8 @@ class TestPropagateFullGraph:
         assert row[0] == "9999"
 
     def test_anidb_rooted_fribb_fallback(self):
-        """Phase 2b: AniDB-only show gets AniList/MAL/TMDB/IMDB from Fribb."""
+        """Phase 2b: AniDB-only show gets TMDB/IMDB from Fribb — never AniList/MAL, which
+        are season level (R1.23, 2026-09-30)."""
         from lcars.anidb import propagate_cross_ids
 
         # An anime show with only AniDB (no AniList)
@@ -449,23 +456,25 @@ class TestPropagateFullGraph:
                   "tvdb_id": 555}]
 
         counts = propagate_cross_ids(self.conn, fribb)
-        assert counts["anilist"] == 1
-        assert counts["mal"] == 1
+        assert counts["anilist"] == 0
+        assert counts["mal"] == 0
         assert counts["tmdb"] == 1
         assert counts["imdb"] == 1
 
-        # Check all IDs were inserted
         ids = dict(self.conn.execute(
             "SELECT service, external_id FROM show_external_id"
             " WHERE show_id = 's1' ORDER BY service"
         ).fetchall())
-        assert ids["anilist"] == "111"
-        assert ids["mal"] == "222"
+        assert "anilist" not in ids and "mal" not in ids
         assert ids["tmdb"] == "333"
         assert ids["imdb"] == "tt0004444"
 
     def test_anime_lists_tmdb_imdb_propagation(self):
-        """Phase 3: anime_list_entry fills TMDB and IMDB alongside TVDB."""
+        """Phase 3: anime_list_entry fills TMDB and IMDB; its TVDB id is offered to the
+        guard (one source: a review, R3.7e)."""
+        from unittest import mock
+
+        from lcars import tvdb_guard
         from lcars.anidb import propagate_cross_ids
 
         # Show with AniDB but no TMDB/IMDB
@@ -481,8 +490,10 @@ class TestPropagateFullGraph:
             " VALUES (100, '200', 0, 300, 'tt0000300')")
         self.conn.commit()
 
-        counts = propagate_cross_ids(self.conn, [])
-        assert counts["tvdb"] == 1
+        with mock.patch.object(tvdb_guard, "offer", return_value=tvdb_guard.REVIEW) as offer:
+            counts = propagate_cross_ids(self.conn, [])
+        assert counts["tvdb"] == 0
+        offer.assert_called_once_with(self.conn, "s1", "200", "anime-lists")
         assert counts["tmdb"] == 1
         assert counts["imdb"] == 1
 
@@ -507,19 +518,18 @@ class TestPropagateFullGraph:
 
         counts = propagate_cross_ids(self.conn, fribb)
 
-        # Phase 1 seeded AniDB, phase 2b filled the rest
+        # Phase 1 seeded AniDB, phase 2b filled the rest (never AniList/MAL on the show, R1.23)
         assert counts["anidb"] == 1
-        assert counts["anilist"] == 1
-        assert counts["mal"] == 1
+        assert counts["anilist"] == 0
+        assert counts["mal"] == 0
         assert counts["tmdb"] == 1
         assert counts["imdb"] == 1
 
-        # Verify all 6 services are populated
         services = [r[0] for r in self.conn.execute(
             "SELECT service FROM show_external_id"
             " WHERE show_id = 's1' ORDER BY service"
         ).fetchall()]
-        assert sorted(services) == ["anidb", "anilist", "imdb", "mal", "tmdb", "tvdb"]
+        assert sorted(services) == ["anidb", "imdb", "tmdb", "tvdb"]
 
     def test_insert_only_never_overwrites(self):
         """Existing IDs (manual corrections) are never overwritten."""

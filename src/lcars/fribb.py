@@ -280,6 +280,14 @@ def build_anidb_index(dataset: list[dict]) -> dict[int, list[dict]]:
     return index
 
 
+def tmdb_scalar(value):
+    """Fribb gives a film's TMDB id as a list (`{"movie": [4935]}`): one id is that id,
+    several are ambiguous (None). Stored as a list it matched nothing (09-30: `[4935]`)."""
+    if isinstance(value, list):
+        return value[0] if len(value) == 1 else None
+    return value
+
+
 def resolve_ids_for_anidb(
     index: dict[int, list[dict]], anidb_id: int
 ) -> dict[str, int | str | None]:
@@ -306,7 +314,7 @@ def resolve_ids_for_anidb(
     for c in candidates:
         tmdb = c.get("themoviedb_id")
         if tmdb:
-            tid = tmdb.get("tv") or tmdb.get("movie")
+            tid = tmdb_scalar(tmdb.get("tv")) or tmdb_scalar(tmdb.get("movie"))
             if tid:
                 tmdb_id = tid
                 tmdb_kind = "tv" if tmdb.get("tv") else "movie"

@@ -301,6 +301,7 @@ def propagate_cross_ids(conn, fribb_dataset: list[dict],
     import sqlite3
 
     from lcars import fribb as fribb_mod
+    from lcars import tvdb_guard
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     counts = {"anidb": 0, "anilist": 0, "mal": 0,
@@ -380,7 +381,7 @@ def propagate_cross_ids(conn, fribb_dataset: list[dict],
                   OR adb.external_id IS NOT NULL)"""
     ).fetchall()
 
-    for show_id, _media_shape, anilist_id_str, anidb_id_str in shows:
+    for show_id, media_shape, anilist_id_str, anidb_id_str in shows:
         # Phase 2a: AniList-rooted Fribb lookup (primary path)
         fribb = None
         if anilist_id_str:
@@ -388,21 +389,15 @@ def propagate_cross_ids(conn, fribb_dataset: list[dict],
             fribb = al_index.get(anilist_id)
 
         if fribb:
-            # ── MAL ──
-            if fribb.get("mal_id"):
-                mal_id = fribb["mal_id"]
-                before = conn.total_changes
-                _insert(show_id, "mal", mal_id,
-                        f"https://myanimelist.net/anime/{mal_id}")
-                if conn.total_changes > before:
-                    counts["mal"] += 1
+            # MAL is never written on the show: AniList/MAL ids are season level (R1.23).
 
             # ── TMDB ──
             if fribb.get("themoviedb_id"):
                 tmdb = fribb["themoviedb_id"]
-                tmdb_id = tmdb.get("tv") or tmdb.get("movie")
-                if tmdb_id:
-                    kind = "tv" if tmdb.get("tv") else "movie"
+                tmdb_id = (fribb_mod.tmdb_scalar(tmdb.get("tv"))
+                           or fribb_mod.tmdb_scalar(tmdb.get("movie")))
+                kind = "tv" if tmdb.get("tv") else "movie"
+                if tmdb_id and not (media_shape == "movie" and kind == "tv"):  # R3.2a
                     url = f"https://www.themoviedb.org/{kind}/{tmdb_id}"
                     before = conn.total_changes
                     _insert(show_id, "tmdb", tmdb_id, url)
@@ -427,21 +422,11 @@ def propagate_cross_ids(conn, fribb_dataset: list[dict],
             resolved = fribb_mod.resolve_ids_for_anidb(
                 anidb_index, int(anidb_id_str))
 
-            if resolved["anilist_id"]:
-                before = conn.total_changes
-                _insert(show_id, "anilist", resolved["anilist_id"],
-                        f"https://anilist.co/anime/{resolved['anilist_id']}")
-                if conn.total_changes > before:
-                    counts["anilist"] += 1
+            # AniList/MAL are never written on the show (R1.23, user 2026-09-30).
 
-            if resolved["mal_id"]:
-                before = conn.total_changes
-                _insert(show_id, "mal", resolved["mal_id"],
-                        f"https://myanimelist.net/anime/{resolved['mal_id']}")
-                if conn.total_changes > before:
-                    counts["mal"] += 1
-
-            if resolved["tmdb_id"]:
+            # a film takes its film TMDB id, never its series' (R3.2a)
+            if resolved["tmdb_id"] and not (media_shape == "movie"
+                                            and resolved["tmdb_kind"] != "movie"):
                 kind = resolved["tmdb_kind"] or "tv"
                 before = conn.total_changes
                 _insert(show_id, "tmdb", resolved["tmdb_id"],
@@ -468,14 +453,13 @@ def propagate_cross_ids(conn, fribb_dataset: list[dict],
 
                 # TVDB
                 if ale_tvdb and str(ale_tvdb).isdigit():
-                    before = conn.total_changes
-                    _insert(show_id, "tvdb", ale_tvdb,
-                            f"https://thetvdb.com/dereferrer/series/{ale_tvdb}")
-                    if conn.total_changes > before:
+                    # one source only: a review, never a blind link (R1.14a, R3.7e)
+                    outcome = tvdb_guard.offer(conn, show_id, ale_tvdb, "anime-lists")
+                    if outcome == tvdb_guard.WRITTEN:
                         counts["tvdb"] += 1
 
-                # TMDB (from anime-lists tmdb_tv)
-                if ale_tmdb:
+                # TMDB (from anime-lists tmdb_tv) — a series id, never on a film (R3.2a)
+                if ale_tmdb and media_shape != "movie":
                     before = conn.total_changes
                     _insert(show_id, "tmdb", ale_tmdb,
                             f"https://www.themoviedb.org/tv/{ale_tmdb}")
@@ -521,12 +505,10 @@ def propagate_cross_ids(conn, fribb_dataset: list[dict],
                 tvdb_id = tmdb_to_tvdb.get(tmdb_id)
             if tvdb_id is None and imdb_id:
                 tvdb_id = imdb_to_tvdb.get(imdb_id)
-            if tvdb_id:
-                before = conn.total_changes
-                _insert(show_id, "tvdb", tvdb_id,
-                        f"https://thetvdb.com/dereferrer/series/{tvdb_id}")
-                if conn.total_changes > before:
-                    counts["tvdb"] += 1
+            # one source only: a review (R1.14a, R3.7e)
+            if tvdb_id and (tvdb_guard.offer(conn, show_id, tvdb_id, "wikidata")
+                            == tvdb_guard.WRITTEN):
+                counts["tvdb"] += 1
 
     conn.commit()
     return counts

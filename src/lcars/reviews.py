@@ -25,6 +25,8 @@ Kinds with choices:
 - `tvdb_link` — an add whose TVDB link nothing confirmed (PLAN-CODE 8.8): link
   it (or "despite" its mismatches) / link the TVDB id in your note / keep it an
   individual season.
+- `tvdb_candidate` — a TVDB id only one source suggests for an existing show (R3.7e): it is
+  this show / it isn't / the TVDB id in your note is (R1.14 and R3.2a still apply).
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ LABELS = {
     "link_tvdb": "Link this TVDB show",
     "link_tvdb_despite": "Link this TVDB show despite the mismatches",
     "link_other_tvdb": "Link the TVDB id in my note instead",
+    "reject_tvdb": "Not this show",
     "keep_individual": "Keep it an individual season for now",
     "re_add": "Add it back to the list",
     "stop_mirroring": "Stop mirroring this season to that list",
@@ -184,6 +187,10 @@ def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | N
         from lcars import tvdb_vetting
 
         tvdb_vetting.resolve(conn, payload, choice, note)
+    elif field == "tvdb_candidate":
+        from lcars import tvdb_guard
+
+        tvdb_guard.resolve(conn, row["entity_id"], payload, choice, note)
     elif field == "same_tvdb_show" and choice == "merge":
         result = consolidation.apply_group(conn, payload["tvdb_id"], fribb.load_dataset())
         if not result.get("merged"):

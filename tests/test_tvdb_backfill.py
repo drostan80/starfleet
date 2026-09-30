@@ -5,6 +5,7 @@ call is monkeypatched, same as test_server.py's own reconcileSeasonMapping
 tests do).
 """
 
+import json
 import os
 import sqlite3
 import subprocess
@@ -64,12 +65,13 @@ def test_backfills_a_real_tvdb_id_from_a_known_anilist_id(conn, monkeypatch):
         fribb, "load_dataset", lambda: [{"anilist_id": 20613, "tvdb_id": 279328}]
     )
 
+    # Fribb alone is one source (R1.14a, R3.7e, 2026-09-30): a review, not a link
     updated = tvdb_backfill.backfill_tvdb_ids(conn)
-    assert updated == 1
-    link = _tvdb_link(conn, "s-tvb001")
-    assert link is not None
-    assert link["external_id"] == "279328"
-    assert link["url"] == "https://thetvdb.com/dereferrer/series/279328"
+    assert updated == 0
+    assert _tvdb_link(conn, "s-tvb001") is None
+    review = conn.execute("SELECT payload FROM pending_review WHERE entity_id = 's-tvb001'"
+                          " AND field = 'tvdb_candidate'").fetchone()
+    assert json.loads(review["payload"]) == {"tvdb_id": "279328", "source": "fribb"}
 
 
 def test_skips_a_show_that_already_has_a_tvdb_link(conn, monkeypatch):
@@ -166,6 +168,6 @@ def test_multiple_candidates_resolved_in_one_pass(conn, monkeypatch):
     )
 
     updated = tvdb_backfill.backfill_tvdb_ids(conn)
-    assert updated == 2
-    assert _tvdb_link(conn, "s-tvb007")["external_id"] == "100"
-    assert _tvdb_link(conn, "s-tvb008")["external_id"] == "200"
+    assert updated == 0  # each one a review for you (R3.7e)
+    assert conn.execute("SELECT COUNT(*) FROM pending_review WHERE field = 'tvdb_candidate'"
+                        ).fetchone()[0] == 2

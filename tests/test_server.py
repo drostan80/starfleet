@@ -144,6 +144,8 @@ async def add_show(client, **overrides) -> dict:
         "tvdbId": next(_next_tvdb_id),
         **overrides,
     }
+    if input_["mediaShape"] == "MOVIE" and "tvdbId" not in overrides:
+        input_["tvdbId"] = None  # a film never carries a TVDB series id (R3.2a)
     if input_["tvdbId"] is None:
         del input_["tvdbId"]
     data = await gql(
@@ -9610,15 +9612,22 @@ async def test_backfill_tvdb_ids_returns_zero_with_no_candidates(client):
     assert data["backfillTvdbIds"] == {"showsUpdated": 0}
 
 
-async def test_backfill_tvdb_ids_writes_a_real_link_end_to_end(client, monkeypatch):
-    from lcars import fribb
+async def test_backfill_tvdb_ids_asks_you_end_to_end(client, monkeypatch):
+    """Fribb alone is one source (R1.14a, R3.7e, 2026-09-30): the id is a review, not a link;
+    your "yes" links it."""
+    from lcars import fribb, reviews
 
     show = await add_show_without_tvdb(client, titleRomaji="Akame ga Kill!", anilistId=20613)
     monkeypatch.setattr(
         fribb, "load_dataset", lambda: [{"anilist_id": 20613, "tvdb_id": 279328}]
     )
     data = await gql(client, BACKFILL_TVDB_IDS, headers=auth_headers())
-    assert data["backfillTvdbIds"] == {"showsUpdated": 1}
+    assert data["backfillTvdbIds"] == {"showsUpdated": 0}
+    assert await _external_id_url(client, show["id"], "tvdb") is None
+    conn = db.get_connection()
+    review = conn.execute("SELECT id FROM pending_review WHERE entity_id = ? AND field ="
+                          " 'tvdb_candidate'", (show["id"],)).fetchone()
+    reviews.resolve_choice(conn, review["id"], "link_tvdb", "data", None)
     assert await _external_id_url(client, show["id"], "tvdb") == (
         "https://thetvdb.com/dereferrer/series/279328"
     )

@@ -403,8 +403,11 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
 
                 # Also backfill TVDB/IMDB/TMDB from TVmaze if we're missing them
                 externals = show_data.get("externals", {})
-                _backfill_id(conn, show_id, "tvdb", externals.get("thetvdb"),
-                             "https://thetvdb.com/dereferrer/series/{}", now)
+                if externals.get("thetvdb"):  # one source only: a review (R1.14a, R3.7e)
+                    from lcars import tvdb_guard
+
+                    tvdb_guard.offer(conn, show_id, externals["thetvdb"], "tvmaze")
+                    conn.commit()
                 _backfill_id(conn, show_id, "imdb", externals.get("imdb"),
                              "https://www.imdb.com/title/{}/", now)
                 # TVmaze carries TMDB IDs under "themoviedb" in externals
