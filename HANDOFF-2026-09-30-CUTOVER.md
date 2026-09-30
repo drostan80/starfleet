@@ -148,6 +148,11 @@ This machine's `lcars.ini` has tiny's old IP: never edit it, pass the URLs as ab
 
 ## 6. After go-live (queued, not today)
 
+**Step 0 of any future rebuild (user 09-30; not needed while the live setup runs — the baseline then
+maintains itself):** `rebuild_writes._seed_baseline` skips `skipped` levels, so their list entries get no
+baseline and the first intake poll takes the list's value as an edit (what went wrong at cutover). Fix it
+before re-running a rebuild: seed every level that holds a list id, skipped included.
+
 **Queued, data only (user 09-30, decided to wait until go-live is settled / the AniDB drip is done):** parts are
 numbered out of span order in two shows — Bookworm S1 (now 1–14, 37–60, 15–26, 27–36; should be
 1–14, 15–26, 27–36, 37–60) and Dr. STONE S4 (now 82–94, 58–69, 70–81; should be 58–69, 70–81, 82–94).
