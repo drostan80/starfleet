@@ -24,7 +24,7 @@ from pathlib import Path
 
 import httpx
 
-from lcars import db, fribb, sonarr_match
+from lcars import db, fribb, sonarr_match, util
 
 log = logging.getLogger(__name__)
 
@@ -1257,7 +1257,10 @@ def _load_entries_for_tvdb(conn, tvdb_id: str) -> list[dict]:
 ANIDB_API_URL = "http://api.anidb.net:9001/httpapi"
 ANIDB_CLIENT = "memalpha"
 ANIDB_CLIENT_VER = 1
-ANIDB_RATE_LIMIT_SECONDS = 2.1  # slightly above 2s to stay safe
+ANIDB_RATE_LIMIT_SECONDS = 4.0  # AniDB asks >= 2 s; 4 s stays well clear (user 09-30)
+ANIDB_REFRESH_DAYS = 7  # watching/planned anime are re-fetched weekly once the backlog is done
+ANIDB_BAN_BACKOFF_SECONDS = 24 * 3600
+_banned_until: float = 0.0  # in-process: a restart forgets it (one request, then back off)
 ANIDB_DAILY_CAP = 200  # anime per UTC day (user, 2026-09-28)
 
 # Module-level timestamp for rate limiting across calls within one tick.
@@ -1451,23 +1454,60 @@ def _write_tombstone(conn, anidb_anime_id: int, fetched_at: str):
         """INSERT INTO anidb_episode
            (anidb_anime_id, anidb_season, anidb_epno, fetched_at)
            VALUES (?, 1, 0, ?)
-           ON CONFLICT DO NOTHING""",
+           ON CONFLICT (anidb_anime_id, anidb_season, anidb_epno)
+           DO UPDATE SET fetched_at = excluded.fetched_at""",
         (anidb_anime_id, fetched_at),
     )
     conn.commit()
 
 
-def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
-    """Fetch AniDB episodes for up to `limit` shows that need them.
+def drip_queue(conn, limit: int, now: str) -> list[int]:
+    """The AniDB anime to fetch next (user order 2026-09-28/30): every AniDB id behind a tracked
+    anime show (TVDB → anime-lists, or an AniDB id the show holds). First the ones with no
+    data — watching shows, then planned, then the rest; then refreshes — anime of watching or
+    planned shows whose data is older than ANIDB_REFRESH_DAYS, oldest first."""
+    if limit <= 0:
+        return []
+    cutoff = util.add_days(now, -ANIDB_REFRESH_DAYS)
+    rank = ("CASE sh.status WHEN 'watching' THEN 0 WHEN 'planned' THEN 1 ELSE 2 END")
+    rows = conn.execute(
+        f"""WITH wanted AS (
+              SELECT ale.anidb_id AS aid, {rank} AS rk
+              FROM show sh
+              JOIN show_external_id x ON x.show_id = sh.id AND x.service = 'tvdb'
+              JOIN anime_list_entry ale ON ale.tvdb_id = x.external_id
+              WHERE sh.tracked = 1 AND sh.tracking_space = 'anime'
+              UNION ALL
+              SELECT CAST(x.external_id AS INTEGER), {rank}
+              FROM show sh JOIN show_external_id x ON x.show_id = sh.id AND x.service = 'anidb'
+              WHERE sh.tracked = 1 AND sh.tracking_space = 'anime'),
+            best AS (SELECT aid, MIN(rk) AS rk FROM wanted WHERE aid > 0 GROUP BY aid),
+            have AS (SELECT anidb_anime_id AS aid, MAX(fetched_at) AS at FROM anidb_episode
+                     GROUP BY anidb_anime_id)
+            SELECT b.aid FROM best b LEFT JOIN have h ON h.aid = b.aid
+            WHERE h.aid IS NULL OR (b.rk <= 1 AND h.at < ?)
+            ORDER BY h.aid IS NOT NULL, CASE WHEN h.aid IS NULL THEN b.rk ELSE 0 END,
+                     h.at, b.aid
+            LIMIT ?""",
+        (cutoff, limit),
+    ).fetchall()
+    return [r[0] for r in rows]
 
-    Picks shows that have AniDB mappings but no anidb_episode rows yet.
+
+def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
+    """Fetch AniDB episodes for up to `limit` anime from `drip_queue`: the backlog first, then
+    weekly refreshes of watching/planned shows. At most ANIDB_DAILY_CAP anime per UTC day
+    (refreshes count); after a ban, nothing is asked for ANIDB_BAN_BACKOFF_SECONDS.
     Returns stats: {fetched, episodes_stored, skipped, banned}.
     """
+    global _banned_until
     from lcars import service_health
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     stats = {"fetched": 0, "episodes_stored": 0, "skipped": 0,
              "banned": False}
+    if time.time() < _banned_until:
+        return stats  # banned recently: asking again only extends the ban
     # AniDB bans an IP after ~250 requests (2026-09-28, twice): at most
     # ANIDB_DAILY_CAP anime per UTC day, counted from what was stored today.
     fetched_today = conn.execute(
@@ -1475,21 +1515,7 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
         (now[:10],),
     ).fetchone()[0]
     limit = min(limit, max(0, ANIDB_DAILY_CAP - fetched_today))
-    if limit == 0:
-        return stats
-
-    # Find AniDB anime IDs that have episode mappings but no episode data
-    rows = conn.execute(
-        """SELECT DISTINCT m.anidb_anime_id
-           FROM episode_anidb_mapping m
-           WHERE NOT EXISTS (
-             SELECT 1 FROM anidb_episode ae
-             WHERE ae.anidb_anime_id = m.anidb_anime_id
-           )
-           LIMIT ?""",
-        (limit,),
-    ).fetchall()
-
+    rows = [(aid,) for aid in drip_queue(conn, limit, now)]
     if not rows:
         return stats
 
@@ -1500,6 +1526,7 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
 
             if result == "BANNED":
                 stats["banned"] = True
+                _banned_until = time.time() + ANIDB_BAN_BACKOFF_SECONDS
                 service_health.record_failure(conn, "anidb", "client banned")
                 conn.commit()
                 log.error("AniDB ban detected, aborting drip fetch")
