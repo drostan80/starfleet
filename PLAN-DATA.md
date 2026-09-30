@@ -810,3 +810,8 @@ isn't on an airing show goes on the review list.
   standard). Film pairs merged (VIRGIN PUNK, Ghost in the Shell), Returner's Magic stub's TVDB id removed; rule applied to
   14 side pieces (R2.15/R2.14, no list entries). 15 shows' metadata refreshed. Open reviews left: 138 width checks (wait
   for the AniDB drip), 131 Fribb-unmatched (information).
+- **AniDB drip (v0.3.2, deployed 09-30 10:53).** The old queue read an empty mapping table, so nothing was fetched or
+  refreshed. Now: every AniDB id behind a tracked anime show; backlog first (watching → planned → rest), then weekly
+  refresh of watching/planned; 5 per pass, 200/day, 4 s pacing, 24 h back-off after a ban. First pass fetched the
+  expected 5 (Dangers in My Heart film, Tempal, then planned tier); no ban, nothing else changed. Backlog 1,147 → ~6 days.
+  No second IP (user rule 09-28: never rotate IPs to get around AniDB's limit).
