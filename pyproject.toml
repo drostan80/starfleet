@@ -10,6 +10,8 @@ requires-python = ">=3.12"
 dependencies = [
     # Schema-first GraphQL, hand-written SDL wired to resolvers — SCOPE.md §11.1.
     "ariadne>=0.23",
+    # graphql-core 3.3.0 (09-30) breaks ariadne 1.1.0 (no ExecutionContext): stay on 3.2.x.
+    "graphql-core>=3.2,<3.3",
     # ASGI server to run the Ariadne app; async matches aniq's own httpx-based
     # convention (CLAUDE.md, aniq repo) for the outbound Sonarr/AniList/MAL calls
     # LCARS grows in Phase B.
@@ -80,3 +82,5 @@ select = ["E", "F", "I", "UP", "B", "RUF100"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# tests import each other as `tests.<module>`; bare `pytest` needs the repo root on the path
+pythonpath = ["."]
