@@ -786,3 +786,10 @@ isn't on an airing show goes on the review list.
   2,280 episodes as sent, DB counts equal the snapshot. **`ops` stopped, intake off until the cause is found and a
   fix approved.** Likely cause (unverified): skipped seasons keep list entries (skipped is never mirrored) and are
   not covered by the seeded baseline, so every list value on them reads as an outside edit.
+- **Intake fix (user 09-30, applied on data, no new image):** (1) baseline rows added for the 46 list entries LCARS holds
+  that had none (skipped levels: `_seed_baseline` skipped them — code fix still to do in `rebuild_writes`); (2) R2.15 wins
+  (R2.15b): Natsume S1 completed, S2 dropped (status only; list keeps 13), later seasons skipped, show dropped; Kaiju minis
+  completed 4 — 6 writes sent and read back; (3) the 17 Urusei Yatsura films skip-listed by TMDB id (the arr sweep had
+  recreated them), Don: Gokudou Suikoden (TVDB 427736, wrong id) deleted from Sonarr (no files), Medalist Movie left for the
+  sweep to add as a tracked film. Snapshots `lcars.db.bak-20260930-pre-intake-fix`, `-pre-intake-2`. Intake on, ops started
+  08:25:48 (tiny time).

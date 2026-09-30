@@ -372,6 +372,10 @@ An episode can be unaired but watched (pre-air showing, leak…).
     (R2.14 still turns planned into watching on the first watched episode) and is checked
     again whenever a source reports a total or an end. Past seasons and episodes are not
     reviewed for this: it applies to new watches and refreshes.
+  - **R2.15b The rule wins over a status you set** `[clarified 2026-09-30]`: a level you set
+    dropped (or watching) whose episodes are all watched, with a confirmed count, is completed
+    (Natsume S1 13/13, Kaiju No. 8 minis 4/4). "Next season is dropped / skipped tho": the drop
+    moves to the next season (dropped), later seasons stay skipped, so the show still reads dropped.
 - **R2.16 New season found** gets:
   - previous season completed / watching / planned → **planned**;
   - previous season paused / dropped / skipped → **skipped**.
@@ -805,3 +809,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-29 — R2.2 addendum (skipped episode state kept, not an active rule: no episode is skipped; if ever used, marking a season watched would mark all its episodes except the skipped ones); R4.9/R4.10 clarified (timestamps decide; the AniList-then-MAL order was an example; to be built); R3.7c (two sources agreeing on a TVDB id attach it), R3.7d (show page can add a TVDB id by hand), R3.7e (unconfirmed TVDB id → review with yes / no / no-here-is-the-right-one), R1.14a (one show per TVDB id and a TVDB id on every tracked show are enforced; some Radarr movies may be individual seasons for now).
 - 2026-09-29 — R2.15a: a level completes by itself only with a confirmed episode count (AniList total = the episodes LCARS holds, or an ended series / later season, or set by you); past seasons not reviewed.
 - 2026-09-29 — R1.11 amended (span when the level has episodes or a place in a series; standalone movies and list-only entries exempt, a film with a place is not); R1.12 (a special/film inside another film's span, and a mini inside its group, are not overlaps; Monogatari a named exception); R1.13c (minis sit inside their group); R1.2f (episodes identified by title + air date; TVDB renumbering re-anchors rows); R2.7 (an unaired episode is never marked watched; a level with one is watching); R3.2a (film shows carry `tvdb_movie`, found through TMDB).
+- 2026-09-30 — R2.15b: R2.15 wins over a status you set; a completed dropped level passes the drop to the next season.
