@@ -148,6 +148,15 @@ This machine's `lcars.ini` has tiny's old IP: never edit it, pass the URLs as ab
 
 ## 6. After go-live (queued, not today)
 
+**Queued, data only (user 09-30, decided to wait until go-live is settled / the AniDB drip is done):** parts are
+numbered out of span order in two shows — Bookworm S1 (now 1–14, 37–60, 15–26, 27–36; should be
+1–14, 15–26, 27–36, 37–60) and Dr. STONE S4 (now 82–94, 58–69, 70–81; should be 58–69, 70–81, 82–94).
+Cause: `rebuild_reanchor._levels_follow_episodes` folds the levels of one TVDB season into parts by episode
+count, biggest first, not by span. Fix = renumber each parent's parts by span start (a data patch on the
+live DB, no code/version change; nothing external depends on part numbers). 16 more multi-part seasons had a
+part with no span, so they could not be audited: re-audit after the drip. Check whether the drip's
+reconciliation re-derives part order before/after.
+
 TVDB-id guard (R1.14a), R3.7c/d/e, expanded rulecheck/enforcement audit, Data TUI rework,
 rotate Sonarr/Radarr/TMDB keys, MAL client_id, AniList client_secret (memory: rotate at
 project end). **AniDB: resume only after go-live** (user, 09-29): remind once when live, max 200
