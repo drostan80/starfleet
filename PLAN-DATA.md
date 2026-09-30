@@ -774,3 +774,15 @@ isn't on an airing show goes on the review list.
 - **Sends** (`external_writes = send`): 290 of 290, 0 failed, in batches of 20/50/87/133, each read back. AniList and MAL match (only AIR GEAR Special 3791: services clamp progress to their 1-episode count); Sonarr 67 series + season flags and 2,280 episodes read back exactly.
 - **Intake on** (`list_intake_enabled = true`), `ops` started 0.3.0.
 - **Known, queued:** parts numbered out of span order in Bookworm S1 and Dr. STONE S4 (see the handoff §6).
+- **Intake went wrong (09-30 ~08:06–08:17 tiny time), rolled back.** Intake on + `ops` started: the first AniList
+  poll took list values for 21 seasons LCARS holds as **skipped** (skipped → paused/planned/dropped/completed), moved 7
+  show statuses, created 19 tracked show rows, backfilled 13 Natsume S2 episodes, and pushed out: Natsume S1 (4081)
+  Completed on AniList+MAL, Narumi's Week at Work (AniList 204431 / MAL 63138) Completed 4, Sonarr A Returner's
+  Magic S2 monitored, and an AniList **add** of MASHLE S2 (166610, a skipped season) as Dropped. It kept going inside
+  `lcars` after `ops` was stopped (list_sync_log 08:09:47, AniList add 08:17). **Repaired:** intake off
+  (`list_intake_enabled = false`), DB restored from `lcars.db.bak-20260930-post-send-pre-intake` (bad state kept as
+  `lcars.db.bak-20260930-after-bad-intake`), the 4 list entries written back, 166610 deleted, Sonarr 1095 S2
+  unmonitored. Verified: every sent row reads back as sent, both lists equal the post-send export, Sonarr 67 series +
+  2,280 episodes as sent, DB counts equal the snapshot. **`ops` stopped, intake off until the cause is found and a
+  fix approved.** Likely cause (unverified): skipped seasons keep list entries (skipped is never mirrored) and are
+  not covered by the seeded baseline, so every list value on them reads as an outside edit.
