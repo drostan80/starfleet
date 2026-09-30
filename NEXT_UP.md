@@ -40,9 +40,10 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 
 ### C. New (user, 2026-09-30)
 - [ ] **Scoring idea** — to be explained by the user.
-- [ ] **Schedule setter** — see every known air-date schedule for a show, one per source (e.g. AniList: Fridays
-      17:00; Syoboi: a different station/time; streaming), and pick the one that fits; LCARS then uses that
-      schedule for the show's air dates. Example of the view: https://www.livechart.me/anime/13417/schedules
+- [ ] **Schedule setter** — see every air-date schedule available for a show, from every source, and all of each
+      source's schedules (not one per source: e.g. AniList Fridays 17:00; Syoboi's several stations/times; each
+      streaming service), so there is a real choice; pick the one that fits and LCARS uses it for the show's air
+      dates. Example of the view: https://www.livechart.me/anime/13417/schedules
 Full build history archived to `~/repos/starfleet-archive`.
 
 > Full account of the 2026-09-23 session (changes, data operations, backups,
