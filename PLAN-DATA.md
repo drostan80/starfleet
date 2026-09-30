@@ -764,3 +764,13 @@ cutover moment, PLAN-DATA §2):
 
 Where the three disagree, the user's note wins; anything only in LCARS/AniList that
 isn't on an airing show goes on the review list.
+
+## Cutover (2026-09-30)
+
+- **Run 2** on a fresh live copy (`live-20260930T0628Z.db`, 06:28Z), stages 1–10, `~/starfleet-rebuild/run2/`. Rulecheck open R1.8 2 + R1.11i 73; 1,738 of 1,738 show pages answered; 38 list decisions applied. Write list equal to run 1's except one entry: Skeleton Knight in Another World S2 (AniList 185542) — user watched ep 12 on 09-29 (AniList Completed 12); recorded as a per-entry decision (completed at 12), MAL 60522 then also needed the same value (already set on MAL 07:04Z).
+- **Polar Opposites S2** watched to 11 only (the live S2E12 row is not a real watch); the write list lowers AniList/MAL 12 → 11.
+- **Release `v0.3.0`** (`v0.2.72` failed CI: `graphql-core` 3.3.0 broke `ariadne` 1.1.0 — pinned `<3.3`; bare `pytest` needs `pythonpath = ["."]`). Deployed 0.3.0 / 0.3.0 / 0.3.0-web, `LCARS_AUTOMATION_FROZEN=0`. Prod DB replaced by run 2's `10-writes.db` (sha256 `81ed9901…`), checked: 1,738 tracked, 36,104 watch events, 290 captured rows, head `d4e5f6a7b8c0`.
+- **Snapshots:** `lcars.db.bak-20260930-pre-cutover-v0.2.72` (before the swap), `lcars.db.bak-20260930-post-send-pre-intake` (after the sends), `starfleet.yml.bak-20260930-pre-v0.3.0`, `lcars.ini.bak-20260930-pre-send` / `-pre-intake`; local `~/starfleet-rebuild/snapshots-20260930/`.
+- **Sends** (`external_writes = send`): 290 of 290, 0 failed, in batches of 20/50/87/133, each read back. AniList and MAL match (only AIR GEAR Special 3791: services clamp progress to their 1-episode count); Sonarr 67 series + season flags and 2,280 episodes read back exactly.
+- **Intake on** (`list_intake_enabled = true`), `ops` started 0.3.0.
+- **Known, queued:** parts numbered out of span order in Bookworm S1 and Dr. STONE S4 (see the handoff §6).
