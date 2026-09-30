@@ -716,8 +716,8 @@ Stage 9 (checks) on run 1 found five kinds of thing; your answers and what was b
   LCARS takes the list's progress; an entry last changed before the mess (08-15) is never lowered.
 - **The 11 mess-era entries** (changed 08-15..09-27 and going down): the value before the mess
   (08-26 snapshot) wins. It agrees with the rebuilt copy for all but Mob Psycho 100 S3 → dropped
-  at 3 (`rebuild-inputs/list_decisions.json`); You and I Are Polar Opposites S2 ep 12 is your
-  09-27 watch (run 2 takes it).
+  at 3 (`rebuild-inputs/list_decisions.json`); You and I Are Polar Opposites S2 is **watched to 11
+  only** (user, 09-30: the live S2E12 row is not a real watch; the write list lowers AniList/MAL 12 → 11, correct).
 - **GDPR export** (your download, 09-29): "get everything you can from AniList and map it; if it
   gives new information trust it; only discard what is likely an artefact of the late mess and
   what conflicts with what I explicitly confirmed today". Extracted without personal data to
