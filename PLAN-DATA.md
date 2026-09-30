@@ -793,3 +793,12 @@ isn't on an airing show goes on the review list.
   recreated them), Don: Gokudou Suikoden (TVDB 427736, wrong id) deleted from Sonarr (no files), Medalist Movie left for the
   sweep to add as a tracked film. Snapshots `lcars.db.bak-20260930-pre-intake-fix`, `-pre-intake-2`. Intake on, ops started
   08:25:48 (tiny time).
+- **Memory Alpha propagation incident + guard (09-30).** The first pass after the intake fix wrote 1,052 AniList + 1,052
+  MAL ids on shows (R1.23) and 54 unrelated series TVDB ids (mostly films, R3.2a) + TVmaze/TMDB/IMDB follow-ons: ops
+  stopped, rows removed back to the 08:25 state (`lcars.db.bak-20260930-pre-id-cleanup`). **v0.3.1** (`tvdb_guard`,
+  R1.14a): every automatic TVDB id through one gate (never a second show, never a series id on a film, one source → a
+  `tvdb_candidate` review), no AniList/MAL on the show, film TMDB ids as numbers and never a series id. No database
+  uniqueness rule (the rebuild/merge tools need shared-id states). Deployed 09:48; first pass verified against
+  `lcars.db.bak-20260930-pre-v0.3.1`: 0 TVDB / AniList / MAL writes, ~80 correct film TMDB/IMDB ids, no status /
+  watch / episode changes. Open clean-ups (not blockers): Returner's Magic S2 stub holds the show's TVDB id;
+  VIRGIN PUNK and Ghost in the Shell each tracked twice (AniList show + Radarr show).
