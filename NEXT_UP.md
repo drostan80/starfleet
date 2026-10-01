@@ -49,6 +49,11 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       source's schedules (not one per source: e.g. AniList Fridays 17:00; Syoboi's several stations/times; each
       streaming service), so there is a real choice; pick the one that fits and LCARS uses it for the show's air
       dates. Example of the view: https://www.livechart.me/anime/13417/schedules
+- [ ] **Refresh show data button** (show page) — one click runs a pass for that show: episode data from TVmaze or
+      AniDB as fits the show, the schedule sources (once the schedule setter exists), and art. Prompted 10-01 by
+      Hotel Inhumans S2 E1 missing from the calendar: show added correctly, but E1's air date clearly wrong (should
+      be fixed by the drip; a manual refresh would cover such cases later).
+
 Full build history archived to `~/repos/starfleet-archive`.
 
 > Full account of the 2026-09-23 session (changes, data operations, backups,
