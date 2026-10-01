@@ -53,6 +53,12 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       AniDB as fits the show, the schedule sources (once the schedule setter exists), and art. Prompted 10-01 by
       Hotel Inhumans S2 E1 missing from the calendar: show added correctly, but E1's air date clearly wrong (should
       be fixed by the drip; a manual refresh would cover such cases later).
+      **Checked 10-01: the drip will NOT fix it.** S2E1 holds S1E1's AniList date (2025-07-06 14:46Z, source
+      `anilist`), wrong since at least the 08-15 backup; real date 2026-10-04 14:45Z (AniList 199426 and TVmaze
+      agree; S2's AniList link is correct). Nothing corrects it: AniDB/TVmaze/Syoboi only fill empty dates or lose
+      to an earlier date from another source ("earliest wins", `airdate_priority.should_apply`), and AniList's own
+      re-check (the only source that may move it later) runs only for **watching** + airing shows — this show is
+      planned. Same trap for any wrong-early date on a non-watching show.
 
 Full build history archived to `~/repos/starfleet-archive`.
 
