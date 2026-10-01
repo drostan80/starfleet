@@ -11,6 +11,11 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 - [ ] **Every Memory Alpha pass times out in ops** (found 09-30): `pollMemoryAlpha` exceeds ops's 120 s timeout on all
       8 passes in 4 h. LCARS finishes the pass anyway (fetches land), so ops logs a failure each time; unverified
       whether the renumber at the end of the pass completes.
+- [ ] **Reboot DNS race on tiny** (found 10-01): after the 06:36Z reboot, lcars/ops/web started before the host's
+      `/etc/resolv.conf` had a nameserver → containers got `NO EXTERNAL NAMESERVERS DEFINED`; AniList, MAL and AniDB
+      all failed for 3.5 h (drip stalled, no list sync) until the user recreated the three containers 10:12Z. Will
+      recur on every reboot. Options to decide: `dns:` in starfleet.yml, or Docker waiting for network-online.
+      (gluetun/qbittorrent/autobrr/prowlarr-mam/port-sync show the same marker — not checked.)
 - [ ] **identity-mismatch check crashes** on levels with no season number (`_resolve_by_position`, None < 1), and
       `reconcileSeasonMapping` the same (specials; last step of the daily sweep).
 - [ ] **Part order** — Bookworm S1, Dr. STONE S4 (data patch, after the drip); re-audit 16 multi-part seasons with a
