@@ -6,8 +6,9 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 ## Open work — consolidated 2026-09-30
 
 ### A. Left over from the rebuild
-- [ ] **AniDB drip** — running (v0.3.2). 09-30 13:50Z: 40 anime fetched since 10:53, no ban; queue 1,100 backlog + 125
-      refreshes (watching/planned data from 09-12) ≈ 6 days at 200/day.
+- [ ] **AniDB drip** — running (v0.3.2). 10-03 07:42Z: 200/day reached 10-01 and 10-02, no ban; left 460 backlog +
+      118 refreshes ≈ done 10-05/06. 200/day is the user's cap, not a known AniDB limit (bans seen at ~250 requests
+      per VPN IP on 09-28, time window unknown).
 - [ ] **Every Memory Alpha pass times out in ops** (found 09-30): `pollMemoryAlpha` exceeds ops's 120 s timeout on all
       8 passes in 4 h. LCARS finishes the pass anyway (fetches land), so ops logs a failure each time; unverified
       whether the renumber at the end of the pass completes.
