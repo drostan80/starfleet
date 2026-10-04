@@ -35,7 +35,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       TVDB season, e.g. Gintama S1–S10 against 5 Fribb entries; FLCL, Bleach, JoJo likewise). Read-only prototype on the prod
       copy: comparing Fribb's own `season.tvdb` number with the LCARS TVDB-season number (kind tvdb_season only; a season
       with several Fribb entries = split cours = ambiguous, no opinion) gives **1 mismatch of 1,373** (R.O.D -READ OR DIE-
-      S1: stored 208, Fribb 209). Proposed change, awaiting yes. Until then the check keeps failing as its last sweep step
+      S1: stored 208, Fribb 209). Proposed change, awaiting yes — full write-up with the 58 listed: `DECISION-identity-check-2026-10-04.md`. Until then the check keeps failing as its last sweep step
       (harmless: nothing after it, nothing flagged).
 - [ ] **Part order** — Bookworm S1, Dr. STONE S4 (data patch, after the drip); re-audit 16 multi-part seasons with a
       part with no span once the drip is done.
