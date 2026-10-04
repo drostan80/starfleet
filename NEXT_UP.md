@@ -17,8 +17,16 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       all failed for 3.5 h (drip stalled, no list sync) until the user recreated the three containers 10:12Z. Will
       recur on every reboot. Options to decide: `dns:` in starfleet.yml, or Docker waiting for network-online.
       (gluetun/qbittorrent/autobrr/prowlarr-mam/port-sync show the same marker — not checked.)
+- [ ] **New episodes never fetched once every known episode has aired** (found 10-04, A Tale of the Secret Saint E2
+      on the server, not in LCARS). The daily episode refresh (`dueForMetadataRefresh`) takes only **watching** shows
+      that are **airing**, and "airing" = an episode with no date or a future date (`_show_is_airing`). Secret Saint
+      was created 09-30 with E1 only (refreshed 09-30 06:33), planned until E1 was watched 10-03 14:40 → watching,
+      but E1 had aired, so no longer "airing" → never refreshed; E2 (aired the same day, double premiere) and the
+      rest never arrive. Same state 10-04: Magic Repo Man, #I'm Looking For a Zombie, VERTEX FORCE, Seven Knights of
+      the Marronnier Kingdom, Magical Explorer (1 episode each, last refresh 09-30); possibly Ranma1/2 (2024),
+      Broken Saintess, Ramparts of Ice (last refresh 08-11 to 09-05).
 - [ ] **identity-mismatch check crashes** on levels with no season number (`_resolve_by_position`, None < 1), and
-      `reconcileSeasonMapping` the same (specials; last step of the daily sweep).
+      `reconcileSeasonMapping` the same (specials). Fails the hourly sweep every run since 10-01; it is the last step, so the steps before it still run — only the identity check itself is lost.
 - [ ] **Part order** — Bookworm S1, Dr. STONE S4 (data patch, after the drip); re-audit 16 multi-part seasons with a
       part with no span once the drip is done.
 - [ ] **138 width checks** (should clear as AniDB data arrives) and **131 Fribb-unmatched** (information) — re-look
