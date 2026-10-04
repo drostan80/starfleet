@@ -26,6 +26,7 @@ from ariadne import EnumType, MutationType, ObjectType, QueryType, SubscriptionT
 from graphql import GraphQLError
 
 from lcars import (
+    air_sources,
     anidb,
     anilist_client,
     animeschedule,
@@ -60,6 +61,7 @@ from lcars import (
     service_presence,
     show_backfill,
     show_merge,
+    show_refresh,
     shows,
     sonarr_client,
     sonarr_sync,
@@ -2183,6 +2185,62 @@ def resolve_refresh_show_metadata(_, info, show_id):
     metadata.fetch_and_populate(conn, show_id)
     conn.commit()
     return _get_show(conn, show_id)
+
+
+@query.field("airSchedules")
+def resolve_air_schedules(_, info, show_id):
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    return air_sources.schedules_for_show(conn, show_id)
+
+
+def _season_air_schedules(conn, season_id: str) -> dict:
+    row = conn.execute("SELECT show_id FROM season WHERE id = ?", (season_id,)).fetchone()
+    if row is None or row["show_id"] is None:
+        raise GraphQLError(f"no such season: {season_id}")
+    return next(
+        s for s in air_sources.schedules_for_show(conn, row["show_id"])
+        if s["season_id"] == season_id
+    )
+
+
+@mutation.field("setSeasonAirSchedule")
+def resolve_set_season_air_schedule(_, info, season_id, source, channel=None):
+    """The user picks which source's schedule (and Syoboi station) a season follows —
+    air_sources.py. Writes the season's dates from it now (air_date_change rows, changed_by the
+    client); manual dates stay."""
+    conn = db.get_connection()
+    client = require_client(info)
+    try:
+        _season_air_schedules(conn, season_id)  # exists, belongs to a show
+        air_sources.set_choice(conn, season_id, source, channel or "", changed_by=client)
+    except ValueError as e:
+        conn.rollback()
+        raise GraphQLError(str(e)) from e
+    conn.commit()
+    return _season_air_schedules(conn, season_id)
+
+
+@mutation.field("clearSeasonAirSchedule")
+def resolve_clear_season_air_schedule(_, info, season_id):
+    conn = db.get_connection()
+    require_client(info)
+    _season_air_schedules(conn, season_id)
+    air_sources.clear_choice(conn, season_id)
+    conn.commit()
+    return _season_air_schedules(conn, season_id)
+
+
+@mutation.field("refreshShowData")
+def resolve_refresh_show_data(_, info, show_id):
+    """The show page's refresh button — show_refresh.py. No require_client(): like
+    refreshShowMetadata it only re-reads sources (the one write that carries history, a chosen
+    schedule re-applied, is recorded as the schedule_choice)."""
+    conn = db.get_connection()
+    _require_show(conn, show_id)
+    result = show_refresh.refresh_show_data(conn, show_id)
+    conn.commit()
+    return {**result, "show": _get_show(conn, show_id)}
 
 
 @mutation.field("pollFileAvailability")

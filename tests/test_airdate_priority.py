@@ -130,7 +130,11 @@ class TestRewireConditionParity:
                     ('sonarr','anilist','animeschedule','manual','tvmaze','anidb','syoboi')),
                 sonarr_season INTEGER, sonarr_episode INTEGER,
                 created_at TEXT, updated_at TEXT, state TEXT DEFAULT 'unwatched',
+                season_id TEXT,
                 UNIQUE(show_id, season, episode)
+            );
+            CREATE TABLE season_air_choice (
+                season_id TEXT PRIMARY KEY, source TEXT, channel TEXT, chosen_at TEXT
             );
             CREATE TABLE episode_anidb_mapping (
                 episode_id TEXT, anidb_anime_id INTEGER,
@@ -173,7 +177,7 @@ class TestRewireConditionParity:
             )
             conn.execute(
                 "INSERT INTO episode VALUES"
-                " (?, ?, 1, 1, 'regular', ?, ?, 1, 1, '', '', 'unwatched')",
+                " (?, ?, 1, 1, 'regular', ?, ?, 1, 1, '', '', 'unwatched', NULL)",
                 (episode_id, show_id, date, source),
             )
             conn.execute(

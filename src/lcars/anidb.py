@@ -1494,15 +1494,53 @@ def drip_queue(conn, limit: int, now: str) -> list[int]:
     return [r[0] for r in rows]
 
 
+def _fetch_and_store_anime(conn, client, anidb_id: int, now: str, stats: dict) -> bool:
+    """One AniDB anime: fetch, then store (or tombstone, or leave for a retry). Shared by the
+    drip and the per-show refresh so both follow exactly the same ban/tombstone rules.
+    Returns True when AniDB banned us — the caller must stop asking."""
+    global _banned_until
+    from lcars import service_health
+
+    result = fetch_anime_episodes(anidb_id, client=client)
+
+    if result == "BANNED":
+        stats["banned"] = True
+        _banned_until = time.time() + ANIDB_BAN_BACKOFF_SECONDS
+        service_health.record_failure(conn, "anidb", "client banned")
+        conn.commit()
+        log.error("AniDB ban detected, aborting drip fetch")
+        return True
+
+    if result is None:
+        # Transport/parse error — don't tombstone, retry next tick
+        stats["skipped"] += 1
+        return False
+
+    if result == "NOT_FOUND":
+        # Permanent error — tombstone so we don't retry
+        stats["skipped"] += 1
+        _write_tombstone(conn, anidb_id, now)
+        return False
+
+    if not result:
+        # Empty list (all credits/trailers) — tombstone too
+        stats["skipped"] += 1
+        _write_tombstone(conn, anidb_id, now)
+        return False
+
+    count = ingest_anime_episodes(conn, anidb_id, result, now)
+    stats["fetched"] += 1
+    stats["episodes_stored"] += count
+    log.info("AniDB drip: aid=%d → %d episodes stored", anidb_id, count)
+    return False
+
+
 def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
     """Fetch AniDB episodes for up to `limit` anime from `drip_queue`: the backlog first, then
     weekly refreshes of watching/planned shows. At most ANIDB_DAILY_CAP anime per UTC day
     (refreshes count); after a ban, nothing is asked for ANIDB_BAN_BACKOFF_SECONDS.
     Returns stats: {fetched, episodes_stored, skipped, banned}.
     """
-    global _banned_until
-    from lcars import service_health
-
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     stats = {"fetched": 0, "episodes_stored": 0, "skipped": 0,
              "banned": False}
@@ -1522,42 +1560,73 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
     client = httpx.Client(timeout=30.0)
     try:
         for (anidb_id,) in rows:
-            result = fetch_anime_episodes(anidb_id, client=client)
-
-            if result == "BANNED":
-                stats["banned"] = True
-                _banned_until = time.time() + ANIDB_BAN_BACKOFF_SECONDS
-                service_health.record_failure(conn, "anidb", "client banned")
-                conn.commit()
-                log.error("AniDB ban detected, aborting drip fetch")
+            if _fetch_and_store_anime(conn, client, anidb_id, now, stats):
                 break
-
-            if result is None:
-                # Transport/parse error — don't tombstone, retry next tick
-                stats["skipped"] += 1
-                continue
-
-            if result == "NOT_FOUND":
-                # Permanent error — tombstone so we don't retry
-                stats["skipped"] += 1
-                _write_tombstone(conn, anidb_id, now)
-                continue
-
-            if not result:
-                # Empty list (all credits/trailers) — tombstone too
-                stats["skipped"] += 1
-                _write_tombstone(conn, anidb_id, now)
-                continue
-
-            count = ingest_anime_episodes(conn, anidb_id, result, now)
-            stats["fetched"] += 1
-            stats["episodes_stored"] += count
-            log.info(
-                "AniDB drip: aid=%d → %d episodes stored", anidb_id, count
-            )
     finally:
         client.close()
 
+    return stats
+
+
+def anidb_ids_for_show(conn, show_id: str) -> list[int]:
+    """The AniDB anime behind one show: TVDB → anime-lists, plus an AniDB id the show holds
+    (the same two routes `drip_queue` uses for every tracked anime show)."""
+    rows = conn.execute(
+        """SELECT ale.anidb_id AS aid
+           FROM show_external_id x JOIN anime_list_entry ale ON ale.tvdb_id = x.external_id
+           WHERE x.show_id = ? AND x.service = 'tvdb'
+           UNION
+           SELECT CAST(x.external_id AS INTEGER) FROM show_external_id x
+           WHERE x.show_id = ? AND x.service = 'anidb'""",
+        (show_id, show_id),
+    ).fetchall()
+    return sorted({r[0] for r in rows if r[0] and r[0] > 0})
+
+
+def refresh_anime_now(conn, anidb_ids: list[int]) -> dict:
+    """The per-show refresh button's AniDB step. Same limits as the drip, because it shares its
+    state: nothing during the ban back-off, nothing past ANIDB_DAILY_CAP anime today, and
+    nothing for an anime fetched in the last 24 h (AniDB asks not to re-request the same
+    anime). Returns the drip's stats plus `refused` (why anything was held back) and `recent`
+    (how many were skipped as fetched in the last 24 h)."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    stats = {"fetched": 0, "episodes_stored": 0, "skipped": 0, "banned": False,
+             "recent": 0, "refused": None}
+    if not anidb_ids:
+        return stats
+    if time.time() < _banned_until:
+        stats["refused"] = "AniDB banned this server recently — not asking again for 24 h"
+        return stats
+    fetched_today = conn.execute(
+        "SELECT COUNT(DISTINCT anidb_anime_id) FROM anidb_episode WHERE fetched_at >= ?",
+        (now[:10],),
+    ).fetchone()[0]
+    room = max(0, ANIDB_DAILY_CAP - fetched_today)
+    day_ago = util.add_days(now, -1)
+    todo = []
+    for aid in anidb_ids:
+        last = conn.execute(
+            "SELECT MAX(fetched_at) FROM anidb_episode WHERE anidb_anime_id = ?", (aid,)
+        ).fetchone()[0]
+        if last is not None and last >= day_ago:
+            stats["recent"] += 1
+        else:
+            todo.append(aid)
+    if len(todo) > room:
+        stats["refused"] = (
+            f"AniDB's daily limit ({ANIDB_DAILY_CAP}) is used up for today"
+            if room == 0 else f"only {room} AniDB request(s) left today"
+        )
+        todo = todo[:room]
+    if not todo:
+        return stats
+    client = httpx.Client(timeout=30.0)
+    try:
+        for aid in todo:
+            if _fetch_and_store_anime(conn, client, aid, now, stats):
+                break
+    finally:
+        client.close()
     return stats
 
 

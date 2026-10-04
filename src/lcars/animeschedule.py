@@ -76,6 +76,7 @@ import json
 import logging
 
 from lcars import (
+    air_sources,
     airdate_priority,
     animeschedule_client,
     fuzzy,
@@ -199,6 +200,11 @@ def _apply_or_flag(conn, show_id: str, item: dict) -> str:
     episode_row = matches[0]
     if not status_rules.episode_followed(conn, episode_row["id"]):
         return "unchanged"  # R2.10: a skipped season isn't followed
+    air_sources.record_candidate(
+        conn, episode_row["id"], "animeschedule", "", item["air_date_utc"]
+    )  # kept for the schedule chooser whether or not it is applied
+    if air_sources.episode_is_locked(conn, episode_row["id"]):
+        return "unchanged"  # the season follows a schedule the user chose
     if not airdate_priority.should_apply(
         "animeschedule",
         item["air_date_utc"],

@@ -1486,11 +1486,72 @@ type TmdbBrowseResult {
 }
 
 # ---------------------------------------------------------------------------
+# Air-date schedules (user, 2026-10-04) — every source's schedule, chosen a posteriori
+# ---------------------------------------------------------------------------
+
+"One date a source gives for one episode of a season."
+type AirScheduleEpisode {
+  episodeId: ID!
+  season: Int!
+  episode: Int!
+  airDateUtc: DateTime!
+  "The date LCARS stores for this episode now."
+  currentAirDateUtc: DateTime
+}
+
+"""
+One source's complete schedule for a season — for Syoboi, one per TV station. `inUse`: every
+date equals what LCARS stores now. `chosen`: the user made the season follow this one.
+"""
+type AirScheduleOption {
+  source: String!
+  "Syoboi's station id; empty for sources without channels."
+  channel: String!
+  label: String!
+  episodeCount: Int!
+  firstAirDateUtc: DateTime!
+  lastAirDateUtc: DateTime!
+  "AniDB gives a day, not a time."
+  dateOnly: Boolean!
+  inUse: Boolean!
+  chosen: Boolean!
+  episodes: [AirScheduleEpisode!]!
+}
+
+type SeasonAirSchedules {
+  seasonId: ID!
+  seasonNumber: Int
+  partNumber: Int!
+  episodeCount: Int!
+  "The source most of the season's stored dates came from."
+  currentSource: String
+  chosenSource: String
+  chosenChannel: String
+  options: [AirScheduleOption!]!
+}
+
+"What one step of the show refresh did (or why it did nothing)."
+type RefreshStep {
+  name: String!
+  ok: Boolean!
+  detail: String!
+}
+
+type ShowDataRefresh {
+  steps: [RefreshStep!]!
+  "Dates listed from the stored sources (TVmaze, AniDB, Syoboi, Sonarr) after this refresh."
+  candidates: Int!
+  show: Show!
+}
+
+# ---------------------------------------------------------------------------
 # Query
 # ---------------------------------------------------------------------------
 
 type Query {
   show(id: ID!): Show
+  "Every known schedule per season of the show, from every source, to choose between (setSeasonAirSchedule)."
+  airSchedules(showId: ID!): [SeasonAirSchedules!]!
   shows(first: Int, after: String, last: Int, before: String): ShowConnection!
   "§8 — shows by status. A list of statuses (not singular) so e.g. WATCHING+PAUSED can be queried together without becoming generic pass-through filtering."
   showsByStatus(statuses: [ShowStatus!]!, first: Int, after: String, last: Int, before: String): ShowConnection!
@@ -1625,6 +1686,14 @@ type Query {
 # ---------------------------------------------------------------------------
 
 type Mutation {
+  # -- Air-date schedules + show refresh (2026-10-04) -----------------------
+  "Make a season follow one source's schedule (and a Syoboi station, via channel) from now on: its dates are written from it and the automatic overwriting sources leave the season alone. A manual date still wins. Needs the schedule to be known (airSchedules)."
+  setSeasonAirSchedule(seasonId: ID!, source: String!, channel: String): SeasonAirSchedules!
+  "Stop following a chosen schedule: dates stay as they are, the automatic rule (a different source wins only by an earlier date) resumes."
+  clearSeasonAirSchedule(seasonId: ID!): SeasonAirSchedules!
+  "The show page's refresh button: the metadata fetch, then TVmaze (TV) or AniDB + Syoboi (anime) for this one show, then every schedule listed and the chosen ones re-applied. AniDB follows the drip's limits (24 h ban back-off, daily cap, nothing re-asked within 24 h)."
+  refreshShowData(showId: ID!): ShowDataRefresh!
+
   # -- Show lifecycle ---------------------------------------------------
   """
   addShow also triggers A.8's on-demand metadata fetch (poster/

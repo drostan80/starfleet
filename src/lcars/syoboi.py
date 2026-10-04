@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 
-from lcars import status_rules
+from lcars import air_sources, status_rules, util
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +142,41 @@ def fetch_programs(tids: list[int], *,
         })
 
     return programs
+
+
+def fetch_channels(*, client: httpx.Client | None = None) -> dict[int, str]:
+    """Syoboi's TV stations: {ChID: name} (ChLookup, no ids = all)."""
+    root = _get({"Command": "ChLookup"}, client=client)
+    channels = {}
+    for item in root.findall(".//ChItem"):
+        chid = item.findtext("ChID")
+        name = (item.findtext("ChName") or "").strip()
+        if chid and chid.isdigit() and name:
+            channels[int(chid)] = name
+    return channels
+
+
+def ensure_channels(conn, *, max_age_days: int = 30) -> int:
+    """Keep station names (for the schedule chooser) fresh; one cheap call a month at most.
+    Returns the number stored, 0 when the table was fresh or Syoboi could not be read."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    newest = conn.execute("SELECT MAX(fetched_at) FROM syoboi_channel").fetchone()[0]
+    if newest is not None and newest >= util.add_days(now, -max_age_days):
+        return 0
+    try:
+        channels = fetch_channels()
+    except (httpx.HTTPError, ET.ParseError):
+        log.warning("Syoboi ChLookup failed", exc_info=True)
+        return 0
+    for chid, name in channels.items():
+        conn.execute(
+            "INSERT INTO syoboi_channel (chid, name, fetched_at) VALUES (?, ?, ?)"
+            " ON CONFLICT (chid) DO UPDATE SET name = excluded.name,"
+            " fetched_at = excluded.fetched_at",
+            (chid, name, now),
+        )
+    conn.commit()
+    return len(channels)
 
 
 def fetch_titles(tids: list[int], *,
@@ -396,6 +431,7 @@ def _rewire_condition() -> str:
     return (
         f"{status_rules.followed_sql()} AND "  # R2.10: skipped seasons aren't followed
         "episode.air_date_source != 'manual'"
+        f" AND NOT {air_sources.LOCKED_SQL}"  # a season following a chosen schedule is left alone
         " AND episode.air_date_utc != sp_min.earliest_utc"
         " AND (episode.air_date_source IN ('syoboi', 'sonarr')"
         "      OR sp_min.earliest_utc < episode.air_date_utc)"

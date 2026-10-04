@@ -55,6 +55,7 @@ from datetime import datetime
 
 from lcars import (
     add_check,
+    air_sources,
     airdate_priority,
     anilist_client,
     art,
@@ -720,8 +721,13 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             current_source = episode_row["air_date_source"]
             current_date = episode_row["air_date_utc"]
             new_air_date = util.unix_to_iso(node["airingAt"])
+            # Every read of AniList's schedule is kept as a candidate (air_sources), so the user
+            # can compare it with the other sources whether or not it is applied below.
+            air_sources.record_candidate(conn, episode_row["id"], "anilist", "", new_air_date)
             if current_date == new_air_date:
                 continue
+            if air_sources.episode_is_locked(conn, episode_row["id"]):
+                continue  # the season follows a schedule the user chose (air_sources)
 
             # 2026-08-15 — real, user-caught bug: "Draw This, Then Die!"
             # episode 7. AniList's `airingSchedule` is one global value

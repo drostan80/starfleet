@@ -12182,3 +12182,126 @@ async def test_due_for_metadata_refresh_still_excludes_a_continuing_non_watching
     _set_series_status(migrated_db, show["id"], "continuing")
     _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
     assert show["id"] not in await _due_ids(client)
+
+
+# --- air-date schedules: airSchedules / setSeasonAirSchedule / clearSeasonAirSchedule / ----
+# --- refreshShowData (air_sources.py, show_refresh.py, 2026-10-04) ----------------------
+
+AIR_SCHEDULES_QUERY = """
+    query($id: ID!) {
+      airSchedules(showId: $id) {
+        seasonId seasonNumber currentSource chosenSource chosenChannel
+        options { source channel label episodeCount inUse chosen dateOnly
+                  episodes { episodeId airDateUtc currentAirDateUtc } }
+      }
+    }
+"""
+
+
+async def _show_with_two_schedules(client):
+    show = await add_show(client, titleRomaji="Two Schedules")
+    conn = db.get_connection()
+    _insert_season(None, "z-sch001", show["id"], 1)
+    conn.execute("UPDATE season SET kind = 'tvdb_season' WHERE id = 'z-sch001'")
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, air_date_source,"
+        " season_id, created_at, updated_at)"
+        " VALUES ('e-sch001', ?, 1, 1, 'regular', '2026-10-04T14:45:00Z', 'sonarr', 'z-sch001',"
+        " '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')",
+        (show["id"],),
+    )
+    for source, channel, date in [("tvmaze", "", "2026-10-04T14:50:00Z"),
+                                   ("syoboi", "20", "2026-10-05T12:00:00Z")]:
+        conn.execute(
+            "INSERT INTO episode_air_candidate (episode_id, source, channel, air_date_utc,"
+            " fetched_at) VALUES ('e-sch001', ?, ?, ?, '2026-10-01T00:00:00Z')",
+            (source, channel, date),
+        )
+    conn.commit()
+    return show
+
+
+async def test_air_schedules_lists_every_option_of_a_season(client, migrated_db):
+    show = await _show_with_two_schedules(client)
+    data = await gql(client, AIR_SCHEDULES_QUERY, {"id": show["id"]}, headers=auth_headers())
+    [season] = data["airSchedules"]
+    assert season["seasonId"] == "z-sch001" and season["chosenSource"] is None
+    assert {(o["source"], o["channel"]) for o in season["options"]} == {
+        ("tvmaze", ""), ("syoboi", "20")}
+
+
+async def test_set_season_air_schedule_applies_it_and_clear_releases_it(client, migrated_db):
+    show = await _show_with_two_schedules(client)
+    data = await gql(
+        client,
+        """mutation($s: ID!) { setSeasonAirSchedule(seasonId: $s, source: "syoboi", channel: "20")
+           { chosenSource chosenChannel options { source chosen inUse } } }""",
+        {"s": "z-sch001"}, headers=auth_headers(),
+    )
+    chosen = data["setSeasonAirSchedule"]
+    assert (chosen["chosenSource"], chosen["chosenChannel"]) == ("syoboi", "20")
+    assert [o["source"] for o in chosen["options"] if o["chosen"]] == ["syoboi"]
+    assert [o["source"] for o in chosen["options"] if o["inUse"]] == ["syoboi"]
+    stored = db.get_connection().execute(
+        "SELECT air_date_utc, air_date_source FROM episode WHERE id = 'e-sch001'").fetchone()
+    assert tuple(stored) == ("2026-10-05T12:00:00Z", "syoboi")
+
+    cleared = await gql(
+        client,
+        "mutation($s: ID!) { clearSeasonAirSchedule(seasonId: $s) { chosenSource } }",
+        {"s": "z-sch001"}, headers=auth_headers(),
+    )
+    assert cleared["clearSeasonAirSchedule"]["chosenSource"] is None
+    assert show["id"]
+
+
+async def test_set_season_air_schedule_for_an_unknown_schedule_is_an_error(client, migrated_db):
+    await _show_with_two_schedules(client)
+    resp = await client.post(
+        "/",
+        json={"query": 'mutation { setSeasonAirSchedule(seasonId: "z-sch001", source: "anidb")'
+                       " { chosenSource } }"},
+        headers=auth_headers(),
+    )
+    assert "no anidb schedule" in resp.json()["errors"][0]["message"]
+
+
+async def test_set_season_air_schedule_needs_the_client_header(client, migrated_db):
+    await _show_with_two_schedules(client)
+    resp = await client.post(
+        "/",
+        json={"query": 'mutation { setSeasonAirSchedule(seasonId: "z-sch001", source: "tvmaze")'
+                       " { chosenSource } }"},
+        headers=auth_headers(client_name=None),
+    )
+    assert "X-LCARS-Client" in resp.json()["errors"][0]["message"]
+
+
+async def test_refresh_show_data_reports_each_step_and_lists_the_schedules(client, migrated_db):
+    show = await _show_with_two_schedules(client)
+    data = await gql(
+        client,
+        """mutation($id: ID!) { refreshShowData(showId: $id)
+           { candidates steps { name ok detail } show { id } } }""",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    result = data["refreshShowData"]
+    steps = {s["name"]: s for s in result["steps"]}
+    assert result["show"]["id"] == show["id"]
+    assert steps["Metadata and episodes"]["ok"] is True
+    assert steps["Schedules"]["ok"] is True
+    assert steps["AniDB"]["ok"] is False  # an anime with no AniDB id: said, not silently skipped
+
+
+async def test_refresh_show_data_does_nothing_while_automation_is_frozen(
+    client, migrated_db, monkeypatch
+):
+    monkeypatch.setenv("LCARS_AUTOMATION_FROZEN", "1")
+    show = await _show_with_two_schedules(client)
+    data = await gql(
+        client,
+        "mutation($id: ID!) { refreshShowData(showId: $id) { steps { name ok detail } } }",
+        {"id": show["id"]}, headers=auth_headers(),
+    )
+    [only] = data["refreshShowData"]["steps"]
+    assert only["ok"] is False and "frozen" in only["detail"]
