@@ -992,13 +992,13 @@ def resolve_due_for_metadata_refresh(_, info, **page_args):
     """§6.7/B.1 — Ops's own daily-pass query; a client's on-open trigger
     calls this exact same query (SCOPE.md §11.2's B.1 note) rather than
     a separate mutation. Eligibility is `status = WATCHING` **and**
-    actively airing — reuses `_show_is_airing` (A.10) verbatim rather
-    than re-deriving the same "any episode with a null/future
-    air_date_utc" predicate a second time in raw SQL; §6.7's own text
-    ("watching-status, actively-airing shows... not-airing/not-watching
-    shows get no background refresh") reads as one combined filter, not
-    two independent jobs. Not a single-table WHERE (same reason nextUp,
-    A.11, isn't) — the airing check isn't one column comparison — so
+    still running — `_show_needs_episode_refresh`: airing by
+    `_show_is_airing` (A.10, any episode with a null/future
+    air_date_utc), or Sonarr's series status says continuing/upcoming,
+    or an episode aired in the last 14 days (changed 2026-10-04: with
+    only "a known episode is still to come", a show whose known
+    episodes had all aired never learned of the next ones). Not a
+    single-table WHERE (same reason nextUp, A.11, isn't), so
     candidates are computed in Python first and handed to
     pagination.paginate_list, same pattern as nextUp."""
     conn = db.get_connection()
@@ -1008,8 +1008,34 @@ def resolve_due_for_metadata_refresh(_, info, **page_args):
         " AND (metadata_last_refreshed_at IS NULL OR metadata_last_refreshed_at < ?)",
         (cutoff,),
     ).fetchall()
-    due = [dict(show) for show in candidates if _show_is_airing(conn, show["id"])]
+    due = [dict(show) for show in candidates if _show_needs_episode_refresh(conn, show)]
     return pagination.paginate_list(due, **page_args)
+
+
+# A show whose newest known episode aired within this many days is still being refreshed.
+_REFRESH_RECENT_EPISODE_DAYS = 14
+
+
+def _show_needs_episode_refresh(conn, show) -> bool:
+    """Does the daily refresh owe this (watching) show a visit? Wider than `_show_is_airing`:
+    a show whose every *known* episode has aired is not finished if its source still says it
+    is running — the episodes after the last known one only arrive when we ask again
+    (A Tale of the Secret Saint, 10-04: created with E1 only, E1 watched, never refreshed
+    again, E2–E13 never fetched). A show is due when any of: a known episode has no date or a
+    future one (`_show_is_airing`); Sonarr's own series status (stored, no live call) is
+    continuing or upcoming; its newest known episode aired in the last 14 days. A movie has
+    no episodes to wait for."""
+    if show["media_shape"] != "episodic":
+        return False
+    if _show_is_airing(conn, show["id"]):
+        return True
+    if (show["series_status"] or "").lower() in ("continuing", "upcoming"):
+        return True
+    cutoff = util.utc_iso_offset(-_REFRESH_RECENT_EPISODE_DAYS)
+    return conn.execute(
+        "SELECT 1 FROM episode WHERE show_id = ? AND air_date_utc > ? LIMIT 1",
+        (show["id"], cutoff),
+    ).fetchone() is not None
 
 
 @query.field("dueForSeasonReconciliation")

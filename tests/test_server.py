@@ -12104,3 +12104,81 @@ async def test_a_tvdb_link_review_cannot_be_dismissed_without_a_choice(client, m
         "variables": {"id": review["id"]}}, headers=auth_headers())
     assert "resolved by one of its choices" in resp.json()["errors"][0]["message"]
     assert _open_link_review() is not None
+
+
+# --- dueForMetadataRefresh: a show still running with every known episode aired --------
+
+
+def _set_series_status(migrated_db: Path, show_id: str, value: str | None) -> None:
+    conn = db.get_connection()
+    conn.execute("UPDATE show SET series_status = ? WHERE id = ?", (value, show_id))
+    conn.commit()
+
+
+async def _due_ids(client) -> set[str]:
+    data = await gql(client, DUE_FOR_METADATA_REFRESH_QUERY, headers=auth_headers())
+    return {e["node"]["id"] for e in data["dueForMetadataRefresh"]["edges"]}
+
+
+async def test_due_for_metadata_refresh_includes_a_continuing_show_whose_known_episodes_aired(
+    client, migrated_db
+):
+    # A Tale of the Secret Saint: created with E1 only, E1 aired and watched — no known
+    # future episode, but Sonarr says the series is continuing, so E2.. are still to fetch.
+    show = await _add_watching_show(client, titleRomaji="Continuing One Known")
+    _insert_episode_with_air_date(migrated_db, "e-due010", show["id"], "2020-01-01T00:00:00Z")
+    _set_series_status(migrated_db, show["id"], "continuing")
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    assert show["id"] in await _due_ids(client)
+
+
+async def test_due_for_metadata_refresh_includes_an_upcoming_show(client, migrated_db):
+    show = await _add_watching_show(client, titleRomaji="Upcoming One Known")
+    _insert_episode_with_air_date(migrated_db, "e-due011", show["id"], "2020-01-01T00:00:00Z")
+    _set_series_status(migrated_db, show["id"], "Upcoming")  # case-insensitive
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    assert show["id"] in await _due_ids(client)
+
+
+async def test_due_for_metadata_refresh_excludes_an_ended_show_with_old_episodes(
+    client, migrated_db
+):
+    show = await _add_watching_show(client, titleRomaji="Ended Long Ago")
+    _insert_episode_with_air_date(migrated_db, "e-due012", show["id"], "2020-01-01T00:00:00Z")
+    _set_series_status(migrated_db, show["id"], "ended")
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    assert show["id"] not in await _due_ids(client)
+
+
+async def test_due_for_metadata_refresh_includes_a_show_whose_newest_episode_aired_recently(
+    client, migrated_db
+):
+    # No series status at all (never fetched / not in Sonarr): a recent episode still
+    # means more may follow — covers a double premiere or a show Sonarr can't classify.
+    show = await _add_watching_show(client, titleRomaji="Aired Last Week")
+    last_week = (datetime.now(UTC) - timedelta(days=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_episode_with_air_date(migrated_db, "e-due013", show["id"], last_week)
+    _set_series_status(migrated_db, show["id"], None)
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    assert show["id"] in await _due_ids(client)
+
+
+async def test_due_for_metadata_refresh_excludes_a_show_whose_newest_episode_is_a_month_old(
+    client, migrated_db
+):
+    show = await _add_watching_show(client, titleRomaji="Aired Last Month")
+    last_month = (datetime.now(UTC) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_episode_with_air_date(migrated_db, "e-due014", show["id"], last_month)
+    _set_series_status(migrated_db, show["id"], None)
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    assert show["id"] not in await _due_ids(client)
+
+
+async def test_due_for_metadata_refresh_still_excludes_a_continuing_non_watching_show(
+    client, migrated_db
+):
+    show = await add_show(client, titleRomaji="Continuing But Planned")  # PLANNED
+    _insert_episode_with_air_date(migrated_db, "e-due015", show["id"], "2020-01-01T00:00:00Z")
+    _set_series_status(migrated_db, show["id"], "continuing")
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    assert show["id"] not in await _due_ids(client)
