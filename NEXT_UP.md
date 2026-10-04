@@ -26,17 +26,22 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       Magic Repo Man). A manual refresh already brings in everything (checked in dev: Secret Saint E2–E13 arrive).
       Not changed (ask first): the weekly Fribb reconcile (`dueForSeasonReconciliation`) has the same blind spot; planned
       shows are never refreshed daily.
-- ⏳ **identity-mismatch check crashes** on levels with no season number (`_resolve_by_position`, `None < 1`), and the weekly
-      `reconcileSeasonMapping` failed on the same levels (382 failures in 48 h on prod; logged per season, retried hourly).
-      **Weekly half fixed in dev** (`dueForSeasonReconciliation` skips levels with no season number; branch `dev-airing-sources`).
-      **Identity half NOT fixed — needs your decision (10-04):** a plain None guard makes the check run again, and on the prod
-      copy it then flags **58** seasons, mostly false: 27 are `part` levels compared as whole seasons, and the rest come from
-      the check's assumption "LCARS season number = position in Fribb's list", which the rebuilt data breaks (a row for every
-      TVDB season, e.g. Gintama S1–S10 against 5 Fribb entries; FLCL, Bleach, JoJo likewise). Read-only prototype on the prod
-      copy: comparing Fribb's own `season.tvdb` number with the LCARS TVDB-season number (kind tvdb_season only; a season
-      with several Fribb entries = split cours = ambiguous, no opinion) gives **1 mismatch of 1,373** (R.O.D -READ OR DIE-
-      S1: stored 208, Fribb 209). Proposed change, awaiting yes — full write-up with the 58 listed: `DECISION-identity-check-2026-10-04.md`. Until then the check keeps failing as its last sweep step
-      (harmless: nothing after it, nothing flagged).
+- ⏳ **identity-mismatch check crashes** on levels with no season number, and the weekly `reconcileSeasonMapping` failed on
+      the same levels (382 failures in 48 h on prod). **Both fixed in dev, not deployed** (branch `dev-airing-sources`;
+      user said apply 10-04): the weekly query skips levels with no season number; the identity check now compares Fribb's
+      own TVDB season number with the LCARS TVDB-season number (whole numbered seasons only; none or several Fribb entries =
+      no opinion; parts and unnumbered levels not checked). On the prod copy: 1,269 checked, **1 flagged** (R.O.D -READ OR
+      DIE- S1: stored AniList 208, Fribb 209 — not yet checked which is right) instead of 58 false ones. Write-up and the
+      old 58: `DECISION-identity-check-2026-10-04.md`. When deployed, that one review appears; the check also stops logging a
+      failure every hour.
+- ⏳ **Dark Sonarr icon on cards** (user 10-04, screenshot): 56 tracked shows were in Sonarr with no `sonarr` link row, so
+      the icon was dim. Cause: only the monthly presence sweep wrote the link (last run 09-30 06:32, before the rebuilt
+      shows existed; next ~10-30), and a show added any other way never got one. **Fixed in dev, not deployed:** the hourly
+      `reconcile_arr_state` (which already holds Sonarr's/Radarr's full catalog) now writes a missing link for every show
+      holding the series' tvdb id (Radarr: tmdb id); existing links untouched, no `*_public_url` = no link. Prod copy:
+      330 → 387 links, no Sonarr show left unlinked; calendar in the browser: 28 lit, 1 dark (a dropped show that is not in
+      Sonarr — correct). Not changed: 36 shows hold a link whose TVDB id is no longer in Sonarr (stale links; `INSERT OR
+      IGNORE` never updates a link).
 - [ ] **Part order** — Bookworm S1, Dr. STONE S4 (data patch, after the drip); re-audit 16 multi-part seasons with a
       part with no span once the drip is done.
 - [ ] **138 width checks** (should clear as AniDB data arrives) and **131 Fribb-unmatched** (information) — re-look

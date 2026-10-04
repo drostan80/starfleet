@@ -1,6 +1,8 @@
 # Decision pending: the identity-mismatch check (2026-10-04)
 
-Status: **nothing changed in the code for this.** The weekly half of the crash is fixed (commit `1f1f838`, local branch
+Status update 2026-10-04 (later): **you chose option C and it is applied in dev** (branch `dev-airing-sources`, not deployed). Result on the production copy: 1,269 seasons checked, 1 flagged (R.O.D). The text below is the analysis as it stood before that.
+
+Original status: **nothing changed in the code for this.** The weekly half of the crash is fixed (commit `1f1f838`, local branch
 `dev-airing-sources`, not deployed); the identity-check half is left as it was until you decide. Everything below was
 measured **read-only on a copy of the production database** (taken 2026-10-04 from tiny) with Fribb's current dataset.
 

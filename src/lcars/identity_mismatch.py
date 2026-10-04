@@ -63,38 +63,48 @@ to "Part II" (no mismatch); the Tantei stub still correctly flags (its
 season 1 resolves to Milky Holmes' real season 1, disagreeing with what
 was stored). Ambiguous cases (two candidates landing on the same sort
 key) return None rather than guess, same "never guess" convention this
-codebase uses everywhere else."""
+codebase uses everywhere else.
+
+**Redesigned 2026-10-04 (user), for the rebuilt data.** The position method above assumed
+LCARS's season number counted cours in release order. Since the rebuild, a season's number is its
+**TVDB season number** (a split cour is a `part` level inside it), and every TVDB season has a
+row — including ones with no AniList entry (Gintama: TVDB seasons 1–10, Fribb lists 5). Position
+then no longer lines up: run on the production copy the position method flagged 58 seasons, almost
+all false, and a level with no season number (a special) crashed it (`None < 1`) on every hourly
+sweep since the cutover. Now: for each *whole numbered TVDB season* with an AniList id, take the
+Fribb entries for the show's TVDB id whose own `season.tvdb` equals that number (not specials or
+movies); exactly one AniList id -> compare; none (Fribb has no entry for that season) or several
+(a split cour) -> **no opinion**. Part levels and levels with no number are not checked. On the
+production copy: 1 disagreement in 1,373 seasons. Decision record:
+DECISION-identity-check-2026-10-04.md."""
 
 import sqlite3
 
 from lcars import fribb, pending_review
 
 
-def _resolve_by_position(candidates: list[dict], lcars_season_number: int) -> dict | None:
-    """Strict, position-based season resolver — see module docstring for
-    why this is separate from fribb.resolve_season_candidate.
-
-    2026-09-21: the ordering itself now lives in
-    `fribb.enumerate_real_seasons` (shared with `season_ranges.
-    ensure_fribb_season_rows`, which creates the LCARS season rows this
-    function verifies) — this function only does the position lookup
-    once no season-number gap can exist between the two anymore."""
-    numbered = fribb.enumerate_real_seasons(candidates)
-    if numbered is None:
-        return None
-    if lcars_season_number < 1 or lcars_season_number > len(numbered):
-        return None
-    return numbered[lcars_season_number - 1]
+def _fribb_anilist_ids(candidates: list[dict], tvdb_season: int) -> set[int]:
+    """The AniList ids Fribb holds for one TVDB season number of a show (specials and movies
+    left out, same as `fribb.enumerate_real_seasons`)."""
+    found = set()
+    for c in candidates:
+        if c.get("type") in ("SPECIAL", "MOVIE"):
+            continue
+        if (c.get("season") or {}).get("tvdb") != tvdb_season:
+            continue
+        anilist_id, _mal_id = fribb.extract_ids(c)
+        if anilist_id is not None:
+            found.add(anilist_id)
+    return found
 
 
 def check_anilist_id_mismatch(conn: sqlite3.Connection) -> dict:
-    """Signal 1 — for every tracked season with its own `anilist_id` and
-    a show-level `tvdb` id, compare against Fribb's own independent
-    tvdb->anilist resolution for that exact position in the show's own
-    release order (`_resolve_by_position`, not raw season_number).
-    Disagreement opens a `pending_review` (season, field='anilist_id',
-    so it gets the same season-AniList-ID inline editor reviews.html
-    already has for the unrelated "no match found" case — distinguished
+    """Signal 1 — for every tracked whole TVDB season (`kind = 'tvdb_season'`, with a season
+    number) that has its own `anilist_id`, compare it with Fribb's own independent answer for
+    that TVDB season number (`_fribb_anilist_ids`). A split cour (several Fribb entries on one
+    TVDB season) or a season Fribb has no entry for gives no opinion. Disagreement opens a
+    `pending_review` (season, field='anilist_id', so it gets the same season-AniList-ID inline
+    editor reviews.html already has for the unrelated "no match found" case — distinguished
     by `source`).
 
     Deliberately does NOT skip `manual_override = 1` seasons: the real
@@ -113,6 +123,7 @@ def check_anilist_id_mismatch(conn: sqlite3.Connection) -> dict:
         JOIN show_external_id sei_tvdb
           ON sei_tvdb.show_id = sh.id AND sei_tvdb.service = 'tvdb'
         WHERE sh.tracked = 1 AND s.anilist_id IS NOT NULL
+          AND s.kind = 'tvdb_season' AND s.season_number IS NOT NULL
         """
     ).fetchall()
 
@@ -123,13 +134,10 @@ def check_anilist_id_mismatch(conn: sqlite3.Connection) -> dict:
             tvdb_id = int(row["tvdb_id"])
         except (TypeError, ValueError):
             continue
-        candidates = index.get(tvdb_id, [])
-        candidate = _resolve_by_position(candidates, row["season_number"])
-        if candidate is None:
-            continue  # Fribb has no unambiguous opinion for this position — not this signal's job
-        fribb_anilist_id, _fribb_mal_id = fribb.extract_ids(candidate)
-        if fribb_anilist_id is None:
-            continue
+        expected = _fribb_anilist_ids(index.get(tvdb_id, []), row["season_number"])
+        if len(expected) != 1:
+            continue  # none (no Fribb entry for this season) or several (split cour): no opinion
+        (fribb_anilist_id,) = expected
         checked += 1
         if fribb_anilist_id == row["anilist_id"]:
             continue
