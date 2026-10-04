@@ -1262,6 +1262,7 @@ ANIDB_REFRESH_DAYS = 7  # watching/planned anime are re-fetched weekly once the 
 ANIDB_BAN_BACKOFF_SECONDS = 24 * 3600
 _banned_until: float = 0.0  # in-process: a restart forgets it (one request, then back off)
 ANIDB_DAILY_CAP = 200  # anime per UTC day (user, 2026-09-28)
+ANIDB_REFRESH_MAX_PER_CLICK = 5  # the per-show refresh button: one click, at most this many anime
 
 # Module-level timestamp for rate limiting across calls within one tick.
 _last_api_call: float = 0.0
@@ -1587,11 +1588,12 @@ def refresh_anime_now(conn, anidb_ids: list[int]) -> dict:
     """The per-show refresh button's AniDB step. Same limits as the drip, because it shares its
     state: nothing during the ban back-off, nothing past ANIDB_DAILY_CAP anime today, and
     nothing for an anime fetched in the last 24 h (AniDB asks not to re-request the same
-    anime). Returns the drip's stats plus `refused` (why anything was held back) and `recent`
-    (how many were skipped as fetched in the last 24 h)."""
+    anime) — and at most ANIDB_REFRESH_MAX_PER_CLICK anime per call. Returns the drip's stats
+    plus `refused` (why anything was held back), `recent` (skipped as fetched in the last 24 h)
+    and `left` (not fetched this time because of the per-click limit)."""
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     stats = {"fetched": 0, "episodes_stored": 0, "skipped": 0, "banned": False,
-             "recent": 0, "refused": None}
+             "recent": 0, "left": 0, "refused": None}
     if not anidb_ids:
         return stats
     if time.time() < _banned_until:
@@ -1611,7 +1613,12 @@ def refresh_anime_now(conn, anidb_ids: list[int]) -> dict:
         if last is not None and last >= day_ago:
             stats["recent"] += 1
         else:
-            todo.append(aid)
+            todo.append((last or "", aid))  # never fetched sorts first, then the oldest
+    todo = [aid for _last, aid in sorted(todo)]
+    # One click never holds the (single-threaded) server for a franchise's worth of 4 s calls
+    # (Pokémon has 65 AniDB entries): the drip's batch size, the rest on the next click or the drip.
+    stats["left"] = max(0, len(todo) - ANIDB_REFRESH_MAX_PER_CLICK)
+    todo = todo[:ANIDB_REFRESH_MAX_PER_CLICK]
     if len(todo) > room:
         stats["refused"] = (
             f"AniDB's daily limit ({ANIDB_DAILY_CAP}) is used up for today"

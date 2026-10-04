@@ -86,6 +86,8 @@ def refresh_show_data(conn, show_id: str) -> dict:
                 parts = [f"{stats['fetched']} anime fetched ({stats['episodes_stored']} episodes)"]
                 if stats["recent"]:
                     parts.append(f"{stats['recent']} already fetched in the last 24 h")
+                if stats["left"]:
+                    parts.append(f"{stats['left']} more left for the next click (or the drip)")
                 if stats["skipped"]:
                     parts.append(f"{stats['skipped']} could not be read")
                 if stats["refused"]:

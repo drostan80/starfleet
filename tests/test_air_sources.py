@@ -341,6 +341,15 @@ def test_refresh_stops_at_the_daily_cap(conn, anidb_state, monkeypatch):
     assert "daily limit" in anidb.refresh_anime_now(conn, [1002])["refused"]
 
 
+def test_one_click_fetches_at_most_a_batch_and_says_how_many_are_left(conn, anidb_state):
+    stats = anidb.refresh_anime_now(conn, list(range(2000, 2012)))  # a franchise: 12 entries
+    assert stats["fetched"] == anidb.ANIDB_REFRESH_MAX_PER_CLICK == len(anidb_state)
+    assert stats["left"] == 12 - anidb.ANIDB_REFRESH_MAX_PER_CLICK
+    again = anidb.refresh_anime_now(conn, list(range(2000, 2012)))  # next click: the next batch
+    assert again["recent"] == anidb.ANIDB_REFRESH_MAX_PER_CLICK
+    assert not set(anidb_state[:5]) & set(anidb_state[5:])
+
+
 def test_a_ban_during_the_refresh_starts_the_back_off(conn, monkeypatch):
     monkeypatch.setattr(anidb, "_banned_until", 0.0)
     monkeypatch.setattr(anidb, "fetch_anime_episodes", lambda *_a, **_k: "BANNED")

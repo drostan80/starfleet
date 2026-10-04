@@ -69,13 +69,20 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 - ⏳ **Refresh show data button** — **built in dev, not deployed.** The ↻ on the show page now runs `refreshShowData`: the
       metadata fetch, then TVmaze (TV) or AniDB + Syoboi (anime), every schedule listed, chosen schedules re-applied; the page
       then fetches art (the manual fetch, ignores the not-found cache) and reloads the show; a banner lists each step.
-      AniDB shares the drip's state: 24 h ban back-off, 200/day cap, and an anime fetched in the last 24 h is not re-asked.
+      AniDB shares the drip's state: 24 h ban back-off, 200/day cap, an anime fetched in the last 24 h is not re-asked, and
+      one click fetches at most 5 anime (a franchise can have dozens of AniDB entries — Pokémon 65, Dragon Ball Z 22 — at
+      4 s each); the banner says how many are left. Dev check of the daily-pass change on the 11 newly due shows (prod copy):
+      +80 episode rows (the goal), +1 open review (Broken Saintess: an AniList sequel the add check could not place), no show
+      or season status changed, no season rows, no list_sync_log, no captured Sonarr/AniList/MAL writes.
       **Hotel Inhumans S2 E1 (10-04), corrected:** the plain refresh already fixes it (AniList 2026-10-04T14:45Z replaces the
       stale S1 date; checked in dev). It stayed wrong only because the daily refresh skips *planned* shows (and AniList is
-      the one source allowed to move its own date later). So the button, not a rule change, is the fix; no wrong-early-date
-      trap exists for a watching show.
-- [ ] **To apply after the drip is done** (user 10-04): deploy the dev branch (migration `e5f6a7b8c9d1` runs on start);
-      then refresh the stuck shows once; check the 1-minute AniList-vs-Sonarr "delay" reviews a refresh can open
+      the one source allowed to move its own date later). So the button is the fix for this case. The trap itself is real for
+      other sources: a wrong *early* date written by Syoboi, AniDB or TVmaze still beats a correct later one, unless that
+      same source corrects it or you choose a schedule for the season (R1.0b) — a watching show is not immune.
+- [ ] **To apply after the drip is done** (user 10-04): deploy the dev branch (migration `e5f6a7b8c9d1` runs on start;
+      note the drip's per-anime fetch was refactored into a shared helper — same behaviour, tests pass); check the proxy
+      read timeout in front of LCARS (nginx/caddy) is long enough for the refresh button (up to ~1 min); then refresh
+      the stuck shows once; check the 1-minute AniList-vs-Sonarr "delay" reviews a refresh can open
       (Hotel Inhumans S1 showed several in dev: AniList 14:46 vs Sonarr 14:45 on downloaded episodes).
 
 Full build history archived to `~/repos/starfleet-archive`.
