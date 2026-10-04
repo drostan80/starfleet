@@ -12305,3 +12305,25 @@ async def test_refresh_show_data_does_nothing_while_automation_is_frozen(
     )
     [only] = data["refreshShowData"]["steps"]
     assert only["ok"] is False and "frozen" in only["detail"]
+
+
+async def test_due_for_season_reconciliation_excludes_a_level_with_no_season_number(
+    client, migrated_db
+):
+    # A special has no season number; reconcileSeasonMapping takes one, so asking for it failed
+    # on every hourly tick (382 times in 48 h on prod, 10-04).
+    show = await _add_watching_show(client, titleRomaji="Has A Special")
+    _insert_episode_with_air_date(migrated_db, "e-dsr090", show["id"], None)  # airing
+    _insert_season(migrated_db, "z-dsr090", show["id"], 1, last_reconciled_at=None)
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, source, matched, manual_override,"
+        " kind, created_at, updated_at)"
+        " VALUES ('z-dsr091', ?, NULL, 'unmatched', 0, 0, 'special',"
+        " '2026-08-09T00:00:00Z', '2026-08-09T00:00:00Z')",
+        (show["id"],),
+    )
+    conn.commit()
+    data = await gql(client, DUE_FOR_SEASON_RECONCILIATION_QUERY, headers=auth_headers())
+    season_ids = {e["node"]["id"] for e in data["dueForSeasonReconciliation"]["edges"]}
+    assert "z-dsr090" in season_ids and "z-dsr091" not in season_ids

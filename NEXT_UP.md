@@ -26,8 +26,17 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       Magic Repo Man). A manual refresh already brings in everything (checked in dev: Secret Saint E2–E13 arrive).
       Not changed (ask first): the weekly Fribb reconcile (`dueForSeasonReconciliation`) has the same blind spot; planned
       shows are never refreshed daily.
-- [ ] **identity-mismatch check crashes** on levels with no season number (`_resolve_by_position`, None < 1), and
-      `reconcileSeasonMapping` the same (specials). Fails the hourly sweep every run since 10-01; it is the last step, so the steps before it still run — only the identity check itself is lost.
+- ⏳ **identity-mismatch check crashes** on levels with no season number (`_resolve_by_position`, `None < 1`), and the weekly
+      `reconcileSeasonMapping` failed on the same levels (382 failures in 48 h on prod; logged per season, retried hourly).
+      **Weekly half fixed in dev** (`dueForSeasonReconciliation` skips levels with no season number; branch `dev-airing-sources`).
+      **Identity half NOT fixed — needs your decision (10-04):** a plain None guard makes the check run again, and on the prod
+      copy it then flags **58** seasons, mostly false: 27 are `part` levels compared as whole seasons, and the rest come from
+      the check's assumption "LCARS season number = position in Fribb's list", which the rebuilt data breaks (a row for every
+      TVDB season, e.g. Gintama S1–S10 against 5 Fribb entries; FLCL, Bleach, JoJo likewise). Read-only prototype on the prod
+      copy: comparing Fribb's own `season.tvdb` number with the LCARS TVDB-season number (kind tvdb_season only; a season
+      with several Fribb entries = split cours = ambiguous, no opinion) gives **1 mismatch of 1,373** (R.O.D -READ OR DIE-
+      S1: stored 208, Fribb 209). Proposed change, awaiting yes. Until then the check keeps failing as its last sweep step
+      (harmless: nothing after it, nothing flagged).
 - [ ] **Part order** — Bookworm S1, Dr. STONE S4 (data patch, after the drip); re-audit 16 multi-part seasons with a
       part with no span once the drip is done.
 - [ ] **138 width checks** (should clear as AniDB data arrives) and **131 Fribb-unmatched** (information) — re-look

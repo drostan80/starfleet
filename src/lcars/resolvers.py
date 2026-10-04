@@ -1075,6 +1075,9 @@ def resolve_due_for_season_reconciliation(_, info, **page_args):
     placeholders = ",".join("?" for _ in airing_show_ids)
     due = conn.execute(
         f"SELECT * FROM season WHERE show_id IN ({placeholders})"
+        # a level with no season number (a special...) can't be reconciled by number — asking
+        # for it failed on every hourly tick (reconcileSeasonMapping takes the number)
+        " AND season_number IS NOT NULL"
         " AND (last_reconciled_at IS NULL OR last_reconciled_at < ?)",
         (*airing_show_ids, cutoff),
     ).fetchall()
