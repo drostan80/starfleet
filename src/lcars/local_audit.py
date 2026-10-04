@@ -753,6 +753,25 @@ def _create_from_untracked_entry(
         return
 
 
+def _ensure_arr_link(conn, show_ids, media_shape: str, title_slug: str | None) -> None:
+    """The deep link into the local Sonarr/Radarr web UI (`show_external_id` service
+    sonarr/radarr) for every show holding this series'/movie's id — the Sonarr/Radarr icon on
+    calendar and list cards lights up only when this row exists. Until 2026-10-04 only a monthly
+    sweep wrote it (service_presence), so every show added since the last pass — the 44 the
+    rebuild created, shows added through other routes — kept a dark icon for up to a month.
+    Writes only a missing row (`write_arr_external_id` commits on each call, so the steady
+    state must be zero writes); a link that already exists is left alone."""
+    if not title_slug:
+        return
+    service = "sonarr" if media_shape == "episodic" else "radarr"
+    for show_id in show_ids:
+        has = conn.execute(
+            "SELECT 1 FROM show_external_id WHERE show_id = ? AND service = ?", (show_id, service)
+        ).fetchone()
+        if has is None:
+            shows.write_arr_external_id(conn, show_id, media_shape, title_slug)
+
+
 def reconcile_arr_state(conn) -> dict:
     """Lighter-weight, scheduled counterpart to audit_local_files()
     above — NEXT_UP.md follow-up, rides Ops's existing availability
@@ -809,6 +828,10 @@ def reconcile_arr_state(conn) -> dict:
                     if tvdb_id not in known_tvdb_ids:
                         continue  # already handled as untracked above
                     show_id = _show_id_for_tvdb(conn, series["tvdbId"])
+                    _ensure_arr_link(
+                        conn, sonarr_match.sibling_show_ids_for_tvdb(conn, series["tvdbId"]),
+                        "episodic", series.get("titleSlug"),
+                    )
                     corrected, _orphans = _audit_sonarr_series(
                         conn, client, show_id, series, now, walk_orphans=False
                     )
@@ -834,6 +857,8 @@ def reconcile_arr_state(conn) -> dict:
                     if tmdb_id not in known_tmdb_ids:
                         continue
                     show_id = _show_id_for_tmdb_movie(conn, movie["tmdbId"])
+                    _ensure_arr_link(conn, [show_id] if show_id else [], "movie",
+                                     movie.get("titleSlug"))
                     corrected, _orphans = _audit_radarr_movie(
                         conn, show_id, movie, now, walk_orphans=False
                     )

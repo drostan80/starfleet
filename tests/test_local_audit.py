@@ -1088,3 +1088,99 @@ def test_reconcile_never_pauses_a_movie_unmonitored_in_radarr(conn, monkeypatch)
 
     result = local_audit.reconcile_arr_state(conn)
     assert result["to_pause"] == []  # Radarr's monitoring never changes LCARS
+
+
+# --- the Sonarr/Radarr deep link, written on the hourly reconcile (2026-10-04) ----------------
+
+
+def _configure_public_urls():
+    cfg = config.get_current()
+    cfg.sonarr_public_url = "http://sonarr.public:8989"
+    cfg.radarr_public_url = "http://radarr.public:7878"
+
+
+def _arr_link(conn, show_id, service):
+    return conn.execute(
+        "SELECT external_id, url FROM show_external_id WHERE show_id = ? AND service = ?",
+        (show_id, service),
+    ).fetchone()
+
+
+def test_reconcile_links_a_show_that_is_in_sonarr_but_has_no_link(conn, monkeypatch):
+    # The dark Sonarr icon (10-04): 56 tracked shows were in Sonarr with no sonarr link, because
+    # only a monthly sweep wrote it.
+    _configure_sonarr()
+    _configure_public_urls()
+    _add_show(conn, "s-lnk001", tvdb_id=478752)
+    series = [{"id": 1, "tvdbId": 478752, "title": "Overgeared", "titleSlug": "overgeared",
+               "path": "/data/overgeared", "monitored": True}]
+    fake = _FakeSonarrClient(series, {1: []})
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+    local_audit.reconcile_arr_state(conn)
+
+    link = _arr_link(conn, "s-lnk001", "sonarr")
+    assert (link["external_id"], link["url"]) == (
+        "overgeared", "http://sonarr.public:8989/series/overgeared")
+
+
+def test_reconcile_links_every_show_holding_the_series_tvdb_id(conn, monkeypatch):
+    _configure_sonarr()
+    _configure_public_urls()
+    _add_show(conn, "s-lnk002", tvdb_id=111)
+    _add_show(conn, "s-lnk003", tvdb_id=111)
+    series = [{"id": 1, "tvdbId": 111, "title": "Two", "titleSlug": "two", "path": "/d",
+               "monitored": True}]
+    monkeypatch.setattr(sonarr_client, "SonarrClient",
+                        lambda *a, **kw: _FakeSonarrClient(series, {1: []}))
+    local_audit.reconcile_arr_state(conn)
+    assert _arr_link(conn, "s-lnk002", "sonarr") and _arr_link(conn, "s-lnk003", "sonarr")
+
+
+def test_reconcile_leaves_an_existing_link_alone_and_does_not_rewrite_it(conn, monkeypatch):
+    _configure_sonarr()
+    _configure_public_urls()
+    _add_show(conn, "s-lnk004", tvdb_id=222)
+    conn.execute(
+        "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+        " VALUES ('s-lnk004', 'sonarr', 'old-slug', 'http://old/series/old-slug', 'x')"
+    )
+    conn.commit()
+    series = [{"id": 1, "tvdbId": 222, "title": "T", "titleSlug": "new-slug", "path": "/d",
+               "monitored": True}]
+    monkeypatch.setattr(sonarr_client, "SonarrClient",
+                        lambda *a, **kw: _FakeSonarrClient(series, {1: []}))
+    local_audit.reconcile_arr_state(conn)
+    assert _arr_link(conn, "s-lnk004", "sonarr")["external_id"] == "old-slug"
+
+
+def test_reconcile_writes_no_link_without_a_public_url(conn, monkeypatch):
+    _configure_sonarr()  # no sonarr_public_url: a link would be unusable from a browser
+    _add_show(conn, "s-lnk005", tvdb_id=333)
+    series = [{"id": 1, "tvdbId": 333, "title": "T", "titleSlug": "t", "path": "/d",
+               "monitored": True}]
+    monkeypatch.setattr(sonarr_client, "SonarrClient",
+                        lambda *a, **kw: _FakeSonarrClient(series, {1: []}))
+    local_audit.reconcile_arr_state(conn)
+    assert _arr_link(conn, "s-lnk005", "sonarr") is None
+
+
+def test_reconcile_links_a_newly_created_show_and_a_radarr_movie(conn, monkeypatch):
+    _configure_sonarr()
+    _configure_radarr()
+    _configure_public_urls()
+    series = [{"id": 1, "tvdbId": 999888, "title": "New Show", "titleSlug": "new-show",
+               "path": "/tv/new-show", "monitored": True}]
+    monkeypatch.setattr(sonarr_client, "SonarrClient",
+                        lambda *a, **kw: _FakeSonarrClient(series, {1: []}))
+    _add_show(conn, "s-lnk006", tmdb_id=777, media_shape="movie")
+    movies = [{"tmdbId": 777, "title": "Film", "titleSlug": "film-777", "path": "/m",
+               "hasFile": False}]
+    monkeypatch.setattr(radarr_client, "RadarrClient",
+                        lambda *a, **kw: _FakeRadarrClient(movies))
+    local_audit.reconcile_arr_state(conn)
+    created = conn.execute(
+        "SELECT sei.show_id FROM show_external_id sei WHERE sei.service='tvdb'"
+        " AND sei.external_id='999888'").fetchone()
+    assert _arr_link(conn, created["show_id"], "sonarr")["external_id"] == "new-show"
+    assert _arr_link(conn, "s-lnk006", "radarr")["external_id"] == "film-777"
