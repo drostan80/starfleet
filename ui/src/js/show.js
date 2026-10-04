@@ -17,12 +17,13 @@ import {
   fetchShow, addWatchEvent, deleteWatchEvent, setScore, setSeasonScore,
   setSeasonStatus, setSeasonMapping, reconcileSeasonMapping,
   fetchEpisodeSynopses,
-  fetchShowArtForSeasons, fetchShowArtShowLevel,
+  fetchShowArtForSeasons, fetchShowArtShowLevel, fetchShowArt,
+  refreshShowData, fetchAirSchedules, setSeasonAirSchedule, clearSeasonAirSchedule,
   setShowSynopsis, setEpisodeSynopsis, fetchSynopsisCandidates,
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=23';
+} from './api.js?v=24';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange,
@@ -334,22 +335,33 @@ function renderExtBadges(container, show, cfg) {
     container.appendChild(amendBtn);
   }
 
-  // "↻" button to refresh metadata (re-runs server-side ID resolution)
+  // "↻" button: refresh this show's data — the metadata fetch, TVmaze (TV) or AniDB + Syoboi
+  // (anime) episode data, every source's schedule, then art (the manual fetch, which ignores the
+  // "not found" cache). Reports each step; the page then reloads the show.
   const refreshBtn = el('button', 'sp-ext-badge sp-ext-add', '↻');
-  refreshBtn.title = 'Refresh metadata (re-fetch IDs from AniList/TVDB)';
+  refreshBtn.title = 'Refresh show data: episodes, schedules and art for this show';
   refreshBtn.addEventListener('click', async () => {
     refreshBtn.disabled = true;
     refreshBtn.textContent = '…';
+    showBanner('Refreshing show data — this can take up to a minute…', 'ok');
     try {
-      const updated = await refreshShowMetadata(show.id);
-      // Update local show data with refreshed externalIds
-      if (updated.externalIds?.edges) {
-        show.externalIds = updated.externalIds.edges.map(e => e.node);
+      const result = await refreshShowData(show.id);
+      let artNote = '';
+      try {
+        await fetchShowArt(show.id);
+      } catch (artErr) {
+        artNote = ` Art: ${artErr.message}`;
       }
-      renderExtBadges(container, show, cfg);
-      showBanner('Metadata refreshed.', 'ok');
+      const failed = result.steps.filter(st => !st.ok);
+      const lines = result.steps.map(st => `${st.ok ? '✓' : '✗'} ${st.name}: ${st.detail}`);
+      showBanner(
+        `${failed.length || artNote ? 'Refresh finished with problems.' : 'Refreshed.'} ${lines.join(' · ')}${artNote}`,
+        failed.length || artNote ? 'warn' : 'ok'
+      );
+      window.dispatchEvent(new Event('starfleet:refetch-show'));
     } catch (e) {
       showBanner(`Refresh failed: ${e.message}`, 'error');
+    } finally {
       refreshBtn.disabled = false;
       refreshBtn.textContent = '↻';
     }
@@ -2099,6 +2111,142 @@ function openSplitSeasonEditor(card, sn, episodes, show, cfg) {
   hdr.after(editor);
 }
 
+/* ── Air-date schedules: every source's schedule for a season, to choose between ─────── */
+
+/** "Fri 17:00" in the viewer's own timezone; a date-only source (AniDB) has no time. */
+function slotLabel(iso, dateOnly) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  if (dateOnly) {
+    return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  }
+  return d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function dateTimeLabel(iso, dateOnly) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  if (dateOnly) return d.toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: 'UTC' });
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+/** The panel's body: what the season follows now, then one row per known schedule. */
+function renderSchedulePanel(panel, entry, show, seasonData) {
+  panel.innerHTML = '';
+  const options = entry?.options || [];
+  if (!options.length) {
+    panel.appendChild(el('div', 'sp-sched-empty',
+      'No source has given a schedule for this season yet. Use ↻ (refresh show data) to collect them.'));
+    return;
+  }
+  const chosen = options.find(o => o.chosen);
+  const status = chosen
+    ? `Following ${chosen.label} — the other sources no longer change this season's dates.`
+    : `No schedule chosen: dates follow the automatic rule (currently from ${entry.currentSource || 'no source'}; a different source only wins by an earlier date).`;
+  const head = el('div', 'sp-sched-head');
+  head.appendChild(el('span', 'sp-sched-status', status));
+  head.appendChild(el('span', 'sp-sched-tz', 'times shown in your local time'));
+  if (chosen) {
+    const release = el('button', 'sp-mapping-save sp-sched-release', 'Back to automatic');
+    release.addEventListener('click', async () => {
+      release.disabled = true;
+      try {
+        const updated = await clearSeasonAirSchedule(seasonData.id);
+        renderSchedulePanel(panel, updated, show, seasonData);
+        showBanner('The season follows the automatic rule again.', 'ok');
+        reopenScheduleFor = seasonData.id;
+        window.dispatchEvent(new Event('starfleet:refetch-show'));
+      } catch (err) {
+        showBanner(`Failed: ${err.message}`, 'error');
+        release.disabled = false;
+      }
+    });
+    head.appendChild(release);
+  }
+  panel.appendChild(head);
+
+  for (const opt of options) {
+    const row = el('div', `sp-sched-opt${opt.chosen ? ' chosen' : ''}${opt.inUse ? ' in-use' : ''}`);
+    const main = el('div', 'sp-sched-opt-main');
+    main.appendChild(el('span', 'sp-sched-label', opt.label));
+    const first = opt.episodes[0];
+    main.appendChild(el('span', 'sp-sched-slot', first ? slotLabel(first.airDateUtc, opt.dateOnly) : ''));
+    main.appendChild(el('span', 'sp-sched-range',
+      `${dateTimeLabel(opt.firstAirDateUtc, opt.dateOnly)} → ${dateTimeLabel(opt.lastAirDateUtc, opt.dateOnly)}`));
+    main.appendChild(el('span', 'sp-sched-count',
+      `${opt.episodeCount} of ${entry.episodeCount} eps`));
+    if (opt.inUse) main.appendChild(el('span', 'sp-sched-tag', '● in use'));
+    if (opt.chosen) main.appendChild(el('span', 'sp-sched-tag chosen', '✔ chosen'));
+    row.appendChild(main);
+
+    const actions = el('div', 'sp-sched-actions');
+    const detailsBtn = el('button', 'sp-season-edit-btn', 'dates');
+    const useBtn = el('button', 'sp-mapping-save', opt.chosen ? 'Chosen' : 'Use this');
+    useBtn.disabled = opt.chosen;
+    useBtn.addEventListener('click', async () => {
+      useBtn.disabled = true;
+      try {
+        const updated = await setSeasonAirSchedule(seasonData.id, opt.source, opt.channel);
+        renderSchedulePanel(panel, updated, show, seasonData);
+        showBanner(`Season now follows ${opt.label}; its dates were updated.`, 'ok');
+        reopenScheduleFor = seasonData.id;
+        window.dispatchEvent(new Event('starfleet:refetch-show'));
+      } catch (err) {
+        showBanner(`Failed: ${err.message}`, 'error');
+        useBtn.disabled = false;
+      }
+    });
+    actions.appendChild(detailsBtn);
+    actions.appendChild(useBtn);
+    row.appendChild(actions);
+
+    const detail = el('div', 'sp-sched-dates');
+    detail.hidden = true;
+    for (const ep of opt.episodes) {
+      const line = el('div', 'sp-sched-date-row');
+      line.appendChild(el('span', 'sp-sched-ep', `S${ep.season}E${ep.episode}`));
+      line.appendChild(el('span', 'sp-sched-when', dateTimeLabel(ep.airDateUtc, opt.dateOnly)));
+      const differs = ep.currentAirDateUtc && ep.currentAirDateUtc !== ep.airDateUtc;
+      if (differs) {
+        line.appendChild(el('span', 'sp-sched-now',
+          `now ${dateTimeLabel(ep.currentAirDateUtc, false)}`));
+      }
+      detail.appendChild(line);
+    }
+    detailsBtn.addEventListener('click', () => { detail.hidden = !detail.hidden; });
+    row.appendChild(detail);
+    panel.appendChild(row);
+  }
+}
+
+/** After choosing, the page reloads the show; this reopens the chooser on the same season. */
+let reopenScheduleFor = null;
+
+/** The 🗓 button on a season card: opens/closes the schedule chooser under the header. */
+function buildScheduleButton(card, hdr, seasonData, show) {
+  const btn = el('button', 'sp-season-edit-btn sp-sched-btn', '🗓');
+  btn.title = 'Air-date schedules: choose which source this season follows';
+  btn.addEventListener('click', async e => {
+    e.stopPropagation();
+    const existing = card.querySelector('.sp-sched-panel');
+    if (existing) { existing.remove(); return; }
+    const panel = el('div', 'sp-sched-panel');
+    panel.appendChild(el('div', 'sp-sched-empty', 'Loading schedules…'));
+    hdr.after(panel);
+    try {
+      const all = await fetchAirSchedules(show.id);
+      renderSchedulePanel(panel, all.find(x => x.seasonId === seasonData.id), show, seasonData);
+    } catch (err) {
+      panel.textContent = `Could not load schedules: ${err.message}`;
+    }
+  });
+  if (reopenScheduleFor === seasonData.id) {
+    reopenScheduleFor = null;
+    setTimeout(() => btn.click(), 0);  // the card is attached to the page by then
+  }
+  return btn;
+}
+
 function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startOpen, opts = {}) {
   const {
     idSuffix = '', rangeLabel = null, scoreSpans = null, minisodes = [],
@@ -2206,6 +2354,9 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     }
 
   }
+
+  // Air-date schedules chooser — every level that has a season row
+  if (seasonData?.id) meta.appendChild(buildScheduleButton(card, hdr, seasonData, show));
 
   // Edit mapping button — works for mapped AND unmapped seasons
   if (isTvdbSeason) {
@@ -3305,6 +3456,13 @@ export async function init() {
     // A watch just launched from this page reports asynchronously (native
     // VLC or desktop mpv-helper — see launchMpv() in calendar.js) — once
     // it's had time to land, re-fetch so watched-state badges are current.
+    window.addEventListener('starfleet:refetch-show', async () => {
+      try {
+        rerender(await fetchShow(showId));
+      } catch (err) {
+        console.warn('Refetch after refresh failed:', err);
+      }
+    });
     window.addEventListener('starfleet:refresh-after-watch', async () => {
       if (root.querySelector('textarea, input, .sp-mapping-editor, .sp-syn-editor, .sp-ep-syn-edit-area')) return;
       try {

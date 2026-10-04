@@ -979,6 +979,60 @@ export async function refreshShowMetadata(showId) {
 }
 
 /**
+ * The show page's refresh button: metadata, then TVmaze (TV) or AniDB + Syoboi (anime) for this
+ * one show, then every schedule listed. Resolves to { steps: [{name, ok, detail}], candidates }.
+ */
+export async function refreshShowData(showId) {
+  const data = await gql(`
+    mutation RefreshShowData($showId: ID!) {
+      refreshShowData(showId: $showId) {
+        candidates
+        steps { name ok detail }
+      }
+    }
+  `, { showId });
+  return data.refreshShowData;
+}
+
+const AIR_SCHEDULES_FIELDS = `
+  seasonId seasonNumber partNumber episodeCount currentSource chosenSource chosenChannel
+  options {
+    source channel label episodeCount firstAirDateUtc lastAirDateUtc dateOnly inUse chosen
+    episodes { episodeId season episode airDateUtc currentAirDateUtc }
+  }
+`;
+
+/** Every known schedule per season of a show (one option per source, per station for Syoboi). */
+export async function fetchAirSchedules(showId) {
+  const data = await gql(`
+    query AirSchedules($showId: ID!) { airSchedules(showId: $showId) { ${AIR_SCHEDULES_FIELDS} } }
+  `, { showId });
+  return data.airSchedules;
+}
+
+/** Make a season follow one source's schedule (channel = Syoboi station id, '' otherwise). */
+export async function setSeasonAirSchedule(seasonId, source, channel = '') {
+  const data = await gql(`
+    mutation SetAirSchedule($seasonId: ID!, $source: String!, $channel: String) {
+      setSeasonAirSchedule(seasonId: $seasonId, source: $source, channel: $channel) {
+        ${AIR_SCHEDULES_FIELDS}
+      }
+    }
+  `, { seasonId, source, channel });
+  return data.setSeasonAirSchedule;
+}
+
+/** Stop following a chosen schedule (dates stay; the automatic rule resumes). */
+export async function clearSeasonAirSchedule(seasonId) {
+  const data = await gql(`
+    mutation ClearAirSchedule($seasonId: ID!) {
+      clearSeasonAirSchedule(seasonId: $seasonId) { ${AIR_SCHEDULES_FIELDS} }
+    }
+  `, { seasonId });
+  return data.clearSeasonAirSchedule;
+}
+
+/**
  * Correct a wrong TVDB/TMDB external ID: validates, deletes old arr entry,
  * adds correct one, updates LCARS link.
  */

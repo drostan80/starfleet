@@ -17,14 +17,15 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       all failed for 3.5 h (drip stalled, no list sync) until the user recreated the three containers 10:12Z. Will
       recur on every reboot. Options to decide: `dns:` in starfleet.yml, or Docker waiting for network-online.
       (gluetun/qbittorrent/autobrr/prowlarr-mam/port-sync show the same marker — not checked.)
-- [ ] **New episodes never fetched once every known episode has aired** (found 10-04, A Tale of the Secret Saint E2
-      on the server, not in LCARS). The daily episode refresh (`dueForMetadataRefresh`) takes only **watching** shows
-      that are **airing**, and "airing" = an episode with no date or a future date (`_show_is_airing`). Secret Saint
-      was created 09-30 with E1 only (refreshed 09-30 06:33), planned until E1 was watched 10-03 14:40 → watching,
-      but E1 had aired, so no longer "airing" → never refreshed; E2 (aired the same day, double premiere) and the
-      rest never arrive. Same state 10-04: Magic Repo Man, #I'm Looking For a Zombie, VERTEX FORCE, Seven Knights of
-      the Marronnier Kingdom, Magical Explorer (1 episode each, last refresh 09-30); possibly Ranma1/2 (2024),
-      Broken Saintess, Ramparts of Ice (last refresh 08-11 to 09-05).
+- ⏳ **New episodes never fetched once every known episode has aired** (found 10-04, A Tale of the Secret Saint E2).
+      Cause: the daily refresh took only watching + "airing" shows (a known episode with no/future date). **Built in dev,
+      not deployed** (branch `dev-airing-sources`, commit 6cff5bf): a show is also due when Sonarr's stored series status
+      is continuing/upcoming or an episode aired in the last 14 days (`_show_needs_episode_refresh`; RULEBOOK R1.0c).
+      On the prod copy: 44 → 55 shows refreshed daily — the 11 added are exactly the stuck ones (Reacher, Star Trek SNW,
+      Ramparts of Ice, Tomb Raider King, Ranma1/2, Broken Saintess, Magical Explorer, Zombie, VERTEX FORCE, Seven Knights,
+      Magic Repo Man). A manual refresh already brings in everything (checked in dev: Secret Saint E2–E13 arrive).
+      Not changed (ask first): the weekly Fribb reconcile (`dueForSeasonReconciliation`) has the same blind spot; planned
+      shows are never refreshed daily.
 - [ ] **identity-mismatch check crashes** on levels with no season number (`_resolve_by_position`, None < 1), and
       `reconcileSeasonMapping` the same (specials). Fails the hourly sweep every run since 10-01; it is the last step, so the steps before it still run — only the identity check itself is lost.
 - [ ] **Part order** — Bookworm S1, Dr. STONE S4 (data patch, after the drip); re-audit 16 multi-part seasons with a
@@ -54,20 +55,28 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 
 ### C. New (user, 2026-09-30)
 - [ ] **Scoring idea** — to be explained by the user.
-- [ ] **Schedule setter** — see every air-date schedule available for a show, from every source, and all of each
-      source's schedules (not one per source: e.g. AniList Fridays 17:00; Syoboi's several stations/times; each
-      streaming service), so there is a real choice; pick the one that fits and LCARS uses it for the show's air
-      dates. Example of the view: https://www.livechart.me/anime/13417/schedules
-- [ ] **Refresh show data button** (show page) — one click runs a pass for that show: episode data from TVmaze or
-      AniDB as fits the show, the schedule sources (once the schedule setter exists), and art. Prompted 10-01 by
-      Hotel Inhumans S2 E1 missing from the calendar: show added correctly, but E1's air date clearly wrong (should
-      be fixed by the drip; a manual refresh would cover such cases later).
-      **Checked 10-01: the drip will NOT fix it.** S2E1 holds S1E1's AniList date (2025-07-06 14:46Z, source
-      `anilist`), wrong since at least the 08-15 backup; real date 2026-10-04 14:45Z (AniList 199426 and TVmaze
-      agree; S2's AniList link is correct). Nothing corrects it: AniDB/TVmaze/Syoboi only fill empty dates or lose
-      to an earlier date from another source ("earliest wins", `airdate_priority.should_apply`), and AniList's own
-      re-check (the only source that may move it later) runs only for **watching** + airing shows — this show is
-      planned. Same trap for any wrong-early date on a non-watching show.
+- ⏳ **Schedule setter** — **built in dev, not deployed** (branch `dev-airing-sources`, commit 84907f9 + UI commit; RULEBOOK
+      R1.0b). Every source's schedule for each season is stored as a candidate (Sonarr raw, TVmaze, AniDB date-only, AniList,
+      animeschedule, **each Syoboi station separately**, with station names); a 🗓 button on each season card lists them
+      with weekday/time slot, date range, per-episode dates, "in use" / "chosen"; "Use this" makes the season follow it
+      (dates written, air_date_change recorded, AniList/animeschedule/Syoboi-rewire leave the season alone, a manual date
+      still wins), "Back to automatic" releases it. Default stays earliest-wins. Migration `e5f6a7b8c9d1` (additive).
+      Limits to know: (a) no streaming-service schedules (no API; livechart not scraped); (b) AniList/animeschedule candidates
+      only exist after a read (the refresh button or the normal polls); (c) TVmaze candidates exist for TV shows (and any
+      show whose TVmaze episodes are stored) — the refresh does not fetch TVmaze episodes for anime, as the drip's guard says;
+      (d) Syoboi station names are fetched monthly from prod (ChLookup, works from the home IP, blocked by Cloudflare from
+      the dev machine's VPN IP); (e) choice is per season level, not per episode.
+- ⏳ **Refresh show data button** — **built in dev, not deployed.** The ↻ on the show page now runs `refreshShowData`: the
+      metadata fetch, then TVmaze (TV) or AniDB + Syoboi (anime), every schedule listed, chosen schedules re-applied; the page
+      then fetches art (the manual fetch, ignores the not-found cache) and reloads the show; a banner lists each step.
+      AniDB shares the drip's state: 24 h ban back-off, 200/day cap, and an anime fetched in the last 24 h is not re-asked.
+      **Hotel Inhumans S2 E1 (10-04), corrected:** the plain refresh already fixes it (AniList 2026-10-04T14:45Z replaces the
+      stale S1 date; checked in dev). It stayed wrong only because the daily refresh skips *planned* shows (and AniList is
+      the one source allowed to move its own date later). So the button, not a rule change, is the fix; no wrong-early-date
+      trap exists for a watching show.
+- [ ] **To apply after the drip is done** (user 10-04): deploy the dev branch (migration `e5f6a7b8c9d1` runs on start);
+      then refresh the stuck shows once; check the 1-minute AniList-vs-Sonarr "delay" reviews a refresh can open
+      (Hotel Inhumans S1 showed several in dev: AniList 14:46 vs Sonarr 14:45 on downloaded episodes).
 
 Full build history archived to `~/repos/starfleet-archive`.
 

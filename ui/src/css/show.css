@@ -1118,3 +1118,43 @@ a.sp-special-title:hover { color: var(--accent); }
 #show-root.hide-watched .sp-ep-row:has([data-state="WATCHED"]) {
   display: none;
 }
+
+
+/* Air-date schedule chooser (inline in a season card) */
+.sp-sched-panel {
+  border-top: 1px solid var(--border);
+  padding: 8px 16px 10px;
+  font-size: 12px;
+}
+.sp-sched-empty { color: var(--muted); padding: 4px 0; }
+.sp-sched-head {
+  display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center;
+  margin-bottom: 8px; color: var(--muted);
+}
+.sp-sched-status { color: var(--text); flex: 1 1 320px; }
+.sp-sched-tz { font-family: 'DM Mono', monospace; font-size: 10px; }
+.sp-sched-opt {
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 8px; margin-bottom: 6px; background: var(--surface-2, transparent);
+}
+.sp-sched-opt.chosen { border-color: var(--accent); }
+.sp-sched-opt-main { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.sp-sched-label { font-weight: 600; min-width: 190px; }
+.sp-sched-slot { font-family: 'DM Mono', monospace; color: var(--accent); }
+.sp-sched-range, .sp-sched-count {
+  font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted);
+}
+.sp-sched-tag { font-size: 11px; color: var(--st-watching); }
+.sp-sched-tag.chosen { color: var(--accent); }
+.sp-sched-actions { display: flex; gap: 6px; margin-top: 6px; }
+.sp-sched-dates {
+  margin-top: 6px; max-height: 220px; overflow-y: auto;
+  font-family: 'DM Mono', monospace; font-size: 11px;
+}
+.sp-sched-date-row { display: flex; gap: 12px; padding: 1px 0; }
+.sp-sched-ep { min-width: 56px; color: var(--muted); }
+.sp-sched-now { color: var(--st-paused); }
+@media (max-width: 640px) {
+  .sp-sched-panel { padding: 8px 10px; }
+  .sp-sched-label { min-width: 0; flex: 1 1 100%; }
+}

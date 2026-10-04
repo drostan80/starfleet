@@ -34,6 +34,22 @@ rule applies to TV series, ask — do not assume.
   still gets a number — a placeholder shown as **x** until its air date arrives; the
   number stored is **5000.1, 5000.2…** (higher than any real episode number, so it
   sorts as not aired yet; any number from 5000 up is a placeholder).
+- **R1.0b Air dates: every source's schedule is kept, one is followed** `[decided 2026-10-04]`:
+  each source's schedule for an episode (Sonarr/TVDB, TVmaze, AniDB — a day only —,
+  AniList, animeschedule, and **every Syoboi TV station separately**) is stored as a
+  candidate. By default a different source only replaces a stored date with an **earlier**
+  one (a later one is usually another broadcast); the same source re-asserting its own
+  value always applies. **You can choose, per season, which source (and station) it
+  follows** — the season's dates are then written from that schedule and no other source
+  changes them, until you go back to automatic. A date you set by hand on an episode
+  outranks a chosen schedule. Sources that only fill an empty date are unaffected.
+- **R1.0c A show is refreshed daily while it is still running** `[decided 2026-10-04]`: a
+  *watching* show gets the daily episode refresh when a known episode has no date or a
+  future one, **or** Sonarr says the series is continuing/upcoming, **or** an episode aired
+  in the last 14 days — so the episodes after the last known one are found. A show page
+  has a **refresh** button that does this for that one show at once: episode data (TVmaze
+  for TV; AniDB and Syoboi for anime, within AniDB's limits), every source's schedule, and
+  art.
 - **R1.2** Episodes are ordered by **absolute episode number**, derived from AniDB,
   Fribb and other sources. On disagreement, or where disambiguation is needed,
   order by **air date-time**.
@@ -810,3 +826,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-29 — R2.15a: a level completes by itself only with a confirmed episode count (AniList total = the episodes LCARS holds, or an ended series / later season, or set by you); past seasons not reviewed.
 - 2026-09-29 — R1.11 amended (span when the level has episodes or a place in a series; standalone movies and list-only entries exempt, a film with a place is not); R1.12 (a special/film inside another film's span, and a mini inside its group, are not overlaps; Monogatari a named exception); R1.13c (minis sit inside their group); R1.2f (episodes identified by title + air date; TVDB renumbering re-anchors rows); R2.7 (an unaired episode is never marked watched; a level with one is watching); R3.2a (film shows carry `tvdb_movie`, found through TMDB).
 - 2026-09-30 — R2.15b: R2.15 wins over a status you set; a completed dropped level passes the drop to the next season.
+- 2026-10-04 — R1.0b (every source's schedule kept; you choose which one a season follows; earliest-wins stays the default), R1.0c (daily refresh covers any running show; per-show refresh button).

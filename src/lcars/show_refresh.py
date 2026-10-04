@@ -92,7 +92,9 @@ def refresh_show_data(conn, show_id: str) -> dict:
                     parts.append(stats["refused"])
                 if stats["banned"]:
                     parts.append("AniDB banned this server — stopped")
-                step("AniDB", not (stats["banned"] or stats["refused"]), "; ".join(parts))
+                unread = stats["skipped"] > 0 and stats["fetched"] == 0
+                step("AniDB", not (stats["banned"] or stats["refused"] or unread),
+                     "; ".join(parts))
             except Exception as e:
                 log.exception("refresh %s: AniDB step failed", show_id)
                 step("AniDB", False, str(e))
