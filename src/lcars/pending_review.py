@@ -78,6 +78,24 @@ def open_or_extend(
     )
 
 
+def close_obsolete(
+    conn, entity_type: str, entity_id: str, field: str, note: str, source: str | None = None
+) -> int:
+    """Closes the open review(s) on this field whose finding no longer holds (the pass that opened
+    them has just run again and found nothing wrong). A review nobody can answer because the data
+    already corrected itself is noise (user, 10-05: Apothecary Diaries, R.O.D, Kanojo no
+    Tomodachi). Returns how many were closed; the caller commits."""
+    sql = (
+        "UPDATE pending_review SET resolved_at = ?, resolution_note = ?"
+        " WHERE entity_type = ? AND entity_id = ? AND field = ? AND resolved_at IS NULL"
+    )
+    args: list = [util.now_utc_iso(), note, entity_type, entity_id, field]
+    if source is not None:
+        sql += " AND source = ?"
+        args.append(source)
+    return conn.execute(sql, args).rowcount
+
+
 def already_resolved_with(conn, entity_type: str, entity_id: str, field: str, value) -> bool:
     """2026-08-12 — for a write path whose "value" is a derived message
     rather than a stored column (metadata.py's own season-split guard,

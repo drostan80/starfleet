@@ -88,3 +88,17 @@ def test_a_part_with_no_schedule_yet_leaves_its_episodes_alone(conn, monkeypatch
     dates = {r["episode"]: r["air_date_utc"] for r in conn.execute(
         "SELECT episode, air_date_utc FROM episode WHERE show_id = 's-prt001'")}
     assert dates[1] is not None and dates[13] is None
+
+
+def test_an_old_wrong_entry_review_closes_itself_once_the_schedule_agrees(conn, monkeypatch):
+    # Kanojo no Tomodachi: Sonarr's dates were wrong when the review opened; refreshed, they agree
+    from lcars import pending_review
+
+    pending_review.open_or_extend(
+        conn, "season", "z-prt001", "anilist_id", "anilist", None,
+        "season 3: AniList media 195516's airing schedule is ~5451 days from Sonarr's own dates")
+    conn.commit()
+    _schedule(monkeypatch, {195516: P1, 200927: P1 + 20 * WEEK})
+    metadata._reconcile_air_dates(conn, {"id": "s-prt001"})
+    assert conn.execute("SELECT COUNT(*) FROM pending_review WHERE resolved_at IS NULL"
+                        ).fetchone()[0] == 0

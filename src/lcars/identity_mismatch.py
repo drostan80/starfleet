@@ -140,6 +140,10 @@ def check_anilist_id_mismatch(conn: sqlite3.Connection) -> dict:
         (fribb_anilist_id,) = expected
         checked += 1
         if fribb_anilist_id == row["anilist_id"]:
+            pending_review.close_obsolete(
+                conn, "season", row["season_id"], "anilist_id",
+                "the season's AniList id now agrees with Fribb", source="fribb_identity_mismatch",
+            )
             continue
 
         proposed = str(fribb_anilist_id)

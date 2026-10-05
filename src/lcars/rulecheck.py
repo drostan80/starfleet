@@ -632,7 +632,7 @@ def check_levels_follow_episodes(conn):
         f"SELECT {_TITLE} AS show, z.season_number AS season, z.anilist_id AS anilist_id"
         " FROM season z JOIN show sh ON sh.id = z.show_id"
         " WHERE z.kind = 'tvdb_season' AND sh.tracked = 1 AND z.anilist_id IS NOT NULL"
-        " AND z.season_number > 0"
+        " AND z.status != 'skipped' AND z.season_number > 0"
         " AND z.season_number != (SELECT COALESCE(MAX(e.season), 0) + 1 FROM episode e"
         "   WHERE e.show_id = z.show_id AND e.season > 0)"
         " AND NOT EXISTS (SELECT 1 FROM episode e WHERE e.show_id = z.show_id"

@@ -703,6 +703,11 @@ def _reconcile_air_dates(conn, show: dict) -> None:
                 )
             continue
 
+        # both guards passed: an earlier "wrong entry / spans several entries" review is obsolete
+        pending_review.close_obsolete(
+            conn, "season", season["id"], "anilist_id",
+            "the AniList schedule now agrees with the episodes", source="anilist",
+        )
         for node in result["nodes"]:
             episode_id = by_number.get(node["episode"])
             episode_row = None if episode_id is None else conn.execute(

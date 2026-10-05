@@ -312,3 +312,17 @@ def test_cours_that_do_not_fill_the_season_stay_unplaced(conn):
                    155211: (dt.date(2023, 1, 5), 11)})
     r = run(conn, [entry(1, 1), entry(129196, 4), entry(155211, 4)], facts)
     assert r["parts_made"] == 0 and r["left"] == 2  # 11 + 11 of 24: something is missing
+
+
+def test_the_weekly_season_mapping_does_not_give_a_divided_season_its_first_cours_id_back(
+    conn, monkeypatch,
+):
+    from lcars import fribb, season_mapping
+
+    entries, facts = kusuriya(conn)
+    run(conn, entries, facts)
+    monkeypatch.setattr(fribb, "load_dataset", lambda *a, **k: entries)  # Fribb: S3 = 195516
+    season_mapping.reconcile_season(conn, "s-lr0001", 3)
+    parent = conn.execute("SELECT anilist_id, mal_id FROM season WHERE id = 'z-s30000'").fetchone()
+    assert tuple(parent) == (None, None)
+    assert conn.execute("SELECT COUNT(*) FROM season WHERE anilist_id = 195516").fetchone()[0] == 1

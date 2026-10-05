@@ -116,6 +116,15 @@ def reconcile_season(
         int(tvdb_row["external_id"]) if tvdb_row is not None else None,
         tvdb_coords,
     )
+    if derived not in (None, _NO_CLAIM) and existing is not None and _claim_breaks_levels(
+        conn, existing, derived
+    ):
+        derived = _NO_CLAIM
+        for field in ("anilist_id", "mal_id"):  # an earlier claim's review is obsolete
+            pending_review.close_obsolete(
+                conn, "season", existing["id"], field,
+                "the season is divided into parts; the parts hold the ids", source="fribb",
+            )
     if derived is None and existing is not None and (
         existing["anilist_id"] is not None or existing["mal_id"] is not None
     ):
@@ -178,6 +187,24 @@ def reconcile_season(
 
 
 _NO_CLAIM = object()
+
+
+def _claim_breaks_levels(conn, existing: dict, derived) -> bool:
+    """A season divided into part levels holds no list id (R1.10: the parts do), and one id sits on
+    one level of a show (R1.22). A Fribb claim that would put an id on a divided season, or one a
+    sibling level already holds, is not made (Kusuriya, 10-05: Fribb gives 195516 to TVDB S3 and
+    200927 — S3's second cour — also season 4; the weekly pass gave S3 its first cour's id back)."""
+    if conn.execute(
+        "SELECT 1 FROM season WHERE parent_id = ? AND kind = 'part' LIMIT 1", (existing["id"],)
+    ).fetchone():
+        return True
+    for column, value in zip(("anilist_id", "mal_id"), derived, strict=True):
+        if value is not None and conn.execute(
+            f"SELECT 1 FROM season WHERE show_id = ? AND id != ? AND {column} = ? LIMIT 1",
+            (existing["show_id"], existing["id"], value),
+        ).fetchone():
+            return True
+    return False
 
 
 def _derive_ids(conn, show_id: str, season_number: int, tvdb_id, tvdb_coords):
