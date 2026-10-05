@@ -6,7 +6,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 ## Open work — consolidated 2026-09-30
 
 ### A. Left over from the rebuild
-- 🔧 **Levels follow the episodes — ROOT FIX built in dev, not deployed (user 10-05; RULEBOOK R1.10a)** — Kusuriya's fake "S4" (AniList
+- ✅ **Levels follow the episodes — DEPLOYED v0.4.2 on 2026-10-05 (user OK; snapshot lcars.db.bak-20261005-pre-0.4.2; first pass made 44 parts, 4 empty rows left: Cyberpunk S2, Ghost in the Shell S2–S4 now skipped) (RULEBOOK R1.10a)** — Kusuriya's fake "S4" (AniList
       200927 = S3 part 2) came from `ensure_fribb_season_rows` making a level per entry from Fribb's order; the rules existed only in the one-off
       rebuild. Replaced by `level_reconcile.py` (+ `level_parts.py`, shared with the manual "⤵ make part of season N" button and the
       `makeSeasonPart` mutation): in the Memory Alpha pass an entry no level places is placed by its episodes (start date in Japan time must be
