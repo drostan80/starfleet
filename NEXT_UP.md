@@ -6,13 +6,12 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 ## Open work — consolidated 2026-09-30
 
 ### A. Left over from the rebuild
-- 🔴 **Special levels re-created on every Memory Alpha pass (found 10-05)** — 53 new rows per pass, ~3,450 a day; prod `season` is
+- ✅ **Special levels re-created on every Memory Alpha pass (found 10-05) — FIXED IN DEV, not deployed (commit 794acc1; cleanup script in the ship checklist)** — 53 new rows per pass, ~3,450 a day; prod `season` is
       21,798 rows with 18,863 auto specials (healthy ≈ 4,900); one piece exists 323 times. Cause: `numbering._special_level`
       looks under the season but `_nest_in_minis_groups` moves pieces into their minis group, so every pass makes a new one.
       No external effect (no list ids, no episodes). Cleanup looks safe (14,048 extras, none with episodes/ids/scores).
-      **Needs your yes:** fix the lookup + a dry-run data patch to delete the extras; consider shipping it ahead of the bulk
-      release. Details: `AUDIT-2026-10-05.md` §1.
-- ⏳ **Memory Alpha pass exceeds ops's 120 s (timing done 10-05)** — 53 s of a 94 s pass is `ensure_fribb_season_rows` making 26
+      Fix + cleanup script done (prod copy: 18,988 → 5,044 rows, three further passes add nothing). Details: `AUDIT-2026-10-05.md` §1.
+- ✅ **Memory Alpha pass exceeds ops's 120 s — BOTH fixes in dev, not deployed (user 10-05: cover ourselves)**: wasted AniList calls removed (pass 94 s → 41 s on the same copy) and ops timeout 300 s. Was: — 53 s of a 94 s pass is `ensure_fribb_season_rows` making 26
       throttled AniList calls and then creating nothing; plus AniDB ≈ 20 s, renumber 9 s (shrinks after the cleanup above). Options
       in `AUDIT-2026-10-05.md` §2; waiting for your pick.
 - ⏳ **Air-date noise: 10-minute buffer — done in dev** (user 10-05): two sources < 10 min apart change nothing and open no
@@ -105,11 +104,28 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       the one source allowed to move its own date later). So the button is the fix for this case. The trap itself is real for
       other sources: a wrong *early* date written by Syoboi, AniDB or TVmaze still beats a correct later one, unless that
       same source corrects it or you choose a schedule for the season (R1.0b) — a watching show is not immune.
-- [ ] **To apply after the drip is done** (user 10-04): deploy the dev branch (migration `e5f6a7b8c9d1` runs on start;
-      note the drip's per-anime fetch was refactored into a shared helper — same behaviour, tests pass); check the proxy
-      read timeout in front of LCARS (nginx/caddy) is long enough for the refresh button (up to ~1 min); then refresh
-      the stuck shows once; check the 1-minute AniList-vs-Sonarr "delay" reviews a refresh can open
-      (Hotel Inhumans S1 showed several in dev: AniList 14:46 vs Sonarr 14:45 on downloaded episodes).
+- 🚢 **SHIP CHECKLIST — all of branch `dev-airing-sources` (user 10-05: ship once the drip has hit 200 today; make sure it restarts tomorrow)**
+      0. Before: today's drip count ≥ 200 (`anidb_episode` distinct anime with `fetched_at` ≥ today); labelled DB snapshot on tiny.
+      1. Release from the branch (tag → CI: require `test success` + `docker success`), deploy per memory `starfleet-deploy-process`
+         (`/-web/!` sed pair, all three image lines). Migration `e5f6a7b8c9d1` runs on start; check `alembic_version`.
+      2. **Delete the duplicate special levels** (after the new image runs, so they are not re-made): labelled snapshot, then
+         `scripts/cleanup_duplicate_special_levels_20261005.py` — dry run first, then `--apply`
+         (`curl -fsSL …/scripts/….py | docker exec -i lcars python - [--apply]`). Expect ≈ 21,800 → ≈ 5,100 season rows.
+         Then wait for one Memory Alpha pass (~20 min) and check the season count did NOT grow.
+      3. **The drip must restart tomorrow:** the cap counts `fetched_at` by UTC date from the DB (a restart does not reset it) and the
+         ban back-off is in-process (a restart clears it). Check after 00:00 UTC that fetches resume; leftover = refreshes of
+         watching/planned shows (weekly), plus whatever backlog is left.
+      4. ops timeout for Memory Alpha is now 300 s; check the proxy/read timeout in front of LCARS covers the refresh button (~1 min).
+      5. **R.O.D -READ OR DIE- fix is DATA on PROD, not code** (user 10-05: remember at ship): after deploy the identity review
+         appears (S1 stores 208, Fribb says 209). Swap through the app (season mapping edit): TVDB S1 ← 209 (The TV, 26 eps),
+         the OVA 208 → its special level; then decide the statuses with the user (LCARS holds 26 phantom watched episodes; their
+         lists say only the OVA was watched; AniList/MAL 209 are plan-to-watch). No external write is needed if statuses stay as lists have them.
+      6. Refresh the stuck watching shows once (Secret Saint etc.); expect +80 episode rows and one new add-check review (Broken Saintess).
+      7. After the first hourly reconcile: ~57 Sonarr links appear (dark icons light up); the hourly sweep stops logging the identity
+         crash and the weekly `reconcileSeasonMapping` failures; air-date reviews for 1-minute differences stop.
+      8. Confirm after a day: no new special levels, Memory Alpha pass < 120 s with no ReadTimeout in ops logs.
+      9. Then (needs the drip finished): re-run the part-order dry run and write the patch; the cutover-leftover decisions
+         (`DECISION-cutover-leftovers-2026-10-05.md`).
 
 Full build history archived to `~/repos/starfleet-archive`.
 
