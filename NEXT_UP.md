@@ -41,7 +41,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       only, Battle Angel keep both. Patch after the drip (dry run first).
 - ⏳ **Air-date noise: 10-minute buffer — done in dev** (user 10-05): two sources < 10 min apart change nothing and open no
       review (`airdate_priority.within_tolerance`, also in the Syoboi SQL and the AniList reconcile). Confirm the 10 minutes.
-- [ ] **R.O.D -READ OR DIE- S1 swapped ids** — LCARS S1 (26 eps, completed) holds 208 (the OVA); Fribb right (209 = the TV series).
+- ✅ **R.O.D swap DONE on prod 10-05 (user OK; scripts/leftover_fixes_20261005.py; snapshot lcars.db.bak-20261005-pre-leftover-fixes)**: S1 ← 209 planned (26 phantom watches removed), OVA level ← 208 completed. Same script moved the A1 season-2 entries (Kankin Kuiki 182877 completed, Sekai Saikou 169579, Skip and Loafer 185657) from special levels onto TVDB S2. User: Dragon Warrior 2819 is right (Fribb's 2229 is wrong), Nobody's Boy Remi 2828 is right (2829 wrong) — nothing to change in LCARS. (old text:) **R.O.D -READ OR DIE- S1 swapped ids** — LCARS S1 (26 eps, completed) holds 208 (the OVA); Fribb right (209 = the TV series).
       Lists unaffected. Decision on ids/statuses when the review appears (`AUDIT-2026-10-05.md` §3).
 - [ ] **AniDB drip** — running (v0.3.2). 10-03 07:42Z: 200/day reached 10-01 and 10-02, no ban; left 460 backlog +
       118 refreshes ≈ done 10-05/06. 200/day is the user's cap, not a known AniDB limit (bans seen at ~250 requests
