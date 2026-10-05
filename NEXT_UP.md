@@ -36,10 +36,10 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 - ✅ **Rulecheck: seven new checks built (user 10-05; commit bad53b4)** — R1.13b one level per label (55 duplicate groups before the cleanup, 0
       after), R1.13c episodes held by two levels (421, a "look at"), R1.2b decimals (0 wrong), R1.0a placeholders (0) + undated with real
       numbers (325, a "look at"), R1.10b part order (3), R1.0b air-date source (0). 19 → 26 rules checked.
-- [ ] **Cutover-leftover decisions recorded (user 10-05)** — A1 best guesses (parts/season ids/leave; table in
+- ✅ **[DONE 10-05: levels follow episodes v0.4.2 + leftover_fixes script]** **Cutover-leftover decisions recorded (user 10-05)** — A1 best guesses (parts/season ids/leave; table in
       `DECISION-cutover-leftovers-2026-10-05.md`), A2 films integral (needs your OK on creating a film episode per list-only film), A3 list
       only, Battle Angel keep both. Patch after the drip (dry run first).
-- ⏳ **Air-date noise: 10-minute buffer — done in dev** (user 10-05): two sources < 10 min apart change nothing and open no
+- ✅ **[DEPLOYED v0.4.0, 10-05 — 'dev only' wording below is history]** **Air-date noise: 10-minute buffer — done in dev** (user 10-05): two sources < 10 min apart change nothing and open no
       review (`airdate_priority.within_tolerance`, also in the Syoboi SQL and the AniList reconcile). Confirm the 10 minutes.
 - ✅ **R.O.D swap DONE on prod 10-05 (user OK; scripts/leftover_fixes_20261005.py; snapshot lcars.db.bak-20261005-pre-leftover-fixes)**: S1 ← 209 planned (26 phantom watches removed), OVA level ← 208 completed. Same script moved the A1 season-2 entries (Kankin Kuiki 182877 completed, Sekai Saikou 169579, Skip and Loafer 185657) from special levels onto TVDB S2. User: Dragon Warrior 2819 is right (Fribb's 2229 is wrong), Nobody's Boy Remi 2828 is right (2829 wrong) — nothing to change in LCARS. (old text:) **R.O.D -READ OR DIE- S1 swapped ids** — LCARS S1 (26 eps, completed) holds 208 (the OVA); Fribb right (209 = the TV series).
       Lists unaffected. Decision on ids/statuses when the review appears (`AUDIT-2026-10-05.md` §3).
@@ -54,7 +54,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       all failed for 3.5 h (drip stalled, no list sync) until the user recreated the three containers 10:12Z. Will
       recur on every reboot. Options to decide: `dns:` in starfleet.yml, or Docker waiting for network-online.
       (gluetun/qbittorrent/autobrr/prowlarr-mam/port-sync show the same marker — not checked.)
-- ⏳ **New episodes never fetched once every known episode has aired** (found 10-04, A Tale of the Secret Saint E2).
+- ✅ **[DEPLOYED v0.4.0, 10-05 — 'dev only' wording below is history]** **New episodes never fetched once every known episode has aired** (found 10-04, A Tale of the Secret Saint E2).
       Cause: the daily refresh took only watching + "airing" shows (a known episode with no/future date). **Built in dev,
       not deployed** (branch `dev-airing-sources`, commit 6cff5bf): a show is also due when Sonarr's stored series status
       is continuing/upcoming or an episode aired in the last 14 days (`_show_needs_episode_refresh`; RULEBOOK R1.0c).
@@ -63,7 +63,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       Magic Repo Man). A manual refresh already brings in everything (checked in dev: Secret Saint E2–E13 arrive).
       Not changed (ask first): the weekly Fribb reconcile (`dueForSeasonReconciliation`) has the same blind spot; planned
       shows are never refreshed daily.
-- ⏳ **identity-mismatch check crashes** on levels with no season number, and the weekly `reconcileSeasonMapping` failed on
+- ✅ **[DEPLOYED v0.4.0, 10-05 — 'dev only' wording below is history]** **identity-mismatch check crashes** on levels with no season number, and the weekly `reconcileSeasonMapping` failed on
       the same levels (382 failures in 48 h on prod). **Both fixed in dev, not deployed** (branch `dev-airing-sources`;
       user said apply 10-04): the weekly query skips levels with no season number; the identity check now compares Fribb's
       own TVDB season number with the LCARS TVDB-season number (whole numbered seasons only; none or several Fribb entries =
@@ -71,7 +71,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       DIE- S1: stored AniList 208, Fribb 209 — not yet checked which is right) instead of 58 false ones. Write-up and the
       old 58: `DECISION-identity-check-2026-10-04.md`. When deployed, that one review appears; the check also stops logging a
       failure every hour.
-- ⏳ **Dark Sonarr icon on cards** (user 10-04, screenshot): 56 tracked shows were in Sonarr with no `sonarr` link row, so
+- ✅ **[DEPLOYED v0.4.0, 10-05 — 'dev only' wording below is history]** **Dark Sonarr icon on cards** (user 10-04, screenshot): 56 tracked shows were in Sonarr with no `sonarr` link row, so
       the icon was dim. Cause: only the monthly presence sweep wrote the link (last run 09-30 06:32, before the rebuilt
       shows existed; next ~10-30), and a show added any other way never got one. **Fixed in dev, not deployed:** the hourly
       `reconcile_arr_state` (which already holds Sonarr's/Radarr's full catalog) now writes a missing link for every show
@@ -105,7 +105,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 
 ### C. New (user, 2026-09-30)
 - [ ] **Scoring idea** — to be explained by the user.
-- ⏳ **Schedule setter** — **built in dev, not deployed** (branch `dev-airing-sources`, commit 84907f9 + UI commit; RULEBOOK
+- ✅ **[DEPLOYED v0.4.0, 10-05 — 'dev only' wording below is history]** **Schedule setter** — **built in dev, not deployed** (branch `dev-airing-sources`, commit 84907f9 + UI commit; RULEBOOK
       R1.0b). Every source's schedule for each season is stored as a candidate (Sonarr raw, TVmaze, AniDB date-only, AniList,
       animeschedule, **each Syoboi station separately**, with station names); a 🗓 button on each season card lists them
       with weekday/time slot, date range, per-episode dates, "in use" / "chosen"; "Use this" makes the season follow it
@@ -116,7 +116,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       show whose TVmaze episodes are stored) — the refresh does not fetch TVmaze episodes for anime, as the drip's guard says;
       (d) Syoboi station names are fetched monthly from prod (ChLookup, works from the home IP, blocked by Cloudflare from
       the dev machine's VPN IP); (e) choice is per season level, not per episode.
-- ⏳ **Refresh show data button** — **built in dev, not deployed.** The ↻ on the show page now runs `refreshShowData`: the
+- ✅ **[DEPLOYED v0.4.0, 10-05 — 'dev only' wording below is history]** **Refresh show data button** — **built in dev, not deployed.** The ↻ on the show page now runs `refreshShowData`: the
       metadata fetch, then TVmaze (TV) or AniDB + Syoboi (anime), every schedule listed, chosen schedules re-applied; the page
       then fetches art (the manual fetch, ignores the not-found cache) and reloads the show; a banner lists each step.
       AniDB shares the drip's state: 24 h ban back-off, 200/day cap, an anime fetched in the last 24 h is not re-asked, and
@@ -130,7 +130,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       other sources: a wrong *early* date written by Syoboi, AniDB or TVmaze still beats a correct later one, unless that
       same source corrects it or you choose a schedule for the season (R1.0b) — a watching show is not immune.
 - ✅ **Ship rehearsal on a fresh prod copy (10-05 07:15 UTC):** migration applies; cleanup 21,957 → 5,045 season rows (integrity ok); two further Memory Alpha passes add nothing; Sonarr links 330 → 387; identity check 1,269 checked, 1 flagged (R.O.D); daily refresh 33 → 53 watching shows; rulecheck 37 violations (all pre-existing kinds). Full suite 1,746 passed.
-- ⏳ **Review-page noise (user 10-05): built in dev, not yet shipped (release v0.4.1).** Prod had **353 open reviews; 348 were noise or obsolete**:
+- ✅ **[DEPLOYED v0.4.1, 10-05]** **Review-page noise (user 10-05): built in dev, not yet shipped (release v0.4.1).** Prod had **353 open reviews; 348 were noise or obsolete**:
       173 AniList width checks (measured wrongly; none actionable → now `lcars rulecheck` R1.11w, 59 real count differences), 134 "unmatched"
       seasons (a TVDB season with no AniList entry is normal), 23 air-date items (AniList "a delay past the current" on downloaded episodes —
       mostly 5–10 min — and animeschedule changes that were already applied), 9 transient "Could not connect"/"HTTP 429" failures, 4 Urusei id
