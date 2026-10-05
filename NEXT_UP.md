@@ -11,7 +11,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       looks under the season but `_nest_in_minis_groups` moves pieces into their minis group, so every pass makes a new one.
       No external effect (no list ids, no episodes). Cleanup looks safe (14,048 extras, none with episodes/ids/scores).
       Fix + cleanup script done (prod copy: 18,988 → 5,044 rows, three further passes add nothing). Details: `AUDIT-2026-10-05.md` §1.
-- ✅ **Memory Alpha pass exceeds ops's 120 s — BOTH fixes in dev, not deployed (user 10-05: cover ourselves)**: wasted AniList calls removed (pass 94 s → 41 s on the same copy) and ops timeout 300 s. Was: — 53 s of a 94 s pass is `ensure_fribb_season_rows` making 26
+- ✅ **Memory Alpha pass exceeds ops's 120 s — BOTH fixes in dev, not deployed (user 10-05: cover ourselves)**: wasted AniList calls removed (−53 s: 94 s → 41 s on one copy; on today's fresh prod copy a pass is ~78 s because a Syoboi incremental sync adds ~44 s — rate-limited batches — and AniDB ~17 s; so a real pass is ~80–100 s) and ops timeout 300 s. Was: — 53 s of a 94 s pass is `ensure_fribb_season_rows` making 26
       throttled AniList calls and then creating nothing; plus AniDB ≈ 20 s, renumber 9 s (shrinks after the cleanup above). Options
       in `AUDIT-2026-10-05.md` §2; waiting for your pick.
 - ✅ **Rulecheck: seven new checks built (user 10-05; commit bad53b4)** — R1.13b one level per label (55 duplicate groups before the cleanup, 0
@@ -110,6 +110,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       the one source allowed to move its own date later). So the button is the fix for this case. The trap itself is real for
       other sources: a wrong *early* date written by Syoboi, AniDB or TVmaze still beats a correct later one, unless that
       same source corrects it or you choose a schedule for the season (R1.0b) — a watching show is not immune.
+- ✅ **Ship rehearsal on a fresh prod copy (10-05 07:15 UTC):** migration applies; cleanup 21,957 → 5,045 season rows (integrity ok); two further Memory Alpha passes add nothing; Sonarr links 330 → 387; identity check 1,269 checked, 1 flagged (R.O.D); daily refresh 33 → 53 watching shows; rulecheck 37 violations (all pre-existing kinds). Full suite 1,746 passed.
 - 🚢 **SHIP CHECKLIST — all of branch `dev-airing-sources` (user 10-05: ship once the drip has hit 200 today; make sure it restarts tomorrow)**
       0. Before: today's drip count ≥ 200 (`anidb_episode` distinct anime with `fetched_at` ≥ today); labelled DB snapshot on tiny.
       1. Release from the branch (tag → CI: require `test success` + `docker success`), deploy per memory `starfleet-deploy-process`
