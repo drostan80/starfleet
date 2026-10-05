@@ -1799,6 +1799,10 @@ def poll_memory_alpha(conn) -> dict:
             result["syoboi_tids_seeded"] = arm.seed_syoboi_external_ids(
                 conn, arm_data
             )
+            from lcars import syoboi_levels  # a Syoboi run per level (syoboi_levels.py)
+            result["syoboi_tids_seeded"] += syoboi_levels.seed_level_ids(
+                conn, arm.build_anilist_to_syoboi_index(arm_data)
+            )
     except Exception:
         log.exception("ARM Syoboi TID seeding failed")
 
@@ -1969,6 +1973,8 @@ def poll_memory_alpha(conn) -> dict:
             anidb_dates = fill_airdate_gaps_anidb(conn)
             tvmaze_dates = tvmaze.fill_airdate_gaps(conn)
             syoboi_dates = syoboi.fill_airdate_gaps(conn)
+            from lcars import syoboi_levels  # levels whose Syoboi run is not the show's id
+            syoboi_dates += syoboi_levels.fill_gaps(conn)
             result["airdate_gaps_filled"] = anidb_dates + tvmaze_dates + syoboi_dates
     except Exception:
         log.exception("Airdate gap fill failed")

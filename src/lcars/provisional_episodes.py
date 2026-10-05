@@ -5,11 +5,11 @@ episodes while TVDB still listed only a placeholder first one, so the second cou
 nor marked watched. Syoboi lists every numbered broadcast (`count` and the exact start time), so
 until TVDB takes over, the missing episodes are added from it:
 
-  - anime only, tracked, watching or planned, with a Syoboi id and at least one real episode;
-  - the TV season they belong to is the latest one TVDB has episodes for, and only when Syoboi's
-    numbering fits that season: the first overlapping episode's air date within 3 days of Syoboi's
-    first broadcast of the same number (a long runner whose Syoboi count is cumulative fails this
-    and is left alone);
+  - anime only, tracked, watching or planned, with at least one real episode;
+  - the TV season they belong to is the latest one TVDB has episodes for; its last level (the
+    season, or its last part) is matched to Syoboi's broadcasts at episode level by air date
+    (syoboi_levels.align_level: no id is trusted to say which TID covers it), and the next numbers
+    continue that TID's count;
   - the numbers after TVDB's last, up to the last one aired plus `AHEAD` (3) more and never more
     than `MAX_BEYOND` (6) past TVDB's last; never beyond the AniDB episode count once AniDB has
     the entry;
@@ -34,43 +34,19 @@ log = logging.getLogger(__name__)
 
 AHEAD = 3  # unaired provisional episodes beyond the last aired one
 MAX_BEYOND = 6  # and never more than this many beyond TVDB's last episode
-ALIGN_DAYS = 3  # Syoboi's first broadcast of the first shared number vs TVDB's date
 
 
-def _syoboi_tid(conn, show_id: str) -> int | None:
+def _runtime(conn, tid: int, count: int) -> int | None:
     row = conn.execute(
-        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'syoboi'",
-        (show_id,),
+        "SELECT st_time_utc, ed_time_utc FROM syoboi_program WHERE tid = ? AND count = ?"
+        " AND deleted = 0 AND st_time_utc IS NOT NULL ORDER BY st_time_utc LIMIT 1", (tid, count),
     ).fetchone()
-    return int(row[0]) if row and str(row[0]).isdigit() else None
-
-
-def _broadcasts(conn, tid: int) -> dict[int, dict]:
-    """{count: {"first": earliest start UTC, "minutes": length}} — Syoboi's numbered broadcasts."""
-    out: dict[int, dict] = {}
-    for r in conn.execute(
-        "SELECT count, st_time_utc, ed_time_utc FROM syoboi_program WHERE tid = ? AND deleted = 0"
-        " AND count IS NOT NULL AND count > 0 AND st_time_utc IS NOT NULL ORDER BY st_time_utc",
-        (tid,),
-    ):
-        if r["count"] not in out:
-            out[r["count"]] = {"first": r["st_time_utc"], "minutes": _minutes(r)}
-    return out
-
-
-def _minutes(row) -> int | None:
     try:
         a = dt.datetime.strptime(row["st_time_utc"][:19], "%Y-%m-%dT%H:%M:%S")
         b = dt.datetime.strptime(row["ed_time_utc"][:19], "%Y-%m-%dT%H:%M:%S")
         return int((b - a).total_seconds() // 60) or None
     except (TypeError, ValueError):
         return None
-
-
-def _days_apart(a: str, b: str) -> float:
-    fa = dt.datetime.strptime(a[:19], "%Y-%m-%dT%H:%M:%S")
-    fb = dt.datetime.strptime(b[:19], "%Y-%m-%dT%H:%M:%S")
-    return abs((fa - fb).total_seconds()) / 86400
 
 
 def _anidb_cap(conn, show_id: str) -> int | None:
@@ -126,17 +102,15 @@ def sync_show(conn, show_id: str, now: str | None = None) -> dict:
         "SELECT id, season, episode, state FROM episode WHERE show_id = ? AND provisional = 1",
         (show_id,),
     ).fetchall()
-    tid = _syoboi_tid(conn, show_id)
     season = conn.execute(
         "SELECT MAX(season) FROM episode WHERE show_id = ? AND season > 0 AND kind = 'regular'"
         " AND provisional = 0", (show_id,),
     ).fetchone()[0]
     wanted: set[int] = set()
-    shows_ok = (show["status"] in ("watching", "planned") and tid is not None
-                and season is not None)
+    shows_ok = show["status"] in ("watching", "planned") and season is not None
     plan = None
     if shows_ok:
-        plan = _plan(conn, show_id, tid, season, now)
+        plan = _plan(conn, show_id, season, now)
         wanted = set(plan["numbers"]) if plan else set()
     last = conn.execute(
         "SELECT MAX(episode) FROM episode WHERE show_id = ? AND season = ? AND provisional = 0"
@@ -174,42 +148,36 @@ def sync_show(conn, show_id: str, now: str | None = None) -> dict:
     return out
 
 
-def _plan(conn, show_id: str, tid: int, season: int, now: str) -> dict | None:
-    """{"numbers": [...], "broadcasts": {...}} or None when Syoboi's numbering doesn't fit."""
-    from lcars import sonarr_match
+def _plan(conn, show_id: str, season: int, now: str) -> dict | None:
+    """{"numbers": [...], "broadcasts": {n: {"first", "minutes"}}} or None when no Syoboi run fits
+    the latest season's last level at episode level."""
+    from lcars import sonarr_match, syoboi_levels
 
     if sonarr_match.show_numbering_diverged(conn, show_id):
         return None  # LCARS has subdivided this show: its numbers are not Syoboi's
-    broadcasts = _broadcasts(conn, tid)
-    if not broadcasts:
+    levels = [z for z in syoboi_levels.leaf_levels(conn, show_id) if z["season_number"] == season]
+    if not levels:
         return None
-    real = conn.execute(
-        "SELECT episode, air_date_utc FROM episode WHERE show_id = ? AND season = ?"
-        " AND kind = 'regular' AND provisional = 0 ORDER BY episode", (show_id, season),
-    ).fetchall()
-    if not run_fits(conn, show_id, season, broadcasts):
+    alignment, eps, books = syoboi_levels.run_for_level(conn, show_id, levels[-1])
+    if alignment is None or not eps:
         return None  # not the same run (a cumulative count, another cour, another season)
-    top = max(r["episode"] for r in real)
-    aired = [n for n, b in broadcasts.items() if b["first"] <= now]
-    limit = min(top + MAX_BEYOND, max(max(aired, default=0), top) + AHEAD)
+    tid = alignment["tid"]
+    last_index = len(eps) - 1
+    last_count = alignment["start_count"] + last_index - alignment["first_index"]
+    top = max(e["episode"] for e in eps)
+    run = books[tid]
+    ahead = {}
+    n, count = top + 1, last_count + 1
+    while count in run and n <= top + MAX_BEYOND:
+        ahead[n] = {"first": run[count], "minutes": _runtime(conn, tid, count)}
+        n, count = n + 1, count + 1
+    aired = [k for k, b in ahead.items() if b["first"] <= now]
+    limit = max(max(aired, default=0), top) + AHEAD
     cap = _anidb_cap(conn, show_id)
     if cap:
         limit = min(limit, cap)
-    numbers = [n for n in sorted(broadcasts) if top < n <= limit]
-    return {"numbers": numbers, "broadcasts": broadcasts}
-
-
-def run_fits(conn, show_id: str, season: int, broadcasts: dict[int, dict]) -> bool:
-    """Does Syoboi's numbering fit this TVDB season? The first episode both list has an air date
-    within `ALIGN_DAYS` of Syoboi's first broadcast of that number."""
-    shared = [
-        r for r in conn.execute(
-            "SELECT episode, air_date_utc FROM episode WHERE show_id = ? AND season = ?"
-            " AND kind = 'regular' AND provisional = 0 ORDER BY episode", (show_id, season),
-        ) if r["episode"] in broadcasts and r["air_date_utc"]
-    ]
-    return bool(shared) and _days_apart(
-        shared[0]["air_date_utc"], broadcasts[shared[0]["episode"]]["first"]) <= ALIGN_DAYS
+    numbers = [k for k in sorted(ahead) if k <= limit]
+    return {"numbers": numbers, "broadcasts": ahead}
 
 
 def run_all(conn) -> dict:
@@ -219,6 +187,8 @@ def run_all(conn) -> dict:
         "SELECT sh.id FROM show sh WHERE sh.tracked = 1 AND sh.tracking_space = 'anime' AND ("
         " EXISTS (SELECT 1 FROM show_external_id x"
         "         WHERE x.show_id = sh.id AND x.service = 'syoboi')"
+        " OR EXISTS (SELECT 1 FROM season_external_id y JOIN season z ON z.id = y.season_id"
+        "            WHERE z.show_id = sh.id AND y.service = 'syoboi')"
         " OR EXISTS (SELECT 1 FROM episode e WHERE e.show_id = sh.id AND e.provisional = 1))"
     ).fetchall():
         try:

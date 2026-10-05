@@ -718,6 +718,9 @@ def incremental_sync(conn, *, force: bool = False) -> dict:
              AND s.tracking_space = 'anime'"""
     ).fetchall()
     all_tids = [int(r["tid"]) for r in all_tid_rows]
+    from lcars import syoboi_levels  # a run per level, not per show (syoboi_levels.py)
+
+    all_tids = sorted(set(all_tids) | set(syoboi_levels.fetchable_tids(conn)))
 
     if not all_tids:
         return result
@@ -746,18 +749,8 @@ def incremental_sync(conn, *, force: bool = False) -> dict:
                 )
 
         # ── New TIDs: shows with a Syoboi TID but no events yet ──
-        new_tid_rows = conn.execute(
-            """SELECT sei.external_id AS tid
-               FROM show_external_id sei
-               JOIN show s ON sei.show_id = s.id
-               WHERE sei.service = 'syoboi'
-                 AND s.tracked = 1
-                 AND s.tracking_space = 'anime'
-                 AND NOT EXISTS (
-                   SELECT 1 FROM syoboi_program sp
-                   WHERE sp.tid = CAST(sei.external_id AS INTEGER)
-                 )"""
-        ).fetchall()
+        have = {r[0] for r in conn.execute("SELECT DISTINCT tid FROM syoboi_program")}
+        new_tid_rows = [{"tid": t} for t in all_tids if t not in have]
         new_tids = [int(r["tid"]) for r in new_tid_rows]
 
         if new_tids:

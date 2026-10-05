@@ -6,6 +6,12 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 ## Open work — consolidated 2026-09-30
 
 ### A. Left over from the rebuild
+- 🔧 **Syoboi runs per level, matched at episode level (user 10-05; RULEBOOK R1.22a) — BUILT, in dev, ships in v0.4.4**: a Syoboi TID is one broadcast run (per cour/season, like AniList):
+      229 of 263 multi-level shows stored the FIRST season's TID at show level, so the running season was never fetched. `syoboi_levels.py`: the id is held per level
+      (`season_external_id`, seeded from ARM through the level's AniList id: 1,370 on the prod copy), the sync fetches every watching/planned level's TID (108 new, 3 batches,
+      11 s), and nothing trusts an id for which episodes a run covers: each level is matched to the broadcasts at episode level by air date (≤3 days; one TID shared by several
+      levels is split by count offset). The schedule options, the air-date gap fill and the provisional episodes all read that one mapping; a Syoboi badge per season level.
+      Prod copy after: provisional episodes 137 on 42 shows (was 113/31), Syoboi options on 84 shows (was 79; Apothecary S3 now has its stations).
 - 🔧 **Syoboi id auto-fill + links (user 10-05) — BUILT, in dev, ships in v0.4.4**: the id is seeded each Memory Alpha pass from ARM, but only through a show-level AniList id
       (74 shows have one; R1.23 puts them on seasons), so new shows rarely filled: now also through the show's latest season/part ARM maps (prod copy: 8 more, 993 total;
       the rest are films/shows ARM has no Syoboi entry for). Links: the show page links a badge only from `show_external_id.url`, empty on 984/985 Syoboi, 1,055/1,061 AniDB,

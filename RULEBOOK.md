@@ -264,6 +264,14 @@ show X
 
 - **R1.22** The database may hold ids at any and all levels, as long as they follow
   the rules above. All external ids must be mapped according to the rules.
+- **R1.22a Syoboi ids belong to levels, matched to episodes by air date** `[decided 2026-10-05]`:
+  a Syoboi TID is one broadcast run (a cour or season, like an AniList entry — not like a
+  TVDB show), so it is held **per level** (`season_external_id`, service `syoboi`), seeded
+  from ARM through the level's AniList id; the show-level id is only a candidate. No id is
+  trusted to say which episodes a run covers (a few TIDs span several AniList entries): each
+  level is matched to Syoboi's numbered broadcasts **at episode level** — its first dated
+  episode against the first airing of each count of each candidate run, within 3 days — and
+  its episode *i* then takes count + *i*. A run that fits no level matches nothing.
 - **R1.23** Always be explicit about which level is meant.
   - **AniList is always season level** (even when it calls them shows); most anime
     DBs are.
@@ -850,4 +858,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-30 — R2.15b: R2.15 wins over a status you set; a completed dropped level passes the drop to the next season.
 - 2026-10-04 — R1.0b (every source's schedule kept; you choose which one a season follows; earliest-wins stays the default), R1.0c (daily refresh covers any running show; per-show refresh button).
 - 2026-10-05 — R1.10a (an entry is placed by its episodes: a part of the TVDB season they sit in, or a season level only until TVDB has them; never by Fribb's order; Kusuriya's fake S4).
-- 2026-10-05 — R1.2g (provisional episodes from Syoboi until TVDB has them: anime, +3 after the last aired, at most 6 past TVDB's last).
+- 2026-10-05 — R1.2g (provisional episodes from Syoboi until TVDB has them: anime, +3 after the last aired, at most 6 past TVDB's last); R1.22a (Syoboi ids per level, matched to episodes by air date).

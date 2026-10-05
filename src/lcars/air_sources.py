@@ -143,47 +143,33 @@ def collect_candidates(conn, show_id: str) -> dict[str, int]:
 def _syoboi_by_numbering(conn, show_id: str, now: str) -> int:
     """Syoboi's stations for episodes AniDB has not been mapped to (user 10-05: Syoboi never showed
     as a choice — the join above needs AniDB's numbering, which most running shows do not have
-    yet). When Syoboi's own numbering fits a TVDB season (the first shared episode's date within
-    3 days), its broadcast number N is that season's episode N: one candidate per station. Never
-    replaces a candidate the AniDB route already made."""
-    from lcars import provisional_episodes, sonarr_match
+    yet). Each level is matched to Syoboi's numbered broadcasts at episode level, by air date
+    (syoboi_levels.episode_map: no id is trusted to say which TID covers it); an episode's
+    (TID, count) then gives one candidate per station. Never replaces a candidate the AniDB route
+    already made."""
+    from lcars import sonarr_match, syoboi_levels
 
-    row = conn.execute(
-        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'syoboi'",
-        (show_id,),
-    ).fetchone()
-    if not row or not str(row[0]).isdigit() or sonarr_match.show_numbering_diverged(
-        conn, show_id
-    ):
+    if sonarr_match.show_numbering_diverged(conn, show_id):
         return 0
-    tid = int(row[0])
-    broadcasts = provisional_episodes._broadcasts(conn, tid)
-    if not broadcasts:
+    mapping = syoboi_levels.episode_map(conn, show_id)
+    if not mapping:
         return 0
-    stations: dict[int, list] = {}
-    for p in conn.execute(
-        "SELECT chid, count, MIN(st_time_utc) AS first FROM syoboi_program WHERE tid = ?"
-        " AND deleted = 0 AND count > 0 AND st_time_utc IS NOT NULL GROUP BY chid, count",
-        (tid,),
-    ):
-        stations.setdefault(p["count"], []).append((p["chid"], p["first"]))
+    stations: dict[tuple[int, int], list] = {}
+    for tid in {t for t, _c in mapping.values()}:
+        for p in conn.execute(
+            "SELECT chid, count, MIN(st_time_utc) AS first FROM syoboi_program WHERE tid = ?"
+            " AND deleted = 0 AND count > 0 AND st_time_utc IS NOT NULL GROUP BY chid, count",
+            (tid,),
+        ):
+            stations.setdefault((tid, p["count"]), []).append((p["chid"], p["first"]))
     made = 0
-    for season in [r[0] for r in conn.execute(
-        "SELECT DISTINCT season FROM episode WHERE show_id = ? AND season > 0 AND kind = 'regular'",
-        (show_id,),
-    )]:
-        if not provisional_episodes.run_fits(conn, show_id, season, broadcasts):
-            continue
-        for e in conn.execute(
-            "SELECT id, episode FROM episode WHERE show_id = ? AND season = ? AND kind = 'regular'",
-            (show_id, season),
-        ).fetchall():
-            for chid, first in stations.get(e["episode"], []):
-                made += conn.execute(
-                    "INSERT OR IGNORE INTO episode_air_candidate"
-                    " (episode_id, source, channel, air_date_utc, fetched_at)"
-                    " VALUES (?, 'syoboi', ?, ?, ?)", (e["id"], str(chid), first, now),
-                ).rowcount
+    for episode_id, key in mapping.items():
+        for chid, first in stations.get(key, []):
+            made += conn.execute(
+                "INSERT OR IGNORE INTO episode_air_candidate"
+                " (episode_id, source, channel, air_date_utc, fetched_at)"
+                " VALUES (?, 'syoboi', ?, ?, ?)", (episode_id, str(chid), first, now),
+            ).rowcount
     return made
 
 

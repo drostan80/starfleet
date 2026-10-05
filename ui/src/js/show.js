@@ -2347,6 +2347,22 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
       alLink.addEventListener('click', e => e.stopPropagation());
       meta.appendChild(alLink);
     }
+    // Syoboi: one broadcast run per level (a cour/season, like AniList), linked to its own page
+    const syoboi = (seasonData.externalIds || []).find(x => x.service === 'syoboi');
+    if (syoboi) {
+      const syLink = document.createElement('a');
+      syLink.className = 'sp-season-sy-id sp-season-ext-link';
+      syLink.href = `https://cal.syoboi.jp/tid/${syoboi.externalId}`;
+      syLink.target = '_blank';
+      syLink.rel = 'noopener noreferrer';
+      const syIcon = el('span', 'sp-season-ext-icon');
+      syIcon.innerHTML = SVC_ICONS.syoboi || 'SY';
+      syLink.appendChild(syIcon);
+      syLink.appendChild(document.createTextNode(syoboi.externalId));
+      syLink.title = 'Syoboi Calendar — this level\'s broadcast run';
+      syLink.addEventListener('click', e => e.stopPropagation());
+      meta.appendChild(syLink);
+    }
     if (seasonData.malId) {
       const malLink = document.createElement('a');
       malLink.className = 'sp-season-mal-id sp-season-ext-link';

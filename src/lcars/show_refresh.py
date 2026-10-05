@@ -24,6 +24,7 @@ from lcars import (
     numbering,
     provisional_episodes,
     syoboi,
+    syoboi_levels,
     tvmaze,
 )
 
@@ -110,13 +111,14 @@ def refresh_show_data(conn, show_id: str) -> dict:
                 log.exception("refresh %s: AniDB step failed", show_id)
                 step("AniDB", False, str(e))
 
-        tid = _external_id(conn, show_id, "syoboi")
-        if tid and tid.isdigit():
+        tids = syoboi_levels.candidate_tids(conn, show_id)
+        if tids:
             try:
-                stats = syoboi.batch_fetch_and_ingest(conn, [int(tid)])
+                stats = syoboi.batch_fetch_and_ingest(conn, tids)
                 conn.commit()
                 syoboi.ensure_channels(conn)  # station names for the chooser (monthly)
-                step("Syoboi", True, f"{stats['programs_stored']} broadcasts read")
+                step("Syoboi", True,
+                     f"{stats['programs_stored']} broadcasts read from {len(tids)} Syoboi run(s)")
             except Exception as e:
                 log.exception("refresh %s: Syoboi step failed", show_id)
                 step("Syoboi", False, str(e))
@@ -138,6 +140,7 @@ def refresh_show_data(conn, show_id: str) -> dict:
         anidb.fill_airdate_gaps_anidb(conn)
         tvmaze.fill_airdate_gaps(conn)
         syoboi.fill_airdate_gaps(conn)
+        syoboi_levels.fill_gaps(conn)
         if fetched_anidb:
             numbering.renumber_show(conn, show_id)
             conn.commit()
