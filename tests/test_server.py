@@ -3388,6 +3388,67 @@ async def test_anilist_air_date_reconciliation_does_not_overwrite_a_downloaded_e
     assert "region-scoped delay" in reviews[0]["proposedValueChain"][-1]
 
 
+async def test_anilist_a_minute_off_an_already_downloaded_episode_changes_and_flags_nothing(
+    client, monkeypatch
+):
+    """10-05: AniList 14:31 vs Sonarr 14:30 on a downloaded episode used to open a "delay" review
+    each time. Within the tolerance (airdate_priority) the sources agree: no change, no review."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {
+            "episodes": 12,
+            # 2026-08-14T14:31:00Z — one minute after the episode's stored 14:30
+            "nodes": [{"episode": 1, "airingAt": 1786717860}],
+        },
+    )
+
+    def _ep(number):
+        return {"seasonNumber": 1, "episodeNumber": number,
+                "airDateUtc": "2026-08-14T14:30:00Z", "runtime": 24}
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1)])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, tvdbId=67891)
+    episode_id = (
+        await gql(
+            client,
+            "query($id: ID!) { show(id: $id) { episodes { edges { node { id } } } } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    )["show"]["episodes"]["edges"][0]["node"]["id"]
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE episode SET available_via_sonarr = 'available' WHERE id = ?", (episode_id,)
+    )
+    conn.commit()
+    await gql(
+        client,
+        "mutation($id: ID!) { setSeasonMapping(showId: $id, seasonNumber: 1, anilistId: 12345)"
+        " { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+
+    row = db.get_connection().execute(
+        "SELECT air_date_utc, air_date_source FROM episode WHERE id = ?", (episode_id,)
+    ).fetchone()
+    assert (row["air_date_utc"], row["air_date_source"]) == ("2026-08-14T14:30:00Z", "sonarr")
+    reviews = [
+        r for r in await _pending_reviews_for(client, episode_id) if r["field"] == "air_date_utc"
+    ]
+    assert reviews == []
+
+
 async def test_anilist_air_date_reconciliation_still_applies_an_earlier_date_despite_a_download(
     client, monkeypatch
 ):

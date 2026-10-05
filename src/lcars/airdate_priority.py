@@ -46,6 +46,8 @@ Sonarr seed date forward — `test_anilist_air_date_reconciliation_
 corrects_a_sonarr_seeded_date`.)
 """
 
+from datetime import datetime
+
 # Sources no automatic writer may ever overwrite.
 PROTECTED_SOURCES: frozenset[str] = frozenset({"manual"})
 
@@ -53,6 +55,25 @@ PROTECTED_SOURCES: frozenset[str] = frozenset({"manual"})
 # than a genuine competing broadcast — any different source may replace
 # it in either direction. See module docstring's exception to rule 3.
 _WEAK_SOURCES: frozenset[str] = frozenset({"sonarr", "tvdb"})
+
+# Two sources a few minutes apart (AniList 14:46 vs Sonarr 14:45) are saying the same thing, not
+# disagreeing: nothing changes and nothing is flagged (user 2026-10-05: no reviews that tell
+# nothing important, and no back-and-forth between sources over a minute). A real reschedule moves
+# an episode by far more. `syoboi._rewire_condition` repeats this in SQL.
+AIR_DATE_TOLERANCE_SECONDS = 600
+
+
+def within_tolerance(date_a: str | None, date_b: str | None) -> bool:
+    """Are two stored-format dates (UTC `YYYY-MM-DDTHH:MM:SSZ`) closer than the tolerance?
+    Anything missing or unparseable is not "close" — the caller then decides as before."""
+    if not date_a or not date_b:
+        return False
+    try:
+        a = datetime.strptime(date_a, "%Y-%m-%dT%H:%M:%SZ")
+        b = datetime.strptime(date_b, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return abs((a - b).total_seconds()) < AIR_DATE_TOLERANCE_SECONDS
 
 
 def should_apply(
@@ -74,6 +95,8 @@ def should_apply(
         return False
     if candidate_date is None:
         return False
+    if within_tolerance(candidate_date, existing_date):
+        return False  # the same time to within a few minutes: no change, no flip-flop
     if candidate_source == existing_source:
         return candidate_date != existing_date
     if existing_source in _WEAK_SOURCES:

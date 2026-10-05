@@ -98,6 +98,46 @@ class TestShouldApply:
         assert not airdate_priority.should_apply(None, None, "syoboi", "2026-01-01T00:00:00Z")
 
 
+class TestTolerance:
+    """Two sources a few minutes apart agree: no change, no flip-flop (user 2026-10-05)."""
+
+    @pytest.mark.parametrize("source", ["anilist", "sonarr", "syoboi", "tvmaze", "anidb"])
+    def test_a_minute_apart_never_applies_whatever_the_sources(self, source):
+        for existing in ["anilist", "sonarr", "syoboi", "tvmaze", "anidb"]:
+            assert not airdate_priority.should_apply(
+                source, "2026-10-04T14:46:00Z", existing, "2026-10-04T14:45:00Z"
+            ), (source, existing)
+            assert not airdate_priority.should_apply(
+                source, "2026-10-04T14:44:00Z", existing, "2026-10-04T14:45:00Z"
+            ), (source, existing)
+
+    def test_the_tolerance_is_a_buffer_not_a_ban_on_real_reschedules(self):
+        # same source, 10 minutes or more: a real reschedule still applies
+        assert airdate_priority.should_apply(
+            "anilist", "2026-10-04T14:55:00Z", "anilist", "2026-10-04T14:45:00Z"
+        )
+        assert airdate_priority.should_apply(
+            "anilist", "2026-10-11T14:45:00Z", "anilist", "2026-10-04T14:45:00Z"
+        )
+
+    def test_no_flip_flop_between_two_sources_a_minute_apart(self):
+        stored = ("sonarr", "2026-10-04T14:45:00Z")
+        for _ in range(3):  # AniList says :46, then Syoboi says :45, then AniList again...
+            assert not airdate_priority.should_apply("anilist", "2026-10-04T14:46:00Z", *stored)
+            assert not airdate_priority.should_apply("syoboi", "2026-10-04T14:45:00Z", *stored)
+
+    def test_within_tolerance_edges(self):
+        within = airdate_priority.within_tolerance
+        assert within("2026-10-04T14:45:00Z", "2026-10-04T14:45:00Z")
+        assert within("2026-10-04T14:45:00Z", "2026-10-04T14:54:59Z")
+        assert not within("2026-10-04T14:45:00Z", "2026-10-04T14:55:00Z")
+        assert not within(None, "2026-10-04T14:45:00Z")
+        assert not within("not a date", "2026-10-04T14:45:00Z")
+
+    def test_a_nothing_stored_yet_value_still_applies(self):
+        assert airdate_priority.should_apply("anilist", "2026-10-04T14:46:00Z", None, None)
+
+
 class TestRewireConditionParity:
     """Constructs episode fixtures covering every branch of
     should_apply()'s decision tree, runs syoboi.rewire_airdates against
@@ -203,6 +243,10 @@ class TestRewireConditionParity:
             ("anidb", "2026-01-15T00:00:00Z"),  # real source, syoboi earlier -> should update
             ("manual", "2020-01-01T00:00:00Z"),  # protected -> must NOT update
             ("anidb", "2026-01-01T00:00:00Z"),  # real source, syoboi later -> must NOT update
+            ("syoboi", "2026-01-10T00:01:00Z"),  # same source, a minute apart -> NOT (tolerance)
+            ("sonarr", "2026-01-10T00:09:00Z"),  # weak source, 9 min apart -> NOT (tolerance)
+            ("anidb", "2026-01-10T00:12:00Z"),  # real source, syoboi 12 min earlier -> update
+            ("sonarr", "2026-01-10T00:10:00Z"),  # exactly the tolerance -> update
         ],
     )
     def test_rewire_matches_should_apply(self, existing_source, existing_date):

@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 
-from lcars import air_sources, status_rules, util
+from lcars import air_sources, airdate_priority, status_rules, util
 
 log = logging.getLogger(__name__)
 
@@ -433,6 +433,9 @@ def _rewire_condition() -> str:
         "episode.air_date_source != 'manual'"
         f" AND NOT {air_sources.LOCKED_SQL}"  # a season following a chosen schedule is left alone
         " AND episode.air_date_utc != sp_min.earliest_utc"
+        # within the tolerance two sources agree (airdate_priority.within_tolerance): no change
+        f" AND ABS(strftime('%s', episode.air_date_utc) - strftime('%s', sp_min.earliest_utc))"
+        f"     >= {airdate_priority.AIR_DATE_TOLERANCE_SECONDS}"
         " AND (episode.air_date_source IN ('syoboi', 'sonarr')"
         "      OR sp_min.earliest_utc < episode.air_date_utc)"
     )

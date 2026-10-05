@@ -6,6 +6,19 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 ## Open work — consolidated 2026-09-30
 
 ### A. Left over from the rebuild
+- 🔴 **Special levels re-created on every Memory Alpha pass (found 10-05)** — 53 new rows per pass, ~3,450 a day; prod `season` is
+      21,798 rows with 18,863 auto specials (healthy ≈ 4,900); one piece exists 323 times. Cause: `numbering._special_level`
+      looks under the season but `_nest_in_minis_groups` moves pieces into their minis group, so every pass makes a new one.
+      No external effect (no list ids, no episodes). Cleanup looks safe (14,048 extras, none with episodes/ids/scores).
+      **Needs your yes:** fix the lookup + a dry-run data patch to delete the extras; consider shipping it ahead of the bulk
+      release. Details: `AUDIT-2026-10-05.md` §1.
+- ⏳ **Memory Alpha pass exceeds ops's 120 s (timing done 10-05)** — 53 s of a 94 s pass is `ensure_fribb_season_rows` making 26
+      throttled AniList calls and then creating nothing; plus AniDB ≈ 20 s, renumber 9 s (shrinks after the cleanup above). Options
+      in `AUDIT-2026-10-05.md` §2; waiting for your pick.
+- ⏳ **Air-date noise: 10-minute buffer — done in dev** (user 10-05): two sources < 10 min apart change nothing and open no
+      review (`airdate_priority.within_tolerance`, also in the Syoboi SQL and the AniList reconcile). Confirm the 10 minutes.
+- [ ] **R.O.D -READ OR DIE- S1 swapped ids** — LCARS S1 (26 eps, completed) holds 208 (the OVA); Fribb right (209 = the TV series).
+      Lists unaffected. Decision on ids/statuses when the review appears (`AUDIT-2026-10-05.md` §3).
 - [ ] **AniDB drip** — running (v0.3.2). 10-03 07:42Z: 200/day reached 10-01 and 10-02, no ban; left 460 backlog +
       118 refreshes ≈ done 10-05/06. 200/day is the user's cap, not a known AniDB limit (bans seen at ~250 requests
       per VPN IP on 09-28, time window unknown).
@@ -42,13 +55,12 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       330 → 387 links, no Sonarr show left unlinked; calendar in the browser: 28 lit, 1 dark (a dropped show that is not in
       Sonarr — correct). Not changed: 36 shows hold a link whose TVDB id is no longer in Sonarr (stale links; `INSERT OR
       IGNORE` never updates a link).
-- [ ] **Part order** — Bookworm S1, Dr. STONE S4 (data patch, after the drip); re-audit 16 multi-part seasons with a
-      part with no span once the drip is done.
+- ⏳ **Part order** — dry run 10-05: 3 out of order (Dr. STONE S4, Bookworm S1, SAKAMOTO DAYS Part 2), 2 not judgeable (Haruhi S1,
+      Mahou Shoujo Ikusei Keikaku restart S1); the drip already placed spans for 14 of the 16. Data patch ready to write (renumber by span start).
 - [ ] **138 width checks** (should clear as AniDB data arrives) and **131 Fribb-unmatched** (information) — re-look
       after the drip.
-- [ ] **List sync: one AniList entry spanning several TVDB seasons** is skipped as a conflict (Urusei Yatsura 1293).
-- [ ] **ops daily sweep dropped-connection handling** — unverified whether it recurs.
-- [ ] **`_seed_baseline` step 0** — seed skipped levels too, before any future rebuild.
+- [ ] **List sync: one AniList entry spanning several TVDB seasons** (Urusei Yatsura 1293) is skipped as a conflict. **Decided 10-05:** progress synced by episode; status = mirror the last AniList status. Not built yet.
+- ✅ ops daily sweep dropped connection — not reproduced in 72 h of prod logs (only Memory Alpha ReadTimeouts); closed.
 - [ ] **R3.7c/d/e** — two sources agreeing on a TVDB id attach it; TVDB id entry on the show page; unconfirmed TVDB
       id → yes / no / here's-the-right-one review.
 - [ ] **8.8.3 / 8.8.5** — side-by-side evidence page; link provenance re-checked when Fribb later has data.
@@ -61,7 +73,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 - [ ] **Key rotation** (Sonarr/Radarr/TMDB, MAL client_id, AniList client_secret) — at project end.
 
 ### B. Carried over from before the rebuild
-- [ ] Service icons white until hard refresh (never reproduced/fixed; needs the user to see it fixed).
+- 💤 Service icons white until a hard refresh — parked (user 10-05: not appearing lately).
 - [ ] Secrets out of plaintext config; AniList metadata fallback scalar-only; franchise function.
 - [ ] Ideas: unified list page, Discover, Statistics, season-level external ids, Memory Alpha browse prefill +
       add confirmation, art-fetch leftovers, IMDB datasets, studio browse, direct TVDB search, livechart

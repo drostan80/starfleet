@@ -262,7 +262,7 @@ def test_anilist_reconcile_records_a_candidate_and_leaves_a_chosen_season_alone(
     e = _episode(conn, show, z, 1, "2026-10-04T14:45:00Z", "anilist")
     conn.commit()
     _stub_anilist(monkeypatch, [{"episode": 1, "airingAt": 1791125100}])
-    monkeypatch.setattr(util, "unix_to_iso", lambda _ts: "2026-10-04T14:40:00Z")  # AniList: earlier
+    monkeypatch.setattr(util, "unix_to_iso", lambda _ts: "2026-10-04T14:30:00Z")
 
     air_sources.record_candidate(conn, e, "tvmaze", "", "2026-10-04T14:50:00Z")
     conn.execute(
@@ -270,11 +270,11 @@ def test_anilist_reconcile_records_a_candidate_and_leaves_a_chosen_season_alone(
         " VALUES (?, 'tvmaze', '', ?)", (z, NOW))
     metadata._reconcile_air_dates(conn, {"id": show})
     assert _row(conn, e)["air_date_utc"] == "2026-10-04T14:45:00Z"  # locked: not overwritten
-    assert _candidates(conn, e)[("anilist", "")] == "2026-10-04T14:40:00Z"  # but remembered
+    assert _candidates(conn, e)[("anilist", "")] == "2026-10-04T14:30:00Z"  # but remembered
 
     air_sources.clear_choice(conn, z)
     metadata._reconcile_air_dates(conn, {"id": show})
-    assert _row(conn, e)["air_date_utc"] == "2026-10-04T14:40:00Z"  # unlocked: earlier wins
+    assert _row(conn, e)["air_date_utc"] == "2026-10-04T14:30:00Z"  # unlocked: earlier wins
 
 
 def test_syoboi_rewire_leaves_a_chosen_season_alone(conn):

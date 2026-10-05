@@ -724,8 +724,10 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             # Every read of AniList's schedule is kept as a candidate (air_sources), so the user
             # can compare it with the other sources whether or not it is applied below.
             air_sources.record_candidate(conn, episode_row["id"], "anilist", "", new_air_date)
-            if current_date == new_air_date:
-                continue
+            if current_date == new_air_date or airdate_priority.within_tolerance(
+                current_date, new_air_date
+            ):
+                continue  # the same time to within a few minutes: no change, no review
             if air_sources.episode_is_locked(conn, episode_row["id"]):
                 continue  # the season follows a schedule the user chose (air_sources)
 
