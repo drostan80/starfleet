@@ -215,6 +215,15 @@ show X
   follows, but it isn't a rule: episode lists may be read **straight from TVDB** — e.g.
   every show that isn't (or no longer is) in Sonarr. AniDB (the drip) then reconciles
   the numbering for anime (R1.2d); it doesn't replace the TVDB episode list.
+- **R1.2g Provisional episodes until TVDB has them** `[decided 2026-10-05]`: when TVDB lags a
+  running anime (a placeholder first episode while several have aired), the next episodes come
+  from **Syoboi's numbered broadcasts**: anime only (tracked, watching or planned, with a
+  Syoboi id), only for the latest TVDB season and only when Syoboi's numbering fits it (the
+  first shared episode's air date within 3 days), up to the last aired number plus 3 and
+  never more than 6 past TVDB's last, and never past AniDB's episode count once AniDB has
+  it. Each is flagged **provisional**, dated by Syoboi, shown as TBA, and can be opened and
+  marked watched. TVDB takes over: its episode with the same number adopts the row (the
+  watched mark stays); a provisional number TVDB skips goes (kept if watched).
 - **R1.2d No authoritative data yet** `[clarified 2026-09-28, Q-T]`: TVDB order +
   air date may be used, carefully — the numbering still follows every rule above
   (season 0 episodes get their numbers too, R1.8). It is **reconciled once the
@@ -841,3 +850,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-30 — R2.15b: R2.15 wins over a status you set; a completed dropped level passes the drop to the next season.
 - 2026-10-04 — R1.0b (every source's schedule kept; you choose which one a season follows; earliest-wins stays the default), R1.0c (daily refresh covers any running show; per-show refresh button).
 - 2026-10-05 — R1.10a (an entry is placed by its episodes: a part of the TVDB season they sit in, or a season level only until TVDB has them; never by Fribb's order; Kusuriya's fake S4).
+- 2026-10-05 — R1.2g (provisional episodes from Syoboi until TVDB has them: anime, +3 after the last aired, at most 6 past TVDB's last).

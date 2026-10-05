@@ -1220,6 +1220,11 @@ def _fetch_sonarr(conn, show: dict, derive: bool = True) -> None:
     # *routed* LCARS season number, with the real TVDB coordinates
     # passed along so season identity is derived from them, never from
     # the LCARS number itself.
+    # TVDB takes over: a provisional episode (made from Syoboi's broadcast list while TVDB lagged)
+    # whose number Sonarr now lists becomes that episode, a watched mark and all.
+    from lcars import provisional_episodes
+
+    provisional_episodes.adopt(conn, show["id"], episodes)
     routed = []
     for ep in episodes:
         if ep.get("seasonNumber") is None or ep.get("episodeNumber") is None:

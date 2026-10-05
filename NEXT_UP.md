@@ -6,6 +6,14 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 ## Open work — consolidated 2026-09-30
 
 ### A. Left over from the rebuild
+- 🔧 **Provisional episodes from Syoboi — BUILT, in dev, ships in v0.4.4 (user 10-05; RULEBOOK R1.2g)** — TVDB lagged several running anime (two
+      episodes aired, only the placeholder E1 on the page: couldn't open or mark E2). `provisional_episodes.py`: for tracked anime (watching/planned)
+      with a Syoboi id, when Syoboi's numbering fits the latest TVDB season, the next episodes are added from its numbered broadcasts (last aired +3,
+      at most 6 past TVDB's last, never past AniDB's count), flagged `episode.provisional` (new migration f8a1b2c3d4e5), dated by Syoboi, TBA; the
+      Sonarr sync adopts a row when TVDB lists the same number (watched stays); skipped numbers go. Memory Alpha pass step + refresh button; "provisional"
+      tag on the episode row. Prod copy: 113 episodes on 31 shows (Goblin E3–E5), all numbered, no new rulecheck violation (R1.11w +3 "for a look").
+      v0.4.3 (stale reviews close themselves, divided seasons keep no list id, nginx re-resolves lcars) is tagged, CI green, NOT deployed:
+      folded into v0.4.4 with the prod data steps still to run then (scripts/levels_cleanup_20261005.py, Bleach show-level "dropped", MAL 54344 removal).
 - ✅ **Levels follow the episodes — DEPLOYED v0.4.2 on 2026-10-05 (user OK; snapshot lcars.db.bak-20261005-pre-0.4.2; first pass made 44 parts, 4 empty rows left: Cyberpunk S2, Ghost in the Shell S2–S4 now skipped) (RULEBOOK R1.10a)** — Kusuriya's fake "S4" (AniList
       200927 = S3 part 2) came from `ensure_fribb_season_rows` making a level per entry from Fribb's order; the rules existed only in the one-off
       rebuild. Replaced by `level_reconcile.py` (+ `level_parts.py`, shared with the manual "⤵ make part of season N" button and the

@@ -1507,6 +1507,11 @@ function buildAnidbEpRow(ep, show, cfg) {
   const titleCell = el('div', 'sp-ep-title-cell');
   const mainTitle = m.titleEn || ep.title || 'TBA';
   titleCell.appendChild(el('span', 'sp-ep-title', mainTitle));
+  if (ep.provisional) {
+    const tag = el('span', 'sp-ep-provisional', 'provisional');
+    tag.title = 'Listed by Syoboi; TVDB does not have this episode yet. It is replaced by the real one when TVDB lists it.';
+    titleCell.appendChild(tag);
+  }
   // Japanese + romaji subtitle
   const subtitles = [m.titleJa, m.titleRomaji].filter(Boolean);
   if (subtitles.length) {

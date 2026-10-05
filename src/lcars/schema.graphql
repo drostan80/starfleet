@@ -318,6 +318,8 @@ type Episode {
   "The last irreducible direct-Sonarr-read blocker for the Data thin-client swap, closed 2026-08-16 — sourced from Sonarr's own episode.title, go-forward capture only (null on every episode that existed before this field did, until its show's next real Sonarr fetch). No Radarr/movie equivalent — media_shape = MOVIE has no episode row at all, a movie's own title lives on Show."
   title: String
   synopsis: String
+  "True while the episode exists only because Syoboi lists it and TVDB does not yet (2026-10-05): it can be opened and marked watched, and TVDB's own episode takes it over."
+  provisional: Boolean!
 
   airDateUtc: DateTime
   airDateSource: AirDateSource

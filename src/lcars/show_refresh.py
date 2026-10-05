@@ -16,7 +16,16 @@ from __future__ import annotations
 import logging
 import time
 
-from lcars import air_sources, anidb, freeze, metadata, numbering, syoboi, tvmaze
+from lcars import (
+    air_sources,
+    anidb,
+    freeze,
+    metadata,
+    numbering,
+    provisional_episodes,
+    syoboi,
+    tvmaze,
+)
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +120,18 @@ def refresh_show_data(conn, show_id: str) -> dict:
             except Exception as e:
                 log.exception("refresh %s: Syoboi step failed", show_id)
                 step("Syoboi", False, str(e))
+
+    if anime:  # the next episodes TVDB doesn't list yet, from Syoboi's numbered broadcasts
+        try:
+            made = provisional_episodes.sync_show(conn, show_id)
+            conn.commit()
+            if made["created"] or made["removed"]:
+                step("Provisional episodes", True,
+                     f"{made['created']} added from Syoboi, {made['removed']} removed"
+                     " (until TVDB lists them)")
+        except Exception as e:
+            log.exception("refresh %s: provisional episodes failed", show_id)
+            step("Provisional episodes", False, str(e))
 
     # 3. new data may fill empty dates and (after AniDB) changes the numbering
     try:

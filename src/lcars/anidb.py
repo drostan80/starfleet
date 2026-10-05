@@ -1849,6 +1849,16 @@ def poll_memory_alpha(conn) -> dict:
     except Exception:
         log.exception("List-only film episodes failed")
 
+    # ── 2e3. Provisional episodes from Syoboi (provisional_episodes.py, user 2026-10-05) ──
+    # A running anime whose TVDB list lags gets the next few episodes from Syoboi's numbered
+    # broadcasts until TVDB takes over. Before the numbering so they are numbered this pass.
+    try:
+        with db.undo_on_error(conn):
+            from lcars import provisional_episodes
+            result["provisional_episodes"] = provisional_episodes.run_all(conn)["created"]
+    except Exception:
+        log.exception("Provisional episodes failed")
+
     # ── 2f. Numbering (phase 3.2, R1.2c/R1.2d) ──
     # Memory Alpha renumbers every tracked show: TVDB order + air date
     # first, reconciled with AniDB/TVmaze as their data comes in.

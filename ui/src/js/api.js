@@ -310,7 +310,7 @@ const SHOW_DETAIL_QUERY = `
       }
       episodes(first: 200, after: $epAfter) {
         edges { node {
-          id season episode absoluteNumber kind title synopsis
+          id season episode absoluteNumber kind title synopsis provisional
           airDateUtc runtimeMinutes state
           availableViaSonarr availableViaRadarr availableLocally
           filePathSonarr filePathRadarr
