@@ -9,7 +9,8 @@ Keeps the OLDEST level of each group of id-less copies (same show, parent and la
 deletes the others, with their spans and status-history rows. An id-less level beside one that
 holds an AniList id is NOT touched: that twin is made once (AniDB data for the piece is not
 there yet, so the id-holder is not found) and does not grow. An extra is deleted only if it is a
-plain auto-created copy: auto source, no AniList/MAL id, no score/dates, no episode, no child level, no art, no external
+plain auto-created copy: auto source, no AniList/MAL id, no score/dates, no episode, no child
+level, no art, no external
 id, no list lock and no chosen schedule. Anything else is left and reported.
 
 Usage (take a labelled snapshot first; stop nothing — it is one short transaction):
