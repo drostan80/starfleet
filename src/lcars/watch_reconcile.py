@@ -238,8 +238,27 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     for season in seasons:
         seasons_by_ext_id.setdefault(season["ext_id"], []).append(season)
     conflicted_season_ids: set[str] = set()
+    covered_season_ids: set[str] = set()  # levels of a shared entry, spoken for by the last one
     for ext_id, dupes in seasons_by_ext_id.items():
         if len(dupes) <= 1:
+            continue
+        if len({d["show_id"] for d in dupes}) == 1 and dupes[0]["show_id"] is not None:
+            # One entry that covers several TVDB seasons of ONE show (Urusei Yatsura 1293): not a
+            # conflict. The last level speaks for it (list_sync.group_levels): progress by
+            # episode across all of them, the list's status mirrored onto that level.
+            ordered = sorted(dupes, key=lambda d: (d["season_number"] is None,
+                                                   d["season_number"] or 0, d["part_number"] or 0,
+                                                   d["id"]))
+            covered_season_ids.update(d["id"] for d in ordered[:-1])
+            # The conflict reviews an older version opened for these levels are moot now.
+            marks = ",".join("?" for _ in dupes)
+            conn.execute(
+                "UPDATE pending_review SET resolved_at = ?, resolution_note = ?"
+                f" WHERE entity_type = 'season' AND entity_id IN ({marks}) AND field = ?"
+                " AND resolved_at IS NULL",
+                (now, "one list entry over several seasons of one show — not a conflict",
+                 *[d["id"] for d in dupes], f"{service}_id_conflict"),
+            )
             continue
         for season in dupes:
             conflicted_season_ids.add(season["id"])
@@ -262,7 +281,7 @@ def _apply_remote_list(conn, *, entries_by_ext_id, service, source, now):
     capturing = external_writes.capturing()
     total_changed: set[str] = set()  # shows whose entry gave a new episode total (R2.15a)
     for season in seasons:
-        if season["id"] in conflicted_season_ids:
+        if season["id"] in conflicted_season_ids or season["id"] in covered_season_ids:
             continue
         ext_id = season["ext_id"]
         entry = entries_by_ext_id.get(ext_id)

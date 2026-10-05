@@ -412,3 +412,129 @@ def test_a_total_that_does_not_match_leaves_it_watching(conn, world):
     world.state["anilist"][100]["episodes"] = 12
     _poll(conn)
     assert _status(conn) == "watching"
+
+
+# ── one list entry covering several TVDB seasons (Urusei Yatsura, user 2026-10-05) ──────────
+
+
+def _shared_show(conn, watched=0, status="watching"):
+    """Three TVDB seasons (2 + 2 + 1 episodes, absolute 1–5) that are ONE AniList entry 100 (MAL
+    200) — like Urusei Yatsura's 54 + 52 + 43 + 46 = 195."""
+    conn.execute(
+        "INSERT INTO show (id, media_shape, tracking_space, title_romaji, primary_title,"
+        " status, tracked, created_at, updated_at)"
+        " VALUES ('s-shr001', 'episodic', 'anime', 'Shared', 'romaji', 'watching', 1, 'x', 'x')")
+    n = 0
+    for k, (zid, count) in enumerate((("z-shr001", 2), ("z-shr002", 2), ("z-shr003", 1)), 1):
+        conn.execute(
+            "INSERT INTO season (id, show_id, season_number, status, anilist_id, mal_id, source,"
+            " created_at, updated_at) VALUES (?, 's-shr001', ?, ?, 100, 200, 'manual', 'x', 'x')",
+            (zid, k, status))
+        for service, ext in (("anilist", 100), ("mal", 200)):
+            conn.execute(
+                "INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+                " VALUES (?, ?, ?, 'x')", (zid, service, ext))
+        conn.execute("INSERT INTO season_span (season_id, abs_from, abs_to) VALUES (?, ?, ?)",
+                     (zid, n + 1, n + count))
+        for e in range(1, count + 1):
+            n += 1
+            conn.execute(
+                "INSERT INTO episode (id, show_id, season, episode, kind, absolute_number, state,"
+                " air_date_utc, season_id, created_at, updated_at)"
+                " VALUES (?, 's-shr001', ?, ?, 'regular', ?, ?, ?, ?, 'x', 'x')",
+                (f"e-shr00{n}", k, e, n, "watched" if n <= watched else "unwatched", PAST, zid))
+    conn.commit()
+
+
+def _shared_watched(conn):
+    return [r[0] for r in conn.execute(
+        "SELECT absolute_number FROM episode WHERE show_id = 's-shr001' AND state = 'watched'"
+        " ORDER BY absolute_number")]
+
+
+def test_one_entry_over_several_seasons_is_not_a_conflict_and_progress_is_by_episode(conn, world):
+    _shared_show(conn)
+    world.put("anilist", 100, "CURRENT", 0)
+    world.put("mal", 200, "watching", 0)
+    _poll(conn)  # seed
+    world.edit("anilist", 100, progress=3)  # watched three episodes: all of S1, the first of S2
+    _poll(conn)
+    assert _shared_watched(conn) == [1, 2, 3]
+    assert conn.execute("SELECT COUNT(*) FROM pending_review WHERE field LIKE '%id_conflict'"
+                        ).fetchone()[0] == 0
+
+
+def test_lcars_writes_one_combined_progress_and_never_a_status_for_a_shared_entry(conn, world):
+    from lcars import list_sync
+
+    _shared_show(conn)
+    world.put("anilist", 100, "CURRENT", 0)
+    world.put("mal", 200, "watching", 0)
+    _poll(conn)
+    world.calls.clear()
+    conn.execute("UPDATE episode SET state = 'watched' WHERE absolute_number <= 4")
+    conn.commit()
+    list_sync.push_progress_for_show(conn, "s-shr001")
+    anilist = [c for c in world.calls if c[0] == "anilist"]
+    assert [(c[1], c[2]) for c in anilist] == [(100, {"progress": 4})]  # once, combined, no status
+    mal = [c for c in world.calls if c[0] == "mal"]
+    assert [(c[1], c[2]) for c in mal] == [(200, {"num_watched_episodes": 4})]
+
+
+def test_the_lists_status_is_mirrored_onto_the_last_level_of_a_shared_entry(conn, world):
+    _shared_show(conn, watched=2)
+    world.put("anilist", 100, "CURRENT", 2)
+    world.put("mal", 200, "watching", 2)
+    _poll(conn)
+    world.edit("anilist", 100, status="PAUSED")
+    _poll(conn)
+    statuses = dict(conn.execute("SELECT id, status FROM season WHERE show_id = 's-shr001'"))
+    assert statuses["z-shr003"] == "paused"  # the last level speaks for the entry
+    assert statuses["z-shr001"] == "watching" and statuses["z-shr002"] == "watching"
+
+
+def test_a_shared_entry_is_one_group_in_list_sync(conn):
+    from lcars import list_sync
+
+    _shared_show(conn)
+    last = conn.execute("SELECT * FROM season WHERE id = 'z-shr003'").fetchone()
+    first = conn.execute("SELECT * FROM season WHERE id = 'z-shr001'").fetchone()
+    assert [lv["id"] for lv in list_sync.group_levels(conn, first)] == [
+        "z-shr001", "z-shr002", "z-shr003"]
+    assert list_sync.is_group_representative(conn, last)
+    assert not list_sync.is_group_representative(conn, first)
+    assert len(list_sync.level_episodes_ordered(conn, first)) == 5
+
+
+def test_two_different_shows_sharing_an_id_are_still_a_conflict(conn, world):
+    _shared_show(conn)
+    conn.execute(
+        "INSERT INTO show (id, media_shape, tracking_space, title_romaji, primary_title,"
+        " status, tracked, created_at, updated_at)"
+        " VALUES ('s-shr002', 'episodic', 'anime', 'Other', 'romaji', 'watching', 1, 'x', 'x')")
+    conn.execute(
+        "INSERT INTO season (id, show_id, season_number, status, anilist_id, source,"
+        " created_at, updated_at) VALUES ('z-oth001', 's-shr002', 1, 'watching', 100, 'manual',"
+        " 'x', 'x')")
+    conn.execute("INSERT INTO season_external_id (season_id, service, external_id, created_at)"
+                 " VALUES ('z-oth001', 'anilist', 100, 'x')")
+    conn.commit()
+    world.put("anilist", 100, "CURRENT", 0)
+    _poll(conn)
+    assert conn.execute("SELECT COUNT(*) FROM pending_review WHERE field = 'anilist_id_conflict'"
+                        ).fetchone()[0] >= 1
+
+
+def test_the_old_conflict_reviews_of_a_shared_entry_are_closed(conn, world):
+    _shared_show(conn)
+    for i, zid in enumerate(("z-shr001", "z-shr002", "z-shr003")):
+        conn.execute(
+            "INSERT INTO pending_review (id, entity_type, entity_id, field, proposed_value_chain,"
+            " source, created_at) VALUES (?, 'season', ?, 'anilist_id_conflict', '[]',"
+            " 'anilist_reconcile', 'x')", (f"r-old00{i}", zid))
+    conn.commit()
+    world.put("anilist", 100, "CURRENT", 0)
+    _poll(conn)
+    open_ = conn.execute("SELECT COUNT(*) FROM pending_review WHERE field = 'anilist_id_conflict'"
+                         " AND resolved_at IS NULL").fetchone()[0]
+    assert open_ == 0

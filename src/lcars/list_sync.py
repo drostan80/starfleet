@@ -5,6 +5,11 @@
 - Progress is per level (AniList/MAL are always season level, R1.23): the
   furthest watched episode among the level's own episodes, in absolute order —
   a cour's progress counts only the cour's episodes.
+- One list entry can cover several TVDB seasons (Urusei Yatsura: AniList 1293 is four seasons,
+  54 + 52 + 43 + 46 = 195 episodes). Those levels are one entry (`group_levels`): its progress is
+  the furthest watched episode across all of them in absolute order, so every level says the same
+  thing; its status is never written from LCARS (the list's status is mirrored onto the last
+  level instead, watch_reconcile) — user decision 2026-10-05.
 - A season LCARS added itself as planned and then moved to skipped is deleted
   from AniList/MAL (R2.10); one you set yourself never is.
 Best effort: a failed write opens a review and is retried by the reconcile.
@@ -64,10 +69,46 @@ def pushable(conn, season) -> bool:
     return show is not None and bool(show[0])
 
 
+def group_levels(conn, season) -> list:
+    """The levels that are ONE list entry: those of the same show holding this level's AniList
+    (or MAL) id, in season order — just the level itself when its entry is its own."""
+    if season is None or season["show_id"] is None:
+        return [season]
+    if season["anilist_id"] is None and season["mal_id"] is None:
+        return [season]
+    rows = conn.execute(
+        "SELECT * FROM season WHERE show_id = ? AND status IS NOT NULL AND status != 'skipped'"
+        " AND ((? IS NOT NULL AND anilist_id = ?) OR (? IS NOT NULL AND mal_id = ?))"
+        " ORDER BY COALESCE(season_number, 9999), part_number, id",
+        (season["show_id"], season["anilist_id"], season["anilist_id"],
+         season["mal_id"], season["mal_id"]),
+    ).fetchall()
+    return rows if len(rows) > 1 and any(r["id"] == season["id"] for r in rows) else [season]
+
+
+def is_shared_entry(conn, season) -> bool:
+    return len(group_levels(conn, season)) > 1
+
+
+def is_group_representative(conn, season) -> bool:
+    """One level speaks for a shared entry — the last, so the list's status is mirrored onto the
+    level that is current. A level with its own entry is its own representative."""
+    group = group_levels(conn, season)
+    return group[-1]["id"] == season["id"]
+
+
 def level_episodes_ordered(conn, season) -> list:
     from lcars import status_rules
 
-    eps = status_rules.level_episodes(conn, season)
+    group = group_levels(conn, season)
+    if len(group) > 1:  # one entry, several seasons: its episodes are all of theirs
+        seen: dict = {}
+        for level in group:
+            for e in status_rules.level_episodes(conn, level):
+                seen.setdefault(e["id"], e)
+        eps = list(seen.values())
+    else:
+        eps = status_rules.level_episodes(conn, season)
     number = {r[0]: r[1] for r in conn.execute(
         "SELECT id, absolute_number FROM episode WHERE show_id = ?", (season["show_id"],))}
     return sorted(eps, key=lambda e: (number.get(e["id"]) is None, number.get(e["id"]) or 0,
@@ -108,7 +149,7 @@ def _save(conn, cfg, service: str, ext: int, fields: dict) -> None:
         list_baseline.mal_save(conn, cfg.mal_access_token, ext, **fields)
 
 
-def _read_back(conn, cfg, season, service: str, ext: int, count) -> None:
+def _read_back(conn, cfg, season, service: str, ext: int, count, check_status: bool = True) -> None:
     """R4.10: what the service holds after the write is compared with LCARS's
     decision. A status it moved by itself gets one corrective, status-only write;
     what still differs (or a progress it clamped) is not pushed again — the
@@ -116,7 +157,7 @@ def _read_back(conn, cfg, season, service: str, ext: int, count) -> None:
     if external_writes.capturing():
         return
     base = list_baseline.get(conn, service, ext) or {}
-    wanted = _fields(service, season, None, True).get("status")
+    wanted = _fields(service, season, None, True).get("status") if check_status else None
     if wanted and base.get("status") not in (None, season["status"]):
         _save(conn, cfg, service, ext, {"status": wanted})
         base = list_baseline.get(conn, service, ext) or {}
@@ -144,6 +185,9 @@ def push(conn, season_id: str, *, status: bool = True, progress: bool = True,
         return
     cfg = config.get_current()
     ids = list_ids(conn, season_id)
+    shared = is_shared_entry(conn, season)
+    if shared:
+        status = False  # several seasons, one entry: its status is the list's to say
     count = level_progress(conn, season) if progress else None
     for service in services:
         ext = ids.get(service)
@@ -157,7 +201,7 @@ def push(conn, season_id: str, *, status: bool = True, progress: bool = True,
             fields = _fields(service, season, count, status)
             if fields:
                 _save(conn, cfg, service, ext, fields)
-                _read_back(conn, cfg, season, service, ext, count)
+                _read_back(conn, cfg, season, service, ext, count, check_status=not shared)
         except (anilist_client.AniListError, mal_client.MALError) as e:
             pending_review.open_or_extend(
                 conn, "season", season_id, f"{service}_push", service, None, str(e)
@@ -172,6 +216,8 @@ def push_progress_for_show(conn, show_id: str) -> None:
     ).fetchall():
         if not pushable(conn, season):
             continue
+        if not is_group_representative(conn, season):
+            continue  # one write per shared entry, by the level that speaks for it
         count = level_progress(conn, season)
         for service, ext in list_ids(conn, season["id"]).items():
             base = list_baseline.get(conn, service, ext) or {}
