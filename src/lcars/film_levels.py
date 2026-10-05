@@ -10,9 +10,9 @@ the list entry — no second level is made.
 Which levels: a tracked anime show, a `special` level with an AniList id, not skipped (R2.10), with
 no episode, no span (no place in the numbering yet — a film Sonarr or AniDB's mapping already
 numbers keeps that) and no child level, whose Fribb entry says it is a MOVIE. The air date and
-length come from AniDB (the drip's `anidb_episode` rows, via Fribb's AniDB id) and, when AniDB has nothing for
-it, from AniList (one call; a few per pass at most). Without a date the film gets a placeholder
-number (R1.0a) until one arrives.
+length come from AniDB (the drip's `anidb_episode` rows, via Fribb's AniDB id) and, when AniDB
+has nothing for it, from AniList (one call; a few per pass at most). Without a date the film
+gets a placeholder number (R1.0a) until one arrives.
 
 The episode is `kind = 'bonus_movie'` (that is how the numbering knows it is a film whatever its
 length — a 35-minute "movie" counts), with no Sonarr coordinates and, when AniDB knows the film,
