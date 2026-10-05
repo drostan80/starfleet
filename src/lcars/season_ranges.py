@@ -26,7 +26,7 @@ Two responsibilities, both inert until S3 switches reconcile reads:
 import logging
 import sqlite3
 
-from lcars import anilist_client, ids, pending_review, status_rules, util
+from lcars import anilist_client, ids, status_rules, util
 
 log = logging.getLogger(__name__)
 
@@ -273,21 +273,10 @@ def check_subdivision_widths(conn: sqlite3.Connection) -> dict[str, int]:
         range_width = r["abs_end"] - r["abs_start"] + 1
         if range_width == anilist_eps:
             continue
-        # Mismatch — flag if not already resolved with this exact value
-        mismatch_str = f"anilist={anilist_eps},range_width={range_width}"
-        if pending_review.already_resolved_with(
-            conn, "season", r["id"], "season_subdivision", mismatch_str
-        ):
-            continue
-        pending_review.open_or_extend(
-            conn,
-            "season",
-            r["id"],
-            "season_subdivision",
-            "anilist_width_check",
-            None,
-            mismatch_str,
-        )
+        # A mismatch is counted, no longer a review (10-05): 173 of them sat on the page and none
+        # was actionable — the width measured abs_end - abs_start + 1, which is wrong for a level
+        # with several spans or decimals, and the rest are entries spanning several TVDB seasons
+        # or specials. The comparison now lives in `lcars rulecheck` (R1.11w).
         flagged += 1
     conn.commit()
     return {"checked": checked, "flagged": flagged}

@@ -636,6 +636,36 @@ def check_dated_have_a_source(conn):
     )
 
 
+def check_anilist_count_vs_level(conn):
+    """R1.11w — the episode count of a level's AniList entry (`episode_total`) against the
+    episodes the level holds by its spans. Information only: it is what the width sweep used to
+    put on the review page (173 reviews, none actionable from there). A difference is normal for
+    a special, a season LCARS has not fully fetched, or an airing show; one id over several
+    seasons is R1.22's."""
+    if not _has(conn, "season_span"):
+        return _not_yet("R1.11w", "AniList count vs the level's episodes", "no span columns")
+    return _finding(
+        conn,
+        "R1.11w",
+        "A level whose AniList episode count differs from the episodes it holds, for a look",
+        "check",
+        f"SELECT {_TITLE} AS show, z.season_number, z.part_number, z.kind, z.episode_total,"
+        " (SELECT COUNT(DISTINCT e.id) FROM episode e JOIN season_span sp ON sp.season_id = z.id"
+        "  AND e.absolute_number BETWEEN sp.abs_from AND sp.abs_to"
+        "  WHERE e.show_id = z.show_id AND e.kind = 'regular') AS held"
+        " FROM season z JOIN show sh ON sh.id = z.show_id"
+        " WHERE sh.tracked = 1 AND z.kind IN ('tvdb_season', 'part') AND z.anilist_id IS NOT NULL"
+        " AND z.episode_total IS NOT NULL AND z.status != 'skipped'"
+        " AND EXISTS (SELECT 1 FROM season_span sp WHERE sp.season_id = z.id)"
+        " AND (SELECT COUNT(*) FROM season o WHERE o.show_id = z.show_id"
+        "  AND o.anilist_id = z.anilist_id AND o.status != 'skipped') = 1"
+        " AND held <> z.episode_total ORDER BY show, z.season_number, z.part_number",
+        fmt=lambda r: (f"{r['show']} S{r['season_number']}"
+                       + (f" part {r['part_number']}" if r["kind"] == "part" else "")
+                       + f": AniList {r['episode_total']}, holds {r['held']}"),
+    )
+
+
 CHECKS: list[Callable[[sqlite3.Connection], Finding]] = [
     check_every_episode_numbered,
     check_season_zero_redistributed,
@@ -663,6 +693,7 @@ CHECKS: list[Callable[[sqlite3.Connection], Finding]] = [
     check_undated_have_placeholders,
     check_parts_in_span_order,
     check_dated_have_a_source,
+    check_anilist_count_vs_level,
 ]
 
 NOT_IN_DATABASE = (

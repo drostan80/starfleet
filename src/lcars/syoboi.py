@@ -435,7 +435,7 @@ def _rewire_condition() -> str:
         " AND episode.air_date_utc != sp_min.earliest_utc"
         # within the tolerance two sources agree (airdate_priority.within_tolerance): no change
         f" AND ABS(strftime('%s', episode.air_date_utc) - strftime('%s', sp_min.earliest_utc))"
-        f"     >= {airdate_priority.AIR_DATE_TOLERANCE_SECONDS}"
+        f"     > {airdate_priority.AIR_DATE_TOLERANCE_SECONDS}"
         " AND (episode.air_date_source IN ('syoboi', 'sonarr')"
         "      OR sp_min.earliest_utc < episode.air_date_utc)"
     )

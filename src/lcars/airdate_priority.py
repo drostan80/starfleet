@@ -64,7 +64,7 @@ AIR_DATE_TOLERANCE_SECONDS = 600
 
 
 def within_tolerance(date_a: str | None, date_b: str | None) -> bool:
-    """Are two stored-format dates (UTC `YYYY-MM-DDTHH:MM:SSZ`) closer than the tolerance?
+    """Are two stored-format dates (UTC `YYYY-MM-DDTHH:MM:SSZ`) no further apart than the tolerance?
     Anything missing or unparseable is not "close" — the caller then decides as before."""
     if not date_a or not date_b:
         return False
@@ -73,7 +73,7 @@ def within_tolerance(date_a: str | None, date_b: str | None) -> bool:
         b = datetime.strptime(date_b, "%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
         return False
-    return abs((a - b).total_seconds()) < AIR_DATE_TOLERANCE_SECONDS
+    return abs((a - b).total_seconds()) <= AIR_DATE_TOLERANCE_SECONDS
 
 
 def should_apply(

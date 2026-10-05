@@ -3381,11 +3381,11 @@ async def test_anilist_air_date_reconciliation_does_not_overwrite_a_downloaded_e
     assert ep["airDateUtc"] == "2026-08-14T14:30:00Z"  # unchanged — the real, downloaded date
     assert ep["airDateSource"] == "SONARR"  # never flipped to ANILIST
 
+    # No review any more (10-05): the downloaded date stands and nothing needs answering.
     reviews = [
         r for r in await _pending_reviews_for(client, episode_id) if r["field"] == "air_date_utc"
     ]
-    assert len(reviews) == 1
-    assert "region-scoped delay" in reviews[0]["proposedValueChain"][-1]
+    assert reviews == []
 
 
 async def test_anilist_a_minute_off_an_already_downloaded_episode_changes_and_flags_nothing(

@@ -494,8 +494,9 @@ class TestCheckSubdivisionWidths:
         ).fetchone()[0]
         assert pr_count == 0
 
-    def test_mismatch_opens_pending_review(self, conn):
-        """AniList says 23 eps but range is 11 → opens pending_review."""
+    def test_a_mismatch_is_counted_but_opens_no_review(self, conn):
+        """AniList says 23 eps but the range is 11 → counted, no pending_review (10-05: the
+        sweep's 173 reviews were never actionable; the comparison lives in rulecheck R1.11w)."""
         _show(conn, "s-aaaaaa")
         _season_with_range_and_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, 1, 11)
         conn.commit()
@@ -504,76 +505,11 @@ class TestCheckSubdivisionWidths:
         with mock.patch(
             "lcars.anilist_client._graphql_request", return_value=fake_response
         ):
-            result = season_ranges.check_subdivision_widths(conn)
+            first = season_ranges.check_subdivision_widths(conn)
+            second = season_ranges.check_subdivision_widths(conn)
 
-        assert result == {"checked": 1, "flagged": 1}
-        pr = conn.execute(
-            "SELECT field, source, proposed_value_chain FROM pending_review"
-            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
-            "   AND resolved_at IS NULL"
-        ).fetchone()
-        assert pr is not None
-        assert pr["field"] == "season_subdivision"
-        assert pr["source"] == "anilist_width_check"
-        import json
-        chain = json.loads(pr["proposed_value_chain"])
-        assert chain == ["anilist=23,range_width=11"]
-
-    def test_idempotent_extends_not_duplicates(self, conn):
-        """Second run with same mismatch → extends chain, no duplicate row."""
-        _show(conn, "s-aaaaaa")
-        _season_with_range_and_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, 1, 11)
-        conn.commit()
-
-        fake_response = {"Page": {"media": [{"id": 100, "episodes": 23}]}}
-        with mock.patch(
-            "lcars.anilist_client._graphql_request", return_value=fake_response
-        ):
-            season_ranges.check_subdivision_widths(conn)
-            result2 = season_ranges.check_subdivision_widths(conn)
-
-        assert result2["flagged"] == 1  # still flagged (extended), not zero
-        pr_count = conn.execute(
-            "SELECT COUNT(*) FROM pending_review"
-            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
-            "   AND resolved_at IS NULL"
-        ).fetchone()[0]
-        assert pr_count == 1  # one row, not two
-
-    def test_already_resolved_suppresses_reopen(self, conn):
-        """If a human resolved the same mismatch value, don't reopen."""
-        import json
-
-        _show(conn, "s-aaaaaa")
-        _season_with_range_and_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, 1, 11)
-        conn.commit()
-
-        # Simulate a previously-resolved review with the same chain tail
-        mismatch_str = "anilist=23,range_width=11"
-        conn.execute(
-            "INSERT INTO pending_review"
-            " (id, entity_type, entity_id, field, previous_value,"
-            "  proposed_value_chain, source, created_at, resolved_at)"
-            " VALUES ('r-aaaaaa', 'season', 'z-aaaaaa', 'season_subdivision',"
-            "  NULL, ?, 'anilist_width_check', 'x', 'x')",
-            (json.dumps([mismatch_str]),),
-        )
-        conn.commit()
-
-        fake_response = {"Page": {"media": [{"id": 100, "episodes": 23}]}}
-        with mock.patch(
-            "lcars.anilist_client._graphql_request", return_value=fake_response
-        ):
-            result = season_ranges.check_subdivision_widths(conn)
-
-        assert result == {"checked": 1, "flagged": 0}
-        # No new open row
-        open_count = conn.execute(
-            "SELECT COUNT(*) FROM pending_review"
-            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
-            "   AND resolved_at IS NULL"
-        ).fetchone()[0]
-        assert open_count == 0
+        assert first == {"checked": 1, "flagged": 1} == second
+        assert conn.execute("SELECT COUNT(*) FROM pending_review").fetchone()[0] == 0
 
     def test_airing_null_episodes_skipped(self, conn):
         """AniList returns null episodes (airing) → not counted, not flagged."""
@@ -625,17 +561,7 @@ class TestCheckSubdivisionWidths:
             result = season_ranges.check_subdivision_widths(conn)
 
         assert result == {"checked": 2, "flagged": 1}
-        pr_s1 = conn.execute(
-            "SELECT COUNT(*) FROM pending_review"
-            " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
-        ).fetchone()[0]
-        assert pr_s1 == 0
-
-        pr_s2 = conn.execute(
-            "SELECT COUNT(*) FROM pending_review"
-            " WHERE entity_type = 'season' AND entity_id = 'z-bbbbbb'"
-        ).fetchone()[0]
-        assert pr_s2 == 1
+        assert conn.execute("SELECT COUNT(*) FROM pending_review").fetchone()[0] == 0
 
 
 # ---------------------------------------------------------------------------

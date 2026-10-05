@@ -164,7 +164,11 @@ def _read_back(conn, cfg, season, service: str, ext: int, count, check_status: b
     differs = []
     if wanted and base.get("status") not in (None, season["status"]):
         differs.append(f"status {base.get('status')} (LCARS {season['status']})")
-    if count is not None and base.get("progress") not in (None, count):
+    # A service holds at most the entry's own episode count: LCARS saying more than that is
+    # clamped, which is expected and nothing to review.
+    total = season["episode_total"]
+    expected = min(count, total) if (count is not None and total) else count
+    if expected is not None and base.get("progress") not in (None, expected):
         differs.append(f"progress {base.get('progress')} (LCARS {count})")
     if differs:
         list_hub.log(conn, season["id"], service, "readback_differs", "; ".join(differs))
@@ -203,6 +207,8 @@ def push(conn, season_id: str, *, status: bool = True, progress: bool = True,
                 _save(conn, cfg, service, ext, fields)
                 _read_back(conn, cfg, season, service, ext, count, check_status=not shared)
         except (anilist_client.AniListError, mal_client.MALError) as e:
+            if pending_review.is_transient_error(e):
+                continue  # a blip or a rate limit: the next reconcile pushes it again
             pending_review.open_or_extend(
                 conn, "season", season_id, f"{service}_push", service, None, str(e)
             )

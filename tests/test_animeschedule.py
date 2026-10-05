@@ -4,7 +4,6 @@ BUILD_PLAN.md B.5. Exercised against a real, migrated SQLite database
 with a fake animeschedule_client (no real network call).
 """
 
-import json
 import os
 import sqlite3
 import subprocess
@@ -92,9 +91,14 @@ def test_a_clear_match_updates_the_matching_episode(conn, monkeypatch):
     ).fetchone()
     assert row["air_date_utc"] == "2026-08-09T00:00:00Z"
     assert row["air_date_source"] == "animeschedule"
-    reviews = _pending_reviews(conn, "e-aaaaaa", "air_date_utc")
-    assert len(reviews) == 1
-    assert reviews[0]["source"] == "animeschedule"
+    # The applied change is history (air_date_change), not a review (10-05).
+    assert _pending_reviews(conn, "e-aaaaaa", "air_date_utc") == []
+    change = conn.execute(
+        "SELECT previous_air_date_utc, new_air_date_utc, previous_source, new_source, changed_by"
+        " FROM air_date_change WHERE episode_id = 'e-aaaaaa'"
+    ).fetchone()
+    assert tuple(change) == ("2099-01-01T00:00:00Z", "2026-08-09T00:00:00Z", "sonarr",
+                             "animeschedule", "system")
     # §6.7, B.6 — a successful feed fetch records service_health, whether or
     # not anything ended up matching a tracked show.
     health = next(r for r in service_health.get_all(conn) if r["service"] == "animeschedule")
@@ -220,7 +224,7 @@ def test_a_fully_released_show_with_no_airing_episode_is_never_a_candidate(conn,
     assert result == {"episodes_updated": 0, "flagged": 0}
 
 
-def test_no_matching_episode_row_is_flagged_not_written(conn, monkeypatch):
+def test_no_matching_episode_row_writes_nothing_and_opens_no_review(conn, monkeypatch):
     _add_show(conn, "s-hhhhhh", title_romaji="Digimon BeatBreak")
     # Only episode 1 exists (still airing) — the feed reports episode 42.
     _add_episode(conn, "e-hhhhhh", "s-hhhhhh", season=1, episode=1, air_date_utc=None)
@@ -229,14 +233,18 @@ def test_no_matching_episode_row_is_flagged_not_written(conn, monkeypatch):
         "fetch_raw_feed",
         lambda: [_item("Digimon BeatBreak", 42, "2026-08-09T00:00:00Z")],
     )
-    result = animeschedule.poll_anime_schedule(conn)
-    assert result == {"episodes_updated": 0, "flagged": 1}
-    reviews = _pending_reviews(conn, "s-hhhhhh", "animeschedule_episode_match")
-    assert len(reviews) == 1
-    assert reviews[0]["source"] == "animeschedule"
+    for _ in range(2):  # re-seen on the next hourly sweep
+        result = animeschedule.poll_anime_schedule(conn)
+        assert result == {"episodes_updated": 0, "flagged": 0}
+    # An unclear match is logged, no longer a review (10-05).
+    assert _pending_reviews(conn, "s-hhhhhh", "animeschedule_episode_match") == []
+    assert conn.execute("SELECT air_date_utc FROM episode WHERE id = 'e-hhhhhh'"
+                        ).fetchone()[0] is None
 
 
-def test_multiple_currently_airing_seasons_sharing_an_episode_number_is_flagged(conn, monkeypatch):
+def test_multiple_currently_airing_seasons_sharing_an_episode_number_open_no_review(
+    conn, monkeypatch
+):
     _add_show(conn, "s-iiiiii", title_romaji="Digimon BeatBreak")
     _add_episode(conn, "e-iiiiii", "s-iiiiii", season=1, episode=6, air_date_utc=None)
     _add_episode(conn, "e-jjjjjj", "s-iiiiii", season=2, episode=6, air_date_utc=None)
@@ -246,65 +254,20 @@ def test_multiple_currently_airing_seasons_sharing_an_episode_number_is_flagged(
         lambda: [_item("Digimon BeatBreak", 6, "2026-08-09T00:00:00Z")],
     )
     result = animeschedule.poll_anime_schedule(conn)
-    assert result == {"episodes_updated": 0, "flagged": 1}
+    assert result == {"episodes_updated": 0, "flagged": 0}
+    assert _pending_reviews(conn, "s-iiiiii", "animeschedule_episode_match") == []
+    assert conn.execute("SELECT COUNT(*) FROM episode WHERE air_date_utc IS NOT NULL"
+                        ).fetchone()[0] == 0  # ambiguous: nothing guessed
 
 
-def test_repeated_flagging_of_the_same_show_extends_not_duplicates(conn, monkeypatch):
-    _add_show(conn, "s-kkkkkk", title_romaji="Digimon BeatBreak")
-    _add_episode(conn, "e-kkkkkk", "s-kkkkkk", season=1, episode=1, air_date_utc=None)
-    monkeypatch.setattr(
-        animeschedule_client,
-        "fetch_raw_feed",
-        lambda: [_item("Digimon BeatBreak", 42, "2026-08-09T00:00:00Z")],
-    )
-    result_1 = animeschedule.poll_anime_schedule(conn)
-    result_2 = animeschedule.poll_anime_schedule(conn)
-    assert result_1 == {"episodes_updated": 0, "flagged": 1}
-    # Same item, same finding, re-seen on the next hourly sweep — the real
-    # bug caught in review: this must be treated as a no-op, not re-flagged.
-    assert result_2 == {"episodes_updated": 0, "flagged": 0}
-    reviews = _pending_reviews(conn, "s-kkkkkk", "animeschedule_episode_match")
-    assert len(reviews) == 1
-    chain = json.loads(reviews[0]["proposed_value_chain"])
-    assert len(chain) == 1  # not duplicated on the repeat sweep
-
-
-def test_a_genuinely_different_flagged_finding_does_extend_the_chain(conn, monkeypatch):
-    _add_show(conn, "s-mmmmmm", title_romaji="Digimon BeatBreak")
-    _add_episode(conn, "e-mmmmmm", "s-mmmmmm", season=1, episode=1, air_date_utc=None)
-    monkeypatch.setattr(
-        animeschedule_client,
-        "fetch_raw_feed",
-        lambda: [_item("Digimon BeatBreak", 42, "2026-08-09T00:00:00Z")],
-    )
-    animeschedule.poll_anime_schedule(conn)
-    # A later sweep reports a different episode number for the same show —
-    # a genuinely new finding, not a re-read of the same one.
-    monkeypatch.setattr(
-        animeschedule_client,
-        "fetch_raw_feed",
-        lambda: [_item("Digimon BeatBreak", 43, "2026-08-09T01:00:00Z")],
-    )
-    animeschedule.poll_anime_schedule(conn)
-    reviews = _pending_reviews(conn, "s-mmmmmm", "animeschedule_episode_match")
-    assert len(reviews) == 1
-    chain = json.loads(reviews[0]["proposed_value_chain"])
-    assert len(chain) == 2
-
-
-def test_apply_or_flag_flags_rather_than_silently_no_ops_with_zero_airing_seasons(conn):
-    """Unreachable via poll_anime_schedule()'s own normal flow today —
-    _candidate_shows and _airing_seasons share the same predicate, so a
-    candidate show always has >=1 airing season — but exercised directly
-    here as a defensive-branch regression test: a caught-in-review bug
-    had this silently return "unchanged" instead of flagging."""
+def test_a_show_with_no_airing_season_is_left_alone_and_opens_no_review(conn):
+    """Defensive branch (unreachable through poll_anime_schedule's own candidate filter)."""
     _add_show(conn, "s-nnnnnn", title_romaji="Digimon BeatBreak")
     outcome = animeschedule._apply_or_flag(
         conn, "s-nnnnnn", _item("Digimon BeatBreak", 42, "2026-08-09T00:00:00Z")
     )
-    assert outcome == "flagged"
-    reviews = _pending_reviews(conn, "s-nnnnnn", "animeschedule_episode_match")
-    assert len(reviews) == 1
+    assert outcome == "unchanged"
+    assert _pending_reviews(conn, "s-nnnnnn", "animeschedule_episode_match") == []
 
 
 def test_a_feed_fetch_failure_is_a_clean_zero_result_not_a_raise(conn, monkeypatch):

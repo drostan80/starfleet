@@ -11,6 +11,17 @@ import json
 
 from lcars import ids, util
 
+_TRANSIENT_MARKERS = ("could not connect", "http 429", "http 5", "timed out", "timeout",
+                      "temporary failure", "connection")
+
+
+def is_transient_error(message) -> bool:
+    """A network blip, a rate limit or a server error: retried by the next pass anyway, so it is
+    logged and never a review (10-05: 9 stale 'Could not connect' / 'HTTP 429' reviews sat on the
+    page after an outage that had long since cleared)."""
+    text = str(message).lower()
+    return any(marker in text for marker in _TRANSIENT_MARKERS)
+
 
 def open_or_extend(
     conn, entity_type: str, entity_id: str, field: str, source: str, previous_value, new_value
@@ -40,6 +51,8 @@ def open_or_extend(
     ).fetchone()
     if existing is not None:
         chain = json.loads(existing["proposed_value_chain"])
+        if chain and chain[-1] == new_str:
+            return  # the same finding again is not "the source changed its mind": nothing to add
         chain.append(new_str)
         conn.execute(
             "UPDATE pending_review SET proposed_value_chain = ? WHERE id = ?",

@@ -180,6 +180,10 @@ def _guarded(conn, show: dict, service: str, fn: Callable[[object, dict], None])
     except Exception as e:
         # The step's own partial writes are gone (undo_on_error); its
         # service_health failure was committed before it raised.
+        if pending_review.is_transient_error(e):
+            log.warning("metadata fetch (%s) for %s failed, retried next pass: %s",
+                        service, show["id"], e)
+            return
         pending_review.open_or_extend(
             conn, "show", show["id"], "metadata_fetch", service, None, str(e)
         )
@@ -236,16 +240,8 @@ def _ensure_anilist_link(conn, show: dict) -> None:
     # R1.23: the id goes on the season Fribb places it in, not "season 1".
     season_number = ((candidate or {}).get("season") or {}).get("tvdb") or 1
     if anilist_id is None:
-        pending_review.open_or_extend(
-            conn,
-            "show",
-            show["id"],
-            "anilist_id",
-            "fribb",
-            None,
-            f"no AniList match for tvdb id {tvdb_id_str} (§5.1 requires one)",
-        )
-        conn.commit()
+        # No review: AniList ids live on seasons now (R1.23) and a TVDB show without an AniList
+        # entry is normal — information, not something to answer (10-05).
         return
 
     _upsert_season(conn, show["id"], season_number, anilist_id, _mal_id, source="fribb")
@@ -752,18 +748,9 @@ def _reconcile_air_dates(conn, show: dict) -> None:
                 and current_date is not None
                 and new_air_date > current_date
             ):
-                pending_review.open_or_extend(
-                    conn,
-                    "episode",
-                    episode_row["id"],
-                    "air_date_utc",
-                    "anilist",
-                    current_date,
-                    f"AniList proposes {new_air_date} (a delay past the current "
-                    f"{current_date}) but a file is already downloaded at the current "
-                    "date — likely a region-scoped delay that doesn't apply to the real "
-                    "broadcast; not applied automatically, needs a human look",
-                )
+                # Not applied (the downloaded file proves the current date), and no review any
+                # more (10-05: it was always "keep the downloaded date" — pure noise); AniList's
+                # date stays visible as a candidate in the schedule chooser (air_sources).
                 continue
 
             if not airdate_priority.should_apply(
@@ -1447,16 +1434,7 @@ def _derive_episode_numbering(conn, show_id: str, series: dict, episodes: list[d
     now = util.now_utc_iso()
 
     if existing is not None:
-        if existing["scheme"] != scheme:
-            pending_review.open_or_extend(
-                conn,
-                "episode_numbering_mapping",
-                existing["id"],
-                "scheme",
-                "sonarr",
-                existing["scheme"],
-                scheme,
-            )
+        # (no review when the scheme changes: LCARS owns its numbering, R1.2a — Memory Alpha)
         conn.execute(
             "UPDATE episode_numbering_mapping"
             " SET scheme = ?, source = 'sonarr', matched = 1, updated_at = ?"

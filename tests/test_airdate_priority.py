@@ -112,8 +112,12 @@ class TestTolerance:
             ), (source, existing)
 
     def test_the_tolerance_is_a_buffer_not_a_ban_on_real_reschedules(self):
-        # same source, 10 minutes or more: a real reschedule still applies
+        # same source, more than 10 minutes: a real reschedule still applies
         assert airdate_priority.should_apply(
+            "anilist", "2026-10-04T14:56:00Z", "anilist", "2026-10-04T14:45:00Z"
+        )
+        # exactly 10 minutes is still inside the buffer (AniList 16:05 vs Sonarr 15:55, 10-05)
+        assert not airdate_priority.should_apply(
             "anilist", "2026-10-04T14:55:00Z", "anilist", "2026-10-04T14:45:00Z"
         )
         assert airdate_priority.should_apply(
@@ -129,8 +133,8 @@ class TestTolerance:
     def test_within_tolerance_edges(self):
         within = airdate_priority.within_tolerance
         assert within("2026-10-04T14:45:00Z", "2026-10-04T14:45:00Z")
-        assert within("2026-10-04T14:45:00Z", "2026-10-04T14:54:59Z")
-        assert not within("2026-10-04T14:45:00Z", "2026-10-04T14:55:00Z")
+        assert within("2026-10-04T14:45:00Z", "2026-10-04T14:55:00Z")  # exactly 10 minutes
+        assert not within("2026-10-04T14:45:00Z", "2026-10-04T14:55:01Z")
         assert not within(None, "2026-10-04T14:45:00Z")
         assert not within("not a date", "2026-10-04T14:45:00Z")
 
@@ -246,7 +250,8 @@ class TestRewireConditionParity:
             ("syoboi", "2026-01-10T00:01:00Z"),  # same source, a minute apart -> NOT (tolerance)
             ("sonarr", "2026-01-10T00:09:00Z"),  # weak source, 9 min apart -> NOT (tolerance)
             ("anidb", "2026-01-10T00:12:00Z"),  # real source, syoboi 12 min earlier -> update
-            ("sonarr", "2026-01-10T00:10:00Z"),  # exactly the tolerance -> update
+            ("sonarr", "2026-01-10T00:10:00Z"),  # exactly the tolerance -> NOT (inside it)
+            ("sonarr", "2026-01-10T00:11:00Z"),  # one minute past it -> update
         ],
     )
     def test_rewire_matches_should_apply(self, existing_source, existing_date):

@@ -80,7 +80,7 @@ from lcars import (
     airdate_priority,
     animeschedule_client,
     fuzzy,
-    pending_review,
+    ids,
     service_health,
     status_rules,
     util,
@@ -213,19 +213,20 @@ def _apply_or_flag(conn, show_id: str, item: dict) -> str:
     ):
         return "unchanged"  # same-source unchanged, or a different source's earlier date wins
 
-    pending_review.open_or_extend(
-        conn,
-        "episode",
-        episode_row["id"],
-        "air_date_utc",
-        "animeschedule",
-        episode_row["air_date_utc"],
-        item["air_date_utc"],
+    now = util.now_utc_iso()
+    # The change is recorded in the air-date history (air_date_change), not as a review: it was
+    # applied, there is nothing to answer (10-05: these filled the review page).
+    conn.execute(
+        "INSERT INTO air_date_change (id, episode_id, previous_air_date_utc, new_air_date_utc,"
+        " previous_source, new_source, changed_at, changed_by)"
+        " VALUES (?, ?, ?, ?, ?, 'animeschedule', ?, 'system')",
+        (ids.generate_id(conn, "g"), episode_row["id"], episode_row["air_date_utc"],
+         item["air_date_utc"], episode_row["air_date_source"], now),
     )
     conn.execute(
         "UPDATE episode SET air_date_utc = ?, air_date_source = 'animeschedule',"
         " updated_at = ? WHERE id = ?",
-        (item["air_date_utc"], util.now_utc_iso(), episode_row["id"]),
+        (item["air_date_utc"], now, episode_row["id"]),
     )
     return "updated"
 
@@ -243,12 +244,10 @@ def _flag(conn, show_id: str, item: dict, reason: str) -> str:
         f'episode {item["episode"]} of "{item["title"]}" reported released '
         f"{item['air_date_utc']}: {reason}"
     )
-    if _last_chain_entry(conn, "show", show_id, "animeschedule_episode_match") == message:
-        return "unchanged"
-    pending_review.open_or_extend(
-        conn, "show", show_id, "animeschedule_episode_match", "animeschedule", None, message
-    )
-    return "flagged"
+    # Logged, no longer a review (10-05): animeschedule is a third source, AniList and the user's
+    # chooser cover the dates, and "needs a human to confirm which" was never answered.
+    logger.info("animeschedule: %s", message)
+    return "unchanged"
 
 
 def _last_chain_entry(conn, entity_type: str, entity_id: str, field: str) -> str | None:

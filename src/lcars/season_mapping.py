@@ -166,10 +166,8 @@ def reconcile_season(
             (season_id, show_id, season_number, status,
              anilist_id, mal_id, source, matched, now, now, now, list_sync),
         )
-        if not matched:
-            pending_review.open_or_extend(
-                conn, "season", season_id, "anilist_id", "fribb", None, None
-            )
+        # (no review for a season Fribb has no AniList entry for: 1,315 TVDB seasons are like
+        # that by design — information, not a question; 10-05)
 
     # S2 dual-write: mirror into season_external_id so the mapping table
     # stays current going forward (S3 reads from it; see season_ranges.py).
