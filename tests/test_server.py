@@ -2461,13 +2461,16 @@ async def test_already_bare_anime_show_recovers_on_refresh(client, monkeypatch):
     assert links["anilist"] == "111"
 
 
-async def test_anime_show_with_no_resolvable_anilist_id_opens_a_review(client, monkeypatch):
-    """§5.1 mandates the link; §3 principle 1 says flag, never gate —
-    hard-rejecting would break Data's bridge on every anime add."""
+async def test_anime_show_with_no_resolvable_anilist_id_is_added_without_a_review(
+    client, monkeypatch
+):
+    """Never gate (§3 principle 1): hard-rejecting would break Data's bridge on every anime add.
+    Since 10-05 it is not reviewed either — AniList ids live on seasons (R1.23) and a TVDB show
+    without an AniList entry is normal information, not a question."""
     _patch_fribb_dataset(monkeypatch, dataset=[])  # no match for anything
     show = await add_show(client, trackingSpace="ANIME", tvdbId=555)
     reviews = await _pending_reviews_for(client, show["id"])
-    assert any(r["field"] == "anilist_id" for r in reviews), reviews
+    assert not any(r["field"] == "anilist_id" for r in reviews), reviews
     # ...and the show still exists and is usable, not rejected
     data = await gql(
         client,
@@ -2594,10 +2597,10 @@ async def test_add_show_metadata_fetch_skips_silently_when_not_configured(client
 
 async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(client, monkeypatch):
     down = lambda *a, **kw: (_ for _ in ()).throw(  # noqa: E731
-        anilist_client.AniListError("Could not connect")
+        anilist_client.AniListError("AniList returned a malformed response")
     )
     monkeypatch.setattr(anilist_client, "fetch_media", down)
-    # AniList is down for every call (the season you added it with now
+    # AniList is failing for every call (the season you added it with now
     # exists from the start, so the airing-schedule call runs too).
     monkeypatch.setattr(anilist_client, "fetch_airing_schedule", down)
     show = await add_show(client, anilistId=12345)
@@ -2610,7 +2613,7 @@ async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(cl
     assert reviews[0]["entityType"] == "show"
     assert reviews[0]["field"] == "metadata_fetch"
     assert reviews[0]["source"] == "anilist"
-    assert set(reviews[0]["proposedValueChain"]) == {"Could not connect"}  # fetch + schedule
+    assert set(reviews[0]["proposedValueChain"]) == {"AniList returned a malformed response"}
 
     # §6.7, B.6 — the same failure that opened the pending_review above
     # also recorded a service_health entry, through metadata._guarded's
@@ -2618,7 +2621,7 @@ async def test_add_show_fetch_failure_logs_pending_review_and_refresh_retries(cl
     health_data = await gql(client, SERVICE_HEALTH_QUERY, headers=auth_headers())
     anilist_health = next(e for e in health_data["serviceHealth"] if e["service"] == "ANILIST")
     assert anilist_health["status"] == "UNREACHABLE"
-    assert anilist_health["lastErrorMessage"] == "Could not connect"
+    assert anilist_health["lastErrorMessage"] == "AniList returned a malformed response"
 
     # whatever was unreachable is back — retry via refreshShowMetadata,
     # the manual-fix-by-user path (confirmed 2026-08-08)
@@ -4040,14 +4043,24 @@ async def test_add_show_tmdb_fetch_skips_silently_when_not_configured(client):
 
 async def test_add_show_tmdb_fetch_failure_logs_pending_review(client, monkeypatch):
     config.set_current(config.Config(tmdb_api_key="key"))
-    fake = _FakeTmdbClient(error=tmdb_client.TmdbError("Could not connect to TMDB"))
+    fake = _FakeTmdbClient(error=tmdb_client.TmdbError("TMDB returned a malformed response"))
     monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
     show = await add_show(client, trackingSpace="TV", tvdbId=67890)
 
     reviews = await _pending_reviews_for(client, show["id"])
     assert len(reviews) == 1
     assert reviews[0]["source"] == "tmdb"
-    assert reviews[0]["proposedValueChain"] == ["Could not connect to TMDB"]
+    assert reviews[0]["proposedValueChain"] == ["TMDB returned a malformed response"]
+
+
+async def test_add_show_tmdb_network_blip_opens_no_review(client, monkeypatch):
+    """10-05: 'Could not connect' / 'HTTP 429' are retried by the next pass — logged, never a
+    review (nine of them sat on the page long after an outage had cleared)."""
+    config.set_current(config.Config(tmdb_api_key="key"))
+    fake = _FakeTmdbClient(error=tmdb_client.TmdbError("Could not connect to TMDB"))
+    monkeypatch.setattr(tmdb_client, "TmdbClient", lambda *a, **kw: fake)
+    show = await add_show(client, trackingSpace="TV", tvdbId=67891)
+    assert await _pending_reviews_for(client, show["id"]) == []
 
 
 @pytest.mark.parametrize(
@@ -8223,7 +8236,7 @@ async def _reconcile(client, show_id, season_number):
     return data["reconcileSeasonMapping"]
 
 
-async def test_reconcile_season_mapping_no_tvdb_link_logs_no_candidate_review(client, monkeypatch):
+async def test_reconcile_season_mapping_no_tvdb_link_is_unmatched_no_review(client, monkeypatch):
     _patch_fribb_dataset(monkeypatch)
     show = await add_show(client)
 
@@ -8233,11 +8246,8 @@ async def test_reconcile_season_mapping_no_tvdb_link_logs_no_candidate_review(cl
     assert season["anilistId"] is None
     assert season["malId"] is None
 
-    reviews = await _pending_reviews_for(client, season["id"])
-    assert len(reviews) == 1
-    assert reviews[0]["entityType"] == "season"
-    assert reviews[0]["field"] == "anilist_id"
-    assert reviews[0]["source"] == "fribb"
+    # No review since 10-05: a season Fribb has no AniList entry for is normal (1,315 of them).
+    assert await _pending_reviews_for(client, season["id"]) == []
 
 
 async def test_reconcile_season_mapping_matches_via_linked_tvdb_id(client, monkeypatch):

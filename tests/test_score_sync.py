@@ -238,7 +238,7 @@ class TestDrift:
 
 class TestIdempotency:
     def test_second_run_extends_not_duplicates(self, conn):
-        """Same drift on back-to-back calls → chain extended, no duplicate row."""
+        """Same drift on back-to-back calls → one row, one chain entry (10-05)."""
         _show(conn, "s-aaaaaa")
         _season_with_ext(conn, "z-aaaaaa", "s-aaaaaa", 1, 100, score=17.0)
         conn.commit()
@@ -258,7 +258,7 @@ class TestIdempotency:
             " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
         ).fetchone()
         chain = json.loads(pr["proposed_value_chain"])
-        assert chain == ["18.0", "18.0"]
+        assert chain == ["18.0"]  # the same finding again is not a new entry (10-05)
 
     def test_already_resolved_suppresses_reopen(self, conn):
         """Human resolved the exact proposed value → no re-open on next tick."""
@@ -540,7 +540,7 @@ class TestMalIdempotency:
         config.get_current().mal_access_token = "mal-token"
 
     def test_second_run_extends_not_duplicates(self, conn):
-        """Same MAL drift on back-to-back calls → chain extended, no duplicate row."""
+        """Same MAL drift on back-to-back calls → one row, one chain entry (10-05)."""
         _show(conn, "s-aaaaaa")
         _season_with_mal(conn, "z-aaaaaa", "s-aaaaaa", 1, 200, score=16.0)
         conn.commit()
@@ -560,7 +560,7 @@ class TestMalIdempotency:
             " WHERE entity_type = 'season' AND entity_id = 'z-aaaaaa'"
         ).fetchone()
         chain = json.loads(pr["proposed_value_chain"])
-        assert chain == ["18.0", "18.0"]
+        assert chain == ["18.0"]  # the same finding again is not a new entry (10-05)
 
     def test_already_resolved_suppresses_reopen(self, conn):
         """Human resolved the exact proposed MAL value → no re-open on next tick."""
