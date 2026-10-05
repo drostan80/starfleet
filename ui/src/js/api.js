@@ -1,3 +1,4 @@
+import { broadcastWatched } from './auto-refresh.js?v=1';
 /**
  * GraphQL HTTP client.
  *
@@ -121,6 +122,7 @@ export async function addWatchEvent(showId, season, episode) {
       }
     }
   `, { showId, season, episode, watchedAt: new Date().toISOString() });
+  broadcastWatched(); // other open pages refresh (auto-refresh.js)
   return data.addWatchEvent.id;
 }
 
@@ -133,6 +135,7 @@ export async function deleteWatchEvent(watchEventId) {
       deleteWatchEvent(watchEventId: $id)
     }
   `, { id: watchEventId });
+  broadcastWatched();
   return data.deleteWatchEvent;
 }
 

@@ -130,6 +130,7 @@
 
 <script type="module">
   import { applyAppName } from './js/config.js?v=5';
+  import './js/auto-refresh.js?v=1';  // page auto-refresh (every so often, and after a watch elsewhere)
   import { getDownloads, retriggerDownload, purgeDownload, purgeAll, playOffline } from './js/downloads.js?v=3';
   applyAppName();
   const isNative = window.Capacitor?.isNativePlatform?.();
@@ -242,6 +243,7 @@
   // had time to land (see downloads.js) — refresh so purge/auto-delete
   // state reflects the new watched status.
   window.addEventListener('starfleet:refresh-after-watch', render);
+  window.addEventListener('starfleet:auto-refresh', render);
 </script>
 
 </body>

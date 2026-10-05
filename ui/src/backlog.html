@@ -245,7 +245,7 @@
 <script type="module">
   import { getConfig, bootstrapConfig, applyAppName } from './js/config.js?v=5';
   import { initSearch } from './js/search.js?v=3';
-  import { fetchBacklog } from './js/api.js?v=24';
+  import { fetchBacklog } from './js/api.js?v=25';
   import {
     buildCard,
     showBanner, hideBanner,
@@ -535,6 +535,8 @@
   // A just-watched episode needs to drop out of this list — see
   // launchMpv() in calendar.js for why the refresh is delayed.
   window.addEventListener('starfleet:refresh-after-watch', () => load(true));
+  // every so often, and when the tab comes back into view (auto-refresh.js)
+  window.addEventListener('starfleet:auto-refresh', () => load(true));
 </script>
 
 </body>

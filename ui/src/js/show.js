@@ -23,7 +23,7 @@ import {
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=24';
+} from './api.js?v=25';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange,
@@ -3515,12 +3515,31 @@ export async function init() {
         console.warn('Refetch after refresh failed:', err);
       }
     });
-    window.addEventListener('starfleet:refresh-after-watch', async () => {
+    const refreshShowPage = async () => {
       if (root.querySelector('textarea, input, .sp-mapping-editor, .sp-syn-editor, .sp-ep-syn-edit-area')) return;
       try {
         rerender(await fetchShow(showId));
       } catch (err) {
         console.warn('Refresh-after-watch fetch failed:', err);
+      }
+    };
+    window.addEventListener('starfleet:refresh-after-watch', refreshShowPage);
+    // Every so often (auto-refresh.js): only when something actually changed, and with the scroll
+    // position kept, so a periodic refresh never collapses what the viewer has open.
+    let lastSnapshot = null;
+    window.addEventListener('starfleet:auto-refresh', async () => {
+      if (root.querySelector('textarea, input, .sp-mapping-editor, .sp-syn-editor, .sp-ep-syn-edit-area')) return;
+      try {
+        const fresh = await fetchShow(showId);
+        const snapshot = JSON.stringify(fresh);
+        if (lastSnapshot === null) { lastSnapshot = snapshot; return; }  // first tick: baseline
+        if (snapshot === lastSnapshot) return;
+        lastSnapshot = snapshot;
+        const y = window.scrollY;
+        rerender(fresh);
+        window.scrollTo(0, y);
+      } catch (err) {
+        console.warn('Auto-refresh fetch failed:', err);
       }
     });
 

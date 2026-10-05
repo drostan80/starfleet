@@ -222,7 +222,7 @@
 <script type="module">
   import { bootstrapConfig, getConfig, applyAppName } from './js/config.js?v=5';
   import { initSearch } from './js/search.js?v=3';
-  import { fetchAllShows, gql, setSeasonStatus } from './js/api.js?v=24';
+  import { fetchAllShows, gql, setSeasonStatus } from './js/api.js?v=25';
   import {
     buildSvcStrip,
     fetchTmdbPoster,
@@ -473,12 +473,12 @@
   }
 
   /* ── Load ────────────────────────────────────────────────────── */
-  async function load() {
+  async function load(silent = false) {
     try {
-      showBanner('Loading shows…', 'loading');
+      if (!silent) showBanner('Loading shows…', 'loading');
       _allShows = await fetchAllShows();
       renderList(_allShows, getConfig());
-      hideBanner();
+      if (!silent) hideBanner();
     } catch (err) {
       document.getElementById('list-grid').innerHTML =
         `<div class="list-empty" style="color:var(--st-dropped)">${err.message}</div>`;
@@ -534,6 +534,11 @@
 
   load();
   loadIndividualSeasons();
+
+  // A watch elsewhere, and every so often (auto-refresh.js): reload quietly.
+  for (const name of ['starfleet:refresh-after-watch', 'starfleet:auto-refresh']) {
+    window.addEventListener(name, () => { load(true); loadIndividualSeasons(); });
+  }
 </script>
 
 </body>
