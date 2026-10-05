@@ -6,6 +6,11 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 ## Open work — consolidated 2026-09-30
 
 ### A. Left over from the rebuild
+
+**STATE 2026-10-05 night.** Shipped: v0.4.0 (airing sources, film levels, shared-entry list sync, schedule chooser + refresh button, review/noise rules, rulecheck), v0.4.1 (review cleanup), v0.4.2 (levels follow episodes, R1.10a; R.O.D swap, A1 season-2 entries, Bleach/Ghost in the Shell skips), DNS fix in starfleet.yml. v0.4.3 (stale reviews close themselves, divided seasons keep no list id, nginx re-resolves lcars) is folded into **v0.4.4** = provisional episodes (R1.2g), Syoboi runs per level (R1.22a), every source's schedule as a choice, Syoboi id seeding, links on every external id. **At the v0.4.4 deploy, data steps on prod:** `scripts/levels_cleanup_20261005.py` (part order, Kusuriya's duplicate id, 4 stale reviews), Bleach show-level "dropped" (setStatus SKIPPED on the show: reads dropped, S1 untouched), remove MAL 54344 (skipped Mahou Shoujo part still on MAL, R2.10).
+
+**Rulecheck triage (prod copy 10-05, 34 violations after the above):** R2.7 completed levels with unwatched episodes (24, mostly specials: rule says mark watched — needs your OK, it writes watch events), R2.14 planned levels with watched episodes (4), R1.8 episodes in no level (2: Strawberry 100% S0E6, SAO Ordinal Scale S0E23), R1.12 Mushi-shi S2 (special 36.5 inside part 1's span), R1.23 Magic Repo Man (AniList 202250 on the show, not on S1), R2.10 (MAL 54344). Not started.
+
 - 🔧 **Syoboi runs per level, matched at episode level (user 10-05; RULEBOOK R1.22a) — BUILT, in dev, ships in v0.4.4**: a Syoboi TID is one broadcast run (per cour/season, like AniList):
       229 of 263 multi-level shows stored the FIRST season's TID at show level, so the running season was never fetched. `syoboi_levels.py`: the id is held per level
       (`season_external_id`, seeded from ARM through the level's AniList id: 1,370 on the prod copy), the sync fetches every watching/planned level's TID (108 new, 3 batches,
@@ -41,24 +46,24 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       legit future season; JoJo S7; Ghost in the Shell S2–S4 have no TVDB series), 10 entries "left" with reasons (R.O.D swap, Yuki Yuna, JoJo…). User 10-05: cours whose dates miss but whose counts fill the season are parts too (group count rule: Dungeon S4 11+11, Yuki Yuna S2 6+6, JoJo S5 12+26) → 44 parts, 4 left (JJK 209895 TVDB has no episodes; Dragon Warrior 2229 vs 2819; Nobody's Boy Remi 2829; R.O.D swap). Bleach (dropped): its seasons 2–17 are set skipped BEFORE the deploy so the new TYBW parts come out skipped; Ghost in the Shell S2–S4 skipped too.
       Rehearsal on a fresh prod copy: no new rulecheck violations (R1.10a 6 → 3), no foreign-key breaks, second pass changes nothing; captured
       list writes: 4 new (AoT 104578 COMPLETED, Bleach 116674 PLANNING, progress 12 for 99147 and 20632) — see the report.
-- ✅ **Special levels re-created on every Memory Alpha pass (found 10-05) — FIXED IN DEV, not deployed (commit 794acc1; cleanup script in the ship checklist)** — 53 new rows per pass, ~3,450 a day; prod `season` is
+- ✅ **[DEPLOYED v0.4.0 10-05; cleanup script run on prod]** **Special levels re-created on every Memory Alpha pass (found 10-05) — FIXED IN DEV, not deployed (commit 794acc1; cleanup script in the ship checklist)** — 53 new rows per pass, ~3,450 a day; prod `season` is
       21,798 rows with 18,863 auto specials (healthy ≈ 4,900); one piece exists 323 times. Cause: `numbering._special_level`
       looks under the season but `_nest_in_minis_groups` moves pieces into their minis group, so every pass makes a new one.
       No external effect (no list ids, no episodes). Cleanup looks safe (14,048 extras, none with episodes/ids/scores).
       Fix + cleanup script done (prod copy: 18,988 → 5,044 rows, three further passes add nothing). Details: `AUDIT-2026-10-05.md` §1.
-- ✅ **Memory Alpha pass exceeds ops's 120 s — BOTH fixes in dev, not deployed (user 10-05: cover ourselves)**: wasted AniList calls removed (−53 s: 94 s → 41 s on one copy; on today's fresh prod copy a pass is ~78 s because a Syoboi incremental sync adds ~44 s — rate-limited batches — and AniDB ~17 s; so a real pass is ~80–100 s) and ops timeout 300 s. Was: — 53 s of a 94 s pass is `ensure_fribb_season_rows` making 26
+- ✅ **[DEPLOYED v0.4.0 10-05]** **Memory Alpha pass exceeds ops's 120 s — BOTH fixes in dev, not deployed (user 10-05: cover ourselves)**: wasted AniList calls removed (−53 s: 94 s → 41 s on one copy; on today's fresh prod copy a pass is ~78 s because a Syoboi incremental sync adds ~44 s — rate-limited batches — and AniDB ~17 s; so a real pass is ~80–100 s) and ops timeout 300 s. Was: — 53 s of a 94 s pass is `ensure_fribb_season_rows` making 26
       throttled AniList calls and then creating nothing; plus AniDB ≈ 20 s, renumber 9 s (shrinks after the cleanup above). Options
       in `AUDIT-2026-10-05.md` §2; waiting for your pick.
-- ✅ **Film mechanism built (user OK 10-05; commit e088ddc)** — each list-only AniList film level (Fribb type MOVIE, not skipped, no span) gets one
+- ✅ **[DEPLOYED v0.4.0 10-05]** **Film mechanism built (user OK 10-05; commit e088ddc)** — each list-only AniList film level (Fribb type MOVIE, not skipped, no span) gets one
       `bonus_movie` episode (date/length from AniDB, else AniList; watched when the level is completed) so the numbering puts it between the
       seasons by date and writes the level's span; no twin level, no guessed AniDB entry. Prod copy: 3 films (Aldnoah.Zero Re+ → abs 25, the two
       Captain Harlock films → 0.1/0.2 because that show has no main episodes yet). Runs in the Memory Alpha pass before the numbering.
       First pass after deploy creates the 3 episodes (+1 watch event each for completed levels, dated that day).
-- ✅ **List sync for one entry over several seasons built (user 10-05; commit after e088ddc)** — Urusei Yatsura 1293: levels of one show sharing an
+- ✅ **[DEPLOYED v0.4.0 10-05]** **List sync for one entry over several seasons built (user 10-05; commit after e088ddc)** — Urusei Yatsura 1293: levels of one show sharing an
       id are one entry; progress by episode across them; status never pushed, the list's status mirrored onto the last level (my reading of
       "mirror last AniList status" — tell me if you meant something else); the 8 old id-conflict reviews close themselves. Prod copy: group of 4,
       195 episodes, matches AniList, nothing changed.
-- ✅ **Rulecheck: seven new checks built (user 10-05; commit bad53b4)** — R1.13b one level per label (55 duplicate groups before the cleanup, 0
+- ✅ **[DEPLOYED v0.4.0 10-05]** **Rulecheck: seven new checks built (user 10-05; commit bad53b4)** — R1.13b one level per label (55 duplicate groups before the cleanup, 0
       after), R1.13c episodes held by two levels (421, a "look at"), R1.2b decimals (0 wrong), R1.0a placeholders (0) + undated with real
       numbers (325, a "look at"), R1.10b part order (3), R1.0b air-date source (0). 19 → 26 rules checked.
 - ✅ **[DONE 10-05: levels follow episodes v0.4.2 + leftover_fixes script]** **Cutover-leftover decisions recorded (user 10-05)** — A1 best guesses (parts/season ids/leave; table in
@@ -71,7 +76,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 - [ ] **AniDB drip** — running (v0.3.2). 10-03 07:42Z: 200/day reached 10-01 and 10-02, no ban; left 460 backlog +
       118 refreshes ≈ done 10-05/06. 200/day is the user's cap, not a known AniDB limit (bans seen at ~250 requests
       per VPN IP on 09-28, time window unknown).
-- [ ] **Every Memory Alpha pass times out in ops** (found 09-30): `pollMemoryAlpha` exceeds ops's 120 s timeout on all
+- ✅ **[FIXED v0.4.0 10-05: ops timeout 300 s + pass 100 s → 41–80 s]** **Every Memory Alpha pass times out in ops** (found 09-30): `pollMemoryAlpha` exceeds ops's 120 s timeout on all
       8 passes in 4 h. LCARS finishes the pass anyway (fetches land), so ops logs a failure each time; unverified
       whether the renumber at the end of the pass completes.
 - ✅ **FIXED 10-05 (user): `~/stacks/starfleet.yml` on tiny now gives lcars and ops `dns: [192.168.1.1, 1.1.1.1, 8.8.8.8]` and a wait of up to 2 min for outside DNS before they start (backup `starfleet.yml.bak-pre-dns-20261005`; the file is not in the repo). Hit again after the 10-05 13:00 reboot (empty Docker resolver list); restart cured it. The arr/media stacks are not covered (`/etc/docker/daemon.json` `dns` would cover every container, needs root).** (old text:) **Reboot DNS race on tiny** (found 10-01): after the 06:36Z reboot, lcars/ops/web started before the host's
@@ -104,7 +109,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       330 → 387 links, no Sonarr show left unlinked; calendar in the browser: 28 lit, 1 dark (a dropped show that is not in
       Sonarr — correct). Not changed: 36 shows hold a link whose TVDB id is no longer in Sonarr (stale links; `INSERT OR
       IGNORE` never updates a link).
-- ⏳ **Part order** — dry run 10-05: 3 out of order (Dr. STONE S4, Bookworm S1, SAKAMOTO DAYS Part 2), 2 not judgeable (Haruhi S1,
+- 🔧 **[DATA STEP at the v0.4.4 deploy: scripts/levels_cleanup_20261005.py — renumbers by span start; rehearsed on a prod copy, R1.10b 3 → 0]** **Part order** — dry run 10-05: 3 out of order (Dr. STONE S4, Bookworm S1, SAKAMOTO DAYS Part 2), 2 not judgeable (Haruhi S1,
       Mahou Shoujo Ikusei Keikaku restart S1); the drip already placed spans for 14 of the 16. Data patch ready to write (renumber by span start).
 - [ ] **138 width checks** (should clear as AniDB data arrives) and **131 Fribb-unmatched** (information) — re-look
       after the drip.
@@ -114,8 +119,8 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       id → yes / no / here's-the-right-one review.
 - [ ] **8.8.3 / 8.8.5** — side-by-side evidence page; link provenance re-checked when Fribb later has data.
 - [ ] **7.5 / R4.9–R4.10** — AniList and MAL polls as one ordered loop; fixed time block.
-- [ ] **Expanded rulecheck / enforcement audit** (code + DB against the rulebook).
-- [ ] **Cutover review leftovers** (handoff §5): Haruhi 2006/2009 cours spans; 5 Urusei Yatsura films/specials with no
+- ✅ **[DONE 10-05: 28 rule checks incl. the 8 new ones and R1.10a; what it finds is listed under "Rulecheck triage"]** **Expanded rulecheck / enforcement audit** (code + DB against the rulebook).
+- ✅ **[DECIDED by the user 10-05 (A1, A2, A3, Battle Angel, R.O.D, Dragon Warrior 2819, Remi 2828); the unexplained counts (51/78/67, Mushoku 0.x, Haruhi spans, Urusei films) are parked: re-raise only if rulecheck shows them]** **Cutover review leftovers** (handoff §5): Haruhi 2006/2009 cours spans; 5 Urusei Yatsura films/specials with no
       level; Battle Angel OVA no TVDB movie id; 51 unmapped AniList history entries, 78 unlinked levels, 67 held back;
       Mushoku 146065 ep 0.
 - [ ] **Data TUI rework.**
