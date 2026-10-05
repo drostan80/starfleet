@@ -636,8 +636,7 @@ def _reconcile_air_dates(conn, show: dict) -> None:
     unlike ordinary pre-air schedule churn.
     """
     seasons = conn.execute(
-        "SELECT id, season_number, anilist_id FROM season"
-        " WHERE show_id = ? AND anilist_id IS NOT NULL",
+        "SELECT * FROM season WHERE show_id = ? AND anilist_id IS NOT NULL",
         (show["id"],),
     ).fetchall()
     now = util.now_utc_iso()
@@ -662,10 +661,10 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             continue
 
         anilist_episode_count = result["episodes"]
-        lcars_episode_count = conn.execute(
-            "SELECT COUNT(*) AS n FROM episode WHERE show_id = ? AND season = ?",
-            (show["id"], season["season_number"]),
-        ).fetchone()["n"]
+        # AniList's episode N -> the LCARS episode: for a TVDB season its own episode N; for a
+        # part (one cour of a TVDB season, its own AniList entry) the N-th episode of the part.
+        by_number = _anilist_episode_ids(conn, show["id"], season)
+        lcars_episode_count = len(by_number)
         if anilist_episode_count is not None and lcars_episode_count > anilist_episode_count:
             reason = (
                 f"season {season['season_number']} has {lcars_episode_count} episode(s) in "
@@ -688,9 +687,7 @@ def _reconcile_air_dates(conn, show: dict) -> None:
         # date for the same episode is independent of the AniList link:
         # if AniList's schedule sits months away from it, the link — not
         # the date — is what's wrong. Flag the season, write nothing.
-        drift_days = _anilist_schedule_drift_days(
-            conn, show["id"], season["season_number"], result["nodes"]
-        )
+        drift_days = _anilist_schedule_drift_days(conn, by_number, result["nodes"])
         if drift_days is not None and drift_days > _ANILIST_SCHEDULE_MAX_DRIFT_DAYS:
             reason = (
                 f"season {season['season_number']}: AniList media {season['anilist_id']}'s "
@@ -707,10 +704,10 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             continue
 
         for node in result["nodes"]:
-            episode_row = conn.execute(
+            episode_id = by_number.get(node["episode"])
+            episode_row = None if episode_id is None else conn.execute(
                 "SELECT id, air_date_utc, air_date_source, available_via_sonarr FROM episode"
-                " WHERE show_id = ? AND season = ? AND episode = ?",
-                (show["id"], season["season_number"], node["episode"]),
+                " WHERE id = ?", (episode_id,),
             ).fetchone()
             if episode_row is None:
                 continue  # not yet fetched into LCARS — A.8's Sonarr fetch's job, not this one's
@@ -769,17 +766,31 @@ _ANILIST_SCHEDULE_MAX_DRIFT_DAYS = 60
 _ANILIST_SCHEDULE_DRIFT_MIN_SAMPLE = 3
 
 
-def _anilist_schedule_drift_days(conn, show_id: str, season_number: int, nodes) -> float | None:
+def _anilist_episode_ids(conn, show_id: str, season) -> dict[int, str]:
+    """{AniList episode number: LCARS episode id} for one level that holds an AniList id."""
+    if season["kind"] == "part":
+        from lcars import list_sync
+
+        return {n: e["id"] for n, e in enumerate(list_sync.level_episodes_ordered(conn, season), 1)}
+    return {
+        r["episode"]: r["id"]
+        for r in conn.execute(
+            "SELECT id, episode FROM episode WHERE show_id = ? AND season = ?",
+            (show_id, season["season_number"]),
+        )
+    }
+
+
+def _anilist_schedule_drift_days(conn, by_number: dict[int, str], nodes) -> float | None:
     """Median absolute gap, in days, between AniList's airing schedule and
     Sonarr's raw air date for the same LCARS episodes (None when no
     episode has both). Median, so one genuinely delayed episode can't
     trip it — only a whole schedule from a different broadcast can."""
     gaps = []
     for node in nodes:
-        row = conn.execute(
-            "SELECT air_date_raw_sonarr FROM episode"
-            " WHERE show_id = ? AND season = ? AND episode = ?",
-            (show_id, season_number, node["episode"]),
+        episode_id = by_number.get(node["episode"])
+        row = None if episode_id is None else conn.execute(
+            "SELECT air_date_raw_sonarr FROM episode WHERE id = ?", (episode_id,)
         ).fetchone()
         if row is None or not row["air_date_raw_sonarr"]:
             continue
