@@ -3,6 +3,40 @@
 Source: the production copy of 10-04 (after removing the duplicate levels), `lcars rulecheck`, and the rebuild reports. Nothing was
 changed. "Decision" below means a choice only you can make; everything else is waiting on the drip or on me.
 
+## Decisions recorded (user, 10-05)
+
+- **A1 — my best guess, applied as a data patch later (dry run first, after the drip — parts need their spans from AniDB):**
+
+| Show | The TV-format entry | Best guess | Why |
+|---|---|---|---|
+| Aldnoah.Zero | 20853 "Season 2" (12 eps) | **Part 2 of TVDB S1** (S1 = part 1 is 20632) | TVDB S1 holds both cours (24 eps, spans 1–12 and 13–24 already exist) |
+| Durarara!! | 20652 "X2" (12) + 20879 "Ten" + 20880 "Ketsu" | **Parts 1–3 of TVDB S2** (36 eps = 3 × 12) | the rows "S3"/"S4" carrying 20879/20880 have no episodes: positional leftovers |
+| Hoozuki no Reitetsu | 98438 "2" (13) + 100852 "2nd Season Sono Ni" | **Parts of TVDB S2** (26 eps = 2 × 13) | row "S3" (100852) has no episodes |
+| Shingeki no Kyojin | 104578 "Season 3 Part 2" (10) | **Part 2 of TVDB S3** (S3 = 22 eps = 12 + 10; part 1 is 99147) | and the rows "S5"/"S6" (110277, 131681) are the Final Season parts of TVDB S4 (30 eps) |
+| Kankin Kuiki Level X | 182877 "Season 2" (6 eps) | **the AniList id of TVDB S2** (6 eps, planned → completed) | TVDB S2 has 6 episodes and no id |
+| Sekai Saikou no Ansatsusha… | 169579 "2nd Season" | **the AniList id of TVDB S2** (1 episode, planned) | |
+| Skip and Loafer | 185657 "Season 2" | **the AniList id of TVDB S2** (1 episode, planned) | |
+| Rurouni Kenshin (2023) | 188665 "3rd Season" | **leave as is** | TVDB has no S3 yet; it stays a planned entry until it does |
+| R.O.D -READ OR DIE- | 209 "THE TV" | **swap with 208** (see AUDIT §3 / ship checklist) | Fribb is right |
+
+  Side finding: 20 TVDB-season rows made by the rebuild from Fribb's order have **no episodes**; at least the Durarara!!, Hoozuki and
+  Shingeki rows above are positional leftovers of the old "season number = position" idea. The patch above removes/converts them.
+- **A2 — the four films are treated as integral to the story** ("in doubt, integral"): Adieu Galaxy Express 999 (1981), Aldnoah.Zero (Re+)
+  (2025, a recap film), Harlock: Space Pirate (2013), Space Pirate Captain Harlock: Riddle of the Arcadia (1978). Catch: a film only takes a
+  number (R1.4) if it has an episode row, and a list-only AniList film has none today. **Needs your OK before I build:** create one film
+  episode per such entry (air date and runtime from AniList), so the numbering puts it between the seasons by date and gives its level a span.
+- **A3 — the other 48: list only**, nothing to do.
+- **Battle Angel — keep both** (the movie and GUNNM). Nothing to do; the shared AniDB 147 stays.
+
+## What the remaining items mean (plain words)
+
+- **Urusei Yatsura:** nothing for you to decide. Its four seasons share one AniList entry; the sync rule you gave (progress by episode, status mirrors
+  the last AniList status) covers it and is just not built yet.
+- **Haruhi:** nothing to decide. Two cours (2006, 2009) are waiting for episode data from AniDB; the drip will bring it.
+- **51 / 78 / 67 / Mushoku:** leftovers from the rebuild (51 AniList history entries that did not match a level, 78 levels without a list entry, 67 levels
+  where AniList counts a different number of episodes than LCARS, one Mushoku episode 0). I have not opened them yet; after the drip I
+  will go through them and bring you only the ones that need a choice.
+
 ## A. Levels that hold an AniList entry but no episodes and no place in the numbering — 61 (rulecheck R1.11i)
 
 These are `special` levels the rebuild made for entries on your AniList/MAL lists that TVDB/Sonarr don't have episodes for. They are

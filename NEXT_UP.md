@@ -14,6 +14,12 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 - ✅ **Memory Alpha pass exceeds ops's 120 s — BOTH fixes in dev, not deployed (user 10-05: cover ourselves)**: wasted AniList calls removed (pass 94 s → 41 s on the same copy) and ops timeout 300 s. Was: — 53 s of a 94 s pass is `ensure_fribb_season_rows` making 26
       throttled AniList calls and then creating nothing; plus AniDB ≈ 20 s, renumber 9 s (shrinks after the cleanup above). Options
       in `AUDIT-2026-10-05.md` §2; waiting for your pick.
+- ✅ **Rulecheck: seven new checks built (user 10-05; commit bad53b4)** — R1.13b one level per label (55 duplicate groups before the cleanup, 0
+      after), R1.13c episodes held by two levels (421, a "look at"), R1.2b decimals (0 wrong), R1.0a placeholders (0) + undated with real
+      numbers (325, a "look at"), R1.10b part order (3), R1.0b air-date source (0). 19 → 26 rules checked.
+- [ ] **Cutover-leftover decisions recorded (user 10-05)** — A1 best guesses (parts/season ids/leave; table in
+      `DECISION-cutover-leftovers-2026-10-05.md`), A2 films integral (needs your OK on creating a film episode per list-only film), A3 list
+      only, Battle Angel keep both. Patch after the drip (dry run first).
 - ⏳ **Air-date noise: 10-minute buffer — done in dev** (user 10-05): two sources < 10 min apart change nothing and open no
       review (`airdate_priority.within_tolerance`, also in the Syoboi SQL and the AniList reconcile). Confirm the 10 minutes.
 - [ ] **R.O.D -READ OR DIE- S1 swapped ids** — LCARS S1 (26 eps, completed) holds 208 (the OVA); Fribb right (209 = the TV series).
