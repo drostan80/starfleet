@@ -291,7 +291,10 @@ class LcarsClient:
         # pollMemoryAlpha does sync drip-fetching (AniDB 5×2s + TVmaze
         # 5×0.5s + Syoboi batches + dataset downloads on first run) —
         # easily exceeds the default 10s client timeout.
-        data = await self._query(query, timeout=120.0)
+        # 300 s (was 120): one pass legitimately runs ~100 s today (AniDB pacing, numbering of
+        # every show) and LCARS finishes it either way — a client-side timeout only logged a
+        # failure while the work carried on.
+        data = await self._query(query, timeout=300.0)
         return data["pollMemoryAlpha"]
 
     async def backfill_file_availability(self) -> dict:

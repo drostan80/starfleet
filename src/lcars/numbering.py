@@ -691,9 +691,20 @@ def _special_level(conn, show_id: str, season_number, label: str, match: str, no
         ).fetchone()
     row = conn.execute(
         "SELECT id FROM season WHERE show_id = ? AND kind = 'special' AND anilist_id IS NULL"
-        " AND parent_id IS ? AND (label = ? OR substr(label, 1, ?) = ?)",
+        " AND parent_id IS ? AND (label = ? OR substr(label, 1, ?) = ?)"
+        " ORDER BY created_at, id",
         (show_id, parent[0] if parent else None, match, len(match) + 1, match + " "),
     ).fetchone()
+    if row is None:
+        # The level may sit one step deeper: `_nest_in_minis_groups` (R1.13c) moves a piece
+        # into its "Season N minis" group after it is created. Looking only under the season
+        # missed it, so every pass made a new copy (53 per pass on prod, 10-05); the code of a
+        # piece ("S00E10") and the label of a group are unique per show, so any parent will do.
+        row = conn.execute(
+            "SELECT id FROM season WHERE show_id = ? AND kind = 'special' AND anilist_id IS NULL"
+            " AND (label = ? OR substr(label, 1, ?) = ?) ORDER BY created_at, id",
+            (show_id, match, len(match) + 1, match + " "),
+        ).fetchone()
     if row is not None:
         return row[0]
     status = ("skipped" if parent is not None

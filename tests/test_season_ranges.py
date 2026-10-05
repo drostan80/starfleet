@@ -956,6 +956,57 @@ class TestEnsureFribbSeasonRows:
         assert first["season_rows_created"] == 2
         assert second["season_rows_created"] == 0
 
+    def test_does_not_ask_anilist_about_a_position_it_will_not_create(self, conn, monkeypatch):
+        """A split cour held as a part level: Fribb lists two entries on TVDB season 1, LCARS
+        holds the second one's AniList id on another level. Position 2 is skipped — and AniList
+        must not be asked about it (26 throttled calls on every Memory Alpha pass, 10-05)."""
+        from lcars import anilist_client
+
+        _show(conn, "s-noca01", "Split Cour", tracking_space="anime")
+        _tvdb_ext(conn, "s-noca01", 900005)
+        _season(conn, "z-noca01", "s-noca01", 1, anilist_id=111)
+        conn.execute(
+            "INSERT INTO season (id, show_id, season_number, part_number, kind, parent_id,"
+            " anilist_id, source, created_at, updated_at)"
+            " VALUES ('z-noca02', 's-noca01', 1, 2, 'part', 'z-noca01', 222, 'manual',"
+            " 'x', 'x')")
+        conn.commit()
+        monkeypatch.setattr(
+            fribb, "load_dataset",
+            lambda: [
+                _fribb_entry(900005, 111, tvdb_season=1),
+                _fribb_entry(900005, 222, tvdb_season=1, episode_offset=12),
+            ],
+        )
+        calls = []
+        monkeypatch.setattr(anilist_client, "fetch_media_statuses",
+                            lambda ids: calls.append(ids) or {})
+
+        result = season_ranges.ensure_fribb_season_rows(conn)
+
+        assert result["season_rows_created"] == 0
+        assert calls == []
+
+    def test_still_asks_anilist_when_a_row_will_be_created(self, conn, monkeypatch):
+        from lcars import anilist_client
+
+        _show(conn, "s-call01", "Has A New Season", tracking_space="anime")
+        _tvdb_ext(conn, "s-call01", 900006)
+        _season(conn, "z-call01", "s-call01", 1, anilist_id=111)
+        conn.commit()
+        monkeypatch.setattr(
+            fribb, "load_dataset",
+            lambda: [_fribb_entry(900006, 111, tvdb_season=1),
+                     _fribb_entry(900006, 222, tvdb_season=2)],
+        )
+        calls = []
+        monkeypatch.setattr(anilist_client, "fetch_media_statuses",
+                            lambda ids: calls.append(list(ids)) or {222: "FINISHED"})
+
+        result = season_ranges.ensure_fribb_season_rows(conn)
+
+        assert result["season_rows_created"] == 1 and calls == [[222]]
+
     def test_tv_shows_skipped(self, conn, monkeypatch):
         """Fribb is anime-only — a tv show must never go through it."""
         _show(conn, "s-tvskp1", "A TV Show", tracking_space="tv")

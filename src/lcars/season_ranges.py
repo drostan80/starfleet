@@ -465,10 +465,14 @@ def ensure_fribb_season_rows(conn: sqlite3.Connection) -> dict:
             r["anilist_id"] for r in existing_rows if r["anilist_id"] is not None
         }
         # One batched AniList call per show that actually gains rows —
-        # tells an old season (finished) from a future one.
+        # tells an old season (finished) from a future one. Only for positions a row will
+        # really be created for: a position whose AniList id already sits on another level of
+        # the show (a split cour held as a part) is skipped below, and asking AniList about it
+        # every pass cost 26 throttled calls (53 s of every Memory Alpha pass, 10-05).
         missing_ids = [
             fribb.extract_ids(real_seasons[p - 1])[0]
             for p in range(1, len(real_seasons) + 1) if p not in existing
+            and fribb.extract_ids(real_seasons[p - 1])[0] not in existing_anilist_ids
         ]
         missing_ids = [i for i in missing_ids if i is not None]
         release_status: dict[int, str] = {}

@@ -432,3 +432,41 @@ def test_three_digit_specials_do_not_share_a_level(conn):
     for zid, *_ in levels:
         assert conn.execute("SELECT COUNT(*) FROM season_span WHERE season_id = ?",
                             (zid,)).fetchone()[0] == 1
+
+
+# ── a piece nested into its minis group is found again, not re-created each pass ─────────────
+
+
+def _two_minis_around_a_long_special(conn):
+    """In S1's gap (day 1): mini, a 100-minute special (its own level, R1.13b), mini — so the
+    special's span sits inside the "Season 1 minis" group's run and is nested into it (R1.13c)."""
+    for n, (ep, hour, runtime) in enumerate(((2, "20:30", None), (3, "21:00", 100),
+                                             (4, "21:30", None)), start=2):
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc,"
+            " runtime_minutes, title, created_at, updated_at)"
+            " VALUES (?, 's-test01', 0, ?, 'special', ?, ?, ?, ?, ?)",
+            (f"e-sp{n:04d}", ep, f"2020-01-01T{hour}:00Z", runtime, f"Special {ep}", NOW, NOW),
+        )
+    conn.commit()
+
+
+def _special_levels(conn):
+    return conn.execute(
+        "SELECT label, parent_id FROM season WHERE show_id = 's-test01' AND kind = 'special'"
+        " ORDER BY label").fetchall()
+
+
+def test_a_piece_moved_into_its_minis_group_is_not_created_again_every_pass(conn):
+    _two_minis_around_a_long_special(conn)
+    numbering.renumber_show(conn, "s-test01")
+    first = _special_levels(conn)
+    group = conn.execute(
+        "SELECT id FROM season WHERE show_id = 's-test01' AND label = 'Season 1 minis'"
+    ).fetchone()[0]
+    piece = [r for r in first if r[0].startswith("S00E03")]
+    assert len(piece) == 1 and piece[0][1] == group  # nested into the group (R1.13c)
+
+    for _ in range(3):  # Memory Alpha runs this every ~20 minutes
+        numbering.renumber_show(conn, "s-test01")
+    assert _special_levels(conn) == first  # no second "S00E03 …", nothing new
