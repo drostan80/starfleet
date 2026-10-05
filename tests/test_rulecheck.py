@@ -69,8 +69,8 @@ def _episode(path, eid, sid, zid, season, ep, abs_n, state="watched"):
     _write(
         path,
         "INSERT INTO episode (id, show_id, season, episode, kind, absolute_number,"
-        " air_date_utc, state, season_id, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, 'regular', ?, '2020-01-01T00:00:00Z', ?, ?, ?, ?)",
+        " air_date_utc, air_date_source, state, season_id, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, 'regular', ?, '2020-01-01T00:00:00Z', 'sonarr', ?, ?, ?, ?)",
         (eid, sid, season, ep, abs_n, state, zid, NOW, NOW),
     )
 
@@ -206,3 +206,123 @@ def test_r27_counts_a_levels_own_episodes_not_every_episode_of_its_tvdb_season(d
     _episode(db_path, "e-kon003", "s-konkon", None, 1, 3, 1.5, state="unwatched")
     found = _by_rule(db_path)
     assert found["R2.7"].count == 0
+
+
+# ── 2026-10-05: the six checks added after the audit ──────────────────────────────────────
+
+
+def _lvl(path, zid, sid, kind, label=None, parent=None, part=1, anilist=None, spans=(),
+           number=None):
+    _write(
+        path,
+        "INSERT INTO season (id, show_id, season_number, part_number, kind, parent_id, label,"
+        " anilist_id, source, status, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'auto', 'planned', ?, ?)",
+        (zid, sid, number, part, kind, parent, label, anilist, NOW, NOW),
+    )
+    for lo, hi in spans:
+        _write(path, "INSERT INTO season_span (season_id, abs_from, abs_to) VALUES (?, ?, ?)",
+               (zid, lo, hi))
+
+
+def _ep(path, eid, sid, season, ep, abs_n, date="2020-01-01T00:00:00Z", source="sonarr"):
+    _write(
+        path,
+        "INSERT INTO episode (id, show_id, season, episode, kind, absolute_number, air_date_utc,"
+        " air_date_source, state, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, 'regular', ?, ?, ?, 'unwatched', ?, ?)",
+        (eid, sid, season, ep, abs_n, date, source if date else None, NOW, NOW),
+    )
+
+
+def test_r113b_a_special_level_copied_every_pass_is_found(db_path):
+    _show(db_path, "s-dupl01", "Pieces")
+    _season(db_path, "z-dupl00", "s-dupl01", 1, "watching", 1, 2)
+    for i in range(3):  # the runaway: three id-less copies of one piece under one group
+        _lvl(db_path, f"z-dupl{i + 1:02d}", "s-dupl01", "special", "S00E03 Podcast 3",
+               parent="z-dupl00")
+    _lvl(db_path, "z-dupl09", "s-dupl01", "special", "S00E04 Podcast 4", parent="z-dupl00")
+    found = _by_rule(db_path)["R1.13b"]
+    assert found.count == 1 and "× 3" in found.samples[0]
+
+
+def test_r113b_a_twin_beside_a_level_that_holds_an_id_is_not_a_duplicate(db_path):
+    _show(db_path, "s-twin01", "Twins")
+    _lvl(db_path, "z-twin01", "s-twin01", "special", "Side piece after season 2", anilist=204431)
+    _lvl(db_path, "z-twin02", "s-twin01", "special", "Side piece after season 2")
+    first = [f for f in rulecheck.run(rulecheck.open_readonly(str(db_path)))
+             if f.title.startswith("A special level exists once")][0]
+    assert first.count == 0
+
+
+def test_r113b_two_sibling_levels_holding_one_episode_are_listed_to_look_at(db_path):
+    _show(db_path, "s-both01", "Overlap")
+    _season(db_path, "z-both00", "s-both01", 1, "watching", 1, 5)
+    _lvl(db_path, "z-both01", "s-both01", "special", "Season 1 minis", parent="z-both00",
+           spans=[(3.5, 3.5)])
+    _lvl(db_path, "z-both02", "s-both01", "special", "The Film", parent="z-both00",
+           spans=[(3.5, 3.5)], anilist=77)
+    _lvl(db_path, "z-both03", "s-both01", "part", "Part", parent="z-both00", part=2,
+           spans=[(1, 2)])  # a child inside its season: not a double
+    _ep(db_path, "e-both01", "s-both01", 0, 1, 3.5)
+    _ep(db_path, "e-both02", "s-both01", 1, 1, 1)
+    found = _by_rule(db_path)["R1.13c"]
+    assert found.kind == "check" and found.count == 1 and "in 2 levels" in found.samples[0]
+
+
+def test_r12b_decimal_numbers_follow_the_scheme(db_path):
+    _show(db_path, "s-deci01", "Decimals")
+    # 1.5 alone: ok · 2.1, 2.2: ok · 3.3 alone: wrong (a single item is .5)
+    for i, n in enumerate([1, 1.5, 2, 2.1, 2.2, 3, 3.3]):
+        _ep(db_path, f"e-deci{i:02d}", "s-deci01", 1, i + 1, n)
+    found = _by_rule(db_path)["R1.2b"]
+    assert found.count == 1 and "after 3" in found.samples[0]
+
+
+def test_r12b_ten_items_in_one_gap_take_hundredths(db_path):
+    _show(db_path, "s-hund01", "Hundredths")
+    _ep(db_path, "e-hund00", "s-hund01", 1, 1, 1)
+    for i in range(10):
+        _ep(db_path, f"e-hund{i + 1:02d}", "s-hund01", 0, i + 1, round(1 + (i + 1) / 100, 2))
+    assert _by_rule(db_path)["R1.2b"].count == 0
+
+
+def test_r10a_a_placeholder_number_on_a_dated_episode_is_a_violation(db_path):
+    _show(db_path, "s-plac01", "Placeholders")
+    _ep(db_path, "e-plac01", "s-plac01", 1, 1, 5000.1)  # dated: wrong
+    _ep(db_path, "e-plac02", "s-plac01", 1, 2, 5000.2, date=None)  # undated placeholder: right
+    _ep(db_path, "e-plac03", "s-plac01", 1, 3, 3, date=None)  # undated with a real number: look
+    found = {f.rule: f for f in rulecheck.run(rulecheck.open_readonly(str(db_path)))}
+    assert found["R1.0a"].count == 1 and found["R1.0a"].kind == "violation"
+    assert found["R1.0a-b"].count == 1 and found["R1.0a-b"].kind == "check"
+
+
+def test_r110_parts_are_numbered_in_span_order(db_path):
+    _show(db_path, "s-part01", "Parts")
+    _season(db_path, "z-part00", "s-part01", 4, "watching", 58, 94)
+    _lvl(db_path, "z-part01", "s-part01", "part", parent="z-part00", part=1, spans=[(82, 94)])
+    _lvl(db_path, "z-part02", "s-part01", "part", parent="z-part00", part=2, spans=[(58, 69)])
+    _lvl(db_path, "z-part03", "s-part01", "part", parent="z-part00", part=3, spans=[(70, 81)])
+    found = _by_rule(db_path)["R1.10b"]
+    assert found.count == 1 and "S4" in found.samples[0]
+
+
+def test_r110_parts_in_order_or_without_a_span_are_not_flagged(db_path):
+    _show(db_path, "s-part11", "Fine Parts")
+    _season(db_path, "z-part10", "s-part11", 1, "watching", 1, 20)
+    _lvl(db_path, "z-part11", "s-part11", "part", parent="z-part10", part=1, spans=[(1, 10)])
+    _lvl(db_path, "z-part12", "s-part11", "part", parent="z-part10", part=2, spans=[(11, 20)])
+    _show(db_path, "s-part21", "Unplaced Parts")
+    _season(db_path, "z-part20", "s-part21", 1, "watching", 1, 20)
+    _lvl(db_path, "z-part21", "s-part21", "part", parent="z-part20", part=1, spans=[(11, 20)])
+    _lvl(db_path, "z-part22", "s-part21", "part", parent="z-part20", part=2)  # no span yet
+    found = [f for f in rulecheck.run(rulecheck.open_readonly(str(db_path)))
+             if f.title.startswith("Parts are numbered")][0]
+    assert found.count == 0
+
+
+def test_r10b_a_dated_episode_without_a_source_is_a_violation(db_path):
+    _show(db_path, "s-srce01", "Sources")
+    _ep(db_path, "e-srce01", "s-srce01", 1, 1, 1, source=None)
+    _ep(db_path, "e-srce02", "s-srce01", 1, 2, 2)
+    assert _by_rule(db_path)["R1.0b"].count == 1

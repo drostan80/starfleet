@@ -475,6 +475,167 @@ def check_no_stub_shows(conn):
     )
 
 
+# ── Added 2026-10-05 (audit): rules decidable from the database that had no check ──────────
+
+
+def check_one_level_per_label(conn):
+    """R1.13b/c — a special level (a piece, a "Season N minis" group, an AniDB mini sub-season) is
+    found by its label, so it exists once per show and parent. Memory Alpha made a new copy of every
+    piece nested in a minis group on every pass (53 a pass, ~3,450 a day, 09-30 → 10-05) and nothing
+    in the rulecheck noticed. Id-less levels only: one made beside a level holding an AniList id
+    (AniDB data not there yet) is a one-off, not this."""
+    return _finding(
+        conn,
+        "R1.13b",
+        "A special level exists once per label under one parent",
+        "violation",
+        f"SELECT {_TITLE} AS show, z.label, COUNT(*) AS copies FROM season z"
+        " JOIN show sh ON sh.id = z.show_id"
+        " WHERE sh.tracked = 1 AND z.kind = 'special' AND z.label IS NOT NULL"
+        " AND z.anilist_id IS NULL AND z.mal_id IS NULL"
+        " GROUP BY z.show_id, IFNULL(z.parent_id, ''), z.label HAVING COUNT(*) > 1"
+        " ORDER BY copies DESC, show",
+        fmt=lambda r: f"{r['show']} · {r['label']} × {r['copies']}",
+    )
+
+
+def check_episode_in_exactly_one_level(conn):
+    """R1.13b/c — every episode belongs to a level: the deepest level whose span holds its number.
+    None is R1.8 (above); this is the other way wrong: two levels that are not parent and child
+    both hold it, so it is in two places. A "check", not a violation: the rulebook only nests a
+    mini in its group when every span lies inside the group's run (R1.13c)."""
+    if not _has(conn, "season_span"):
+        return _not_yet("R1.13c", "Every episode sits in exactly one level", "no span columns")
+    return _finding(
+        conn,
+        "R1.13c",
+        "Episodes held by two levels at once (a parent and its child aside), for a look",
+        "check",
+        f"SELECT {_TITLE} AS show, e.season, e.episode, e.absolute_number,"
+        " COUNT(DISTINCT z.id) AS levels FROM episode e"
+        " JOIN show sh ON sh.id = e.show_id"
+        " JOIN season z ON z.show_id = e.show_id"
+        " JOIN season_span sp ON sp.season_id = z.id"
+        "  AND e.absolute_number BETWEEN sp.abs_from AND sp.abs_to"
+        " WHERE sh.tracked = 1 AND NOT EXISTS (SELECT 1 FROM season c"
+        "  JOIN season_span cs ON cs.season_id = c.id WHERE c.parent_id = z.id"
+        "  AND e.absolute_number BETWEEN cs.abs_from AND cs.abs_to)"
+        " GROUP BY e.id HAVING COUNT(DISTINCT z.id) > 1 ORDER BY show, e.absolute_number",
+        fmt=lambda r: (
+            f"{r['show']} S{r['season']}E{r['episode']} (abs {r['absolute_number']:g})"
+            f" in {r['levels']} levels"
+        ),
+        note="R1.13c nests a mini in its group only when all its spans lie in the group's run; "
+             "a film level and the minis group often both hold the same special.",
+    )
+
+
+def check_decimal_numbers(conn):
+    """R1.2b (and R1.8d): the items in one gap after whole number N are N.1, N.2, … ; one alone is
+    N.5; ten or more take hundredths (N.01, N.02, …). Placeholders (5000 and up) are R1.0a's."""
+    gaps: dict = {}
+    for row in conn.execute(
+        f"SELECT e.show_id, {_TITLE} AS show, e.absolute_number AS a FROM episode e"
+        " JOIN show sh ON sh.id = e.show_id WHERE sh.tracked = 1"
+        " AND e.absolute_number IS NOT NULL AND e.absolute_number < 5000"
+    ):
+        whole = int(row["a"] + 1e-9)
+        fraction = round(row["a"] - whole, 4)
+        if fraction > 0:
+            gaps.setdefault((row["show_id"], row["show"], whole), []).append(fraction)
+    bad = []
+    for (_show_id, show, whole), fractions in gaps.items():
+        fractions.sort()
+        n = len(fractions)
+        expected = ([0.5] if n == 1 else
+                    [round(i / 10, 4) for i in range(1, n + 1)] if n < 10 else
+                    [round(i / 100, 4) for i in range(1, n + 1)])
+        if fractions != expected:
+            bad.append(f"{show} after {whole}: {', '.join(f'{whole + f:g}' for f in fractions[:6])}"
+                       f" (expected {', '.join(f'{whole + f:g}' for f in expected[:6])})")
+    bad.sort()
+    return Finding("R1.2b", "Numbers between two whole numbers follow .1, .2… (one alone .5)",
+                   "violation", len(bad), bad[:SAMPLE_SIZE])
+
+
+def check_placeholder_numbers(conn):
+    """R1.0a — a placeholder number (5000 and up) is for an episode with no air date yet."""
+    return _finding(
+        conn,
+        "R1.0a",
+        "A placeholder number (5000+) only for an episode with no air date",
+        "violation",
+        f"SELECT {_TITLE} AS show, e.season, e.episode, e.absolute_number, e.air_date_utc"
+        " FROM episode e JOIN show sh ON sh.id = e.show_id"
+        " WHERE sh.tracked = 1 AND e.absolute_number >= 5000 AND e.air_date_utc IS NOT NULL"
+        " ORDER BY show, e.season, e.episode",
+        fmt=lambda r: (f"{r['show']} S{r['season']}E{r['episode']} abs {r['absolute_number']:g}"
+                       f" but dated {r['air_date_utc']}"),
+    )
+
+
+def check_undated_have_placeholders(conn):
+    """R1.0a, the other way: an episode with no air date takes a placeholder. TV episodes that
+    TVDB/TVmaze order but have not dated keep a real number today — listed to look at, not a
+    violation, until you say which way the rule reads for them."""
+    return _finding(
+        conn,
+        "R1.0a-b",
+        "Episodes with no air date that hold a real number, not a placeholder",
+        "check",
+        f"SELECT {_TITLE} AS show, e.season, e.episode, e.absolute_number FROM episode e"
+        " JOIN show sh ON sh.id = e.show_id"
+        " WHERE sh.tracked = 1 AND e.air_date_utc IS NULL AND e.absolute_number < 5000"
+        " ORDER BY show, e.season, e.episode",
+        fmt=lambda r: f"{r['show']} S{r['season']}E{r['episode']} abs {r['absolute_number']:g}",
+        note="Mostly TV episodes numbered from TVDB order with no date yet.",
+    )
+
+
+def check_parts_in_span_order(conn):
+    """R1.10 (order) — a TVDB season's parts are numbered in the order of their spans (part 1 is
+    the one that starts first). A part with no span yet cannot be placed and is left out."""
+    if not _has(conn, "season_span"):
+        return _not_yet("R1.10b", "Parts are numbered in span order", "no span columns")
+    parts: dict = {}
+    for row in conn.execute(
+        f"SELECT p.parent_id, {_TITLE} AS show, p.part_number AS pn,"
+        " (SELECT MIN(abs_from) FROM season_span s WHERE s.season_id = p.id) AS start,"
+        " (SELECT MAX(abs_to) FROM season_span s WHERE s.season_id = p.id) AS finish,"
+        " (SELECT season_number FROM season z WHERE z.id = p.parent_id) AS sn"
+        " FROM season p JOIN show sh ON sh.id = p.show_id"
+        " WHERE p.kind = 'part' AND sh.tracked = 1 ORDER BY p.parent_id, p.part_number"
+    ):
+        parts.setdefault(row["parent_id"], []).append(row)
+    bad = []
+    for group in parts.values():
+        if any(p["start"] is None for p in group):
+            continue
+        by_span = [p["pn"] for p in sorted(group, key=lambda p: (p["start"], p["pn"]))]
+        if by_span != sorted(p["pn"] for p in group):
+            now = ", ".join(f"{p['pn']}={p['start']:g}–{p['finish']:g}" for p in group)
+            bad.append(f"{group[0]['show']} S{group[0]['sn']}: {now}")
+    bad.sort()
+    return Finding("R1.10b", "Parts are numbered in the order of their spans", "violation",
+                   len(bad), bad[:SAMPLE_SIZE])
+
+
+def check_dated_have_a_source(conn):
+    """R1.0b — every stored air date records which source it came from (the schedule chooser and
+    the earliest-wins rule both read it)."""
+    return _finding(
+        conn,
+        "R1.0b",
+        "Every dated episode has an air-date source",
+        "violation",
+        f"SELECT {_TITLE} AS show, e.season, e.episode FROM episode e"
+        " JOIN show sh ON sh.id = e.show_id"
+        " WHERE sh.tracked = 1 AND e.air_date_utc IS NOT NULL AND e.air_date_source IS NULL"
+        " ORDER BY show, e.season, e.episode",
+        fmt=lambda r: f"{r['show']} S{r['season']}E{r['episode']}",
+    )
+
+
 CHECKS: list[Callable[[sqlite3.Connection], Finding]] = [
     check_every_episode_numbered,
     check_season_zero_redistributed,
@@ -495,6 +656,13 @@ CHECKS: list[Callable[[sqlite3.Connection], Finding]] = [
     check_skipped_not_on_lists,
     check_tracked_shows_have_tvdb,
     check_no_stub_shows,
+    check_one_level_per_label,
+    check_episode_in_exactly_one_level,
+    check_decimal_numbers,
+    check_placeholder_numbers,
+    check_undated_have_placeholders,
+    check_parts_in_span_order,
+    check_dated_have_a_source,
 ]
 
 NOT_IN_DATABASE = (
