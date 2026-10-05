@@ -7,28 +7,28 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 
 ### A. Left over from the rebuild
 
-**STATE 2026-10-05 night.** Shipped: v0.4.0 (airing sources, film levels, shared-entry list sync, schedule chooser + refresh button, review/noise rules, rulecheck), v0.4.1 (review cleanup), v0.4.2 (levels follow episodes, R1.10a; R.O.D swap, A1 season-2 entries, Bleach/Ghost in the Shell skips), DNS fix in starfleet.yml. v0.4.3 (stale reviews close themselves, divided seasons keep no list id, nginx re-resolves lcars) is folded into **v0.4.4** = provisional episodes (R1.2g), Syoboi runs per level (R1.22a), every source's schedule as a choice, Syoboi id seeding, links on every external id. **At the v0.4.4 deploy, data steps on prod:** `scripts/levels_cleanup_20261005.py` (part order, Kusuriya's duplicate id, 4 stale reviews), Bleach show-level "dropped" (setStatus SKIPPED on the show: reads dropped, S1 untouched), remove MAL 54344 (skipped Mahou Shoujo part still on MAL, R2.10).
+**STATE 2026-10-05 night: v0.4.4 IS LIVE on tiny** (tag v0.4.4, CI green, snapshot `lcars.db.bak-20261005-pre-0.4.4`; the compose backup is `starfleet.yml.bak-0.4.2-20261005`). It carries v0.4.3 (stale reviews close themselves, divided seasons keep no list id, nginx re-resolves lcars), provisional episodes (R1.2g), Syoboi runs per level (R1.22a), every source's schedule as a choice, Syoboi id seeding and links on every external id. Verified after the deploy: migration applied, DNS inside lcars/ops, web 302 (login), no nginx errors, first pass made 108 provisional episodes on 30 shows, 1,370 level Syoboi ids, 0 external ids without a link. **Prod data steps done at the deploy:** part order fixed (Bookworm S1, Dr. STONE S4, SAKAMOTO DAYS Part 2), Kusuriya S3's duplicate id dropped, the stale reviews closed (0 open), Bleach now reads dropped (S1 stays completed), MAL 54344 removed (it was a plain plan-to-watch on a skipped level). Earlier today: v0.4.0, v0.4.1, v0.4.2 and the starfleet.yml DNS fix. **To watch:** Syoboi options should rise above 79 shows once the next sync has fetched the 108 new level TIDs; the AniDB drip resuming after 00:00 UTC; no review noise returning.
 
 **Rulecheck triage (prod copy 10-05, 34 violations after the above):** R2.7 completed levels with unwatched episodes (24, mostly specials: rule says mark watched — needs your OK, it writes watch events), R2.14 planned levels with watched episodes (4), R1.8 episodes in no level (2: Strawberry 100% S0E6, SAO Ordinal Scale S0E23), R1.12 Mushi-shi S2 (special 36.5 inside part 1's span), R1.23 Magic Repo Man (AniList 202250 on the show, not on S1), R2.10 (MAL 54344). Not started.
 
-- 🔧 **Syoboi runs per level, matched at episode level (user 10-05; RULEBOOK R1.22a) — BUILT, in dev, ships in v0.4.4**: a Syoboi TID is one broadcast run (per cour/season, like AniList):
+- ✅ **Syoboi runs per level, matched at episode level (user 10-05; RULEBOOK R1.22a) — DEPLOYED v0.4.4 10-05**: a Syoboi TID is one broadcast run (per cour/season, like AniList):
       229 of 263 multi-level shows stored the FIRST season's TID at show level, so the running season was never fetched. `syoboi_levels.py`: the id is held per level
       (`season_external_id`, seeded from ARM through the level's AniList id: 1,370 on the prod copy), the sync fetches every watching/planned level's TID (108 new, 3 batches,
       11 s), and nothing trusts an id for which episodes a run covers: each level is matched to the broadcasts at episode level by air date (≤3 days; one TID shared by several
       levels is split by count offset). The schedule options, the air-date gap fill and the provisional episodes all read that one mapping; a Syoboi badge per season level.
       Prod copy after: provisional episodes 137 on 42 shows (was 113/31), Syoboi options on 84 shows (was 79; Apothecary S3 now has its stations).
-- 🔧 **Syoboi id auto-fill + links (user 10-05) — BUILT, in dev, ships in v0.4.4**: the id is seeded each Memory Alpha pass from ARM, but only through a show-level AniList id
+- ✅ **Syoboi id auto-fill + links (user 10-05) — DEPLOYED v0.4.4 10-05**: the id is seeded each Memory Alpha pass from ARM, but only through a show-level AniList id
       (74 shows have one; R1.23 puts them on seasons), so new shows rarely filled: now also through the show's latest season/part ARM maps (prod copy: 8 more, 993 total;
       the rest are films/shows ARM has no Syoboi entry for). Links: the show page links a badge only from `show_external_id.url`, empty on 984/985 Syoboi, 1,055/1,061 AniDB,
       1,687/1,712 TVmaze rows; `external_urls.fill_missing` fills every row each pass (3,465 on the prod copy; TVmaze "-1" = no show stays empty) and the page falls back to
       the service template when a row has none.
-- 🔧 **Schedule chooser review (user 10-05) — BUILT, in dev, ships in v0.4.4**: "I thought I said all schedules … haven't seen Syoboi in the choices". Cause 1: candidates were
+- ✅ **Schedule chooser review (user 10-05) — DEPLOYED v0.4.4 10-05**: "I thought I said all schedules … haven't seen Syoboi in the choices". Cause 1: candidates were
       rebuilt only when the ↻ button was clicked (22 shows on prod had any; Syoboi on 2 although 985 shows have a Syoboi id). Now every watching/planned anime still airing
       (103 on prod, 0.1 s) is collected in the Memory Alpha pass (`air_sources.collect_for_airing`) and a season's chosen schedule is re-applied there so it keeps following
       its source. Cause 2: Syoboi's candidates needed an AniDB episode mapping; now also by Syoboi's own numbering when it fits the TVDB season (same check as the
       provisional episodes), one option per station. Prod copy: Syoboi options on 79 shows (Goblin: AniList, Sonarr, 5 Syoboi stations). AniList stays one schedule per
       entry (one airing schedule per AniList media), recorded when read (daily refresh of watching shows).
-- 🔧 **Provisional episodes from Syoboi — BUILT, in dev, ships in v0.4.4 (user 10-05; RULEBOOK R1.2g)** — TVDB lagged several running anime (two
+- ✅ **Provisional episodes from Syoboi — DEPLOYED v0.4.4 10-05 (user 10-05; RULEBOOK R1.2g)** — TVDB lagged several running anime (two
       episodes aired, only the placeholder E1 on the page: couldn't open or mark E2). `provisional_episodes.py`: for tracked anime (watching/planned)
       with a Syoboi id, when Syoboi's numbering fits the latest TVDB season, the next episodes are added from its numbered broadcasts (last aired +3,
       at most 6 past TVDB's last, never past AniDB's count), flagged `episode.provisional` (new migration f8a1b2c3d4e5), dated by Syoboi, TBA; the
@@ -109,7 +109,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       330 → 387 links, no Sonarr show left unlinked; calendar in the browser: 28 lit, 1 dark (a dropped show that is not in
       Sonarr — correct). Not changed: 36 shows hold a link whose TVDB id is no longer in Sonarr (stale links; `INSERT OR
       IGNORE` never updates a link).
-- 🔧 **[DATA STEP at the v0.4.4 deploy: scripts/levels_cleanup_20261005.py — renumbers by span start; rehearsed on a prod copy, R1.10b 3 → 0]** **Part order** — dry run 10-05: 3 out of order (Dr. STONE S4, Bookworm S1, SAKAMOTO DAYS Part 2), 2 not judgeable (Haruhi S1,
+- ✅ **[DONE on prod at the v0.4.4 deploy: scripts/levels_cleanup_20261005.py — R1.10b 3 → 0]** **Part order** — dry run 10-05: 3 out of order (Dr. STONE S4, Bookworm S1, SAKAMOTO DAYS Part 2), 2 not judgeable (Haruhi S1,
       Mahou Shoujo Ikusei Keikaku restart S1); the drip already placed spans for 14 of the 16. Data patch ready to write (renumber by span start).
 - [ ] **138 width checks** (should clear as AniDB data arrives) and **131 Fribb-unmatched** (information) — re-look
       after the drip.
