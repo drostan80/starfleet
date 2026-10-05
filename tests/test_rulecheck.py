@@ -326,3 +326,18 @@ def test_r10b_a_dated_episode_without_a_source_is_a_violation(db_path):
     _ep(db_path, "e-srce01", "s-srce01", 1, 1, 1, source=None)
     _ep(db_path, "e-srce02", "s-srce01", 1, 2, 2)
     assert _by_rule(db_path)["R1.0b"].count == 1
+
+
+def test_r110a_a_level_with_a_list_id_and_no_episode_is_found_unless_it_is_tvdbs_next_season(
+    db_path,
+):
+    _show(db_path, "s-lvl001", "Follows Episodes")
+    _season(db_path, "z-lvl001", "s-lvl001", 1, "completed", 1, 12)
+    _ep(db_path, "e-lvl001", "s-lvl001", 1, 1, 1)
+    # S2 holds an entry and has no episode: TVDB's next season, a season not there yet — fine
+    _lvl(db_path, "z-lvl002", "s-lvl001", "tvdb_season", number=2, anilist=222)
+    assert _by_rule(db_path)["R1.10a"].count == 0
+    # S4 beyond that is a level made from an order, not from the episodes
+    _lvl(db_path, "z-lvl004", "s-lvl001", "tvdb_season", number=4, anilist=444)
+    found = _by_rule(db_path)["R1.10a"]
+    assert found.count == 1 and "S4" in found.samples[0]

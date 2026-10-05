@@ -994,6 +994,16 @@ export async function refreshShowData(showId) {
   return data.refreshShowData;
 }
 
+/** Make a level that holds an AniList entry a PART of TVDB season N of its show (R1.10). */
+export async function makeSeasonPart(seasonId, parentSeasonNumber) {
+  const data = await gql(`
+    mutation MakeSeasonPart($seasonId: ID!, $parentSeasonNumber: Int!) {
+      makeSeasonPart(seasonId: $seasonId, parentSeasonNumber: $parentSeasonNumber) { id }
+    }
+  `, { seasonId, parentSeasonNumber });
+  return data.makeSeasonPart;
+}
+
 const AIR_SCHEDULES_FIELDS = `
   seasonId seasonNumber partNumber episodeCount currentSource chosenSource chosenChannel
   options {

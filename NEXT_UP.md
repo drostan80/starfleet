@@ -6,6 +6,16 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 ## Open work — consolidated 2026-09-30
 
 ### A. Left over from the rebuild
+- 🔧 **Levels follow the episodes — ROOT FIX built in dev, not deployed (user 10-05; RULEBOOK R1.10a)** — Kusuriya's fake "S4" (AniList
+      200927 = S3 part 2) came from `ensure_fribb_season_rows` making a level per entry from Fribb's order; the rules existed only in the one-off
+      rebuild. Replaced by `level_reconcile.py` (+ `level_parts.py`, shared with the manual "⤵ make part of season N" button and the
+      `makeSeasonPart` mutation): in the Memory Alpha pass an entry no level places is placed by its episodes (start date in Japan time must be
+      an episode's air date; no date → by count): a part of the TVDB season (leftover levels and TV entries held by special levels converted in
+      place), the season's own entry when it is the only one, or a season level only (planned) when TVDB has no such episodes. Positional creation
+      and the positional claim in `season_mapping` removed; rulecheck R1.10a added. Prod copy dry run: 38 parts + 1 link, 5 leftovers (Cyberpunk S2
+      legit future season; JoJo S7; Ghost in the Shell S2–S4 have no TVDB series), 10 entries "left" with reasons (R.O.D swap, Yuki Yuna, JoJo…).
+      Rehearsal on a fresh prod copy: no new rulecheck violations (R1.10a 6 → 3), no foreign-key breaks, second pass changes nothing; captured
+      list writes: 4 new (AoT 104578 COMPLETED, Bleach 116674 PLANNING, progress 12 for 99147 and 20632) — see the report.
 - ✅ **Special levels re-created on every Memory Alpha pass (found 10-05) — FIXED IN DEV, not deployed (commit 794acc1; cleanup script in the ship checklist)** — 53 new rows per pass, ~3,450 a day; prod `season` is
       21,798 rows with 18,863 auto specials (healthy ≈ 4,900); one piece exists 323 times. Cause: `numbering._special_level`
       looks under the season but `_nest_in_minis_groups` moves pieces into their minis group, so every pass makes a new one.

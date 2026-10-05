@@ -225,23 +225,6 @@ def _derive_ids(conn, show_id: str, season_number: int, tvdb_id, tvdb_coords):
 
     if tvdb_id is None:
         return None
-    if not coords and not _season_has_episodes(conn, show_id, season_number):
-        # 2026-09-23 — a season with no episodes yet was created from
-        # Fribb's own season *order* (`season_ranges.ensure_fribb_season_
-        # rows` / `fribb.enumerate_real_seasons`, the 2026-09-21 season-
-        # number-gap fix), so that order is the only evidence there is.
-        # Looking it up by TVDB season number instead — the model those
-        # rows were never created with — cleared 47 such seasons in one
-        # weekly pass (JoJo, Pokémon, NieR...), and would have kept
-        # ping-ponging with the creator forever. No positional answer:
-        # no claim, the stored value stays.
-        dataset = dataset or fribb.load_dataset()
-        numbered = fribb.enumerate_real_seasons(
-            fribb.build_tvdb_index(dataset).get(tvdb_id, [])
-        )
-        if numbered is None or not 1 <= season_number <= len(numbered):
-            return _NO_CLAIM
-        return fribb.extract_ids(numbered[season_number - 1])
     if coords:
         tvdb_seasons = {c[0] for c in coords}
         if len(tvdb_seasons) != 1:
@@ -266,14 +249,6 @@ def _derive_ids(conn, show_id: str, season_number: int, tvdb_id, tvdb_coords):
     if len(matches) != 1:
         return None
     return fribb.extract_ids(matches[0])
-
-
-def _season_has_episodes(conn, show_id: str, season_number: int) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM episode WHERE show_id = ? AND season = ? LIMIT 1",
-        (show_id, season_number),
-    ).fetchone()
-    return row is not None
 
 
 def get_season(conn, season_id: str) -> dict | None:

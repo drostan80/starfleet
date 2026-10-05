@@ -1813,14 +1813,6 @@ def poll_memory_alpha(conn) -> dict:
         with db.undo_on_error(conn):
             from lcars import season_ranges
             result["season_rows_created"] = season_ranges.ensure_all_season_rows(conn)
-            # Proactive counterpart (2026-09-21): the reactive creation above
-            # only makes a row once Sonarr episodes already exist for that
-            # season — a real Fribb-known season with no synced episodes yet
-            # never gets one, which is exactly how the SPY×FAMILY season-gap
-            # bug happened. Must also run before identity_mismatch's own
-            # sweep so a season it just created is there to verify.
-            fribb_result = season_ranges.ensure_fribb_season_rows(conn)
-            result["season_rows_created"] += fribb_result["season_rows_created"]
             result["episode_season_ids_linked"] = season_ranges.backfill_episode_season_id(conn)
     except Exception:
         log.exception("Season row / episode.season_id backfill failed")
@@ -1874,6 +1866,23 @@ def poll_memory_alpha(conn) -> dict:
             conn.commit()
     except Exception:
         log.exception("Numbering pass failed")
+
+    # ── 2f2. Levels follow the episodes (level_reconcile.py, user 2026-10-05) ──
+    # After the numbering, which gives every TVDB season its spans: an AniList/MAL entry no level
+    # places yet becomes a part of the TVDB season its episodes sit in, or — TVDB doesn't have
+    # them yet — a season level only. Settled shows cost no AniList call.
+    try:
+        with db.undo_on_error(conn):
+            from lcars import level_reconcile
+            r = level_reconcile.reconcile_all(conn)
+            result["level_parts_made"] = r["parts_made"] + r["linked"]
+            result["season_rows_created"] += r["future_levels"]
+            from lcars import status_rules as _status_rules
+            for show_id in r["changed"]:  # R2.14/R2.15/R2.17 on the new levels; local, no push
+                _status_rules.after_episodes_changed(conn, show_id, _status_rules.AUTO)
+            conn.commit()
+    except Exception:
+        log.exception("Level reconcile failed")
 
     # ── 2g. Same-TVDB shows: to review, never merged automatically ──
     # Phase 5.3 (R1.14): one show per TVDB id. Shows sharing one are listed

@@ -620,6 +620,30 @@ def check_parts_in_span_order(conn):
                    len(bad), bad[:SAMPLE_SIZE])
 
 
+def check_levels_follow_episodes(conn):
+    """R1.10a — an AniList/MAL entry sits where its episodes are: a TVDB-season level that holds
+    a list id but has no episode — and is not the one season right after TVDB's last (a season
+    it doesn't have yet) — is a level made from an order and not from the episodes (Durarara!!'s
+    "S4" when TVDB stops at 2). Kusuriya's "S4" looks like the next season; the entry-count
+    check R1.11w shows it (S3 holds 24 episodes for a 12-episode entry)."""
+    return _finding(
+        conn, "R1.10a", "A level holding a list id has episodes, or is TVDB's next season",
+        "violation",
+        f"SELECT {_TITLE} AS show, z.season_number AS season, z.anilist_id AS anilist_id"
+        " FROM season z JOIN show sh ON sh.id = z.show_id"
+        " WHERE z.kind = 'tvdb_season' AND sh.tracked = 1 AND z.anilist_id IS NOT NULL"
+        " AND z.season_number > 0"
+        " AND z.season_number != (SELECT COALESCE(MAX(e.season), 0) + 1 FROM episode e"
+        "   WHERE e.show_id = z.show_id AND e.season > 0)"
+        " AND NOT EXISTS (SELECT 1 FROM episode e WHERE e.show_id = z.show_id"
+        "   AND (e.season_id = z.id OR e.season = z.season_number))"
+        " ORDER BY show, season",
+        fmt=lambda r: f"{r['show']} S{r['season']}: AniList {r['anilist_id']}",
+        note="The entry belongs to a part of the TVDB season its episodes sit in "
+             "(level_reconcile.py places it; or use the show page's part button).",
+    )
+
+
 def check_dated_have_a_source(conn):
     """R1.0b — every stored air date records which source it came from (the schedule chooser and
     the earliest-wins rule both read it)."""
@@ -692,6 +716,7 @@ CHECKS: list[Callable[[sqlite3.Connection], Finding]] = [
     check_placeholder_numbers,
     check_undated_have_placeholders,
     check_parts_in_span_order,
+    check_levels_follow_episodes,
     check_dated_have_a_source,
     check_anilist_count_vs_level,
 ]

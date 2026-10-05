@@ -114,6 +114,17 @@ rule applies to TV series, ask — do not assume.
 - **R1.10 Sub-seasons.** When a different source divides a season further (e.g.
   AniList gives cour 1 and cour 2 of a season separate ids), the season may be
   organised into sub-seasons on its page, each named with that source's naming.
+- **R1.10a An entry is placed by its episodes, never by an order** `[decided 2026-10-05]`:
+  an AniList/MAL entry belongs where its **episodes** are. If Sonarr/TVDB has the episodes,
+  the entry maps to those episodes **at that level**: a part of the TVDB season they sit in
+  (R1.10) — or the season's own entry when it is the season's only one. Its start date (the
+  calendar date in Japan) must be the air date of an episode of that season; an entry with no
+  start date is placed by count (the season's free episodes number exactly its episodes);
+  when dates and counts disagree nothing moves. If TVDB does **not** have the episodes, the
+  entry is a **season level only**, planned, numbered as Fribb gives it when that is the next
+  TVDB season (never another number, R1.9a), until the episodes arrive — then it is placed by
+  the above. Fribb's season number and list order are only a hint. A level you placed by
+  hand is never moved; the show page can place one by hand ("make part of season N").
 - **R1.11 All seasons are defined, in the background, by their span of absolute
   episode numbers.** `[amended 2026-09-29]` A level has a span when it **has episodes or a
   place in a series**. Two kinds are exempt, and reported separately, not as violations:
@@ -827,3 +838,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-09-29 — R1.11 amended (span when the level has episodes or a place in a series; standalone movies and list-only entries exempt, a film with a place is not); R1.12 (a special/film inside another film's span, and a mini inside its group, are not overlaps; Monogatari a named exception); R1.13c (minis sit inside their group); R1.2f (episodes identified by title + air date; TVDB renumbering re-anchors rows); R2.7 (an unaired episode is never marked watched; a level with one is watching); R3.2a (film shows carry `tvdb_movie`, found through TMDB).
 - 2026-09-30 — R2.15b: R2.15 wins over a status you set; a completed dropped level passes the drop to the next season.
 - 2026-10-04 — R1.0b (every source's schedule kept; you choose which one a season follows; earliest-wins stays the default), R1.0c (daily refresh covers any running show; per-show refresh button).
+- 2026-10-05 — R1.10a (an entry is placed by its episodes: a part of the TVDB season they sit in, or a season level only until TVDB has them; never by Fribb's order; Kusuriya's fake S4).

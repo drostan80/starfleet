@@ -44,6 +44,8 @@ from lcars import (
     fuzzy,
     identity_mismatch,
     ids,
+    level_parts,
+    level_reconcile,
     list_baseline,
     list_sync,
     local_audit,
@@ -2232,6 +2234,24 @@ def resolve_clear_season_air_schedule(_, info, season_id):
     air_sources.clear_choice(conn, season_id)
     conn.commit()
     return _season_air_schedules(conn, season_id)
+
+
+@mutation.field("makeSeasonPart")
+def resolve_make_season_part(_, info, season_id, parent_season_number):
+    """The manual way to the placement level_reconcile.py does by itself (R1.10, R1.17)."""
+    conn = db.get_connection()
+    require_client(info)
+    row = conn.execute("SELECT show_id FROM season WHERE id = ?", (season_id,)).fetchone()
+    if row is None or row["show_id"] is None:
+        raise GraphQLError("no such season level on a show")
+    try:
+        level_reconcile.make_part(conn, season_id, parent_season_number)
+        status_rules.after_episodes_changed(conn, row["show_id"], status_rules.AUTO)
+    except level_parts.Refused as e:
+        conn.rollback()
+        raise GraphQLError(str(e)) from e
+    conn.commit()
+    return _get_show(conn, row["show_id"])
 
 
 @mutation.field("refreshShowData")

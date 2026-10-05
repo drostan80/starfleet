@@ -371,9 +371,9 @@ def test_a_manual_season_link_beats_a_community_list_that_files_it_under_another
     assert s5 == [(1, 104, 1), (2, 104, 2)]
 
 
-def test_a_season_with_no_episodes_follows_fribbs_season_order(conn):
-    # Created by ensure_fribb_season_rows from Fribb's own order; looking
-    # it up by TVDB season number cleared 47 such seasons on 2026-09-23.
+def test_a_season_with_no_episodes_makes_no_claim(conn):
+    # No coordinate to match, and Fribb's season *order* is no longer evidence (levels follow the
+    # episodes — level_reconcile.py): the stored link stays, an empty one stays empty.
     conn.execute(
         "INSERT INTO season (id, show_id, season_number, anilist_id, mal_id, source,"
         " matched, created_at, updated_at)"
@@ -381,15 +381,13 @@ def test_a_season_with_no_episodes_follows_fribbs_season_order(conn):
         (SHOW,),
     )
     conn.commit()
-    # Position 6 doesn't exist in Fribb (5 real seasons): no claim, kept.
     s6 = season_mapping.reconcile_season(conn, SHOW, 6)
     assert (s6["anilist_id"], s6["mal_id"]) == (777, 888)
-    # Position 5 does: an episode-less S5 gets Fribb's 5th real season.
     conn.execute("DELETE FROM episode WHERE show_id = ? AND season = 5", (SHOW,))
     conn.execute("UPDATE season SET anilist_id = NULL, mal_id = NULL WHERE id = 'z-sea005'")
     conn.commit()
     s5 = season_mapping.reconcile_season(conn, SHOW, 5)
-    assert (s5["anilist_id"], s5["mal_id"]) == (4004, 5004)
+    assert (s5["anilist_id"], s5["mal_id"]) == (None, None)
 
 
 def test_a_lone_fribb_entry_is_not_stamped_onto_every_season(conn, monkeypatch):

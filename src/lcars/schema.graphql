@@ -1686,6 +1686,9 @@ type Query {
 # ---------------------------------------------------------------------------
 
 type Mutation {
+  # -- Levels (2026-10-05) --------------------------------------------------
+  "Make a level that holds an AniList entry (an empty season row, a special) a PART of TVDB season N of its show (R1.10): cut from the season's free episodes by the entry's episode count, placed by hand so the automatic placement never moves it back. Refused with the reason when the episodes can't take it. Returns the show."
+  makeSeasonPart(seasonId: ID!, parentSeasonNumber: Int!): Show!
   # -- Air-date schedules + show refresh (2026-10-04) -----------------------
   "Make a season follow one source's schedule (and a Syoboi station, via channel) from now on: its dates are written from it and the automatic overwriting sources leave the season alone. A manual date still wins. Needs the schedule to be known (airSchedules)."
   setSeasonAirSchedule(seasonId: ID!, source: String!, channel: String): SeasonAirSchedules!

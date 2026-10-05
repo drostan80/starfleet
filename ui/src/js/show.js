@@ -18,7 +18,7 @@ import {
   setSeasonStatus, setSeasonMapping, reconcileSeasonMapping,
   fetchEpisodeSynopses,
   fetchShowArtForSeasons, fetchShowArtShowLevel, fetchShowArt,
-  refreshShowData, fetchAirSchedules, setSeasonAirSchedule, clearSeasonAirSchedule,
+  refreshShowData, makeSeasonPart, fetchAirSchedules, setSeasonAirSchedule, clearSeasonAirSchedule,
   setShowSynopsis, setEpisodeSynopsis, fetchSynopsisCandidates,
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
@@ -2357,6 +2357,34 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
 
   // Air-date schedules chooser — every level that has a season row
   if (seasonData?.id) meta.appendChild(buildScheduleButton(card, hdr, seasonData, show));
+
+  // A level holding an AniList entry but no episodes (an empty season row, a special) can be
+  // placed by hand as a part of a TVDB season that has episodes — the automatic placement does
+  // the same from air dates and counts (R1.10, R1.17).
+  const candidateSeasons = [...new Set(show.episodes.map(ep => ep.season))]
+    .filter(n => n > 0 && n !== seasonData?.seasonNumber).sort((a, b) => a - b);
+  if (seasonData?.id && seasonData.anilistId && !episodes.length
+      && ['tvdb_season', 'special'].includes(seasonData.kind) && candidateSeasons.length) {
+    const partBtn = el('button', 'sp-season-edit-btn sp-part-btn', '⤵');
+    partBtn.title = 'Make this a part of a TVDB season';
+    partBtn.addEventListener('click', async e => {
+      e.stopPropagation();
+      const answer = window.prompt(
+        `Make AniList ${seasonData.anilistId} a part of which TVDB season? (${candidateSeasons.join(', ')})`);
+      const n = parseInt(answer, 10);
+      if (!candidateSeasons.includes(n)) return;
+      partBtn.disabled = true;
+      try {
+        await makeSeasonPart(seasonData.id, n);
+        showBanner(`It is now a part of season ${n}.`, 'ok');
+        window.dispatchEvent(new Event('starfleet:refetch-show'));
+      } catch (err) {
+        showBanner(`Not done: ${err.message}`, 'error');
+        partBtn.disabled = false;
+      }
+    });
+    meta.appendChild(partBtn);
+  }
 
   // Edit mapping button — works for mapped AND unmapped seasons
   if (isTvdbSeason) {
