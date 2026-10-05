@@ -14,6 +14,15 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 - ✅ **Memory Alpha pass exceeds ops's 120 s — BOTH fixes in dev, not deployed (user 10-05: cover ourselves)**: wasted AniList calls removed (−53 s: 94 s → 41 s on one copy; on today's fresh prod copy a pass is ~78 s because a Syoboi incremental sync adds ~44 s — rate-limited batches — and AniDB ~17 s; so a real pass is ~80–100 s) and ops timeout 300 s. Was: — 53 s of a 94 s pass is `ensure_fribb_season_rows` making 26
       throttled AniList calls and then creating nothing; plus AniDB ≈ 20 s, renumber 9 s (shrinks after the cleanup above). Options
       in `AUDIT-2026-10-05.md` §2; waiting for your pick.
+- ✅ **Film mechanism built (user OK 10-05; commit e088ddc)** — each list-only AniList film level (Fribb type MOVIE, not skipped, no span) gets one
+      `bonus_movie` episode (date/length from AniDB, else AniList; watched when the level is completed) so the numbering puts it between the
+      seasons by date and writes the level's span; no twin level, no guessed AniDB entry. Prod copy: 3 films (Aldnoah.Zero Re+ → abs 25, the two
+      Captain Harlock films → 0.1/0.2 because that show has no main episodes yet). Runs in the Memory Alpha pass before the numbering.
+      First pass after deploy creates the 3 episodes (+1 watch event each for completed levels, dated that day).
+- ✅ **List sync for one entry over several seasons built (user 10-05; commit after e088ddc)** — Urusei Yatsura 1293: levels of one show sharing an
+      id are one entry; progress by episode across them; status never pushed, the list's status mirrored onto the last level (my reading of
+      "mirror last AniList status" — tell me if you meant something else); the 8 old id-conflict reviews close themselves. Prod copy: group of 4,
+      195 episodes, matches AniList, nothing changed.
 - ✅ **Rulecheck: seven new checks built (user 10-05; commit bad53b4)** — R1.13b one level per label (55 duplicate groups before the cleanup, 0
       after), R1.13c episodes held by two levels (421, a "look at"), R1.2b decimals (0 wrong), R1.0a placeholders (0) + undated with real
       numbers (325, a "look at"), R1.10b part order (3), R1.0b air-date source (0). 19 → 26 rules checked.
@@ -64,7 +73,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       Mahou Shoujo Ikusei Keikaku restart S1); the drip already placed spans for 14 of the 16. Data patch ready to write (renumber by span start).
 - [ ] **138 width checks** (should clear as AniDB data arrives) and **131 Fribb-unmatched** (information) — re-look
       after the drip.
-- [ ] **List sync: one AniList entry spanning several TVDB seasons** (Urusei Yatsura 1293) is skipped as a conflict. **Decided 10-05:** progress synced by episode; status = mirror the last AniList status. Not built yet.
+- ✅ List sync for one AniList entry over several TVDB seasons (Urusei Yatsura 1293) — built in dev 10-05 (see below).
 - ✅ ops daily sweep dropped connection — not reproduced in 72 h of prod logs (only Memory Alpha ReadTimeouts); closed.
 - [ ] **R3.7c/d/e** — two sources agreeing on a TVDB id attach it; TVDB id entry on the show page; unconfirmed TVDB
       id → yes / no / here's-the-right-one review.
