@@ -290,6 +290,7 @@ query ($mediaId: Int) {
     countryOfOrigin
     format
     episodes
+    duration
     coverImage { large }
   }
 }

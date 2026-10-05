@@ -86,6 +86,10 @@ def reconcile_episode_movie_links(conn) -> dict:
         "SELECT e.id, e.show_id FROM episode e"
         " LEFT JOIN episode_movie_link l ON l.episode_id = e.id"
         " WHERE e.kind = 'bonus_movie' AND (l.id IS NULL OR l.manual_override = 0)"
+        # not a list-only film given an episode by film_levels.py: that film is its own level
+        # (a special holding an AniList id) and there is no Radarr movie to link it to
+        " AND NOT EXISTS (SELECT 1 FROM season z WHERE z.id = e.season_id"
+        "   AND z.kind = 'special' AND z.anilist_id IS NOT NULL)"
     ).fetchall()
     for episode in episodes:
         candidates = _candidate_movie_shows(conn, episode["show_id"])

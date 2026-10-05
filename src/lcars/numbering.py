@@ -71,6 +71,7 @@ class Item:
     # AniDB mapping, when known: (anime id, 1 regular / 0 special, epno)
     anidb: tuple[int, int, int] | None = None
     anidb_type: str | None = None  # the AniDB entry's type (TV Series, Movie, OVA…)
+    film: bool = False  # a list-only film given an episode (film_levels.py), whatever its length
 
 
 @dataclass
@@ -92,6 +93,8 @@ class Plan:
 
 
 def _is_film(item: Item) -> bool:
+    if item.film:
+        return True
     if item.anidb_type:
         return item.anidb_type == "Movie"
     return (item.runtime or 0) >= FILM_MINUTES
@@ -354,10 +357,11 @@ def load_show(conn: sqlite3.Connection, show_id: str) -> tuple[list[Item], str, 
     ).fetchone()
     rows = conn.execute(
         "SELECT id, COALESCE(sonarr_season, season) AS s, COALESCE(sonarr_episode, episode) AS e,"
-        " air_date_utc, runtime_minutes FROM episode WHERE show_id = ?",
+        " air_date_utc, runtime_minutes, kind FROM episode WHERE show_id = ?",
         (show_id,),
     ).fetchall()
-    items = [Item(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+    items = [Item(r[0], r[1], r[2], r[3], r[4], film=(r[5] == "bonus_movie" and r[1] == 0))
+             for r in rows]
     if not items:
         return items, "tvdb", set()
 
@@ -377,7 +381,10 @@ def load_show(conn: sqlite3.Connection, show_id: str) -> tuple[list[Item], str, 
             airdates: dict[tuple, str] = {}
             complete = True
             for it in items:
-                hit = confirmed.get(it.id) or resolver.resolve(it.tvdb_season, it.tvdb_episode)
+                # A list-only film (film_levels.py) has made-up coordinates: only its recorded
+                # AniDB mapping counts, never a guess from them.
+                hit = confirmed.get(it.id) or (
+                    None if it.film else resolver.resolve(it.tvdb_season, it.tvdb_episode))
                 if hit is None or hit[0] not in fetched:
                     if it.tvdb_season > 0:
                         complete = False
@@ -663,6 +670,17 @@ def _apply_own_level(conn, show_id: str, kind: str, rest: list[str], spans, now:
         label = f"Season {season_number} minis"
     else:
         tvdb_s, tvdb_e, season_number = (int(x) for x in rest)
+        # A piece that already has a level of its own — a list-only film given its episode
+        # (film_levels.py) — is that level, whatever its label or AniList id: no second one.
+        owner = conn.execute(
+            "SELECT z.id FROM episode e JOIN season z ON z.id = e.season_id AND z.kind = 'special'"
+            " WHERE e.show_id = ? AND COALESCE(e.sonarr_season, e.season) = ?"
+            " AND COALESCE(e.sonarr_episode, e.episode) = ?",
+            (show_id, tvdb_s, tvdb_e),
+        ).fetchone()
+        if owner is not None:
+            _write_spans(conn, owner[0], spans, now)
+            return
         title = conn.execute(
             "SELECT title FROM episode WHERE show_id = ? AND COALESCE(sonarr_season, season) = ?"
             " AND COALESCE(sonarr_episode, episode) = ?",

@@ -1848,6 +1848,15 @@ def poll_memory_alpha(conn) -> dict:
     except Exception:
         log.exception("season_external_id name backfill failed")
 
+    # ── 2e2. List-only films get their episode (film_levels.py, user 2026-10-05) ──
+    # Before the numbering below, so the film is numbered in the same pass.
+    try:
+        with db.undo_on_error(conn):
+            from lcars import film_levels
+            result["film_episodes_created"] = film_levels.create_film_episodes(conn)["created"]
+    except Exception:
+        log.exception("List-only film episodes failed")
+
     # ── 2f. Numbering (phase 3.2, R1.2c/R1.2d) ──
     # Memory Alpha renumbers every tracked show: TVDB order + air date
     # first, reconciled with AniDB/TVmaze as their data comes in.
