@@ -290,3 +290,25 @@ def test_a_leftover_level_that_is_the_seasons_only_entry_hands_it_everything(con
     assert conn.execute("SELECT COUNT(*) FROM season WHERE id = 'z-s30000'").fetchone()[0] == 0
     assert conn.execute("SELECT season_id FROM season_external_id").fetchone()[0] == "z-s20000"
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_cours_whose_dates_miss_but_whose_counts_fill_the_season_are_its_parts(conn):
+    # Dungeon S4 shape: 22 episodes; AniList's two cours (11 + 11) start two days off TVDB's dates
+    tvdb_season(conn, "z-s10000", 1, 1, 13, "2015-04-03T15:00:00Z", anilist=1, status="completed")
+    tvdb_season(conn, "z-s40000", 4, 14, 22, "2022-07-23T15:00:00Z", status="planned")
+    facts = Facts({1: (dt.date(2015, 4, 4), 13), 129196: (dt.date(2022, 7, 21), 11),
+                   155211: (dt.date(2023, 1, 5), 11)})
+    r = run(conn, [entry(1, 1), entry(129196, 4), entry(155211, 4)], facts)
+    assert r["parts_made"] == 2 and r["left"] == 0
+    assert [tuple(x) for x in conn.execute(
+        "SELECT anilist_id, part_number FROM season WHERE parent_id = 'z-s40000'"
+        " ORDER BY part_number")] == [(129196, 1), (155211, 2)]
+
+
+def test_cours_that_do_not_fill_the_season_stay_unplaced(conn):
+    tvdb_season(conn, "z-s10000", 1, 1, 13, "2015-04-03T15:00:00Z", anilist=1, status="completed")
+    tvdb_season(conn, "z-s40000", 4, 14, 24, "2022-07-23T15:00:00Z", status="planned")
+    facts = Facts({1: (dt.date(2015, 4, 4), 13), 129196: (dt.date(2022, 7, 21), 11),
+                   155211: (dt.date(2023, 1, 5), 11)})
+    r = run(conn, [entry(1, 1), entry(129196, 4), entry(155211, 4)], facts)
+    assert r["parts_made"] == 0 and r["left"] == 2  # 11 + 11 of 24: something is missing

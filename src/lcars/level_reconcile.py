@@ -178,6 +178,7 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
             {**e, "count": fa["episodes"], "start_abs": start_abs, "total": fa["episodes"],
              "row": held.get(e["anilist_id"])}
         )
+    unresolved: list[tuple[dict, dict]] = []
     for e, fa in undated:  # no usable start date: the season whose free episodes are its own
         target = _fit_by_count(conn, e, fa, by_season, holders_in, f, placed)
         if target is None:
@@ -187,13 +188,32 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
             ):
                 out["future"].append(e)  # TVDB has no such season yet: a season level only
             else:
-                out["left"].append((e["anilist_id"], "no episode of the show fits its start date"
-                                    " or episode count"))
+                unresolved.append((e, fa))
             continue
         placed.setdefault(target, []).append(
             {**e, "count": fa["episodes"], "start_abs": None, "total": fa["episodes"],
              "row": held.get(e["anilist_id"])}
         )
+    # Entries whose dates miss (TVDB and AniList count a broadcast day differently) but that
+    # together are exactly the free episodes of the season Fribb puts them in: cours of one
+    # season, in Fribb's release order (Dungeon S4 11+11, Yuki Yuna S2 6+6, JoJo S5 12+26).
+    groups: dict[int, list] = {}
+    for e, fa in unresolved:
+        groups.setdefault(e["hint"], []).append((e, fa))
+    for k, group in groups.items():
+        counts = [fa["episodes"] for _, fa in group]
+        if (k in by_season and all(counts) and len(group) > 1 and sum(counts) == _free(
+                conn, k, by_season, holders_in, f, placed)):
+            for e, fa in group:
+                placed.setdefault(k, []).append(
+                    {**e, "count": fa["episodes"], "start_abs": None, "total": fa["episodes"],
+                     "row": held.get(e["anilist_id"])}
+                )
+        else:
+            out["left"].extend(
+                (e["anilist_id"], "no episode of the show fits its start date or episode count")
+                for e, _ in group
+            )
     for n in [n for n in placed if n not in parents]:
         out["left"].extend(
             (x["anilist_id"], f"TVDB season {n} has no level yet") for x in placed.pop(n)
@@ -230,22 +250,24 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
     return out
 
 
+def _free(conn, n, by_season, holders_in, f, placed) -> int:
+    """Episodes of TVDB season `n` no entry takes yet: what the season has, less what its settled
+    entries and the entries already placed in it take."""
+    taken = sum((x["count"] or 0) for x in placed.get(n, []))
+    for z in holders_in.get(n, []):
+        if z["kind"] == "part":
+            taken += _span_count(conn, z, by_season[n])
+        else:
+            taken += (f.get(z["anilist_id"]) or {}).get("episodes") or 0
+    return len(by_season[n]) - taken
+
+
 def _fit_by_count(conn, e, fa, by_season, holders_in, f, placed) -> int | None:
-    """An entry with no usable start date: the season whose free episodes are exactly its own —
-    what the season has, less what its settled entries and the dated entries placed in it take."""
+    """An entry with no usable start date: the season whose free episodes are exactly its own."""
     n_ep = fa["episodes"]
     if not n_ep:
         return None
-    fits = []
-    for n in by_season:
-        taken = sum((x["count"] or 0) for x in placed.get(n, []))
-        for z in holders_in.get(n, []):
-            if z["kind"] == "part":
-                taken += _span_count(conn, z, by_season[n])
-            else:
-                taken += (f.get(z["anilist_id"]) or {}).get("episodes") or 0
-        if len(by_season[n]) - taken == n_ep:
-            fits.append(n)
+    fits = [n for n in by_season if _free(conn, n, by_season, holders_in, f, placed) == n_ep]
     if e["hint"] in fits:
         return e["hint"]
     return fits[0] if len(fits) == 1 else None

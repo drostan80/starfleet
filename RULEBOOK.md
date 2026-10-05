@@ -119,7 +119,9 @@ rule applies to TV series, ask — do not assume.
   the entry maps to those episodes **at that level**: a part of the TVDB season they sit in
   (R1.10) — or the season's own entry when it is the season's only one. Its start date (the
   calendar date in Japan) must be the air date of an episode of that season; an entry with no
-  start date is placed by count (the season's free episodes number exactly its episodes);
+  start date, or whose date misses, is placed by count: the season's free episodes number
+  exactly its episodes, or exactly the episodes of all the entries Fribb puts on that season
+  (cours of one season, in release order);
   when dates and counts disagree nothing moves. If TVDB does **not** have the episodes, the
   entry is a **season level only**, planned, numbered as Fribb gives it when that is the next
   TVDB season (never another number, R1.9a), until the episodes arrive — then it is placed by

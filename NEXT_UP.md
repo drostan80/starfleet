@@ -13,7 +13,7 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       an episode's air date; no date → by count): a part of the TVDB season (leftover levels and TV entries held by special levels converted in
       place), the season's own entry when it is the only one, or a season level only (planned) when TVDB has no such episodes. Positional creation
       and the positional claim in `season_mapping` removed; rulecheck R1.10a added. Prod copy dry run: 38 parts + 1 link, 5 leftovers (Cyberpunk S2
-      legit future season; JoJo S7; Ghost in the Shell S2–S4 have no TVDB series), 10 entries "left" with reasons (R.O.D swap, Yuki Yuna, JoJo…).
+      legit future season; JoJo S7; Ghost in the Shell S2–S4 have no TVDB series), 10 entries "left" with reasons (R.O.D swap, Yuki Yuna, JoJo…). User 10-05: cours whose dates miss but whose counts fill the season are parts too (group count rule: Dungeon S4 11+11, Yuki Yuna S2 6+6, JoJo S5 12+26) → 44 parts, 4 left (JJK 209895 TVDB has no episodes; Dragon Warrior 2229 vs 2819; Nobody's Boy Remi 2829; R.O.D swap). Bleach (dropped): its seasons 2–17 are set skipped BEFORE the deploy so the new TYBW parts come out skipped; Ghost in the Shell S2–S4 skipped too.
       Rehearsal on a fresh prod copy: no new rulecheck violations (R1.10a 6 → 3), no foreign-key breaks, second pass changes nothing; captured
       list writes: 4 new (AoT 104578 COMPLETED, Bleach 116674 PLANNING, progress 12 for 99147 and 20632) — see the report.
 - ✅ **Special levels re-created on every Memory Alpha pass (found 10-05) — FIXED IN DEV, not deployed (commit 794acc1; cleanup script in the ship checklist)** — 53 new rows per pass, ~3,450 a day; prod `season` is
