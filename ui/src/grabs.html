@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-refreshable>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -812,10 +812,12 @@
   loadGrabs('radarr');
 
   // every so often, and when the tab comes back into view (auto-refresh.js)
-  window.addEventListener('starfleet:auto-refresh', () => {
-    loadGrabs('sonarr', true);
-    loadGrabs('radarr', true);
-  });
+  for (const name of ['starfleet:auto-refresh', 'starfleet:refresh-after-watch']) {
+    window.addEventListener(name, () => {
+      loadGrabs('sonarr', true);
+      loadGrabs('radarr', true);
+    });
+  }
 </script>
 
 </body>

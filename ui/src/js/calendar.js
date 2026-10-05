@@ -1697,4 +1697,7 @@ export async function init() {
   // background addWatchEvent report has had time to reach the server —
   // see launchMpv() for why this can't just refresh immediately on return.
   window.addEventListener('starfleet:refresh-after-watch', () => render(true));
+  // The packaged app has no poll (it relies on the WebSocket events above): the shared
+  // auto-refresh (every so often, on resume, after a watch elsewhere) covers it too.
+  window.addEventListener('starfleet:auto-refresh', () => render(true));
 }
