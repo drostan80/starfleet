@@ -120,9 +120,10 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       other sources: a wrong *early* date written by Syoboi, AniDB or TVmaze still beats a correct later one, unless that
       same source corrects it or you choose a schedule for the season (R1.0b) — a watching show is not immune.
 - ✅ **Ship rehearsal on a fresh prod copy (10-05 07:15 UTC):** migration applies; cleanup 21,957 → 5,045 season rows (integrity ok); two further Memory Alpha passes add nothing; Sonarr links 330 → 387; identity check 1,269 checked, 1 flagged (R.O.D); daily refresh 33 → 53 watching shows; rulecheck 37 violations (all pre-existing kinds). Full suite 1,746 passed.
-- 🚢 **SHIP CHECKLIST — all of branch `dev-airing-sources` (user 10-05: ship once the drip has hit 200 today; make sure it restarts tomorrow)**
+- 🚢 **SHIP CHECKLIST — v0.4.0 (= branch `dev-airing-sources` at 7405595), TAGGED + CI GREEN, NOT DEPLOYED (user 10-05: ship once the drip has hit 200 today; make sure it restarts tomorrow)**
       0. Before: today's drip count ≥ 200 (`anidb_episode` distinct anime with `fetched_at` ≥ today); labelled DB snapshot on tiny.
-      1. Release from the branch (tag → CI: require `test success` + `docker success`), deploy per memory `starfleet-deploy-process`
+      1. **DONE 10-05: tagged `v0.4.0` on commit 7405595 (pushed, never move it); CI run 37282087623 = success (image `0.4.0` / `0.4.0-web` on GHCR).**
+         Remaining: deploy per memory `starfleet-deploy-process`
          (`/-web/!` sed pair, all three image lines). Migration `e5f6a7b8c9d1` runs on start; check `alembic_version`.
       2. **Delete the duplicate special levels** (after the new image runs, so they are not re-made): labelled snapshot, then
          `scripts/cleanup_duplicate_special_levels_20261005.py` — dry run first, then `--apply`
