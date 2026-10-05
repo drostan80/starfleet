@@ -120,6 +120,15 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       other sources: a wrong *early* date written by Syoboi, AniDB or TVmaze still beats a correct later one, unless that
       same source corrects it or you choose a schedule for the season (R1.0b) — a watching show is not immune.
 - ✅ **Ship rehearsal on a fresh prod copy (10-05 07:15 UTC):** migration applies; cleanup 21,957 → 5,045 season rows (integrity ok); two further Memory Alpha passes add nothing; Sonarr links 330 → 387; identity check 1,269 checked, 1 flagged (R.O.D); daily refresh 33 → 53 watching shows; rulecheck 37 violations (all pre-existing kinds). Full suite 1,746 passed.
+- ⏳ **Review-page noise (user 10-05): built in dev, not yet shipped (release v0.4.1).** Prod had **353 open reviews; 348 were noise or obsolete**:
+      173 AniList width checks (measured wrongly; none actionable → now `lcars rulecheck` R1.11w, 59 real count differences), 134 "unmatched"
+      seasons (a TVDB season with no AniList entry is normal), 23 air-date items (AniList "a delay past the current" on downloaded episodes —
+      mostly 5–10 min — and animeschedule changes that were already applied), 9 transient "Could not connect"/"HTTP 429" failures, 4 Urusei id
+      conflicts, 5 singles (numbering scheme, show-level no-AniList-match, MAL progress clamp, animeschedule ambiguity). **Kept (5, real):** the
+      R.O.D identity review, Broken Saintess add check, two AniList-mapping problems (a split-cour season; a schedule 5,451 days off), one MAL lower-progress.
+      Sources changed so they do not return (list in the commit); the 10-minute buffer is now inclusive; identical consecutive review values no longer
+      grow a chain. Cleanup: `scripts/cleanup_noise_reviews_20261005.py` (dry run default; prod copy 353 → 5). To ship: tag v0.4.1, deploy, THEN run the
+      script (else the old code reopens some), snapshot first.
 - 🚢 **SHIP CHECKLIST — v0.4.0 (= branch `dev-airing-sources` at 7405595), TAGGED + CI GREEN, NOT DEPLOYED (user 10-05: ship once the drip has hit 200 today; make sure it restarts tomorrow)**
       0. Before: today's drip count ≥ 200 (`anidb_episode` distinct anime with `fetched_at` ≥ today); labelled DB snapshot on tiny.
       1. **DONE 10-05: tagged `v0.4.0` on commit 7405595 (pushed, never move it); CI run 37282087623 = success (image `0.4.0` / `0.4.0-web` on GHCR).**
