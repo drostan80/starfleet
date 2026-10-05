@@ -120,28 +120,46 @@ def seed_syoboi_external_ids(conn, dataset: list[dict]) -> int:
 
     inserted = 0
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    for show_id, anilist_id_str in rows:
-        anilist_id = int(anilist_id_str)
-        tid = al_to_syoboi.get(anilist_id)
-        if tid is None:
-            continue
+
+    def seed(show_id, tid) -> bool:
         try:
             conn.execute(
                 """INSERT INTO show_external_id
                    (show_id, service, external_id, url, created_at)
                    VALUES (?, 'syoboi', ?, ?, ?)""",
-                (
-                    show_id,
-                    str(tid),
-                    f"https://cal.syoboi.jp/tid/{tid}",
-                    now,
-                ),
+                (show_id, str(tid), f"https://cal.syoboi.jp/tid/{tid}", now),
             )
-            inserted += 1
+            return True
         except Exception:
             log.debug("syoboi external_id already exists for %s", show_id)
-            continue
+            return False
 
+    for show_id, anilist_id_str in rows:
+        tid = al_to_syoboi.get(int(anilist_id_str))
+        if tid is not None and seed(show_id, tid):
+            inserted += 1
+
+    # AniList ids sit on the seasons (R1.23), so the rebuilt shows have none of their own: a show
+    # still without a Syoboi id takes the one of its latest season/part that ARM maps (user 10-05:
+    # the id did not fill for new shows). Skipped where the show has no season table (old tests).
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'season'"
+    ).fetchone():
+        seen: set = set()
+        for show_id, anilist_id in conn.execute(
+            """SELECT z.show_id, z.anilist_id FROM season z JOIN show s ON s.id = z.show_id
+               WHERE z.anilist_id IS NOT NULL AND z.kind IN ('tvdb_season', 'part')
+                 AND s.tracked = 1 AND s.tracking_space = 'anime'
+                 AND NOT EXISTS (SELECT 1 FROM show_external_id x
+                                 WHERE x.show_id = z.show_id AND x.service = 'syoboi')
+               ORDER BY z.show_id, COALESCE(z.season_number, 0) DESC, z.part_number DESC"""
+        ).fetchall():
+            tid = al_to_syoboi.get(int(anilist_id))
+            if show_id in seen or tid is None:
+                continue
+            seen.add(show_id)
+            if seed(show_id, tid):
+                inserted += 1
     conn.commit()
     if inserted:
         log.info("ARM: seeded %d Syoboi TIDs", inserted)

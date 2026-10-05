@@ -136,7 +136,78 @@ def collect_candidates(conn, show_id: str) -> dict[str, int]:
             {"show": show_id, "now": now},
         )
         counts[source] = cursor.rowcount
+    counts["syoboi"] += _syoboi_by_numbering(conn, show_id, now)
     return counts
+
+
+def _syoboi_by_numbering(conn, show_id: str, now: str) -> int:
+    """Syoboi's stations for episodes AniDB has not been mapped to (user 10-05: Syoboi never showed
+    as a choice — the join above needs AniDB's numbering, which most running shows do not have
+    yet). When Syoboi's own numbering fits a TVDB season (the first shared episode's date within
+    3 days), its broadcast number N is that season's episode N: one candidate per station. Never
+    replaces a candidate the AniDB route already made."""
+    from lcars import provisional_episodes, sonarr_match
+
+    row = conn.execute(
+        "SELECT external_id FROM show_external_id WHERE show_id = ? AND service = 'syoboi'",
+        (show_id,),
+    ).fetchone()
+    if not row or not str(row[0]).isdigit() or sonarr_match.show_numbering_diverged(
+        conn, show_id
+    ):
+        return 0
+    tid = int(row[0])
+    broadcasts = provisional_episodes._broadcasts(conn, tid)
+    if not broadcasts:
+        return 0
+    stations: dict[int, list] = {}
+    for p in conn.execute(
+        "SELECT chid, count, MIN(st_time_utc) AS first FROM syoboi_program WHERE tid = ?"
+        " AND deleted = 0 AND count > 0 AND st_time_utc IS NOT NULL GROUP BY chid, count",
+        (tid,),
+    ):
+        stations.setdefault(p["count"], []).append((p["chid"], p["first"]))
+    made = 0
+    for season in [r[0] for r in conn.execute(
+        "SELECT DISTINCT season FROM episode WHERE show_id = ? AND season > 0 AND kind = 'regular'",
+        (show_id,),
+    )]:
+        if not provisional_episodes.run_fits(conn, show_id, season, broadcasts):
+            continue
+        for e in conn.execute(
+            "SELECT id, episode FROM episode WHERE show_id = ? AND season = ? AND kind = 'regular'",
+            (show_id, season),
+        ).fetchall():
+            for chid, first in stations.get(e["episode"], []):
+                made += conn.execute(
+                    "INSERT OR IGNORE INTO episode_air_candidate"
+                    " (episode_id, source, channel, air_date_utc, fetched_at)"
+                    " VALUES (?, 'syoboi', ?, ?, ?)", (e["id"], str(chid), first, now),
+                ).rowcount
+    return made
+
+
+def collect_for_airing(conn) -> dict:
+    """The Memory Alpha step (user 10-05: every schedule of every source should be a choice, not
+    only for the shows whose refresh button was clicked): the candidates of every tracked anime
+    that is watching or planned and still airing — an episode with no date or one dated in the
+    last 45 days or later — rebuilt from the stored data, and a season's chosen schedule
+    re-applied so it keeps following its source."""
+    cutoff = util.utc_iso_offset(-45)
+    total = {"shows": 0, "candidates": 0, "dates_updated": 0}
+    for row in conn.execute(
+        "SELECT sh.id FROM show sh WHERE sh.tracked = 1 AND sh.tracking_space = 'anime'"
+        " AND sh.status IN ('watching', 'planned') AND EXISTS ("
+        "  SELECT 1 FROM episode e WHERE e.show_id = sh.id AND e.kind = 'regular'"
+        "  AND (e.air_date_utc IS NULL OR e.air_date_utc > ?))", (cutoff,),
+    ).fetchall():
+        counts = collect_candidates(conn, row["id"])
+        applied = apply_all_choices(conn, row["id"])
+        total["shows"] += 1
+        total["candidates"] += sum(counts.values())
+        total["dates_updated"] += applied.get("applied", 0)
+    conn.commit()
+    return total
 
 
 def set_choice(

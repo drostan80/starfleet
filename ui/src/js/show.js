@@ -300,9 +300,12 @@ function renderExtBadges(container, show, cfg) {
     const ext = extMap[svc];
     if (!ext) continue;
     rendered.add(svc);
+    // The stored link, else the service's own (an id added by a path that stored no url).
+    const stored = ext.url || (SVC_URL_TEMPLATES[svc]
+      ? SVC_URL_TEMPLATES[svc](ext.externalId, show.mediaShape) : ext.url);
     const url = REWRITE_SVCS.has(svc)
-      ? rewriteHost(ext.url, location.hostname)
-      : ext.url;
+      ? rewriteHost(stored, location.hostname)
+      : stored;
     const badge = buildExtBadge(svc, ext.externalId, url);
 
     // Editable badge: right-click or long-press to edit

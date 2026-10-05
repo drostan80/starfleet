@@ -6,6 +6,17 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 ## Open work — consolidated 2026-09-30
 
 ### A. Left over from the rebuild
+- 🔧 **Syoboi id auto-fill + links (user 10-05) — BUILT, in dev, ships in v0.4.4**: the id is seeded each Memory Alpha pass from ARM, but only through a show-level AniList id
+      (74 shows have one; R1.23 puts them on seasons), so new shows rarely filled: now also through the show's latest season/part ARM maps (prod copy: 8 more, 993 total;
+      the rest are films/shows ARM has no Syoboi entry for). Links: the show page links a badge only from `show_external_id.url`, empty on 984/985 Syoboi, 1,055/1,061 AniDB,
+      1,687/1,712 TVmaze rows; `external_urls.fill_missing` fills every row each pass (3,465 on the prod copy; TVmaze "-1" = no show stays empty) and the page falls back to
+      the service template when a row has none.
+- 🔧 **Schedule chooser review (user 10-05) — BUILT, in dev, ships in v0.4.4**: "I thought I said all schedules … haven't seen Syoboi in the choices". Cause 1: candidates were
+      rebuilt only when the ↻ button was clicked (22 shows on prod had any; Syoboi on 2 although 985 shows have a Syoboi id). Now every watching/planned anime still airing
+      (103 on prod, 0.1 s) is collected in the Memory Alpha pass (`air_sources.collect_for_airing`) and a season's chosen schedule is re-applied there so it keeps following
+      its source. Cause 2: Syoboi's candidates needed an AniDB episode mapping; now also by Syoboi's own numbering when it fits the TVDB season (same check as the
+      provisional episodes), one option per station. Prod copy: Syoboi options on 79 shows (Goblin: AniList, Sonarr, 5 Syoboi stations). AniList stays one schedule per
+      entry (one airing schedule per AniList media), recorded when read (daily refresh of watching shows).
 - 🔧 **Provisional episodes from Syoboi — BUILT, in dev, ships in v0.4.4 (user 10-05; RULEBOOK R1.2g)** — TVDB lagged several running anime (two
       episodes aired, only the placeholder E1 on the page: couldn't open or mark E2). `provisional_episodes.py`: for tracked anime (watching/planned)
       with a Syoboi id, when Syoboi's numbering fits the latest TVDB season, the next episodes are added from its numbered broadcasts (last aired +3,

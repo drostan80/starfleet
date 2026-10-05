@@ -187,9 +187,7 @@ def _plan(conn, show_id: str, tid: int, season: int, now: str) -> dict | None:
         "SELECT episode, air_date_utc FROM episode WHERE show_id = ? AND season = ?"
         " AND kind = 'regular' AND provisional = 0 ORDER BY episode", (show_id, season),
     ).fetchall()
-    shared = [r for r in real if r["episode"] in broadcasts and r["air_date_utc"]]
-    if not shared or _days_apart(shared[0]["air_date_utc"],
-                                 broadcasts[shared[0]["episode"]]["first"]) > ALIGN_DAYS:
+    if not run_fits(conn, show_id, season, broadcasts):
         return None  # not the same run (a cumulative count, another cour, another season)
     top = max(r["episode"] for r in real)
     aired = [n for n, b in broadcasts.items() if b["first"] <= now]
@@ -199,6 +197,19 @@ def _plan(conn, show_id: str, tid: int, season: int, now: str) -> dict | None:
         limit = min(limit, cap)
     numbers = [n for n in sorted(broadcasts) if top < n <= limit]
     return {"numbers": numbers, "broadcasts": broadcasts}
+
+
+def run_fits(conn, show_id: str, season: int, broadcasts: dict[int, dict]) -> bool:
+    """Does Syoboi's numbering fit this TVDB season? The first episode both list has an air date
+    within `ALIGN_DAYS` of Syoboi's first broadcast of that number."""
+    shared = [
+        r for r in conn.execute(
+            "SELECT episode, air_date_utc FROM episode WHERE show_id = ? AND season = ?"
+            " AND kind = 'regular' AND provisional = 0 ORDER BY episode", (show_id, season),
+        ) if r["episode"] in broadcasts and r["air_date_utc"]
+    ]
+    return bool(shared) and _days_apart(
+        shared[0]["air_date_utc"], broadcasts[shared[0]["episode"]]["first"]) <= ALIGN_DAYS
 
 
 def run_all(conn) -> dict:

@@ -141,3 +141,42 @@ def test_never_more_than_six_beyond_what_tvdb_lists(conn):
     conn.execute("DELETE FROM episode WHERE episode = 2")
     made = pe.sync_show(conn, "s-pv0001", "2027-06-01T00:00:00Z")  # all twelve have aired
     assert made["created"] == 6 and numbers(conn) == [2, 3, 4, 5, 6, 7]
+
+
+def syoboi_candidates(conn):
+    return [tuple(r) for r in conn.execute(
+        "SELECT e.episode, c.channel, c.air_date_utc FROM episode_air_candidate c"
+        " JOIN episode e ON e.id = c.episode_id WHERE c.source = 'syoboi' ORDER BY 1, 2")]
+
+
+def test_syoboi_is_a_choice_per_station_without_any_anidb_mapping(conn):
+    from lcars import air_sources
+
+    # a second station airs the same run a day later (the show has no AniDB mapping at all)
+    for n in range(1, 13):
+        conn.execute(
+            "INSERT INTO syoboi_program (pid, tid, chid, count, st_time_utc, ed_time_utc, deleted,"
+            " fetched_at) VALUES (?, 8015, 7, ?, ?, ?, 0, ?)",
+            (2000 + n, n, stamp(n - 1).replace("T13:", "T14:").replace("-05T", "-06T")
+             if n == 1 else stamp(n - 1), stamp(n - 1), T))
+    air_sources.collect_candidates(conn, "s-pv0001")
+    got = syoboi_candidates(conn)
+    assert [(e, ch) for e, ch, _ in got] == [(1, "19"), (1, "7"), (2, "19"), (2, "7")]  # one each
+
+
+def test_a_syoboi_run_that_does_not_fit_the_season_is_not_offered(conn):
+    from lcars import air_sources
+
+    conn.execute("UPDATE syoboi_program SET st_time_utc ="
+                 " strftime('%Y-%m-%dT%H:%M:%SZ', st_time_utc, '+40 days')")
+    air_sources.collect_candidates(conn, "s-pv0001")
+    assert syoboi_candidates(conn) == []
+
+
+def test_candidates_are_collected_for_airing_shows_without_a_button_click(conn):
+    from lcars import air_sources
+
+    first = air_sources.collect_for_airing(conn)
+    assert first["shows"] == 1 and first["candidates"] > 0
+    assert len(syoboi_candidates(conn)) == 2  # E1 and E2 on station 19
+    assert air_sources.collect_for_airing(conn)["candidates"] == first["candidates"]  # idempotent

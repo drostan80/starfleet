@@ -1802,6 +1802,15 @@ def poll_memory_alpha(conn) -> dict:
     except Exception:
         log.exception("ARM Syoboi TID seeding failed")
 
+    # ── 2b2. A link on every external id (external_urls.py, user 10-05) ──
+    try:
+        with db.undo_on_error(conn):
+            from lcars import external_urls
+            result["external_urls_filled"] = external_urls.fill_missing(conn)
+            conn.commit()
+    except Exception:
+        log.exception("External id links failed")
+
     # ── 2c. Ensure season rows + backfill episode.season_id ──
     # Creates missing season rows from episode.season values (TV: direct,
     # anime: through reconcile_season with Fribb). Then links episodes to
@@ -1893,6 +1902,14 @@ def poll_memory_alpha(conn) -> dict:
             conn.commit()
     except Exception:
         log.exception("Level reconcile failed")
+
+    # ── 2f3. Every source's schedule as a choice (air_sources.collect_for_airing, 10-05) ──
+    try:
+        with db.undo_on_error(conn):
+            from lcars import air_sources
+            result["air_candidates"] = air_sources.collect_for_airing(conn)["candidates"]
+    except Exception:
+        log.exception("Air-date candidates failed")
 
     # ── 2g. Same-TVDB shows: to review, never merged automatically ──
     # Phase 5.3 (R1.14): one show per TVDB id. Shows sharing one are listed
