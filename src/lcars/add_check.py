@@ -341,6 +341,12 @@ def review(
         payload.update(anilist_id=candidate.anilist_id, mal_id=candidate.mal_id,
                        titles=candidate.titles, media_type=candidate.media_type,
                        status=LIST_STATUS.get((candidate.status or "").upper()))
+        if decision.tvdb_id:  # 8.8.3: the facts side by side, fetched once
+            from lcars import tvdb_vetting
+
+            payload.update(tvdb_vetting.evidence(
+                conn, tvdb_vetting.entry_facts(candidate.anilist_id, candidate.titles),
+                [(f"TVDB {decision.tvdb_id}", int(decision.tvdb_id))]))
     reviews.open_review(conn, "show", key, field_name, source, value, choices, payload,
                         show_id=decision.show_id)
 

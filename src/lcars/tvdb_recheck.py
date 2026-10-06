@@ -69,10 +69,16 @@ def recheck(conn, dataset=None) -> int:
             (row["show_id"], FIELD, f'%"{text}"%')).fetchone()
         if open_row:
             continue
+        from lcars import tvdb_vetting  # 8.8.3: stored vs Fribb's id, side by side
+
+        facts = tvdb_vetting.evidence(
+            conn, tvdb_vetting.show_entry_facts(conn, row["show_id"]),
+            [(f"TVDB {row['external_id']} (stored)", int(row["external_id"])),
+             *[(f"TVDB {t} (Fribb)", t) for t in sorted(theirs)[:2]]])
         reviews.open_review(
             conn, "show", row["show_id"], FIELD, "fribb", text, [KEEP, FIX],
             {"tvdb_id": row["external_id"], "stored_source": row["source"],
-             "fribb_ids": sorted(theirs), "anilist_ids": anilist_ids},
+             "fribb_ids": sorted(theirs), "anilist_ids": anilist_ids, **facts},
             show_id=row["show_id"])
         opened += 1
     if opened:

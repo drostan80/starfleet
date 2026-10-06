@@ -117,9 +117,14 @@ def offer(conn, show_id: str, tvdb_id, source: str, *, confirmed: bool = False) 
                 "this show (or can't be read) — is it this show?")
     # answered once (yes / no / another id), never asked again for the same text
     if not pending_review.already_resolved_with(conn, "show", show_id, REVIEW_FIELD, text):
+        from lcars import tvdb_vetting  # 8.8.3: the facts side by side, fetched once
+
+        facts = tvdb_vetting.evidence(
+            conn, tvdb_vetting.show_entry_facts(conn, show_id),
+            [(f"TVDB {value} (suggested by {source})", int(value))])
         reviews.open_review(
             conn, "show", show_id, REVIEW_FIELD, source, text,
-            [CONFIRM, REJECT, OTHER], {"tvdb_id": value, "source": source},
+            [CONFIRM, REJECT, OTHER], {"tvdb_id": value, "source": source, **facts},
             show_id=show_id)
     return REVIEW
 

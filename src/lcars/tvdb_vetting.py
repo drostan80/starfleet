@@ -21,9 +21,12 @@ Linking later joins the individual season to the show (`join`).
 
 from __future__ import annotations
 
+import logging
 import re
 
 from lcars import add_check, anilist_client, config, sonarr_client
+
+logger = logging.getLogger(__name__)
 
 ANIME_LANGUAGES = {"Japanese", "Chinese", "Mandarin", "Cantonese", "Korean"}
 ANIMATION_GENRES = {"Animation", "Anime"}
@@ -84,6 +87,33 @@ def entry_facts(anilist_id: int | None, titles: list[str]) -> dict:
             "poster": (m.get("coverImage") or {}).get("large"),
         })
     return facts
+
+
+def evidence(conn, entry: dict, candidates: list[tuple[str, int]]) -> dict:
+    """PLAN-CODE 8.8.3 — what a review shows side by side: the entry's own facts (`entry_facts`)
+    and, for each TVDB id in question, the TVDB show's (Sonarr's lookup): title, first-aired year,
+    language / country, genres / format, network / episode count, TVDB seasons, poster.
+    {"entry": facts, "columns": [{"label", "facts"}]}; fetched once, when the review opens, and
+    stored in its payload (never in a resolver: the page loads fifty reviews at a time). Optional
+    evidence — any failure gives {} and the review opens without it."""
+    try:
+        return {"entry": entry,
+                "columns": [{"label": label, "facts": tvdb_facts(conn, tvdb_id)}
+                            for label, tvdb_id in candidates]}
+    except Exception:
+        logger.exception("review evidence for %s failed", candidates)
+        return {}
+
+
+def show_entry_facts(conn, show_id: str) -> dict:
+    """`entry_facts` for a tracked show: its first AniList entry and its titles."""
+    show = conn.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone()
+    titles = [t for t in (show["title_english"], show["title_romaji"], show["title_native"])
+              if t] if show else []
+    row = conn.execute("SELECT anilist_id FROM season WHERE show_id = ? AND anilist_id IS NOT"
+                       " NULL ORDER BY COALESCE(season_number, 9999), part_number LIMIT 1",
+                       (show_id,)).fetchone()
+    return entry_facts(row[0] if row else None, titles)
 
 
 def hard_stops(entry: dict, tvdb: dict | None, *, anime: bool, new_show: bool) -> list[str]:

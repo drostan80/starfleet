@@ -437,6 +437,10 @@ added.
 - **7.6** AniList ↔ MAL mirror everywhere possible (R4.4): entry on one, missing on
   the other → added there.
 
+**7.5 ordered loop built 2026-10-06 (v0.4.6):** ops `run_list_hub_once` = AniList check →
+(its propagation) → MAL check when due, one task, failures isolated; the fixed time block stays
+unbuilt (both services give an update time).
+
 **7a/7c done 2026-09-28** (7.1–7.4, 7.6): `lcars/list_sync.py` pushes per level
 (status + progress over the level's own episodes; skipped and status-less seasons
 never pushed; auto-planned → skipped deleted from both lists). `watch_reconcile` /
@@ -525,9 +529,13 @@ verified (the Maria Mercedes failure). Approved plan, in this order:
   page already shows the facts side by side (a start on 8.8.3). Checked: 12 server tests;
   reviews page in headless Firefox (evidence, tick gating). Browse/add evidence dialog:
   syntax-checked, not clicked through (needs a live Sonarr lookup).
-- **After cutover:** 8.8.3 side-by-side evidence page (posters, years, counts,
-  language, network); 8.8.5 every link keeps its provenance and is re-checked when a real
-  source (Fribb) later has data — disagreement opens a review.
+- **Done 2026-10-06 (v0.4.6):** 8.8.3 the evidence side by side (posters, first-aired year,
+  language/country, genres/format, network/episodes, TVDB seasons) is a **panel on the review**
+  (not a separate page) for `tvdb_link`, `tvdb_candidate`, `tvdb_recheck` and add-check reviews
+  that carry a TVDB id: fetched once when the review opens (Sonarr's lookup + AniList), stored in
+  its payload. 8.8.5 `show_external_id.source` + `tvdb_recheck.py` (hourly, in the backfill) —
+  RULEBOOK R3.7f. Also R3.7c (two independent sources attach the id, `tvdb_offer`) and R3.7d (a
+  hand-typed id through `tvdb_guard.link_by_hand`).
 
 ## Phase 9 — Dry run and cutover
 

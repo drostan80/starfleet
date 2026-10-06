@@ -61,7 +61,9 @@ def test_a_single_source_opens_a_review_and_writes_nothing(conn):
     assert tvdb_guard.offer(conn, "s-aaaaaa", 123, "anime-lists") == tvdb_guard.REVIEW
     assert _tvdb(conn, "s-aaaaaa") is None
     [r] = _open_reviews(conn, "s-aaaaaa")
-    assert json.loads(r["payload"]) == {"tvdb_id": "123", "source": "anime-lists"}
+    payload = json.loads(r["payload"])
+    assert (payload["tvdb_id"], payload["source"]) == ("123", "anime-lists")
+    assert payload["columns"][0]["label"] == "TVDB 123 (suggested by anime-lists)"  # 8.8.3
     # asked again: the same review, not a second one
     tvdb_guard.offer(conn, "s-aaaaaa", 123, "anime-lists")
     assert len(_open_reviews(conn, "s-aaaaaa")) == 1

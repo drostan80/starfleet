@@ -517,13 +517,30 @@ An episode can be unaired but watched (pre-air showing, leak…).
   levels, when you confirm it. `[clarified 2026-09-28]`
   `[clarified 2026-09-29]` First there is a check: **if two sources agree on the TVDB
   id, it attaches** by itself; only otherwise does it wait for you.
+  `[decided 2026-10-06, built v0.4.6]` **Independent sources:** Fribb and anime-lists count as
+  ONE (Fribb is built partly from anime-lists); the others (Wikidata, TVmaze, Sonarr's own
+  series, you) each count. Every offer is remembered (`tvdb_offer`). Two independent sources
+  agreeing attach the id only when no source offered another id for the show and the TVDB title
+  (Sonarr's lookup) matches the show's — otherwise it stays a review (R3.7e); R1.14 and R3.2a
+  still refuse. An open review for that show closes itself when the id attaches.
 - **R3.7d Manual TVDB id** `[clarified 2026-09-29]`: whether or not a show is attached to
   a TVDB id, **its page has a way to enter a TVDB id**, so you can attach it by hand.
+  `[built v0.4.6, 2026-10-06]` A hand-typed id goes through the one gate (`tvdb_guard.link_by_hand`):
+  written as yours with no review, but R1.14 (one show per TVDB id) and R3.2a (no series id on a
+  film) refuse it, and an id the show already holds is replaced only when the show is not in
+  Sonarr (otherwise "Correct Sonarr link" on its page, which moves the series too).
 - **R3.7d-review** `[decided 2026-10-06]` Every add-check question ("needs you") offers **"Use the
   TVDB id in my note"**: the id (and "season 2" when the question is which season) is a second,
   independent source (R3.7a); the check runs again with it and what it decides is applied. A
   review also carries **links** to the AniList, MAL, TVDB and Sonarr/Radarr pages of what it is
   about (resolved on the server, `review_links.py`).
+- **R3.7f Link provenance** `[decided 2026-10-06, built v0.4.6]`: every TVDB link records where it
+  came from (`show_external_id.source`: you, sonarr, fribb, anime-lists, wikidata, tvmaze,
+  agreed:<a>+<b>; NULL = from before this, unknown; shown on the badge's tooltip). The hourly
+  backfill re-checks every link that is not **yours** against Fribb: the stored id is among the
+  TVDB ids Fribb gives for ANY of the show's season AniList ids → fine; Fribb silent → no opinion;
+  otherwise a `tvdb_recheck` review (keep mine = stamped yours and never rechecked / Fribb's is
+  right = corrected on the show page). Nothing is changed by the recheck itself.
 - **R3.7e Unconfirmed TVDB id** `[clarified 2026-09-29]`: a TVDB id that is found but not
   confirmed independently by another source becomes a **review**: *does this show's link
   to TVmaze / AniList correspond to the show linked to this TVDB id?* Answers: **yes**
@@ -588,6 +605,9 @@ An episode can be unaired but watched (pre-air showing, leak…).
   database is made.
   - `[clarified 2026-09-29]` The order (AniList first, then MAL…) was only an example;
     the principle is R4.10's timestamps. **Built 2026-09-29 (PLAN-CODE 7.5).**
+    `[v0.4.6, 2026-10-06]` The AniList and MAL checks now run as **one ordered ops task**
+    (`run_list_hub_once`): AniList (with its propagation), then MAL when its interval is due,
+    never two polls at once; a failing check is logged and does not stop the other.
 - **R4.10** If a propagation is blocked (API down or other), **propagation calls
   take precedence over checks**. Remote changes are compared by timestamp: a remote
   change later than the reconciliation supersedes it; an earlier one is moot.
@@ -880,3 +900,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-10-05 — R1.10a (an entry is placed by its episodes: a part of the TVDB season they sit in, or a season level only until TVDB has them; never by Fribb's order; Kusuriya's fake S4).
 - 2026-10-05 — R1.2g (provisional episodes from Syoboi until TVDB has them: anime, +3 after the last aired, at most 6 past TVDB's last); R1.22a (Syoboi ids per level, matched to episodes by air date).
 - 2026-10-06 — R1.22b (an entry filling several whole TVDB seasons is placed by its anime-lists episode range, one entry over those levels); R1.11w-note (a count difference is information, not a review); R3.7d-review (add-check reviews take a TVDB id from the note, and carry AniList/MAL/TVDB/Sonarr links).
+- 2026-10-06 (v0.4.6) — R3.7c built (independent sources: Fribb+anime-lists = one), R3.7d guarded, R3.7f link provenance + recheck (8.8.5), 8.8.3 evidence on the review, R4.9 one ordered list-hub task.

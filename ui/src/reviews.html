@@ -913,6 +913,10 @@
     if (r.field === 'air_date_utc') return 'air date';
     if (r.field === 'tvdb_consolidation_season_collision') return 'season collision';
     if (r.field === 'cross_service_merge') return 'possible duplicate';
+    if (r.field === 'tvdb_candidate') return 'TVDB id: is it this show?';
+    if (r.field === 'tvdb_recheck') return 'TVDB id: Fribb now disagrees';
+    if (r.field === 'tvdb_link') return 'TVDB link';
+    if (r.field.startsWith('add_check:')) return 'add check: needs you';
     if (r.field === 'sonarr_deleted') return 'deleted from Sonarr';
     if (r.field === 'radarr_deleted') return 'deleted from Radarr';
     if (r.field === 'webhook_series_add') return 'Sonarr add failed';
@@ -1690,32 +1694,65 @@
       `;
     }
 
+    // PLAN-CODE 8.8.3: the facts side by side — the entry's own, then each TVDB id in question
+    // (title, first aired, language / country, genres / format, network / episodes, seasons, poster)
+    const factsOf = (x) => !x ? null : {
+      title: x.title || (x.titles || [])[0],
+      year: x.year,
+      lang: x.language || x.country,
+      kind: (x.genres || []).join(', ') || x.format,
+      extra: x.network || (x.episodes != null ? `${x.episodes} episodes` : ''),
+      seasons: (x.seasons || []).join(', '),
+      poster: x.poster,
+    };
+    const evidenceTable = (entry, columns) => {
+      const cols = [{ label: 'This entry', f: factsOf(entry) },
+        ...columns.map(c => ({ label: c.label, f: factsOf(c.facts), unknown: !c.facts }))];
+      const cell = (c, key) => `<span class="dg-val">${c.f ? esc(c.f[key] ?? '—') : (key === 'title' && c.unknown ? '<em>not readable (Sonarr lookup)</em>' : '')}</span>`;
+      const row = (label, key) => `<span class="dg-key">${esc(label)}</span>${cols.map(c => cell(c, key)).join('')}`;
+      const posters = cols.map(c => `<span class="dg-val">${c.f?.poster ? `<img src="${esc(c.f.poster)}" alt="" style="max-height:120px;border-radius:4px" onerror="this.style.display='none'">` : ''}</span>`).join('');
+      return `<div class="detail-grid" style="grid-template-columns:auto repeat(${cols.length},1fr)">
+          <span class="dg-key"></span>${cols.map(c => `<span class="dg-val"><strong>${esc(c.label)}</strong></span>`).join('')}
+          <span class="dg-key">Poster</span>${posters}
+          ${row('Title', 'title')}${row('First aired', 'year')}${row('Language / country', 'lang')}
+          ${row('Genres / format', 'kind')}${row('Network / episodes', 'extra')}${row('TVDB seasons', 'seasons')}
+        </div>`;
+    };
+
     // PLAN-CODE 8.8: a TVDB link review shows its evidence side by side.
     let evidenceHtml = '';
     if (r.field === 'tvdb_link' && r.payload) {
       let ev = {};
       try { ev = JSON.parse(r.payload); } catch {}
-      const t = ev.tvdb || {};
-      const e = ev.entry || {};
-      const row = (k, a, b) => `<span class="dg-key">${esc(k)}</span><span class="dg-val">${esc(a ?? 'unknown')}</span><span class="dg-val">${esc(b ?? '')}</span>`;
       evidenceHtml = `
         <div class="detail-section">
           <div class="detail-section-label">TVDB ${esc(ev.tvdbId)} — ${esc(ev.reason || '')}</div>
-          <div class="detail-grid" style="grid-template-columns:auto 1fr 1fr">
-            <span class="dg-key"></span><span class="dg-val"><strong>TVDB</strong></span><span class="dg-val"><strong>This entry</strong></span>
-            ${row('Title', t.title, (e.titles || [])[0])}
-            ${row('First aired', t.year, e.year)}
-            ${row('Language / country', t.language, e.country)}
-            ${row('Genres', (t.genres || []).join(', ') || null, e.format)}
-            ${row('Network', t.network, e.episodes != null ? `${e.episodes} episodes` : '')}
-            ${row('TVDB seasons', (t.seasons || []).join(', ') || null, '')}
-          </div>
+          ${evidenceTable(ev.entry || {}, [{ label: `TVDB ${ev.tvdbId}`, facts: ev.tvdb }])}
           ${(ev.mismatches || []).length ? `<ul style="color:var(--st-dropped);font-size:12px;margin:8px 0 0">${ev.mismatches.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
           <div style="font-size:11px;color:var(--muted);margin-top:8px">
             <a href="https://thetvdb.com/dereferrer/series/${esc(ev.tvdbId)}" target="_blank" rel="noopener" style="color:var(--accent)">Open on TVDB →</a>
             · In the note: another TVDB id for "Link the TVDB id in my note", or "season 2" to say which season.
           </div>
         </div>`;
+    }
+
+    // 8.8.3 for the other TVDB questions: a candidate id (R3.7e), a link Fribb now disagrees with
+    // (8.8.5), and an add-check question that carries a TVDB id
+    if (['tvdb_candidate', 'tvdb_recheck'].includes(r.field) && r.payload) {
+      let ev = {};
+      try { ev = JSON.parse(r.payload); } catch {}
+      if (ev.columns) {
+        evidenceHtml = `
+          <div class="detail-section">
+            <div class="detail-section-label">The evidence</div>
+            ${evidenceTable(ev.entry || {}, ev.columns)}
+            <div style="font-size:11px;color:var(--muted);margin-top:8px">
+              ${r.field === 'tvdb_candidate'
+                ? 'In the note: the right TVDB id, for "Link the TVDB id in my note".'
+                : 'To change the id, use "Correct Sonarr link" on the show page — it moves the Sonarr series with it.'}
+            </div>
+          </div>`;
+      }
     }
 
     // The add check's question (10-06): the entry's ids and the seasons it fills, with the way to
@@ -1736,6 +1773,7 @@
             ${row('TVDB', ev.tvdb_id)}
             ${row('Fills seasons', span)}
           </div>
+          ${ev.columns ? `<div style="margin-top:10px">${evidenceTable(ev.entry || {}, ev.columns)}</div>` : ''}
           <div style="font-size:11px;color:var(--muted);margin-top:8px">
             Know its TVDB id? Put it in the note (and "season 2" to say which season) and choose
             "Use the TVDB id in my note" — LCARS runs its check again with your id as the second source.
