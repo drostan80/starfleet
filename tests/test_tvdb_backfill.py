@@ -71,7 +71,8 @@ def test_backfills_a_real_tvdb_id_from_a_known_anilist_id(conn, monkeypatch):
     assert _tvdb_link(conn, "s-tvb001") is None
     review = conn.execute("SELECT payload FROM pending_review WHERE entity_id = 's-tvb001'"
                           " AND field = 'tvdb_candidate'").fetchone()
-    assert json.loads(review["payload"]) == {"tvdb_id": "279328", "source": "fribb"}
+    payload = json.loads(review["payload"])
+    assert (payload["tvdb_id"], payload["source"]) == ("279328", "fribb")  # + 8.8.3 evidence
 
 
 def test_skips_a_show_that_already_has_a_tvdb_link(conn, monkeypatch):
