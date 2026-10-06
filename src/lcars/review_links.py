@@ -56,6 +56,17 @@ def for_review(conn, review: dict) -> list[dict]:
         if value is not None:
             ids[service] = (str(value), None)  # the review's own id wins over the show's
 
+    if show_id and season is None and "anilist" not in ids and "mal" not in ids:
+        # a show-level review: the show's first entry
+        first = conn.execute(
+            "SELECT anilist_id, mal_id FROM season WHERE show_id = ? AND (anilist_id IS NOT NULL"
+            " OR mal_id IS NOT NULL) ORDER BY COALESCE(season_number, 9999), part_number LIMIT 1",
+            (show_id,)).fetchone()
+        if first is not None:
+            for service, value in (("anilist", first["anilist_id"]), ("mal", first["mal_id"])):
+                if value is not None:
+                    ids[service] = (str(value), None)
+
     links = []
     for service in _ORDER:
         if service not in ids:

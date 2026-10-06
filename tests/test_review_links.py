@@ -88,3 +88,10 @@ def test_a_recheck_review_links_the_stored_and_fribbs_tvdb_ids(conn):
     tvdb = [(link["label"], link["id"], link["url"]) for link in links if link["service"] == "tvdb"]
     assert tvdb == [("TVDB", "71634", "https://thetvdb.com/dereferrer/series/71634"),
                     ("TVDB (Fribb's)", "99", "https://thetvdb.com/dereferrer/series/99")]
+
+
+def test_a_show_level_review_links_the_shows_first_entry(conn):
+    links = review_links.for_review(conn, {
+        "entity_type": "show", "entity_id": "s-link01", "show_id": "s-link01", "payload": None})
+    assert [(link["service"], link["id"]) for link in links] == [
+        ("anilist", "111"), ("mal", "222"), ("tvdb", "71634"), ("sonarr", "some-show")]
