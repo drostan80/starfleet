@@ -1,5 +1,7 @@
 # Next up
 
+**Start with HANDOFF-2026-10-06.md** (must-watch list, ordered next steps).
+
 Current version: **v0.4.6** (live since 2026-10-06; v0.3.2 was the 09-30 cutover). Record: PLAN-DATA.md "Cutover (2026-09-30)",
 HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 
@@ -141,7 +143,6 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
       headlines, Grabs screen tweaks, Data recent-downloads page.
 
 ### C. New (user, 2026-09-30)
-- [ ] **Scoring idea** — to be explained by the user.
 - ✅ **[DEPLOYED v0.4.0, 10-05 — 'dev only' wording below is history]** **Schedule setter** — **built in dev, not deployed** (branch `dev-airing-sources`, commit 84907f9 + UI commit; RULEBOOK
       R1.0b). Every source's schedule for each season is stored as a candidate (Sonarr raw, TVmaze, AniDB date-only, AniList,
       animeschedule, **each Syoboi station separately**, with station names); a 🗓 button on each season card lists them
