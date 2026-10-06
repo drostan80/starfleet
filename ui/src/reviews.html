@@ -249,6 +249,10 @@
       border-bottom: 1px solid var(--border);
     }
 
+    .review-links { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; }
+    .review-links a { color: var(--accent); text-decoration: none; }
+    .review-links a:hover { text-decoration: underline; }
+
     .detail-grid {
       display: grid;
       grid-template-columns: 120px 1fr;
@@ -669,7 +673,7 @@
     gql, fetchPendingReviews, resolvePendingReview, setSeasonScore,
     linkShowExternalId, setSeasonMapping, unlinkShowExternalId,
     resolveTvdbConsolidation, resolveReviewChoice,
-  } from './js/api.js?v=25';
+  } from './js/api.js?v=26';
 
   applyAppName();
   await bootstrapConfig();
@@ -1301,6 +1305,16 @@
       </div>
     `;
 
+    // The pages of what this review is about (user 10-06): AniList, MAL, TVDB, Sonarr
+    const linksHtml = (r.links || []).length ? `
+      <div class="detail-section">
+        <div class="detail-section-label">Open</div>
+        <div class="review-links">
+          ${r.links.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener" title="${esc(l.label)} ${esc(l.id)}">${esc(l.label)} ${esc(l.id)} ↗</a>`).join('')}
+        </div>
+      </div>
+    ` : '';
+
     // Before/after diff or message display
     let diffHtml = '';
     if (isAirDate && hasVal) {
@@ -1704,7 +1718,32 @@
         </div>`;
     }
 
-    detailEl.innerHTML = headerHtml + metaHtml + diffHtml + chainHtml + evidenceHtml + actionsHtml;
+    // The add check's question (10-06): the entry's ids and the seasons it fills, with the way to
+    // answer with a TVDB id (the links are in the "Open" row above)
+    if (r.field === 'add_check:needs_user' && r.payload) {
+      let ev = {};
+      try { ev = JSON.parse(r.payload); } catch {}
+      const span = (ev.span_seasons || []).map(n => `S${n}`).join(' + ');
+      const row = (k, v) => v == null || v === '' ? '' : `<span class="dg-key">${esc(k)}</span><span class="dg-val">${esc(String(v))}</span>`;
+      evidenceHtml = `
+        <div class="detail-section">
+          <div class="detail-section-label">The entry</div>
+          <div class="detail-grid">
+            ${row('Titles', [...new Set(ev.titles || [])].join(' · '))}
+            ${row('Type', ev.media_type)}
+            ${row('AniList', ev.anilist_id)}
+            ${row('MAL', ev.mal_id)}
+            ${row('TVDB', ev.tvdb_id)}
+            ${row('Fills seasons', span)}
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:8px">
+            Know its TVDB id? Put it in the note (and "season 2" to say which season) and choose
+            "Use the TVDB id in my note" — LCARS runs its check again with your id as the second source.
+          </div>
+        </div>`;
+    }
+
+    detailEl.innerHTML = headerHtml + metaHtml + linksHtml + diffHtml + chainHtml + evidenceHtml + actionsHtml;
 
     // Wire up chain toggle
     const chainToggle = document.getElementById('chain-toggle');

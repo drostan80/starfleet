@@ -79,12 +79,14 @@ def open_or_extend(
 
 
 def close_obsolete(
-    conn, entity_type: str, entity_id: str, field: str, note: str, source: str | None = None
+    conn, entity_type: str, entity_id: str, field: str, note: str, source: str | None = None,
+    reason_like: str | None = None,
 ) -> int:
     """Closes the open review(s) on this field whose finding no longer holds (the pass that opened
     them has just run again and found nothing wrong). A review nobody can answer because the data
     already corrected itself is noise (user, 10-05: Apothecary Diaries, R.O.D, Kanojo no
-    Tomodachi). Returns how many were closed; the caller commits."""
+    Tomodachi). `reason_like` limits it to reviews whose latest message holds that text, for a field
+    that carries several kinds of finding. Returns how many were closed; the caller commits."""
     sql = (
         "UPDATE pending_review SET resolved_at = ?, resolution_note = ?"
         " WHERE entity_type = ? AND entity_id = ? AND field = ? AND resolved_at IS NULL"
@@ -93,6 +95,9 @@ def close_obsolete(
     if source is not None:
         sql += " AND source = ?"
         args.append(source)
+    if reason_like is not None:
+        sql += " AND json_extract(proposed_value_chain, '$[#-1]') LIKE ?"  # the latest finding
+        args.append(f"%{reason_like}%")
     return conn.execute(sql, args).rowcount
 
 

@@ -9,6 +9,11 @@ which decides exactly one of:
 - `link_season`       TVDB season N exists without an AniList/MAL id: this is its id;
 - `part`              another AniList/MAL cour of TVDB season N (R1.10);
 - `special`           a TVDB season-0 piece (film, OVA…) of a tracked show (R1.13a);
+- `span`              one entry whose episodes fill several whole TVDB seasons (Fribb gives the
+                      TVDB id but no single season; the anime-lists episode mapping says which):
+                      its ids go on each of those levels, one entry over several seasons
+                      (R1.22, `list_sync.group_levels`), when none of them is skipped or holds
+                      other ids — otherwise it is yours to say;
 - `new_show`          the first season of a new show, by TVDB id (R3.2);
 - `individual_season` no TVDB id yet, new planned season (R3.6, R3.6c, R4.7);
 - `not_added`         a related entry whose TVDB show isn't tracked, or has no
@@ -38,6 +43,10 @@ LIST = "list"  # your AniList/MAL list (R4.7)
 RELATION = "relation"  # found through an AniList relation / Fribb (R3.5, R3.6)
 
 
+# classify's reason when neither Fribb nor the anime-lists episode mapping names one TVDB season
+NO_SEASON = "no single TVDB season by Fribb or the anime-lists episode mapping"
+
+
 @dataclass
 class Candidate:
     origin: str
@@ -60,6 +69,7 @@ class Decision:
     season_number: int | None = None
     reason: str = ""
     proposal: str = ""
+    season_numbers: list[int] = field(default_factory=list)  # a `span`: the TVDB seasons it fills
 
 
 def _season_by_list_id(conn, anilist_id, mal_id, exclude_season_id=None):
@@ -117,6 +127,73 @@ def _fribb_entries(dataset, anilist_id, mal_id) -> list[dict]:
         return [e for e in fribb.build_mal_index(dataset).get(int(mal_id), [])
                 if e.get("tvdb_id") not in (None, "")]
     return []
+
+
+def spanned_tvdb_seasons(conn, entries: list[dict], tvdb_id) -> list[int]:
+    """The TVDB seasons (> 0) the entry's episodes are placed in by the anime-lists episode
+    mapping (AniDB season 1 ranges: Rayearth's 49 episodes are TVDB S1 1–20 and S2 21–49 — Fribb
+    gives it the TVDB id and no season). [] when the mapping says nothing."""
+    found: set[int] = set()
+    for e in entries:
+        anidb = e.get("anidb_id")
+        if anidb in (None, "", "unknown"):
+            continue
+        row = conn.execute(
+            "SELECT id, tvdb_id FROM anime_list_entry WHERE anidb_id = ?", (int(anidb),)
+        ).fetchone()
+        if row is None or str(row["tvdb_id"]) != str(tvdb_id):
+            continue
+        found.update(m[0] for m in conn.execute(
+            "SELECT DISTINCT tvdb_season FROM anime_list_mapping WHERE entry_id = ?"
+            " AND anidb_season = 1 AND tvdb_season > 0 AND start IS NOT NULL", (row["id"],)))
+    return sorted(found)
+
+
+def span_levels(conn, show_id: str, numbers: list[int]):
+    """(levels by TVDB season, seasons LCARS lacks, seasons already holding a list id, seasons
+    that are skipped) for the seasons a span fills."""
+    levels = {
+        n: conn.execute(
+            "SELECT * FROM season WHERE show_id = ? AND season_number = ? AND kind = 'tvdb_season'",
+            (show_id, n)).fetchone()
+        for n in numbers
+    }
+    missing = [n for n, z in levels.items() if z is None]
+    taken = [n for n, z in levels.items() if z is not None and (
+        z["anilist_id"] is not None or z["mal_id"] is not None or conn.execute(
+            "SELECT 1 FROM season_external_id WHERE season_id = ?"
+            " AND service IN ('anilist', 'mal')", (z["id"],)).fetchone() is not None)]
+    skipped = [n for n, z in levels.items() if z is not None and z["status"] == "skipped"]
+    return levels, missing, taken, skipped
+
+
+def _span_decision(conn, show, tvdb_id: int, numbers: list[int]) -> Decision:
+    """An entry that fills several whole TVDB seasons: placed on each as one entry when every one
+    exists, is not skipped and holds no other id; otherwise yours to say, with why."""
+    label = ", ".join(f"S{n}" for n in numbers)
+    levels, missing, taken, skipped = span_levels(conn, show["id"], numbers)
+    title = _show_titles(show)[0]
+    head = f"its episodes fill TVDB seasons {label} of {title}"
+
+    def lst(ns):
+        return ", ".join(f"S{n}" for n in ns)
+
+    if missing:
+        return Decision("needs_user", show["id"], tvdb_id=tvdb_id, season_numbers=numbers,
+                        reason=f"{head}, but {lst(missing)} isn't in LCARS",
+                        proposal="individual season until TVDB has them — or don't add")
+    if taken:
+        return Decision("needs_user", show["id"], tvdb_id=tvdb_id, season_numbers=numbers,
+                        reason=f"{head}, but {lst(taken)} already holds another entry",
+                        proposal="individual season — or don't add")
+    if skipped:
+        return Decision("needs_user", show["id"], tvdb_id=tvdb_id, season_numbers=numbers,
+                        reason=f"{head}; {lst(skipped)} is skipped, so as one entry its list "
+                               "progress would count only the seasons that are not skipped",
+                        proposal=f"attach it to {label} anyway — or don't add")
+    return Decision("span", show["id"], levels[numbers[-1]]["id"], tvdb_id,
+                    reason=f"one entry over TVDB seasons {label} (anime-lists episode ranges)",
+                    season_numbers=numbers)
 
 
 def classify(conn, c: Candidate, dataset: list[dict], *, exclude_season_id=None) -> Decision:
@@ -189,10 +266,23 @@ def classify(conn, c: Candidate, dataset: list[dict], *, exclude_season_id=None)
 
     seasons = {s for s in fribb_seasons if s is not None}
     if len(seasons) != 1:
-        return Decision("needs_user", show["id"], tvdb_id=tvdb_id,
-                        reason="Fribb gives no single TVDB season",
-                        proposal=f"which season of {_show_titles(show)[0]}?")
+        # Fribb names no season, or several: the episode ranges of the anime-lists mapping say
+        # which TVDB seasons the entry fills (RULEBOOK R1.22, user 10-06: place by episode range)
+        seasons = set(sorted(seasons) if len(seasons) > 1
+                      else spanned_tvdb_seasons(conn, entries, tvdb_id))
+        if len(seasons) > 1 and 0 not in seasons:
+            return _span_decision(conn, show, tvdb_id, sorted(seasons))
+    if len(seasons) != 1:
+        return Decision("needs_user", show["id"], tvdb_id=tvdb_id, reason=NO_SEASON,
+                        proposal=f"which season of {_show_titles(show)[0]}? (\"season 2\" in the"
+                                 " note, with your TVDB id)")
     (n,) = seasons
+    return place_in_season(conn, c, show, tvdb_id, n)
+
+
+def place_in_season(conn, c: Candidate, show, tvdb_id: int, n: int) -> Decision:
+    """Where an entry goes once its one TVDB season `n` is known (by Fribb, by the anime-lists
+    ranges, or by you)."""
     if n == 0 or (c.media_type or "").upper() in ("MOVIE", "SPECIAL"):
         return Decision("special", show["id"], tvdb_id=tvdb_id, season_number=0,
                         reason="TVDB season 0 piece — placed by Memory Alpha (R1.8, R1.13a)")
@@ -239,8 +329,14 @@ def review(
     choices = ["individual", "dont_add"]
     if decision.show_id and decision.season_id:
         choices = ["add_to_show", *choices]
+    if decision.season_numbers and decision.show_id:
+        _levels, missing, taken, _skipped = span_levels(conn, decision.show_id,
+                                                         decision.season_numbers)
+        if not missing and not taken:  # only a skipped season stands in the way: yours to say
+            choices = ["attach_span", *choices]
+    choices.append("use_tvdb_id")  # R3.7d: a TVDB id you have goes in the note
     payload = {"show_id": decision.show_id, "season_id": decision.season_id,
-               "tvdb_id": decision.tvdb_id}
+               "tvdb_id": decision.tvdb_id, "span_seasons": decision.season_numbers}
     if candidate is not None:
         payload.update(anilist_id=candidate.anilist_id, mal_id=candidate.mal_id,
                        titles=candidate.titles, media_type=candidate.media_type,
@@ -325,7 +421,7 @@ def add_sonarr_series(
 
 # ── Applying an automatic decision (R3.4, R3.5a) ───────────────────────
 
-AUTOMATIC = ("link_season", "new_season", "part", "special")
+AUTOMATIC = ("link_season", "new_season", "part", "special", "span")
 
 
 def _status_after(previous: str | None) -> str:
@@ -351,6 +447,25 @@ def _insert_level(conn, show_id, season_number, part_number, kind, parent_id, c,
     return season_id
 
 
+def _attach_span(conn, d: Decision, c: Candidate, now: str) -> str:
+    """The entry's ids on every TVDB season it fills: one list entry over several levels
+    (`list_sync.group_levels`); returns the last level, which speaks for it."""
+    from lcars import season_ranges
+
+    last = None
+    for n in d.season_numbers:
+        row = conn.execute(
+            "SELECT id FROM season WHERE show_id = ? AND season_number = ?"
+            " AND kind = 'tvdb_season'", (d.show_id, n)).fetchone()
+        conn.execute(
+            "UPDATE season SET anilist_id = COALESCE(anilist_id, ?),"
+            " mal_id = COALESCE(mal_id, ?), updated_at = ? WHERE id = ?",
+            (c.anilist_id, c.mal_id, now, row["id"]))
+        season_ranges.upsert_season_external_id(conn, row["id"], c.anilist_id, c.mal_id, now)
+        last = row["id"]
+    return last
+
+
 def apply_decision(conn, d: Decision, c: Candidate) -> str | None:
     """Writes an automatic decision (`AUTOMATIC`); returns the season id.
     Numbering (spans) and the show's status follow on the next pass."""
@@ -367,6 +482,8 @@ def apply_decision(conn, d: Decision, c: Candidate) -> str | None:
         )
         season_ranges.upsert_season_external_id(conn, d.season_id, c.anilist_id, c.mal_id, now)
         return d.season_id
+    if d.kind == "span":
+        return _attach_span(conn, d, c, now)
     if d.kind == "new_season":
         status = status_rules.new_season_status(conn, d.show_id, d.season_number)
         season_id = _insert_level(conn, d.show_id, d.season_number, 1, "tvdb_season", None,

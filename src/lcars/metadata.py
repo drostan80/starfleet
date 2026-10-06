@@ -666,18 +666,16 @@ def _reconcile_air_dates(conn, show: dict) -> None:
         by_number = _anilist_episode_ids(conn, show["id"], season)
         lcars_episode_count = len(by_number)
         if anilist_episode_count is not None and lcars_episode_count > anilist_episode_count:
-            reason = (
-                f"season {season['season_number']} has {lcars_episode_count} episode(s) in "
-                f"LCARS but AniList media {season['anilist_id']} only covers "
-                f"{anilist_episode_count} — likely spans multiple AniList entries; "
-                "air-date reconciliation skipped for this season"
+            # R1.11w: a count difference is information (`lcars rulecheck` lists it), not a review —
+            # nothing on a review can fix it from there (user, 10-06: the ids are right; what
+            # resolves it is a different span, a mini/special in the plan, or an extra date for a
+            # schedule change). The air-date reconciliation still skips this season, and the
+            # reviews this check opened before are closed.
+            pending_review.close_obsolete(
+                conn, "season", season["id"], "anilist_id",
+                "a count difference is no longer a review (R1.11w)", source="anilist",
+                reason_like=_WIDTH_REVIEW_MARK,
             )
-            if not pending_review.already_resolved_with(
-                conn, "season", season["id"], "anilist_id", reason
-            ):
-                pending_review.open_or_extend(
-                    conn, "season", season["id"], "anilist_id", "anilist", None, reason
-                )
             continue
 
         # 2026-09-23 — wrong-entry guard. Slime's LCARS S4 (the 2024
@@ -768,6 +766,9 @@ def _reconcile_air_dates(conn, show: dict) -> None:
 
 
 _ANILIST_SCHEDULE_MAX_DRIFT_DAYS = 60
+# the text of the width reviews opened until v0.4.5 (closed, never opened again); the drift review
+# shares their entity, field and source, so the text is what tells them apart
+_WIDTH_REVIEW_MARK = "likely spans multiple AniList entries"
 _ANILIST_SCHEDULE_DRIFT_MIN_SAMPLE = 3
 
 

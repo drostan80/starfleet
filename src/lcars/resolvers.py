@@ -1979,6 +1979,13 @@ def resolve_review_choices(obj, info):
     return json.loads(obj.get("choices") or "[]")
 
 
+@pending_review_type.field("links")
+def resolve_review_links(obj, info):
+    from lcars import review_links
+
+    return review_links.for_review(db.get_connection(), obj)
+
+
 # --- History table fields ---------------------------------------------------
 #
 # Found missing in the 2026-08-08 audit pass, same class of bug as

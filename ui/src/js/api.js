@@ -554,6 +554,7 @@ export async function fetchPendingReviews(includeResolved = false, first = 50, a
           previousValue proposedValueChain
           source createdAt resolvedAt resolvedByClient resolutionNote
           choices { id label } showId payload
+          links { service label id url }
         }}
         pageInfo { hasNextPage endCursor }
       }

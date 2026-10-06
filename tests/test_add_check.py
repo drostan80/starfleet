@@ -243,7 +243,7 @@ def _needs_you_review(conn):
 def test_needs_you_review_offers_its_choices_and_the_show(conn):
     _reviews, row = _needs_you_review(conn)
     choices = [c["id"] for c in __import__("json").loads(row["choices"])]
-    assert choices == ["add_to_show", "individual", "dont_add"]
+    assert choices == ["add_to_show", "individual", "dont_add", "use_tvdb_id"]
     assert row["show_id"] == "s-mush01"  # R4.8b: links to the show page
 
 
@@ -273,3 +273,121 @@ def test_a_choice_the_review_doesnt_offer_is_refused(conn):
     reviews, row = _needs_you_review(conn)
     with pytest.raises(reviews.ReviewError):
         reviews.resolve_choice(conn, row["id"], "merge", "captains_log", None)
+
+
+# ── an entry that fills several whole TVDB seasons (Rayearth, 10-06) ───────
+
+RAY_TVDB = 71634
+RAY = [{"anilist_id": 435, "mal_id": 435, "anidb_id": 127, "tvdb_id": RAY_TVDB, "type": "TV"}]
+
+
+@pytest.fixture
+def ray(conn):
+    """Magic Knight Rayearth: AniList 435 = 49 episodes = TVDB S1 1–20 + S2 21–49 (anime-lists)."""
+    conn.execute(
+        "INSERT INTO show (id, media_shape, tracking_space, title_english, primary_title, status,"
+        " tracked, created_at, updated_at) VALUES ('s-rayl01', 'episodic', 'anime',"
+        " 'Magic Knight Rayearth', 'english', 'planned', 1, ?, ?)", (NOW, NOW))
+    conn.execute("INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+                 " VALUES ('s-rayl01', 'tvdb', ?, '', ?)", (str(RAY_TVDB), NOW))
+    for zid, n, status in (("z-rayl01", 1, "planned"), ("z-rayl02", 2, "planned")):
+        conn.execute(
+            "INSERT INTO season (id, show_id, season_number, kind, source, status, created_at,"
+            " updated_at) VALUES (?, 's-rayl01', ?, 'tvdb_season', 'auto', ?, ?, ?)",
+            (zid, n, status, NOW, NOW))
+    conn.execute(
+        "INSERT INTO anime_list_entry (id, anidb_id, tvdb_id, default_tvdb_season, name, source,"
+        " fetched_at) VALUES (122, 127, ?, 'a', 'Magic Knight Rayearth', 'community', ?)",
+        (RAY_TVDB, NOW))
+    for anidb_season, tvdb_season, start, end, offset in ((0, 0, 1, 4, 4), (1, 1, 1, 20, None),
+                                                          (1, 2, 21, 49, -20)):
+        conn.execute(
+            'INSERT INTO anime_list_mapping (entry_id, anidb_season, tvdb_season, start, "end",'
+            " offset) VALUES (122, ?, ?, ?, ?, ?)", (anidb_season, tvdb_season, start, end, offset))
+    conn.commit()
+    return conn
+
+
+def test_an_entry_filling_two_tvdb_seasons_goes_on_both_as_one_entry(ray):
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, mal_id=435,
+                                   titles=["Magic Knight Rayearth"]), RAY)
+    assert (d.kind, d.season_numbers, d.season_id) == ("span", [1, 2], "z-rayl02")
+    add_check.apply_decision(ray, d, _c(RELATION, anilist_id=435, mal_id=435))
+    held = ray.execute("SELECT season_number, anilist_id, mal_id FROM season WHERE show_id ="
+                       " 's-rayl01' ORDER BY season_number").fetchall()
+    assert [tuple(r) for r in held] == [(1, 435, 435), (2, 435, 435)]
+
+
+def test_a_skipped_season_in_the_span_is_yours_to_say(ray):
+    ray.execute("UPDATE season SET status = 'skipped' WHERE id = 'z-rayl01'")
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, mal_id=435,
+                                   titles=["Magic Knight Rayearth"]), RAY)
+    assert d.kind == "needs_user"
+    assert "S1 is skipped" in d.reason and "S1, S2" in d.reason
+    add_check.review(ray, "anilist:435", d, "anilist_relation",
+                     _c(RELATION, anilist_id=435, mal_id=435, titles=["Magic Knight Rayearth"]))
+    row = ray.execute("SELECT * FROM pending_review").fetchone()
+    import json
+    assert [c["id"] for c in json.loads(row["choices"])] == [
+        "attach_span", "individual", "dont_add", "use_tvdb_id"]
+    from lcars import reviews
+    reviews.resolve_choice(ray, row["id"], "attach_span", "captains_log", None)
+    held = ray.execute("SELECT season_number, anilist_id FROM season WHERE show_id = 's-rayl01'"
+                       " ORDER BY season_number").fetchall()
+    assert [tuple(r) for r in held] == [(1, 435), (2, 435)]
+
+
+def test_a_season_holding_another_entry_blocks_the_span_and_offers_no_attach(ray):
+    ray.execute("UPDATE season SET anilist_id = 999 WHERE id = 'z-rayl02'")
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, titles=["Magic Knight Rayearth"]),
+                           RAY)
+    assert d.kind == "needs_user" and "S2 already holds another entry" in d.reason
+    add_check.review(ray, "anilist:435", d, "anilist_relation", _c(RELATION, anilist_id=435))
+    import json
+    row = ray.execute("SELECT choices FROM pending_review").fetchone()
+    assert "attach_span" not in [c["id"] for c in json.loads(row["choices"])]
+
+
+def test_an_entry_with_no_mapping_still_asks_which_season(ray):
+    ray.execute("DELETE FROM anime_list_mapping")
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, titles=["Magic Knight Rayearth"]),
+                           RAY)
+    assert d.kind == "needs_user" and "TVDB season" in d.reason
+
+
+def test_a_mapping_to_one_season_places_it_there(ray):
+    ray.execute("DELETE FROM anime_list_mapping WHERE tvdb_season = 2")
+    ray.execute('UPDATE anime_list_mapping SET "end" = 49 WHERE tvdb_season = 1')
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, titles=["Magic Knight Rayearth"]),
+                           RAY)
+    assert (d.kind, d.season_id) == ("link_season", "z-rayl01")
+
+
+def test_your_tvdb_id_in_the_note_runs_the_check_again(conn, monkeypatch):
+    from lcars import config, fribb, reviews
+
+    config.set_current(config.Config())
+    monkeypatch.setattr(fribb, "load_dataset", lambda *a, **k: DATASET)
+    d = add_check.Decision("needs_user", reason="x")
+    add_check.review(conn, "anilist:42", d, "list", _c(LIST, anilist_id=42, titles=["Other"]))
+    row = conn.execute("SELECT id FROM pending_review").fetchone()
+    with pytest.raises(reviews.ReviewError, match="put the TVDB id in the note"):
+        reviews.resolve_choice(conn, row["id"], "use_tvdb_id", "captains_log", "no id here")
+    # TVDB 12345 is no tracked show: nothing is applied blind, the review stays open and says why
+    with pytest.raises(reviews.ReviewError, match="doesn't track yet|doesn't settle"):
+        reviews.resolve_choice(conn, row["id"], "use_tvdb_id", "captains_log", "TVDB 12345")
+    assert conn.execute("SELECT resolved_at FROM pending_review").fetchone()[0] is None
+    # AniList 217434 has no TVDB id in Fribb; your TVDB id of the tracked show alone doesn't say
+    # which season, with "season 4" in the note it does
+    d2 = add_check.Decision("needs_user", reason="x")
+    add_check.review(conn, "anilist:217434", d2, "list",
+                     _c(LIST, anilist_id=217434, titles=["Mushoku Tensei"]))
+    row2 = conn.execute("SELECT id FROM pending_review WHERE entity_id = 'anilist:217434'"
+                        ).fetchone()
+    with pytest.raises(reviews.ReviewError, match="no single TVDB season"):
+        reviews.resolve_choice(conn, row2["id"], "use_tvdb_id", "captains_log", str(TVDB))
+    reviews.resolve_choice(conn, row2["id"], "use_tvdb_id", "captains_log", f"{TVDB} season 4")
+    assert conn.execute("SELECT resolved_at FROM pending_review WHERE id = ?",
+                        (row2["id"],)).fetchone()[0] is not None
+    assert conn.execute("SELECT season_number FROM season WHERE anilist_id = 217434"
+                        ).fetchone()[0] == 4

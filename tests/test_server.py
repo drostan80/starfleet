@@ -24,6 +24,7 @@ from lcars import (
     freeze,
     fribb,
     mal_client,
+    pending_review,
     radarr_client,
     shows,
     sonarr_client,
@@ -3599,7 +3600,7 @@ async def test_anilist_air_date_reconciliation_never_overwrites_a_manual_date(cl
     assert after == before  # refreshShowMetadata added nothing new
 
 
-async def test_season_split_guard_opens_a_review_when_lcars_has_more_episodes(client, monkeypatch):
+async def test_season_split_guard_opens_no_review_when_lcars_has_more_episodes(client, monkeypatch):
     """§5.2/§6.7, B.4's own "season-split guard" — a season's anilist_id
     covers fewer episodes than LCARS actually has locally (a cour-split
     the season model can't represent), so per-episode sync is skipped
@@ -3644,34 +3645,19 @@ async def test_season_split_guard_opens_a_review_when_lcars_has_more_episodes(cl
             headers=auth_headers(),
         )
     )["show"]["seasons"]["edges"][0]["node"]["id"]
+    # R1.11w (10-06): a count difference is no review any more — nothing on a review could fix it
     reviews = [
         r for r in await _pending_reviews_for(client, season_id) if r["field"] == "anilist_id"
     ]
-    assert len(reviews) == 1
-    assert reviews[0]["source"] == "anilist"
-    assert "likely spans multiple AniList entries" in reviews[0]["proposedValueChain"][-1]
+    assert reviews == []
 
 
-async def test_season_split_guard_stays_quiet_once_the_same_mismatch_is_resolved(
+async def test_season_split_guard_closes_the_old_count_review_and_leaves_the_drift_one(
     client, monkeypatch
 ):
-    """Real bug found and fixed 2026-08-12: `open_or_extend` only
-    re-extends an *unresolved* entry, so this guard reopened a brand
-    new review on every single pass — even right after a human
-    resolved one — since nothing remembered the resolved decision.
-    `manual_override` alone is NOT the right gate here (tried first,
-    reverted: it broke the Attack-on-Titan-shaped test above, whose
-    season is legitimately `manual_override = 1` via ordinary
-    addShow(anilistId=...) linking and must still get flagged — that
-    flag only ever means "confirmed AniList entry," never "human
-    accepted this exact episode-count gap"). The real fix:
-    `pending_review.already_resolved_with()` — a genuinely-identical
-    mismatch (same counts, same message) that was already resolved
-    stays resolved; only a *changed* mismatch opens fresh. Same
-    season-2 setup as the test above (Fribb, not addShow's own
-    anilistId, so this exercises a manual_override-free season too —
-    the fix works regardless of that flag either way, confirmed by
-    also setting it via setSeasonMapping partway through)."""
+    """10-06: reviews the count check opened before it stopped opening them are closed by the
+    next pass that meets the mismatch; the schedule-drift review shares their entity, field and
+    source and is not touched."""
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     _patch_fribb_dataset(
         monkeypatch, [{"tvdb_id": 67890, "anilist_id": 999, "mal_id": None, "season": {"tvdb": 2}}]
@@ -3693,52 +3679,40 @@ async def test_season_split_guard_stays_quiet_once_the_same_mismatch_is_resolved
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1), _ep(2)])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
     show = await add_show(client, tvdbId=67890)
+    season_id = (
+        await gql(
+            client,
+            "query($id: ID!) { show(id: $id) { seasons { edges { node { id } } } } }",
+            {"id": show["id"]},
+            headers=auth_headers(),
+        )
+    )["show"]["seasons"]["edges"][0]["node"]["id"]
 
-    # add_show's own inline fetch already hit the mismatch once, before
-    # manual_override existed — opening the review this test is really
-    # about not-reopening. Setting manual_override afterward (real
-    # sequence: Tonbo!/Chitose were both fixed this exact way, live,
-    # the same day) doesn't retroactively touch that already-open
-    # entry directly — but 2026-08-15: setSeasonMapping now
-    # auto-resolves any of *this season's own* open reviews as part of
-    # the same call (real gap found and fixed the same night —
-    # resolvePendingReview alone never applied anything, so a human
-    # calling it after fixing the mapping by hand was a separate,
-    # easy-to-forget step; see setSeasonMapping's own docstring), so
-    # this pre-existing review is resolved by the call below, not left
-    # for a later explicit resolvePendingReview.
-    manual = await gql(
-        client,
-        "mutation($id: ID!) {"
-        " setSeasonMapping(showId: $id, seasonNumber: 2, anilistId: 999) { id manualOverride } }",
-        {"id": show["id"]},
-        headers=auth_headers(),
-    )
-    season_id = manual["setSeasonMapping"]["id"]
-    assert manual["setSeasonMapping"]["manualOverride"] is True
+    width = ("season 2 has 2 episode(s) in LCARS but AniList media 999 only covers 1 — likely "
+             "spans multiple AniList entries; air-date reconciliation skipped for this season")
+    drift = ("season 2: AniList media 999's airing schedule is ~5451 days from Sonarr's own dates"
+             " for the same episodes — likely linked to the wrong AniList entry; air-date "
+             "reconciliation skipped for this season")
+    conn = db.get_connection()
 
-    pre_existing = [
-        r
-        for r in await _pending_reviews_for(client, season_id, include_resolved=True)
-        if r["field"] == "anilist_id"
-    ]
-    assert len(pre_existing) == 1  # confirms the guard did fire once, pre-manual_override
-    assert pre_existing[0]["resolvedAt"] is not None  # auto-resolved by setSeasonMapping itself
-    assert pre_existing[0]["resolvedByClient"] == "DATA"
-
-    # Two more refreshes — same "doesn't reopen" shape as the manual/
-    # animeschedule air-date tests above, not just a single check.
-    for _ in range(2):
+    async def open_chain(*messages):
+        for m in messages:
+            pending_review.open_or_extend(conn, "season", season_id, "anilist_id", "anilist",
+                                          None, m)
+        conn.commit()
         await gql(
             client,
             "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
             {"id": show["id"]},
             headers=auth_headers(),
         )
-    reviews = [
-        r for r in await _pending_reviews_for(client, season_id) if r["field"] == "anilist_id"
-    ]
-    assert reviews == []
+        return [r for r in await _pending_reviews_for(client, season_id)
+                if r["field"] == "anilist_id"]
+
+    assert await open_chain(width) == []  # the count finding is closed, none is opened again
+    still_open = await open_chain(width, drift)  # its latest finding is the drift: untouched
+    assert len(still_open) == 1
+    assert "wrong AniList entry" in still_open[0]["proposedValueChain"][-1]
 
 
 async def test_anilist_air_date_reconciliation_never_overwrites_an_animeschedule_date_later(
@@ -3995,9 +3969,7 @@ async def test_anilist_air_date_reconciliation_skips_a_season_that_spans_multipl
     season_id = seasons["show"]["seasons"]["edges"][0]["node"]["id"]
     all_reviews = await _pending_reviews_for(client, season_id)
     reviews = [r for r in all_reviews if r["field"] == "anilist_id"]
-    assert len(reviews) == 1
-    assert "22" in reviews[0]["proposedValueChain"][0]
-    assert "10" in reviews[0]["proposedValueChain"][0]
+    assert reviews == []  # R1.11w (10-06): the count difference is information, not a review
 
 
 async def test_anilist_air_date_reconciliation_skips_an_unfetched_episode(client, monkeypatch):

@@ -272,6 +272,21 @@ show X
   level is matched to Syoboi's numbered broadcasts **at episode level** — its first dated
   episode against the first airing of each count of each candidate run, within 3 days — and
   its episode *i* then takes count + *i*. A run that fits no level matches nothing.
+- **R1.22b An entry that fills several whole TVDB seasons is placed by its episode range**
+  `[decided 2026-10-06]`: when Fribb gives an entry's TVDB id but no single season, the
+  anime-lists episode mapping (AniDB season 1 ranges) says which TVDB seasons its episodes fill
+  (Magic Knight Rayearth, AniList 435: 49 episodes = TVDB S1 1–20 + S2 21–49). One season: it
+  goes there as any entry would. Several: its ids go on **each of those levels, one entry over
+  several seasons** (R1.22, as Urusei Yatsura), automatically when every one of them exists, is
+  not skipped and holds no other entry. Otherwise it is yours to say, and the review says why: a
+  season LCARS lacks or one that holds another entry offers no attach; a **skipped** season
+  offers "attach it to every season it fills" with the warning that the entry's list progress
+  would then count only the seasons that are not skipped (`list_sync.group_levels` leaves skipped
+  levels out). With no mapping it still asks which season.
+- **R1.11w-note** `[decided 2026-10-06]` A level holding more episodes than its AniList entry
+  covers is **information, not a review**: nothing on a review can fix it (the ids are right);
+  a different span, a mini/special in the plan or an extra date for a schedule change resolves
+  it. `lcars rulecheck` R1.11w lists it; the air-date reconciliation still skips that level.
 - **R1.23** Always be explicit about which level is meant.
   - **AniList is always season level** (even when it calls them shows); most anime
     DBs are.
@@ -504,6 +519,11 @@ An episode can be unaired but watched (pre-air showing, leak…).
   id, it attaches** by itself; only otherwise does it wait for you.
 - **R3.7d Manual TVDB id** `[clarified 2026-09-29]`: whether or not a show is attached to
   a TVDB id, **its page has a way to enter a TVDB id**, so you can attach it by hand.
+- **R3.7d-review** `[decided 2026-10-06]` Every add-check question ("needs you") offers **"Use the
+  TVDB id in my note"**: the id (and "season 2" when the question is which season) is a second,
+  independent source (R3.7a); the check runs again with it and what it decides is applied. A
+  review also carries **links** to the AniList, MAL, TVDB and Sonarr/Radarr pages of what it is
+  about (resolved on the server, `review_links.py`).
 - **R3.7e Unconfirmed TVDB id** `[clarified 2026-09-29]`: a TVDB id that is found but not
   confirmed independently by another source becomes a **review**: *does this show's link
   to TVmaze / AniList correspond to the show linked to this TVDB id?* Answers: **yes**
@@ -859,3 +879,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-10-04 — R1.0b (every source's schedule kept; you choose which one a season follows; earliest-wins stays the default), R1.0c (daily refresh covers any running show; per-show refresh button).
 - 2026-10-05 — R1.10a (an entry is placed by its episodes: a part of the TVDB season they sit in, or a season level only until TVDB has them; never by Fribb's order; Kusuriya's fake S4).
 - 2026-10-05 — R1.2g (provisional episodes from Syoboi until TVDB has them: anime, +3 after the last aired, at most 6 past TVDB's last); R1.22a (Syoboi ids per level, matched to episodes by air date).
+- 2026-10-06 — R1.22b (an entry filling several whole TVDB seasons is placed by its anime-lists episode range, one entry over those levels); R1.11w-note (a count difference is information, not a review); R3.7d-review (add-check reviews take a TVDB id from the note, and carry AniList/MAL/TVDB/Sonarr links).

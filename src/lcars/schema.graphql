@@ -644,6 +644,15 @@ type PendingReview {
   showId: ID
   "The data the review's choices act on, as JSON — e.g. a `tvdb_link` review's evidence (the TVDB show's and the entry's facts, the mismatches), PLAN-CODE 8.8."
   payload: String
+  "The AniList, MAL, TVDB and Sonarr/Radarr pages of what this review is about (user 10-06)."
+  links: [ReviewLink!]!
+}
+
+type ReviewLink {
+  service: String!
+  label: String!
+  id: String!
+  url: String!
 }
 
 type ReviewChoice {

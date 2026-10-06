@@ -39,6 +39,8 @@ LABELS = {
     "add_to_show": "Add to the proposed show",
     "individual": "Individual season until TVDB has it",
     "dont_add": "Don't add",
+    "attach_span": "Attach it to every season it fills (one entry)",
+    "use_tvdb_id": "Use the TVDB id in my note",
     "merge": "Merge into one show",
     "not_same": "Not the same show",
     "accept_completed": "Accept: completed, every episode watched",
@@ -83,6 +85,54 @@ def open_review(
     )
 
 
+def _attach_span(conn, payload: dict, candidate) -> None:
+    """You said yes to one entry over every TVDB season it fills (seasons that are skipped
+    included); a season that is missing or holds another entry still stops it."""
+    from lcars import add_check
+
+    numbers = payload.get("span_seasons") or []
+    if not payload.get("show_id") or len(numbers) < 2:
+        raise ReviewError("this review has no seasons to attach to")
+    _levels, missing, taken, _skipped = add_check.span_levels(conn, payload["show_id"], numbers)
+    if missing or taken:
+        raise ReviewError("seasons " + ", ".join(f"S{n}" for n in missing + taken)
+                          + " are missing or hold another entry now — look at the show page")
+    add_check._attach_span(conn, add_check.Decision(
+        "span", payload["show_id"], tvdb_id=payload.get("tvdb_id"), season_numbers=numbers),
+        candidate, util.now_utc_iso())
+
+
+def _use_tvdb_id(conn, row, payload: dict, candidate, note: str | None) -> None:
+    """R3.7d: the TVDB id in your note is a second, independent source (R3.7a): the add check
+    runs again with it, and what it decides is applied; when it still needs you the review stays
+    open and says why."""
+    import re
+
+    from lcars import add_check, fribb
+
+    m = re.search(r"\d+", re.sub(r"season\s*\d+", "", note or "", flags=re.I))
+    if not m:
+        raise ReviewError("put the TVDB id in the note")
+    candidate.tvdb_id = int(m.group())
+    decision = add_check.classify(conn, candidate, fribb.load_dataset())
+    season = re.search(r"season\s*(\d+)", note or "", re.I)
+    if decision.kind == "needs_user" and decision.reason == add_check.NO_SEASON and season:
+        # you named the season too ("season 2"): your word on which one, the rest as usual
+        show = add_check._tracked_show_for_tvdb(conn, candidate.tvdb_id)
+        decision = add_check.place_in_season(conn, candidate, show, candidate.tvdb_id,
+                                             int(season.group(1)))
+    if decision.kind == "individual_season":
+        add_check.create_individual_season(conn, candidate, payload.get("status"))
+    elif decision.kind in add_check.AUTOMATIC:
+        add_check.apply_decision(conn, decision, candidate)
+    elif decision.kind == "new_show":  # a TVDB show LCARS doesn't track: yours to add
+        raise ReviewError(f"TVDB {candidate.tvdb_id} is a show LCARS doesn't track yet: add it "
+                          "from the add page, then this entry joins it")
+    elif decision.kind != "already_tracked":
+        raise ReviewError(f"TVDB {candidate.tvdb_id} doesn't settle it: {decision.reason}"
+                          + (f" — {decision.proposal}" if decision.proposal else ""))
+
+
 def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | None) -> None:
     from lcars import add_check, consolidation, fribb
 
@@ -115,6 +165,10 @@ def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | N
             ), candidate)
         elif choice == "individual":
             add_check.create_individual_season(conn, candidate, payload.get("status"))
+        elif choice == "attach_span":
+            _attach_span(conn, payload, candidate)
+        elif choice == "use_tvdb_id":
+            _use_tvdb_id(conn, row, payload, candidate, note)
     elif field == "remote_completed":
         # R4.8a: you completed it on the list.
         from lcars import list_sync, status_rules
