@@ -286,7 +286,7 @@ show X
 - **R1.11w-note** `[decided 2026-10-06]` A level holding more episodes than its AniList entry
   covers is **information, not a review**: nothing on a review can fix it (the ids are right);
   a different span, a mini/special in the plan or an extra date for a schedule change resolves
-  it. `lcars rulecheck` R1.11w lists it; the air-date reconciliation still skips that level.
+  it. `lcars rulecheck` R1.11w lists it; the air-date reconciliation still skips that level. `[10-06]` A provisional episode (R1.2g) is not counted in that comparison: it is no evidence that the entry spans more.
 - **R1.23** Always be explicit about which level is meant.
   - **AniList is always season level** (even when it calls them shows); most anime
     DBs are.

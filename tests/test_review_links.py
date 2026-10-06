@@ -79,3 +79,12 @@ def test_a_season_without_the_ids_on_the_row_uses_its_external_id_rows(conn):
     assert _links(conn, "season", "z-link01")["anilist"]["id"] == "333"
 
 
+
+
+def test_a_recheck_review_links_the_stored_and_fribbs_tvdb_ids(conn):
+    links = review_links.for_review(conn, {
+        "entity_type": "show", "entity_id": "s-link01", "show_id": "s-link01",
+        "payload": '{"tvdb_id": "71634", "fribb_ids": [71634, 99]}'})
+    tvdb = [(link["label"], link["id"], link["url"]) for link in links if link["service"] == "tvdb"]
+    assert tvdb == [("TVDB", "71634", "https://thetvdb.com/dereferrer/series/71634"),
+                    ("TVDB (Fribb's)", "99", "https://thetvdb.com/dereferrer/series/99")]

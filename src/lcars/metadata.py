@@ -664,7 +664,7 @@ def _reconcile_air_dates(conn, show: dict) -> None:
         # AniList's episode N -> the LCARS episode: for a TVDB season its own episode N; for a
         # part (one cour of a TVDB season, its own AniList entry) the N-th episode of the part.
         by_number = _anilist_episode_ids(conn, show["id"], season)
-        lcars_episode_count = len(by_number)
+        lcars_episode_count = _real_episode_count(conn, by_number)
         if anilist_episode_count is not None and lcars_episode_count > anilist_episode_count:
             # R1.11w: a count difference is information (`lcars rulecheck` lists it), not a review —
             # nothing on a review can fix it from there (user, 10-06: the ids are right; what
@@ -770,6 +770,19 @@ _ANILIST_SCHEDULE_MAX_DRIFT_DAYS = 60
 # shares their entity, field and source, so the text is what tells them apart
 _WIDTH_REVIEW_MARK = "likely spans multiple AniList entries"
 _ANILIST_SCHEDULE_DRIFT_MIN_SAMPLE = 3
+
+
+def _real_episode_count(conn, by_number: dict[int, str]) -> int:
+    """The episodes of the level TVDB/Sonarr really lists: a provisional episode (R1.2g, made from
+    Syoboi's broadcast list until TVDB has it) is no evidence the entry spans another one — it was
+    what made K-ON! S2 and Love, Chunibyo S2 skip the AniList dates (user 10-06)."""
+    if not by_number:
+        return 0
+    marks = ",".join("?" for _ in by_number)
+    provisional = conn.execute(
+        f"SELECT COUNT(*) FROM episode WHERE provisional = 1 AND id IN ({marks})",
+        list(by_number.values())).fetchone()[0]
+    return len(by_number) - provisional
 
 
 def _anilist_episode_ids(conn, show_id: str, season) -> dict[int, str]:

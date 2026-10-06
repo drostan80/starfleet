@@ -3305,6 +3305,59 @@ async def test_anilist_air_date_reconciliation_corrects_a_sonarr_seeded_date(cli
     assert len(reviews) == 0
 
 
+async def test_a_provisional_episode_does_not_make_the_season_skip_the_anilist_dates(
+    client, monkeypatch
+):
+    """10-06: the count check (LCARS holds more episodes than the AniList entry covers) counted a
+    provisional episode (made from Syoboi until TVDB has it), so K-ON! S2 and Love, Chunibyo S2
+    quietly lost the AniList air dates. A real extra episode still skips, a provisional one does
+    not."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    monkeypatch.setattr(
+        anilist_client,
+        "fetch_airing_schedule",
+        lambda anilist_id, *a, **kw: {
+            "episodes": 1,
+            "nodes": [{"episode": 1, "airingAt": 1735689600}],
+        },
+    )
+    ep = {"seasonNumber": 1, "episodeNumber": 1, "airDateUtc": "2020-01-01T00:00:00Z",
+          "runtime": 24}
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[ep])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, anilistId=12345, tvdbId=67890)
+
+    conn = db.get_connection()
+    from lcars import ids
+
+    def put_extra(provisional):
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, kind, state, provisional,"
+            " season_id, created_at, updated_at) SELECT ?, show_id, season, 2, kind, state, ?,"
+            " season_id, created_at, updated_at FROM episode WHERE show_id = ? AND episode = 1",
+            (ids.generate_id(conn, "e"), provisional, show["id"]))
+        conn.execute("UPDATE episode SET air_date_utc = '2030-01-01T00:00:00Z',"
+                     " air_date_source = 'sonarr' WHERE show_id = ? AND episode = 1", (show["id"],))
+        conn.commit()
+
+    async def first_episode_source():
+        await gql(client, "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+                  {"id": show["id"]}, headers=auth_headers())
+        data = await gql(
+            client,
+            "query($id: ID!) { show(id: $id) { episodes { edges { node { episode airDateUtc"
+            " airDateSource } } } } }", {"id": show["id"]}, headers=auth_headers())
+        node = [e["node"] for e in data["show"]["episodes"]["edges"] if e["node"]["episode"] == 1]
+        return node[0]["airDateSource"]
+
+    put_extra(1)  # provisional episode 2: AniList (1 episode) still dates episode 1
+    assert await first_episode_source() == "ANILIST"
+    conn.execute("DELETE FROM episode WHERE show_id = ? AND episode = 2", (show["id"],))
+    put_extra(0)  # a real second episode: the entry does not cover the season, skipped
+    assert await first_episode_source() == "SONARR"
+
+
 async def test_anilist_air_date_reconciliation_does_not_overwrite_a_downloaded_episode_later(
     client, monkeypatch
 ):

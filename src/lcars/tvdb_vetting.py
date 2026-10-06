@@ -98,7 +98,8 @@ def evidence(conn, entry: dict, candidates: list[tuple[str, int]]) -> dict:
     evidence — any failure gives {} and the review opens without it."""
     try:
         return {"entry": entry,
-                "columns": [{"label": label, "facts": tvdb_facts(conn, tvdb_id)}
+                "columns": [{"label": label, "tvdb_id": tvdb_id,
+                             "facts": tvdb_facts(conn, tvdb_id)}
                             for label, tvdb_id in candidates]}
     except Exception:
         logger.exception("review evidence for %s failed", candidates)

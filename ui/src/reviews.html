@@ -1707,12 +1707,12 @@
     };
     const evidenceTable = (entry, columns) => {
       const cols = [{ label: 'This entry', f: factsOf(entry) },
-        ...columns.map(c => ({ label: c.label, f: factsOf(c.facts), unknown: !c.facts }))];
+        ...columns.map(c => ({ label: c.label, tvdbId: c.tvdb_id, f: factsOf(c.facts), unknown: !c.facts }))];
       const cell = (c, key) => `<span class="dg-val">${c.f ? esc(c.f[key] ?? '—') : (key === 'title' && c.unknown ? '<em>not readable (Sonarr lookup)</em>' : '')}</span>`;
       const row = (label, key) => `<span class="dg-key">${esc(label)}</span>${cols.map(c => cell(c, key)).join('')}`;
       const posters = cols.map(c => `<span class="dg-val">${c.f?.poster ? `<img src="${esc(c.f.poster)}" alt="" style="max-height:120px;border-radius:4px" onerror="this.style.display='none'">` : ''}</span>`).join('');
       return `<div class="detail-grid" style="grid-template-columns:auto repeat(${cols.length},1fr)">
-          <span class="dg-key"></span>${cols.map(c => `<span class="dg-val"><strong>${esc(c.label)}</strong></span>`).join('')}
+          <span class="dg-key"></span>${cols.map(c => `<span class="dg-val"><strong>${c.tvdbId ? `<a href="https://thetvdb.com/dereferrer/series/${esc(c.tvdbId)}" target="_blank" rel="noopener" style="color:var(--accent)">${esc(c.label)} ↗</a>` : esc(c.label)}</strong></span>`).join('')}
           <span class="dg-key">Poster</span>${posters}
           ${row('Title', 'title')}${row('First aired', 'year')}${row('Language / country', 'lang')}
           ${row('Genres / format', 'kind')}${row('Network / episodes', 'extra')}${row('TVDB seasons', 'seasons')}
@@ -1727,7 +1727,7 @@
       evidenceHtml = `
         <div class="detail-section">
           <div class="detail-section-label">TVDB ${esc(ev.tvdbId)} — ${esc(ev.reason || '')}</div>
-          ${evidenceTable(ev.entry || {}, [{ label: `TVDB ${ev.tvdbId}`, facts: ev.tvdb }])}
+          ${evidenceTable(ev.entry || {}, [{ label: `TVDB ${ev.tvdbId}`, tvdb_id: ev.tvdbId, facts: ev.tvdb }])}
           ${(ev.mismatches || []).length ? `<ul style="color:var(--st-dropped);font-size:12px;margin:8px 0 0">${ev.mismatches.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
           <div style="font-size:11px;color:var(--muted);margin-top:8px">
             <a href="https://thetvdb.com/dereferrer/series/${esc(ev.tvdbId)}" target="_blank" rel="noopener" style="color:var(--accent)">Open on TVDB →</a>

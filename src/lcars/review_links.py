@@ -67,4 +67,11 @@ def for_review(conn, review: dict) -> list[dict]:
         if not url:
             continue
         links.append({"service": service, "label": _LABELS[service], "id": ext_id, "url": url})
+    # a TVDB id Fribb gives that is not the stored one (the TVDB site has no search by id: the
+    # dereferrer link opens the show) — user 10-06
+    stored = ids.get("tvdb", (None,))[0]
+    for other in payload.get("fribb_ids") or []:
+        if str(other) != str(stored):
+            links.append({"service": "tvdb", "label": "TVDB (Fribb's)", "id": str(other),
+                          "url": external_urls.TEMPLATES["tvdb"].replace("{id}", str(other))})
     return links
