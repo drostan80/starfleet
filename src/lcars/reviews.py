@@ -25,6 +25,8 @@ Kinds with choices:
 - `tvdb_link` — an add whose TVDB link nothing confirmed (PLAN-CODE 8.8): link
   it (or "despite" its mismatches) / link the TVDB id in your note / keep it an
   individual season.
+- `tvdb_recheck` — Fribb later gives another TVDB id than the stored link (8.8.5): keep mine /
+  Fribb's is right (corrected on the show page, where Sonarr moves with it).
 - `tvdb_candidate` — a TVDB id only one source suggests for an existing show (R3.7e): it is
   this show / it isn't / the TVDB id in your note is (R1.14 and R3.2a still apply).
 """
@@ -41,6 +43,8 @@ LABELS = {
     "dont_add": "Don't add",
     "attach_span": "Attach it to every season it fills (one entry)",
     "use_tvdb_id": "Use the TVDB id in my note",
+    "keep_tvdb": "Keep the TVDB id I have",
+    "fix_tvdb": "Fribb's is right — I'll correct it on the show page",
     "merge": "Merge into one show",
     "not_same": "Not the same show",
     "accept_completed": "Accept: completed, every episode watched",
@@ -241,6 +245,10 @@ def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | N
         from lcars import tvdb_vetting
 
         tvdb_vetting.resolve(conn, payload, choice, note)
+    elif field == "tvdb_recheck":
+        from lcars import tvdb_recheck
+
+        tvdb_recheck.resolve(conn, row["entity_id"], choice)
     elif field == "tvdb_candidate":
         from lcars import tvdb_guard
 

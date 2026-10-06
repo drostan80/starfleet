@@ -414,6 +414,9 @@ def add_sonarr_series(
         "tvdb_id": str(tvdb_id),
         "skip_sequel_check": True,  # R1.14: its own TVDB id makes it its own show
     })
+    conn.execute(  # 8.8.5: this id came from Sonarr's own series
+        "UPDATE show_external_id SET source = 'sonarr' WHERE show_id = ? AND service = 'tvdb'"
+        " AND source IS NULL", (show_id,))
     apply_sonarr_initial_statuses(conn, show_id)
     conn.commit()
     return "new_show", show_id

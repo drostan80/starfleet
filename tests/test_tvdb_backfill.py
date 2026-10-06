@@ -89,8 +89,8 @@ def test_skips_a_show_that_already_has_a_tvdb_link(conn, monkeypatch):
 
     updated = tvdb_backfill.backfill_tvdb_ids(conn)
     assert updated == 0
-    assert called == []  # never even fetched the dataset — nothing to resolve
-    assert _tvdb_link(conn, "s-tvb002")["external_id"] == "1"  # untouched
+    assert called == [1]  # read once, for the 8.8.5 recheck of the stored link — nothing to resolve
+    assert _tvdb_link(conn, "s-tvb002")["external_id"] == "1"  # untouched (a review, not a write)
 
 
 def test_skips_a_show_with_no_anilist_id_at_all(conn, monkeypatch):

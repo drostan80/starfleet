@@ -49,7 +49,7 @@ free — no separate due-tracking of its own — and a show this pass does
 resolve is never reconsidered.
 """
 
-from lcars import fribb, season_ranges, tvdb_guard
+from lcars import fribb, season_ranges, tvdb_guard, tvdb_recheck
 
 
 def backfill_tvdb_ids(conn) -> int:
@@ -68,6 +68,8 @@ def backfill_tvdb_ids(conn) -> int:
         anilist_id = season_ranges.show_list_id(conn, row[0], "anilist")  # R1.23
         if anilist_id is not None:
             candidates.append({"show_id": row[0], "anilist_id": anilist_id})
+    tvdb_recheck.recheck(conn)  # 8.8.5: links Fribb now disagrees with (loads the dataset lazily)
+    conn.commit()
     if not candidates:
         return 0
 
