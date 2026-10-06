@@ -23,7 +23,7 @@ import {
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=26';
+} from './api.js?v=27';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange,
@@ -307,6 +307,7 @@ function renderExtBadges(container, show, cfg) {
       ? rewriteHost(stored, location.hostname)
       : stored;
     const badge = buildExtBadge(svc, ext.externalId, url);
+    if (ext.source) badge.title = `${svc.toUpperCase()} link: ${ext.source.replace('agreed:', 'two sources agree: ')}`;
 
     // Editable badge: right-click or long-press to edit
     if (!READONLY_SVCS.has(svc)) {

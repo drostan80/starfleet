@@ -412,6 +412,8 @@ type ShowExternalId {
   externalId: String!
   url: String!
   createdAt: DateTime!
+  "Where a TVDB link came from (8.8.5): you, fribb, anime-lists, wikidata, tvmaze, agreed:<a>+<b>; null = recorded before provenance existed."
+  source: String
 }
 
 type ShowExternalIdEdge {

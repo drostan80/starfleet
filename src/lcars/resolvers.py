@@ -4086,6 +4086,18 @@ def resolve_link_show_external_id(_, info, show_id, service, external_id, url):
     own PRIMARY KEY (migration 7196ca889757)."""
     conn = db.get_connection()
     _require_show(conn, show_id)
+    if service == "tvdb":
+        # R3.7d: a TVDB id typed by hand still goes through the one gate (R1.14, R3.2a)
+        from lcars import reviews, tvdb_guard
+
+        try:
+            tvdb_guard.link_by_hand(conn, show_id, external_id)
+        except reviews.ReviewError as e:
+            raise GraphQLError(str(e)) from e
+        conn.commit()
+        return dict(conn.execute(
+            "SELECT * FROM show_external_id WHERE show_id = ? AND service = 'tvdb'", (show_id,)
+        ).fetchone())
     now = util.now_utc_iso()
     existing = conn.execute(
         "SELECT 1 FROM show_external_id WHERE show_id = ? AND service = ?", (show_id, service)

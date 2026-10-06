@@ -306,7 +306,7 @@ const SHOW_DETAIL_QUERY = `
         }}
       }
       externalIds(first: 20) {
-        edges { node { service externalId url } }
+        edges { node { service externalId url source } }
       }
       watchEvents(first: 1) {
         edges { node { id watchedAt } }

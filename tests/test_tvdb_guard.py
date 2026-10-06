@@ -162,3 +162,117 @@ def test_a_film_never_takes_a_series_tmdb_id_from_fribb(conn):
     anidb.propagate_cross_ids(conn, dataset)
     assert conn.execute("SELECT 1 FROM show_external_id WHERE show_id = 's-eve001'"
                         " AND service = 'tmdb'").fetchone() is None
+
+
+# ── R3.7c: two independent sources agreeing attach the id (user 2026-10-06) ─
+
+
+def _facts(monkeypatch, titles):
+    from lcars import tvdb_vetting
+
+    monkeypatch.setattr(tvdb_vetting, "tvdb_facts",
+                        lambda conn, tid: {"tvdb_id": tid, "titles": titles} if titles else None)
+
+
+def _prov(c, sid):
+    return c.execute("SELECT source FROM show_external_id WHERE show_id = ? AND service ="
+                     " 'tvdb'", (sid,)).fetchone()[0]
+
+
+def test_fribb_and_anime_lists_are_one_source_and_do_not_confirm_each_other(conn, monkeypatch):
+    _facts(monkeypatch, ["s-bbbbbb"])
+    _show(conn, "s-bbbbbb")
+    assert tvdb_guard.offer(conn, "s-bbbbbb", 123, "fribb") == tvdb_guard.REVIEW
+    assert tvdb_guard.offer(conn, "s-bbbbbb", 123, "anime-lists") == tvdb_guard.REVIEW
+    assert _tvdb(conn, "s-bbbbbb") is None
+
+
+def test_two_independent_sources_that_agree_attach_it_and_close_the_review(conn, monkeypatch):
+    _facts(monkeypatch, ["s-cccccc"])
+    _show(conn, "s-cccccc")
+    assert tvdb_guard.offer(conn, "s-cccccc", 123, "tvmaze") == tvdb_guard.REVIEW
+    assert len(_open_reviews(conn, "s-cccccc")) == 1
+    assert tvdb_guard.offer(conn, "s-cccccc", 123, "fribb") == tvdb_guard.WRITTEN
+    assert _tvdb(conn, "s-cccccc") == "123"
+    assert _prov(conn, "s-cccccc") == "agreed:community+tvmaze"
+    assert _open_reviews(conn, "s-cccccc") == []  # closed by the agreement
+
+
+def test_a_source_offering_another_id_sends_it_to_you(conn, monkeypatch):
+    _facts(monkeypatch, ["s-dddddd"])
+    _show(conn, "s-dddddd")
+    tvdb_guard.offer(conn, "s-dddddd", 123, "tvmaze")
+    tvdb_guard.offer(conn, "s-dddddd", 456, "wikidata")  # disagrees with tvmaze
+    assert tvdb_guard.offer(conn, "s-dddddd", 123, "fribb") == tvdb_guard.REVIEW
+    assert _tvdb(conn, "s-dddddd") is None
+
+
+def test_agreement_with_a_title_that_does_not_fit_stays_a_review(conn, monkeypatch):
+    _facts(monkeypatch, ["Completely Different Show"])
+    _show(conn, "s-eeeeee")
+    tvdb_guard.offer(conn, "s-eeeeee", 123, "tvmaze")
+    assert tvdb_guard.offer(conn, "s-eeeeee", 123, "wikidata") == tvdb_guard.REVIEW
+    assert _tvdb(conn, "s-eeeeee") is None
+    [r] = _open_reviews(conn, "s-eeeeee")
+    assert "title doesn't match" in json.loads(r["proposed_value_chain"])[-1]
+
+
+def test_agreement_with_unreadable_tvdb_facts_waits(conn, monkeypatch):
+    _facts(monkeypatch, None)  # Sonarr unreachable
+    _show(conn, "s-ffffff")
+    tvdb_guard.offer(conn, "s-ffffff", 123, "tvmaze")
+    assert tvdb_guard.offer(conn, "s-ffffff", 123, "wikidata") == tvdb_guard.REVIEW
+    assert _tvdb(conn, "s-ffffff") is None
+
+
+def test_agreement_never_writes_an_id_another_show_holds_or_on_a_film(conn, monkeypatch):
+    _facts(monkeypatch, ["s-gggggg"])
+    _show(conn, "s-gggggg")
+    _show(conn, "s-hhhhhh")
+    _ext(conn, "s-hhhhhh", "tvdb", 123)
+    tvdb_guard.offer(conn, "s-gggggg", 123, "tvmaze")
+    assert tvdb_guard.offer(conn, "s-gggggg", 123, "wikidata") == tvdb_guard.HELD
+    _show(conn, "s-iiiiii", shape="movie")
+    assert tvdb_guard.offer(conn, "s-iiiiii", 555, "tvmaze") == tvdb_guard.FILM
+
+
+def test_your_confirmation_is_recorded_as_you(conn):
+    _show(conn, "s-jjjjjj")
+    assert tvdb_guard.offer(conn, "s-jjjjjj", 777, "you", confirmed=True) == tvdb_guard.WRITTEN
+    assert _prov(conn, "s-jjjjjj") == "you"
+
+
+# ── R3.7d: a TVDB id typed by hand ──────────────────────────────────────────
+
+
+def test_a_hand_typed_id_is_written_as_yours_but_never_to_a_second_show_or_a_film(conn):
+    _show(conn, "s-kkkkkk")
+    _show(conn, "s-llllll")
+    _show(conn, "s-mmmmmm", shape="movie")
+    assert tvdb_guard.link_by_hand(conn, "s-kkkkkk", " 321 ") == tvdb_guard.WRITTEN
+    assert _prov(conn, "s-kkkkkk") == "you"
+    with pytest.raises(reviews.ReviewError, match="another show"):
+        tvdb_guard.link_by_hand(conn, "s-llllll", "321")
+    with pytest.raises(reviews.ReviewError, match="film"):
+        tvdb_guard.link_by_hand(conn, "s-mmmmmm", "654")
+    with pytest.raises(reviews.ReviewError, match="not a TVDB"):
+        tvdb_guard.link_by_hand(conn, "s-llllll", "abc")
+    assert _tvdb(conn, "s-llllll") is None
+
+
+def test_a_hand_typed_id_replaces_an_old_one_only_when_the_show_is_not_in_sonarr(conn):
+    _show(conn, "s-nnnnnn")
+    _ext(conn, "s-nnnnnn", "tvdb", 111)
+    assert tvdb_guard.link_by_hand(conn, "s-nnnnnn", "111") == tvdb_guard.EXISTS
+    assert tvdb_guard.link_by_hand(conn, "s-nnnnnn", "222") == tvdb_guard.WRITTEN
+    assert _tvdb(conn, "s-nnnnnn") == "222" and _prov(conn, "s-nnnnnn") == "you"
+    _ext(conn, "s-nnnnnn", "sonarr", "some-show")
+    with pytest.raises(reviews.ReviewError, match="Correct Sonarr link"):
+        tvdb_guard.link_by_hand(conn, "s-nnnnnn", "333")
+    assert _tvdb(conn, "s-nnnnnn") == "222"
+    # a refused replacement keeps the old id
+    _show(conn, "s-oooooo")
+    _ext(conn, "s-oooooo", "tvdb", 444)
+    with pytest.raises(reviews.ReviewError, match="another show"):
+        tvdb_guard.link_by_hand(conn, "s-oooooo", "222")
+    assert _tvdb(conn, "s-oooooo") == "444"

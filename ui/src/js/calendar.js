@@ -9,7 +9,7 @@
  */
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=26';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=27';
 import { openArtPicker } from './art-picker.js?v=5';
 import {
   buildStatusBtn, refreshStatusBtn,
