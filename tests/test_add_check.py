@@ -309,7 +309,7 @@ def ray(conn):
 
 
 def test_an_entry_filling_two_tvdb_seasons_goes_on_both_as_one_entry(ray):
-    d = add_check.classify(ray, _c(RELATION, anilist_id=435, mal_id=435,
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, mal_id=435, episodes=49,
                                    titles=["Magic Knight Rayearth"]), RAY)
     assert (d.kind, d.season_numbers, d.season_id) == ("span", [1, 2], "z-rayl02")
     add_check.apply_decision(ray, d, _c(RELATION, anilist_id=435, mal_id=435))
@@ -320,7 +320,7 @@ def test_an_entry_filling_two_tvdb_seasons_goes_on_both_as_one_entry(ray):
 
 def test_a_skipped_season_in_the_span_is_yours_to_say(ray):
     ray.execute("UPDATE season SET status = 'skipped' WHERE id = 'z-rayl01'")
-    d = add_check.classify(ray, _c(RELATION, anilist_id=435, mal_id=435,
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, mal_id=435, episodes=49,
                                    titles=["Magic Knight Rayearth"]), RAY)
     assert d.kind == "needs_user"
     assert "S1 is skipped" in d.reason and "S1, S2" in d.reason
@@ -339,13 +339,44 @@ def test_a_skipped_season_in_the_span_is_yours_to_say(ray):
 
 def test_a_season_holding_another_entry_blocks_the_span_and_offers_no_attach(ray):
     ray.execute("UPDATE season SET anilist_id = 999 WHERE id = 'z-rayl02'")
-    d = add_check.classify(ray, _c(RELATION, anilist_id=435, titles=["Magic Knight Rayearth"]),
-                           RAY)
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, episodes=49,
+                                   titles=["Magic Knight Rayearth"]), RAY)
     assert d.kind == "needs_user" and "S2 already holds another entry" in d.reason
     add_check.review(ray, "anilist:435", d, "anilist_relation", _c(RELATION, anilist_id=435))
     import json
     row = ray.execute("SELECT choices FROM pending_review").fetchone()
     assert "attach_span" not in [c["id"] for c in json.loads(row["choices"])]
+
+
+def test_anilist_435_has_20_episodes_so_it_is_season_1_only_even_when_s1_is_skipped(ray):
+    """10-06: the AniDB entry has 49 episodes (S1 + S2), AniList 435 only the first 20: placed on
+    S1 by its own count, no question — the review that asked 'attach to S1 and S2' was wrong."""
+    ray.execute("UPDATE season SET status = 'skipped' WHERE id = 'z-rayl01'")
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, mal_id=435, episodes=20,
+                                   titles=["Magic Knight Rayearth"]), RAY)
+    assert (d.kind, d.season_id, d.season_number) == ("link_season", "z-rayl01", 1)
+
+
+def test_a_count_that_ends_inside_a_season_or_is_unknown_asks_which_season(ray, monkeypatch):
+    from lcars import tvdb_vetting
+
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, episodes=30,
+                                   titles=["Magic Knight Rayearth"]), RAY)
+    assert d.kind == "needs_user" and "AniList says 30 episodes, anime-lists maps 49" in d.reason
+    monkeypatch.setattr(tvdb_vetting, "entry_facts", lambda *a, **k: {"episodes": None})
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, titles=["Magic Knight Rayearth"]),
+                           RAY)
+    assert d.kind == "needs_user" and "can't be read" in d.reason
+    assert d.season_numbers == []  # no attach is offered
+
+
+def test_the_count_is_read_from_anilist_when_the_source_has_none(ray, monkeypatch):
+    from lcars import tvdb_vetting
+
+    monkeypatch.setattr(tvdb_vetting, "entry_facts", lambda *a, **k: {"episodes": 20})
+    d = add_check.classify(ray, _c(RELATION, anilist_id=435, titles=["Magic Knight Rayearth"]),
+                           RAY)
+    assert (d.kind, d.season_id) == ("link_season", "z-rayl01")
 
 
 def test_an_entry_with_no_mapping_still_asks_which_season(ray):

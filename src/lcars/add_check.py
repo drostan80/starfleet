@@ -58,6 +58,7 @@ class Candidate:
     media_type: str | None = None  # TV, MOVIE, OVA, ONA, SPECIAL…
     status: str | None = None  # the status you or your list set
     prequel_anilist_ids: list[int] = field(default_factory=list)  # AniList relations
+    episodes: int | None = None  # AniList's own episode count, when the source has it
 
 
 @dataclass
@@ -129,11 +130,12 @@ def _fribb_entries(dataset, anilist_id, mal_id) -> list[dict]:
     return []
 
 
-def spanned_tvdb_seasons(conn, entries: list[dict], tvdb_id) -> list[int]:
-    """The TVDB seasons (> 0) the entry's episodes are placed in by the anime-lists episode
-    mapping (AniDB season 1 ranges: Rayearth's 49 episodes are TVDB S1 1–20 and S2 21–49 — Fribb
-    gives it the TVDB id and no season). [] when the mapping says nothing."""
-    found: set[int] = set()
+def mapped_ranges(conn, entries: list[dict], tvdb_id) -> list[tuple[int, int, int]]:
+    """[(TVDB season > 0, first, last AniDB episode)] by the anime-lists episode mapping (AniDB
+    season 1), in episode order. Fribb gives an entry its TVDB id and no season; the mapping of
+    its AniDB entry says where the episodes go (Magic Knight Rayearth's AniDB entry: 49 episodes,
+    S1 1–20 and S2 21–49). [] when the mapping says nothing."""
+    found: set[tuple[int, int, int]] = set()
     for e in entries:
         anidb = e.get("anidb_id")
         if anidb in (None, "", "unknown"):
@@ -143,10 +145,43 @@ def spanned_tvdb_seasons(conn, entries: list[dict], tvdb_id) -> list[int]:
         ).fetchone()
         if row is None or str(row["tvdb_id"]) != str(tvdb_id):
             continue
-        found.update(m[0] for m in conn.execute(
-            "SELECT DISTINCT tvdb_season FROM anime_list_mapping WHERE entry_id = ?"
-            " AND anidb_season = 1 AND tvdb_season > 0 AND start IS NOT NULL", (row["id"],)))
-    return sorted(found)
+        found.update((m[0], m[1], m[2]) for m in conn.execute(
+            'SELECT tvdb_season, start, "end" FROM anime_list_mapping WHERE entry_id = ?'
+            " AND anidb_season = 1 AND tvdb_season > 0 AND start IS NOT NULL"
+            ' AND "end" IS NOT NULL', (row["id"],)))
+    return sorted(found, key=lambda r: r[1])
+
+
+def spanned_tvdb_seasons(conn, entries: list[dict], tvdb_id) -> list[int]:
+    """The TVDB seasons (> 0) the anime-lists mapping puts the AniDB entry's episodes in."""
+    return sorted({season for season, _a, _b in mapped_ranges(conn, entries, tvdb_id)})
+
+
+def covered_seasons(ranges: list[tuple[int, int, int]], episodes: int) -> list[int] | None:
+    """The TVDB seasons an entry of `episodes` episodes fills, when it starts at the first
+    mapped episode: exactly the first season(s) whose last episode is its last (AniList 435:
+    20 episodes = S1 of the 49-episode AniDB entry). None when its count ends inside a season or
+    the mapping does not start at 1 — it is then not known which seasons it fills."""
+    if not ranges or ranges[0][1] != 1:
+        return None
+    seasons: list[int] = []
+    for season, _first, last in ranges:
+        if season not in seasons:
+            seasons.append(season)
+        if last == episodes:
+            return seasons
+    return None
+
+
+def _entry_episodes(c: Candidate) -> int | None:
+    """AniList's own episode count for the candidate (given, else read once; None = unknown)."""
+    if c.episodes is not None:
+        return c.episodes
+    if c.anilist_id is None:
+        return None
+    from lcars import tvdb_vetting
+
+    return tvdb_vetting.entry_facts(c.anilist_id, c.titles).get("episodes")
 
 
 def span_levels(conn, show_id: str, numbers: list[int]):
@@ -265,13 +300,32 @@ def classify(conn, c: Candidate, dataset: list[dict], *, exclude_season_id=None)
         return Decision("new_show", tvdb_id=tvdb_id, reason="first season of a new show")
 
     seasons = {s for s in fribb_seasons if s is not None}
+    if len(seasons) > 1 and 0 not in seasons:
+        return _span_decision(conn, show, tvdb_id, sorted(seasons))  # Fribb itself lists them
     if len(seasons) != 1:
-        # Fribb names no season, or several: the episode ranges of the anime-lists mapping say
-        # which TVDB seasons the entry fills (RULEBOOK R1.22, user 10-06: place by episode range)
-        seasons = set(sorted(seasons) if len(seasons) > 1
-                      else spanned_tvdb_seasons(conn, entries, tvdb_id))
-        if len(seasons) > 1 and 0 not in seasons:
-            return _span_decision(conn, show, tvdb_id, sorted(seasons))
+        # Fribb names no season: the anime-lists episode mapping of the entry's AniDB entry says
+        # where its episodes go, and AniList's OWN episode count says how many of them are this
+        # entry's (RULEBOOK R1.22b; 10-06: AniList 435 has 20 episodes, the AniDB entry 49)
+        ranges = mapped_ranges(conn, entries, tvdb_id)
+        mapped = sorted({r[0] for r in ranges})
+        if len(mapped) == 1:
+            seasons = set(mapped)
+        elif len(mapped) > 1:
+            count = _entry_episodes(c)
+            fills = covered_seasons(ranges, count) if count else None
+            if fills is None:
+                total = max(r[2] for r in ranges)
+                said = f"AniList says {count} episodes" if count else "AniList's episode count" \
+                    " can't be read"
+                return Decision(
+                    "needs_user", show["id"], tvdb_id=tvdb_id, reason=NO_SEASON + ": " + said
+                    + f", anime-lists maps {total} over TVDB seasons "
+                    + ", ".join(f"S{n}" for n in mapped),
+                    proposal=f"which season of {_show_titles(show)[0]}? (\"season 2\" in the note,"
+                             " with your TVDB id)")
+            seasons = set(fills)
+            if len(seasons) > 1 and 0 not in seasons:
+                return _span_decision(conn, show, tvdb_id, sorted(seasons))
     if len(seasons) != 1:
         return Decision("needs_user", show["id"], tvdb_id=tvdb_id, reason=NO_SEASON,
                         proposal=f"which season of {_show_titles(show)[0]}? (\"season 2\" in the"

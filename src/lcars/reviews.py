@@ -120,7 +120,7 @@ def _use_tvdb_id(conn, row, payload: dict, candidate, note: str | None) -> None:
     candidate.tvdb_id = int(m.group())
     decision = add_check.classify(conn, candidate, fribb.load_dataset())
     season = re.search(r"season\s*(\d+)", note or "", re.I)
-    if decision.kind == "needs_user" and decision.reason == add_check.NO_SEASON and season:
+    if decision.kind == "needs_user" and decision.reason.startswith(add_check.NO_SEASON) and season:
         # you named the season too ("season 2"): your word on which one, the rest as usual
         show = add_check._tracked_show_for_tvdb(conn, candidate.tvdb_id)
         decision = add_check.place_in_season(conn, candidate, show, candidate.tvdb_id,

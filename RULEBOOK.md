@@ -275,7 +275,11 @@ show X
 - **R1.22b An entry that fills several whole TVDB seasons is placed by its episode range**
   `[decided 2026-10-06]`: when Fribb gives an entry's TVDB id but no single season, the
   anime-lists episode mapping (AniDB season 1 ranges) says which TVDB seasons its episodes fill
-  (Magic Knight Rayearth, AniList 435: 49 episodes = TVDB S1 1–20 + S2 21–49). One season: it
+  (the AniDB entry of Magic Knight Rayearth: 49 episodes = TVDB S1 1–20 + S2 21–49). `[corrected 2026-10-06]` The mapping is
+  of the **AniDB** entry; **AniList's own episode count** says how many of those episodes are this
+  entry's (AniList 435 has 20 = TVDB S1 only; its sequel is AniList 1563, 29 episodes): the entry
+  fills the first season(s) whose last episode is its count; a count that ends inside a season,
+  or one that can't be read, asks which season. One season: it
   goes there as any entry would. Several: its ids go on **each of those levels, one entry over
   several seasons** (R1.22, as Urusei Yatsura), automatically when every one of them exists, is
   not skipped and holds no other entry. Otherwise it is yours to say, and the review says why: a
