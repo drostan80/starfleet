@@ -28,6 +28,7 @@ process `ops run` (cli.py) awaits.
 import asyncio
 import functools
 import logging
+import time
 
 from ops.lcars_client import LcarsClient, LcarsError
 
@@ -455,6 +456,42 @@ async def run_mal_reconcile_once(client: LcarsClient) -> int:
     return changed
 
 
+class ListHubState:
+    """When MAL's check is next due (monotonic seconds); due at the first tick, as the separate MAL
+    loop was."""
+
+    def __init__(self, mal_interval_seconds: int, clock=time.monotonic):
+        self.mal_interval_seconds = mal_interval_seconds
+        self.clock = clock
+        self.mal_due_at = 0.0
+
+
+async def run_list_hub_once(client: LcarsClient, *, state: ListHubState) -> int:
+    """RULEBOOK R4.9 / PLAN-CODE 7.5 — the AniList and MAL checks as ONE ordered task: the AniList
+    check (with its propagation, inside `pollAnilistActivity`) first, then MAL's (inside
+    `pollMalList`) when its own interval is due, never two polls at once (they used to be two
+    loops that could overlap). A change found by one is propagated before the other is checked;
+    a check that fails is logged and does not stop the other (R4.10: a blocked check never holds
+    back the propagation of the next). The log lines keep their old names (`anilist_activity:`,
+    `mal_reconcile:`). Returns the number of changes the two reported."""
+    total = 0
+    try:
+        count = await run_anilist_activity_once(client)
+        logger.info("anilist_activity: processed %d item(s)", count)
+        total += count
+    except Exception:
+        logger.exception("anilist_activity: sweep failed, will retry next interval")
+    if state.clock() >= state.mal_due_at:
+        try:
+            count = await run_mal_reconcile_once(client)
+            logger.info("mal_reconcile: processed %d item(s)", count)
+            total += count
+        except Exception:
+            logger.exception("mal_reconcile: sweep failed, will retry next interval")
+        state.mal_due_at = state.clock() + state.mal_interval_seconds
+    return total
+
+
 async def run_memory_alpha_once(client: LcarsClient) -> int:
     """Memory Alpha cross-reference pipeline — drip-paced, self-gating.
     Runs the full 8-step pipeline (dataset refresh, ID propagation,
@@ -569,7 +606,11 @@ async def run_forever(
     mal_reconcile_interval_seconds: int = 3600,
     memory_alpha_interval_seconds: int = 1200,
 ) -> None:
-    """Four concurrent loops, not one shared cadence — B.2's own
+    """(2026-10-06: the AniList and MAL polls below are now ONE ordered task, `run_list_hub_once`,
+    on the AniList interval, MAL's check when its own interval is due; the paragraphs that follow
+    describe them as the separate loops they were.)
+
+    Four concurrent loops, not one shared cadence — B.2's own
     weekly tier is self-gating (dueForSeasonReconciliation only ever
     returns a season once it's genuinely 7+ days stale, regardless of
     how often it's checked), so it rides the same cadence as B.1's daily
@@ -643,17 +684,13 @@ async def run_forever(
             "monthly+catalog_presence+show_merge",
         ),
         _availability_loop(client),
-        _loop(
-            run_anilist_activity_once,
+        _loop(  # R4.9 / 7.5: AniList, then MAL when its interval is due: one ordered task
+            functools.partial(
+                run_list_hub_once, state=ListHubState(mal_reconcile_interval_seconds)
+            ),
             client,
             anilist_activity_interval_seconds,
-            "anilist_activity",
-        ),
-        _loop(
-            run_mal_reconcile_once,
-            client,
-            mal_reconcile_interval_seconds,
-            "mal_reconcile",
+            "list_hub",
         ),
         _loop(
             run_memory_alpha_once,

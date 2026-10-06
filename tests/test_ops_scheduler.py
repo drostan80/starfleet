@@ -616,10 +616,65 @@ async def test_loop_survives_a_non_lcars_error_and_keeps_ticking(monkeypatch):
     assert len(sleep_calls) == 2
 
 
+# --- run_list_hub_once (R4.9 / 7.5: AniList then MAL as one ordered task) ----
+
+
+class _HubClient(_FakeClient):
+    def __init__(self, order, *, anilist_fails=False, mal_fails=False):
+        super().__init__()
+        self.order, self.anilist_fails, self.mal_fails = order, anilist_fails, mal_fails
+
+    async def poll_anilist_activity(self):
+        self.order.append("anilist")
+        if self.anilist_fails:
+            raise RuntimeError("AniList down")
+        return {"activitiesSeen": 2, "reconcileResult": None}
+
+    async def poll_mal_list(self):
+        self.order.append("mal")
+        if self.mal_fails:
+            raise RuntimeError("MAL down")
+        return {"seasonsChecked": 1, "notMatchedOnMal": 0, "showsStatusUpdated": 1,
+                "episodesBackfilled": 0, "ambiguousMalIdConflicts": 0}
+
+
+async def test_list_hub_checks_anilist_then_mal_and_mal_only_when_its_interval_is_due():
+    from ops.scheduler import ListHubState, run_list_hub_once
+
+    now = [1000.0]
+    state = ListHubState(3600, clock=lambda: now[0])
+    order = []
+    client = _HubClient(order)
+    assert await run_list_hub_once(client, state=state) == 3  # 2 activities + 1 MAL change
+    assert order == ["anilist", "mal"]
+    now[0] += 240
+    assert await run_list_hub_once(client, state=state) == 2  # MAL not due yet
+    assert order == ["anilist", "mal", "anilist"]
+    now[0] += 3600
+    await run_list_hub_once(client, state=state)
+    assert order[-2:] == ["anilist", "mal"]
+
+
+async def test_list_hub_a_failing_check_does_not_stop_the_other(caplog):
+    from ops.scheduler import ListHubState, run_list_hub_once
+
+    order = []
+    state = ListHubState(3600, clock=lambda: 0.0)
+    with caplog.at_level("INFO"):
+        n = await run_list_hub_once(_HubClient(order, anilist_fails=True), state=state)
+    assert order == ["anilist", "mal"] and n == 1
+    assert "anilist_activity: sweep failed" in caplog.text
+    assert "mal_reconcile: processed 1 item(s)" in caplog.text
+    order.clear()
+    state = ListHubState(3600, clock=lambda: 0.0)
+    assert await run_list_hub_once(_HubClient(order, mal_fails=True), state=state) == 2
+    assert order == ["anilist", "mal"]
+
+
 # --- run_forever (wiring only — each loop's own behavior is covered above) --
 
 
-async def test_run_forever_wires_up_all_six_loops(monkeypatch):
+async def test_run_forever_wires_up_all_five_loops(monkeypatch):
     calls = []
 
     async def fake_loop(coro_fn, client, interval_seconds, label):
@@ -651,8 +706,7 @@ async def test_run_forever_wires_up_all_six_loops(monkeypatch):
         # Monthly now checks LCARS's persisted checkpoint on the hourly
         # cadence rather than sleeping 30 days in-process (2026-09-23).
         ("run_monthly_if_due", 3600, "monthly+catalog_presence+show_merge"),
-        ("run_anilist_activity_once", 240, "anilist_activity"),
-        ("run_mal_reconcile_once", 3600, "mal_reconcile"),
+        ("run_list_hub_once", 240, "list_hub"),
         ("run_memory_alpha_once", 1200, "memory_alpha"),
     }
     assert availability_calls == [client]
@@ -671,7 +725,7 @@ async def test_run_forever_defaults_anilist_activity_interval_to_240s(monkeypatc
     monkeypatch.setattr("ops.scheduler._availability_loop", fake_availability_loop)
     client = _FakeClient()
     await run_forever(client, interval_seconds=3600, monthly_interval_seconds=2592000)
-    assert ("run_anilist_activity_once", 240, "anilist_activity") in calls
+    assert ("run_list_hub_once", 240, "list_hub") in calls
 
 
 # --- startup wait for LCARS (2026-09-23) ---
