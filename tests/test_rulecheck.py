@@ -107,6 +107,32 @@ def test_planted_violations_are_found(db_path):
     assert found["R1.14"].count == 1  # both tracked shows carry tvdb 100
 
 
+def test_season_zero_is_exempt_from_r2_14_and_r2_7(db_path):
+    """User 10-06: a special (season 0) may be partly watched and stay planned, or be completed
+    with pieces unwatched; a TVDB season still may not."""
+    _show(db_path, "s-eeeeee", "Specials Show", status="watching")
+    _season(db_path, "z-eeeee1", "s-eeeeee", 1, "watching", 1, 2)
+    _episode(db_path, "e-eeeee1", "s-eeeeee", "z-eeeee1", 1, 1, 1)
+    _episode(db_path, "e-eeeee2", "s-eeeeee", "z-eeeee1", 1, 2, 2)
+    # two special levels (kind special, no season number), spans 1.1-1.2 and 2.1-2.2
+    cases = (("z-eeeee2", "planned", 11.1, 11.2, "a", "b", 1),
+             ("z-eeeee3", "completed", 12.1, 12.2, "c", "d", 3))
+    for zid, status, lo, hi, ea, eb, first in cases:
+        _write(db_path, "INSERT INTO season (id, show_id, season_number, kind, label, source,"
+               " status, created_at, updated_at) VALUES (?, 's-eeeeee', NULL, 'special', ?,"
+               " 'manual', ?, ?, ?)", (zid, zid, status, NOW, NOW))
+        _write(db_path, "INSERT INTO season_span (season_id, abs_from, abs_to) VALUES (?, ?, ?)",
+               (zid, lo, hi))
+        _episode(db_path, f"e-eeeee{ea}", "s-eeeeee", zid, 0, first, lo, state="watched")
+        _episode(db_path, f"e-eeeee{eb}", "s-eeeeee", zid, 0, first + 1, hi, state="unwatched")
+    found = _by_rule(db_path)
+    assert found["R2.14"].count == 0 and found["R2.7"].count == 0
+    # the same shapes on a TVDB season are still violations
+    _write(db_path, "UPDATE season SET status = 'planned' WHERE id = 'z-eeeee1'")
+    _write(db_path, "UPDATE episode SET state = 'unwatched' WHERE id = 'e-eeeee2'")
+    assert _by_rule(db_path)["R2.14"].count == 1
+
+
 def test_database_is_opened_read_only(db_path):
     conn = rulecheck.open_readonly(str(db_path))
     with pytest.raises(sqlite3.OperationalError):

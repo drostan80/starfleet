@@ -332,6 +332,9 @@ An episode can be unaired but watched (pre-air showing, leak…).
   manually only**, with one exception: R2.14 (planned season + an episode
   watched). `[clarified 2026-09-27, Q-B]`
 - **R2.7 completed**
+  - `[decided 2026-10-06]` **Season 0 is exempt** from "completed has every episode watched"
+    (levels of kind `special`): a special can be completed with pieces left unwatched
+    (`lcars rulecheck` does not report it);
   - automatic when all episodes within are watched;
   - may be set manually → **sets all its episodes watched** (mirrors AniList, which
     marks every episode of a season watched when the season is set completed);
@@ -419,6 +422,9 @@ An episode can be unaired but watched (pre-air showing, leak…).
     seasons (this replaces "later seasons → planned" above).
 - **R2.14** Season planned + one episode set watched → season watching. This is
   the **only** automatic path to watching (R2.6). `[clarified 2026-09-27, Q-B]`
+  `[decided 2026-10-06]` **Season 0 is exempt** (specials, OVAs, films of a series: the levels of
+  kind `special`): a special can be partly watched and stay planned. `lcars rulecheck` does not
+  report it.
 - **R2.15** All episodes of a level with an id watched → that level completed —
   also when that level is paused or dropped. `[clarified 2026-09-27, Q-K2]`
   Conversely, a level set completed → all episodes mapped to it watched.
@@ -900,4 +906,5 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-10-05 — R1.10a (an entry is placed by its episodes: a part of the TVDB season they sit in, or a season level only until TVDB has them; never by Fribb's order; Kusuriya's fake S4).
 - 2026-10-05 — R1.2g (provisional episodes from Syoboi until TVDB has them: anime, +3 after the last aired, at most 6 past TVDB's last); R1.22a (Syoboi ids per level, matched to episodes by air date).
 - 2026-10-06 — R1.22b (an entry filling several whole TVDB seasons is placed by its anime-lists episode range, one entry over those levels); R1.11w-note (a count difference is information, not a review); R3.7d-review (add-check reviews take a TVDB id from the note, and carry AniList/MAL/TVDB/Sonarr links).
+- 2026-10-06 — R2.14 and R2.7: season 0 (levels of kind special) exempt from both (rulecheck only; the status engine is unchanged).
 - 2026-10-06 (v0.4.6) — R3.7c built (independent sources: Fribb+anime-lists = one), R3.7d guarded, R3.7f link provenance + recheck (8.8.5), 8.8.3 evidence on the review, R4.9 one ordered list-hub task.

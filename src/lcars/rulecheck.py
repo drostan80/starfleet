@@ -380,10 +380,16 @@ def _level_counts(conn):
     return out
 
 
+def _is_season_zero(lvl) -> bool:
+    """A season-0 level (specials, OVAs, films of a series): R2.14 and R2.7 do not apply to it
+    (user 10-06) — you watch some of a special's pieces and leave the rest."""
+    return lvl["kind"] == "special" or lvl["season_number"] == 0
+
+
 def check_planned_with_watched_episode(conn):
-    title = "A planned season with an episode watched is watching"
+    title = "A planned season with an episode watched is watching (not season 0)"
     bad = [f"{show} {label} ({w}/{n} watched)" for lvl, show, label, n, w in _level_counts(conn)
-           if lvl["status"] == "planned" and 0 < w < n]
+           if lvl["status"] == "planned" and 0 < w < n and not _is_season_zero(lvl)]
     return Finding("R2.14", title, "violation", len(bad), bad[:SAMPLE_SIZE])
 
 
@@ -403,9 +409,9 @@ def check_all_watched_is_completed(conn):
 
 
 def check_completed_has_all_watched(conn):
-    title = "A completed season has every episode watched"
+    title = "A completed season has every episode watched (not season 0)"
     bad = [f"{show} {label} ({w}/{n} watched)" for lvl, show, label, n, w in _level_counts(conn)
-           if lvl["status"] == "completed" and w < n]
+           if lvl["status"] == "completed" and w < n and not _is_season_zero(lvl)]
     return Finding("R2.7", title, "violation", len(bad), bad[:SAMPLE_SIZE])
 
 
