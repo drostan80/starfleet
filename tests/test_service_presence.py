@@ -397,6 +397,33 @@ def test_sonarr_catalog_match_backfills_a_real_deep_link(conn, monkeypatch):
     assert link["url"] == "http://sonarr.local/series/attack-on-titan"
 
 
+def test_a_renamed_series_gets_its_sonarr_link_corrected_matched_by_tvdb_id(conn, monkeypatch):
+    """Magic Repo Man (user 10-07): TVDB renamed the series, Sonarr's titleSlug changed with it,
+    and the link LCARS stored at add time stayed dead (the id is read-only on the show page)."""
+    _configure_sonarr()
+    config.get_current().sonarr_public_url = "http://sonarr.local"
+    _add_show(conn, "s-svp040", title_romaji="Magic Repo Man")
+    _link(conn, "s-svp040", "tvdb", "470347")
+    _link(conn, "s-svp040", "sonarr", "magic-repo-man")
+    conn.execute("UPDATE show_external_id SET url = 'http://sonarr.local/series/magic-repo-man'"
+                 " WHERE show_id = 's-svp040' AND service = 'sonarr'")
+    conn.commit()
+    new_slug = "magic-repo-man-dumped-by-my-party-ill-cash-in-with-a-cute-support-fairy"
+    fake = _FakeSonarrCatalogClient([{"title": "Magic Repo Man: Dumped by My Party",
+                                      "titleSlug": new_slug, "tvdbId": 470347}])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    service_presence.refresh_catalog_presence(conn)
+    link = _external_id(conn, "s-svp040", "sonarr")
+    assert link["external_id"] == new_slug
+    assert link["url"] == f"http://sonarr.local/series/{new_slug}"
+    # a show whose tvdb id is not the catalog entry's keeps its link (title match never replaces)
+    _add_show(conn, "s-svp041", title_romaji="Magic Repo Man Two")
+    _link(conn, "s-svp041", "tvdb", "999")
+    _link(conn, "s-svp041", "sonarr", "keep-me")
+    service_presence.refresh_catalog_presence(conn)
+    assert _external_id(conn, "s-svp041", "sonarr")["external_id"] == "keep-me"
+
+
 def test_radarr_catalog_match_backfills_a_real_deep_link(conn, monkeypatch):
     _configure_radarr()
     cfg = config.get_current()

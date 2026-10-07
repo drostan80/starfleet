@@ -154,7 +154,8 @@ def _refresh_sonarr_presence(conn) -> int:
         # had a similar name.
         series = by_tvdb.get(tvdb_of.get(show["id"]) or "")
         if series is not None and series.get("titleSlug"):
-            shows_module.write_arr_external_id(conn, show["id"], "episodic", series["titleSlug"])
+            shows_module.write_arr_external_id(
+                conn, show["id"], "episodic", series["titleSlug"], replace=True)
     return updated
 
 
@@ -192,7 +193,8 @@ def _refresh_radarr_presence(conn) -> int:
         # 2026-09-23 — link only on an ID match (tmdbId), same as Sonarr above.
         movie = by_tmdb.get(tmdb_of.get(show["id"]) or "")
         if movie is not None and movie.get("titleSlug"):
-            shows_module.write_arr_external_id(conn, show["id"], "movie", movie["titleSlug"])
+            shows_module.write_arr_external_id(
+                conn, show["id"], "movie", movie["titleSlug"], replace=True)
     return updated
 
 

@@ -1247,7 +1247,9 @@ def _ensure_in_arr(conn, input: dict, candidate: dict) -> dict:
     }
 
 
-def write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str) -> None:
+def write_arr_external_id(
+    conn, show_id: str, media_shape: str, title_slug: str, replace: bool = False
+) -> None:
     """2026-08-18 — a real deep link into the *local* Sonarr/Radarr web
     UI (their own `/series/{slug}`/`/movie/{slug}` route) as a
     `show_external_id` row, same shape every tvdb/anilist/imdb/mal/tmdb
@@ -1274,11 +1276,14 @@ def write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str)
     won't carry a sonarr/radarr entry for such a show, same as any
     other unlinked external id.
 
-    `INSERT OR IGNORE`, not upsert — same as every other external-id
-    insert in this module; once a real link exists for a show+service
-    there's nothing to update (the URL is a stable function of
-    title_slug, which Sonarr/Radarr don't change under an existing
-    entry).
+    `INSERT OR IGNORE` by default — same as every other external-id
+    insert in this module. **`replace=True` (2026-10-07, user)** updates an
+    existing link whose slug differs: Sonarr/Radarr DO change an entry's
+    `titleSlug` when TVDB/TMDB renames the series (Magic Repo Man, The
+    Cold Sato-san, Beast King War God Dandivine kept a stale slug and a
+    dead deep link, and the id is read-only on the show page). Only the
+    catalog sweep passes it: it matches by tvdb/tmdb id, so the slug it
+    holds is Sonarr's own for that very show.
 
     Uses `sonarr_public_url`/`radarr_public_url` (config.py), NOT
     `sonarr_url`/`radarr_url` — a real bug caught live 2026-08-18: the
@@ -1296,11 +1301,19 @@ def write_arr_external_id(conn, show_id: str, media_shape: str, title_slug: str)
     if not base_url:
         return
     url = f"{base_url.rstrip('/')}/{path}/{title_slug}"
-    conn.execute(
-        "INSERT OR IGNORE INTO show_external_id (show_id, service, external_id, url, created_at)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (show_id, service, title_slug, url, util.now_utc_iso()),
-    )
+    if replace:
+        sql = (
+            "INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+            " VALUES (?, ?, ?, ?, ?) ON CONFLICT (show_id, service) DO UPDATE SET"
+            " external_id = excluded.external_id, url = excluded.url"
+            " WHERE show_external_id.external_id != excluded.external_id"
+        )
+    else:
+        sql = (
+            "INSERT OR IGNORE INTO show_external_id (show_id, service, external_id, url,"
+            " created_at) VALUES (?, ?, ?, ?, ?)"
+        )
+    conn.execute(sql, (show_id, service, title_slug, url, util.now_utc_iso()))
     conn.commit()
 
 
