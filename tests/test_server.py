@@ -8414,7 +8414,8 @@ async def test_reconcile_season_mapping_discrepancy_applies_immediately_and_logs
     reviews = [r for r in all_reviews if r["field"] == "anilist_id"]
     assert len(reviews) == 1
     assert reviews[0]["previousValue"] == "111"
-    assert reviews[0]["proposedValueChain"] == ["999"]
+    assert reviews[0]["proposedValueChain"] == [
+        "Fribb changed this season's AniList ID from 111 to 999"]
 
     # a THIRD disagreement before the first is ever resolved extends the
     # same entry's value chain rather than opening a duplicate (§5.6)
@@ -8426,7 +8427,10 @@ async def test_reconcile_season_mapping_discrepancy_applies_immediately_and_logs
     reviews = [r for r in all_reviews if r["field"] == "anilist_id"]
     assert len(reviews) == 1  # still one entry, not two
     assert reviews[0]["previousValue"] == "111"  # unchanged — value before the FIRST change
-    assert reviews[0]["proposedValueChain"] == ["999", "777"]
+    assert reviews[0]["proposedValueChain"] == [
+        "Fribb changed this season's AniList ID from 111 to 999",
+        "Fribb changed this season's AniList ID from 999 to 777",
+    ]
 
 
 async def test_season_query_resolves_by_id(client, monkeypatch):

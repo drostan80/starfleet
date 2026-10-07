@@ -909,6 +909,7 @@
     if (r.field === 'anilist_push') return 'AniList push';
     if (r.field === 'mal_push') return 'MAL push';
     if (r.field === 'anilist_id') return r.entityType === 'season' ? 'season AniList ID' : 'AniList ID (season 1)';
+    if (r.field === 'mal_id') return r.entityType === 'season' ? 'season MAL ID' : 'MAL ID';
     if (r.field === 'metadata_fetch') return 'metadata fetch';
     if (r.field === 'air_date_utc') return 'air date';
     if (r.field === 'tvdb_consolidation_season_collision') return 'season collision';
@@ -984,7 +985,7 @@
     const pillLabel = f => {
       const labels = {
         sequel_season: 'sequel season', anilist_push: 'AniList push', mal_push: 'MAL push',
-        anilist_id: 'AniList ID', metadata_fetch: 'metadata fetch', air_date_utc: 'air date',
+        anilist_id: 'AniList ID', mal_id: 'MAL ID', metadata_fetch: 'metadata fetch', air_date_utc: 'air date',
         score: 'score', sonarr_unmonitor: 'sonarr unmonitor', radarr_unmonitor: 'radarr unmonitor',
         tvdb_consolidation_season_collision: 'season collision', cross_service_merge: 'possible duplicate',
         sonarr_deleted: 'deleted from Sonarr', radarr_deleted: 'deleted from Radarr',

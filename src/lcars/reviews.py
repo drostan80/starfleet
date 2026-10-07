@@ -27,6 +27,9 @@ Kinds with choices:
   individual season.
 - `tvdb_recheck` — Fribb later gives another TVDB id than the stored link (8.8.5): keep mine /
   Fribb's is right (corrected on the show page, where Sonarr moves with it).
+- `anilist_id` / `mal_id` from Fribb (user 10-07) — says what Fribb did ("Fribb added MAL ID 62922
+  for this season"), already applied; the one choice is **Confirm** (you have seen the log; the
+  queue clears).
 - `anilist_id` (a schedule far from Sonarr's dates) — the AniList link is right, ignore the gap
   (remembered: it is not opened again for the same finding). A season that follows a schedule
   you chose is not checked at all.
@@ -67,7 +70,21 @@ LABELS = {
     "unlock": "Release the lock without confirming",
     "acknowledge": "Understood, leave it as it is",
     "link_ok": "The AniList link is right — ignore this gap",
+    "confirm": "Confirm",
 }
+
+ID_LABELS = {"anilist_id": "AniList", "mal_id": "MAL"}
+
+
+def fribb_message(field: str, old, new) -> str:
+    """What Fribb's reconcile did to a season's AniList/MAL id, in words (a review that only
+    records what LCARS did: the effect is already applied, you confirm having seen it)."""
+    label = ID_LABELS[field]
+    if old is None and new is not None:
+        return f"Fribb added {label} ID {new} for this season"
+    if new is None and old is not None:
+        return f"Fribb no longer gives this season a {label} ID (it was {old})"
+    return f"Fribb changed this season's {label} ID from {old} to {new}"
 
 
 class ReviewError(ValueError):
@@ -82,9 +99,9 @@ class ReviewError(ValueError):
 
 def open_review(
     conn, entity_type: str, entity_id: str, field: str, source: str, value: str,
-    choices: list[str], payload: dict, show_id: str | None = None,
+    choices: list[str], payload: dict, show_id: str | None = None, previous=None,
 ) -> None:
-    pending_review.open_or_extend(conn, entity_type, entity_id, field, source, None, value)
+    pending_review.open_or_extend(conn, entity_type, entity_id, field, source, previous, value)
     conn.execute(
         "UPDATE pending_review SET choices = ?, payload = ?, show_id = ?"
         " WHERE entity_type = ? AND entity_id = ? AND field = ? AND resolved_at IS NULL",

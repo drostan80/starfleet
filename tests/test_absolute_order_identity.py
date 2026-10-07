@@ -273,6 +273,38 @@ def test_season_identity_from_tvdb_coordinates_before_any_anidb_mapping(conn):
     assert s4["anilist_id"] == 3003
 
 
+def test_a_fribb_id_change_says_what_happened_and_is_confirmed_not_dismissed(conn):
+    """User 10-07: the review held only "62922" and a Dismiss button. It says what Fribb did, links
+    the show, and its one choice is Confirm (the id is already applied; you confirm the log)."""
+    import json
+
+    from lcars import reviews
+
+    season_mapping.reconcile_season(conn, SHOW, 4, tvdb_coords={(3, 1), (3, 2)})
+    review = conn.execute(
+        "SELECT * FROM pending_review WHERE entity_id = 'z-sea004' AND field = 'anilist_id'"
+        " AND source = 'fribb'").fetchone()
+    assert json.loads(review["proposed_value_chain"])[-1] == (
+        "Fribb added AniList ID 3003 for this season")
+    assert [c["id"] for c in json.loads(review["choices"])] == ["confirm"]
+    assert json.loads(review["choices"])[0]["label"] == "Confirm"
+    assert review["show_id"] == SHOW
+    reviews.resolve_choice(conn, review["id"], "confirm", "holodeck", None)
+    row = conn.execute("SELECT resolved_at, resolution_note FROM pending_review WHERE id = ?",
+                       (review["id"],)).fetchone()
+    assert row["resolved_at"] is not None and row["resolution_note"] == "Confirm"
+    assert conn.execute("SELECT anilist_id FROM season WHERE id = 'z-sea004'").fetchone()[0] == 3003
+
+
+def test_fribb_messages_cover_added_changed_and_removed():
+    from lcars import reviews
+
+    message = reviews.fribb_message
+    assert message("mal_id", None, 62922) == "Fribb added MAL ID 62922 for this season"
+    assert message("anilist_id", 1, 2) == "Fribb changed this season's AniList ID from 1 to 2"
+    assert message("mal_id", 5, None) == "Fribb no longer gives this season a MAL ID (it was 5)"
+
+
 def test_ambiguous_evidence_leaves_the_stored_id_alone(conn):
     conn.execute("UPDATE season SET anilist_id = 3003, source = 'fribb' WHERE id = 'z-sea004'")
     conn.commit()

@@ -12,7 +12,7 @@ confirmed by the pre-existing `test_server.py`/`test_fribb.py` coverage
 still passing unchanged.
 """
 
-from lcars import anidb, fribb, ids, pending_review, season_ranges, sonarr_match, util
+from lcars import anidb, fribb, ids, pending_review, reviews, season_ranges, sonarr_match, util
 
 
 def reconcile_season(
@@ -147,14 +147,16 @@ def reconcile_season(
 
     if existing is not None:
         season_id = existing["id"]
-        if existing["anilist_id"] != anilist_id:
-            pending_review.open_or_extend(
-                conn, "season", season_id, "anilist_id", "fribb", existing["anilist_id"], anilist_id
-            )
-        if existing["mal_id"] != mal_id:
-            pending_review.open_or_extend(
-                conn, "season", season_id, "mal_id", "fribb", existing["mal_id"], mal_id
-            )
+        for field, old, new in (("anilist_id", existing["anilist_id"], anilist_id),
+                                ("mal_id", existing["mal_id"], mal_id)):
+            if old != new:
+                # says what Fribb did; already applied below — you confirm having seen it
+                reviews.open_review(
+                    conn, "season", season_id, field, "fribb",
+                    reviews.fribb_message(field, old, new), ["confirm"],
+                    {"season_id": season_id, "field": field, "previous": old, "new": new},
+                    show_id=show_id, previous=old,
+                )
         conn.execute(
             "UPDATE season"
             " SET anilist_id = ?, mal_id = ?, source = ?, matched = ?,"
