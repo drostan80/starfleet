@@ -88,16 +88,20 @@ rule applies to TV series, ask — do not assume.
   fills an episode only when no timed one exists, and a timed one replaces a date-only value
   within three days of it. The Japanese day of a time is its **JST date** — AniDB's dates and
   AniList's start dates are compared on that, never on the UTC date.
-  **Proposed details, built but not yet confirmed by you** `[proposed 2026-10-07]` — these are
-  Claude's choices and become rules only on your yes: (a) "end of the local day" is Japan
-  (UTC+9) for anime and UTC-8 (the latest US zone) for everything else, a date-only value being
-  a day with no known zone; (b) a timed candidate replaces a date-only value within **three
-  days** of it; (c) a TV series whose air time in Sonarr is exactly **00:00** has no air time
-  (Last Seen: files land ~01:20Z against Sonarr's 04:00Z) while 03:00 weekly drops keep theirs
-  (Reacher, Strange New Worlds: files 0.2–0.5 h after it); (d) inside a season still airing, an anime
-  episode that aired more than **45 days** ago keeps its date when a source moves; (e) a Sonarr/TVDB date more than **60 days** from what a broadcast-aware source holds is not applied over it (a wrong link's dates, not a reschedule); (f) the change icons' baseline is
-  re-taken when a source gains or loses an air time, and an AniList schedule an open
-  wrong-entry review distrusts is a candidate to choose but never applied automatically.
+  **Decisions (not rules)** `[confirmed by you 2026-10-07]` — choices made while building R1.0b and
+  R1.0e. They are decisions, open to being discussed again whenever a need arises; the rules
+  above them are not: a rule changes only on your absolute, informed confirmation.
+  (a) "End of the local day" is Japan (UTC+9) for anime and UTC-8 (the latest US zone) for
+  everything else, a date-only value being a day with no known zone; (b) a timed candidate
+  replaces a date-only value within **three days** of it; (c) a TV series whose air time in
+  Sonarr is exactly **00:00** has no air time (Last Seen: files land ~01:20Z against Sonarr's
+  04:00Z) while 03:00 weekly drops keep theirs (Reacher, Strange New Worlds: files 0.2–0.5 h
+  after it); (d) inside a season still airing, an anime episode that aired more than **45 days**
+  ago keeps its date when a source moves; (e) a Sonarr/TVDB date more than **60 days** from what
+  a broadcast-aware source holds is not applied over it (a wrong link's dates, not a reschedule);
+  (f) the change icons' baseline is re-taken when a source gains or loses an air time, and an
+  AniList schedule an open wrong-entry review distrusts is a candidate to choose but never
+  applied automatically.
 - **R1.2** Episodes are ordered by **absolute episode number**, derived from AniDB,
   Fribb and other sources. On disagreement, or where disambiguation is needed,
   order by **air date-time**.

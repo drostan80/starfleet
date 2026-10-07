@@ -27,12 +27,9 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
   episodes cloned from S1's broadcasts. Cleaned: 13 dates cleared, 60 provisional rows deleted. Guards (RULEBOOK R1.6a): the AniList writer skips an id another level
   holds and a schedule that starts before the previous season ended; the provisional plan refuses a season that starts before the previous one ended; rulecheck
   R1.6-copy (violation, announced seasons only; aired history such as Dr. Slump / Pokémon is never listed). A season is now airing / planned / history (user's rule: target airing AND planned
-  seasons); planned is refreshed WEEKLY, airing daily, history never. **OPEN (user's call): three completed shows (A-Rank Party, The Fable,
-  Saijaku Tamer) hold their unreleased S2 as COMPLETED with the TBA episode watched, and LCARS wrote COMPLETED/progress 1 to AniList for those 3 NOT_YET_RELEASED
-  "2nd Season" entries on 09-30 (list_baseline); origin (your list or the cutover write) unknown. R2.7/R2.16 say planned, episode unwatched — would push PLANNING to AniList.**
-- ⚠ **Before deploying:** the user must confirm the *proposed details* at the end of R1.0e (UTC-8 end of day for non-anime, 3-day upgrade window, TV 00:00 = no time,
-  45-day history); icons count only from the first refresh after deploy; **Android APK rebuild** needed for the icons/all-day display; dry run on a prod copy: see the
-  report in the session (≈300 episodes in 18 shows change, almost all TV streamers turning date-only).
+  seasons); planned is refreshed WEEKLY, airing daily, history never. The three completed shows (A-Rank Party, The Fable, Saijaku Tamer) held their unreleased S2 as COMPLETED: the user set them to planned by hand 10-07, no issue.
+- ✅ The R1.0e details (UTC-8 end of day for non-anime, 3-day upgrade window, TV 00:00 = no time, 45-day history, 60-day Sonarr guard) are CONFIRMED decisions (not rules) 10-07; v0.4.7 is LIVE; icons count only from the first refresh; **Android APK rebuild** needed for the icons/all-day display; dry run on a prod copy: see the
+  **Android APK rebuild** still needed for the icons, the always-visible play triangle and the all-day display.
 
 ### A. Left over from the rebuild
 
