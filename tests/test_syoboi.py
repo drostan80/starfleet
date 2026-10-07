@@ -272,8 +272,11 @@ class TestFillAirdateGaps:
                     ('sonarr','anilist','animeschedule','manual','tvmaze','anidb','syoboi')),
                 sonarr_season INTEGER, sonarr_episode INTEGER,
                 created_at TEXT, updated_at TEXT, state TEXT DEFAULT 'unwatched',
+                season_id TEXT, air_precision TEXT, air_local_date TEXT, air_aired_at TEXT,
                 UNIQUE(show_id, season, episode)
             );
+            CREATE TABLE season_air_choice (
+                season_id TEXT PRIMARY KEY, source TEXT, channel TEXT, chosen_at TEXT);
             CREATE TABLE episode_anidb_mapping (
                 episode_id TEXT, anidb_anime_id INTEGER,
                 anidb_season INTEGER, anidb_epno INTEGER
@@ -300,13 +303,13 @@ class TestFillAirdateGaps:
             INSERT INTO episode VALUES (
                 'e-000001', 's-001', 1, 1, 'regular',
                 NULL, NULL, 1, 1,
-                '2023-01-01', '2023-01-01', 'unwatched'
+                '2023-01-01', '2023-01-01', 'unwatched', NULL, NULL, NULL, NULL
             );
             -- Episode with existing airdate (should NOT be overwritten)
             INSERT INTO episode VALUES (
                 'e-000002', 's-001', 1, 2, 'regular',
                 '2023-10-13T00:00:00Z', 'sonarr', 1, 2,
-                '2023-01-01', '2023-01-01', 'unwatched'
+                '2023-01-01', '2023-01-01', 'unwatched', NULL, NULL, NULL, NULL
             );
 
             -- AniDB mappings (both under primary anidb_anime_id 1000)
@@ -375,8 +378,11 @@ class TestFillAirdateGaps:
                     ('sonarr','anilist','animeschedule','manual','tvmaze','anidb','syoboi')),
                 sonarr_season INTEGER, sonarr_episode INTEGER,
                 created_at TEXT, updated_at TEXT, state TEXT DEFAULT 'unwatched',
+                season_id TEXT, air_precision TEXT, air_local_date TEXT, air_aired_at TEXT,
                 UNIQUE(show_id, season, episode)
             );
+            CREATE TABLE season_air_choice (
+                season_id TEXT PRIMARY KEY, source TEXT, channel TEXT, chosen_at TEXT);
             CREATE TABLE episode_anidb_mapping (
                 episode_id TEXT, anidb_anime_id INTEGER,
                 anidb_season INTEGER, anidb_epno INTEGER
@@ -401,7 +407,7 @@ class TestFillAirdateGaps:
             INSERT INTO episode VALUES (
                 'e-000001', 's-001', 1, 1, 'regular',
                 NULL, NULL, 1, 1,
-                '2023-01-01', '2023-01-01', 'unwatched'
+                '2023-01-01', '2023-01-01', 'unwatched', NULL, NULL, NULL, NULL
             );
             INSERT INTO episode_anidb_mapping VALUES ('e-000001', 1000, 1, 1);
 
@@ -441,8 +447,11 @@ class TestFillAirdateGaps:
                     ('sonarr','anilist','animeschedule','manual','tvmaze','anidb','syoboi')),
                 sonarr_season INTEGER, sonarr_episode INTEGER,
                 created_at TEXT, updated_at TEXT, state TEXT DEFAULT 'unwatched',
+                season_id TEXT, air_precision TEXT, air_local_date TEXT, air_aired_at TEXT,
                 UNIQUE(show_id, season, episode)
             );
+            CREATE TABLE season_air_choice (
+                season_id TEXT PRIMARY KEY, source TEXT, channel TEXT, chosen_at TEXT);
             CREATE TABLE episode_anidb_mapping (
                 episode_id TEXT, anidb_anime_id INTEGER,
                 anidb_season INTEGER, anidb_epno INTEGER
@@ -470,7 +479,7 @@ class TestFillAirdateGaps:
             INSERT INTO episode VALUES (
                 'e-s1e1', 's-001', 1, 1, 'regular',
                 NULL, NULL, 1, 1,
-                '2023-01-01', '2023-01-01', 'unwatched'
+                '2023-01-01', '2023-01-01', 'unwatched', NULL, NULL, NULL, NULL
             );
             INSERT INTO episode_anidb_mapping VALUES ('e-s1e1', 1000, 1, 1);
 
@@ -478,7 +487,7 @@ class TestFillAirdateGaps:
             INSERT INTO episode VALUES (
                 'e-s2e1', 's-001', 2, 1, 'regular',
                 NULL, NULL, 2, 1,
-                '2023-01-01', '2023-01-01', 'unwatched'
+                '2023-01-01', '2023-01-01', 'unwatched', NULL, NULL, NULL, NULL
             );
             INSERT INTO episode_anidb_mapping VALUES ('e-s2e1', 2000, 1, 1);
 
@@ -529,6 +538,7 @@ class TestRewireAirdates:
                 sonarr_season INTEGER, sonarr_episode INTEGER,
                 created_at TEXT, updated_at TEXT, state TEXT DEFAULT 'unwatched',
                 season_id TEXT,
+                air_precision TEXT, air_local_date TEXT, air_aired_at TEXT,
                 UNIQUE(show_id, season, episode)
             );
             CREATE TABLE season_air_choice (
@@ -560,19 +570,19 @@ class TestRewireAirdates:
             INSERT INTO episode VALUES (
                 'e-001', 's-001', 1, 1, 'regular',
                 '2023-10-07T00:00:00Z', 'sonarr', 1, 1,
-                '', '', 'unwatched', NULL
+                '', '', 'unwatched', NULL, NULL, NULL, NULL
             );
             -- Ep with manual date (must NOT be overwritten)
             INSERT INTO episode VALUES (
                 'e-002', 's-001', 1, 2, 'regular',
                 '2023-10-14T00:00:00Z', 'manual', 1, 2,
-                '', '', 'unwatched', NULL
+                '', '', 'unwatched', NULL, NULL, NULL, NULL
             );
             -- Ep already correct from syoboi (skip)
             INSERT INTO episode VALUES (
                 'e-003', 's-001', 1, 3, 'regular',
                 '2023-10-20T13:30:00Z', 'syoboi', 1, 3,
-                '', '', 'unwatched', NULL
+                '', '', 'unwatched', NULL, NULL, NULL, NULL
             );
 
             INSERT INTO episode_anidb_mapping VALUES ('e-001', 1000, 1, 1);

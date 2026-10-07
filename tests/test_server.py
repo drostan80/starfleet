@@ -363,7 +363,9 @@ class _FakeSonarrClient:
         self, series=None, episodes=None, error=None, lookup_results=None, add_series_result=None,
         history_page_result=None,
     ):
-        self._series = series
+        # a real Sonarr series has the air time TVDB gives it; without one its dates are days
+        # (R1.0e)
+        self._series = None if series is None else {"airTime": "20:00", **series}
         self._episodes = episodes or []
         self._error = error
         self._lookup_results = lookup_results if lookup_results is not None else []
@@ -3257,6 +3259,11 @@ async def test_backfill_show_posters_one_failure_does_not_abort_the_batch(client
 
 
 async def test_anilist_air_date_reconciliation_corrects_a_sonarr_seeded_date(client, monkeypatch):
+    from lcars import air_sources
+
+    # these fixtures use fixed dates: treat them as recent (history protection is tested apart)
+    monkeypatch.setattr(air_sources, "HISTORY_DAYS", 10**5)
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 10**5)
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
     monkeypatch.setattr(
@@ -3356,6 +3363,74 @@ async def test_a_provisional_episode_does_not_make_the_season_skip_the_anilist_d
     conn.execute("DELETE FROM episode WHERE show_id = ? AND episode = 2", (show["id"],))
     put_extra(0)  # a real second episode: the entry does not cover the season, skipped
     assert await first_episode_source() == "SONARR"
+
+
+async def test_refresh_show_metadata_schedules_only_updates_the_dates_and_adds_nothing(
+    client, monkeypatch
+):
+    """R1.0c (user 10-07): the daily pass for a planned show re-reads its schedules only — Sonarr's
+    new date for an episode LCARS holds follows into the calendar, an episode LCARS has not got
+    is not added, nothing else moves."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+
+    def _ep(number, date):
+        return {"seasonNumber": 1, "episodeNumber": number, "airDateUtc": date, "runtime": 24}
+
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1, "2026-10-04T20:00:00Z")])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, tvdbId=67890)  # PLANNED; the inline fetch holds episode 1
+    # Sonarr now moves episode 1 by a week and lists a second episode
+    fake._episodes = [_ep(1, "2026-10-11T20:00:00Z"), _ep(2, "2026-10-18T20:00:00Z")]
+    await gql(
+        client,
+        "mutation($id: ID!) { refreshShowMetadata(showId: $id, schedulesOnly: true) { id } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { episodes { edges { node { episode airDateUtc"
+        " airDateSource airChange { other } } } } } }",
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    nodes = [e["node"] for e in data["show"]["episodes"]["edges"]]
+    assert [n["episode"] for n in nodes] == [1]                  # episode 2 not added
+    assert nodes[0]["airDateUtc"] == "2026-10-11T20:00:00Z"      # the new Sonarr date followed
+    assert nodes[0]["airDateSource"] == "SONARR"
+    assert nodes[0]["airChange"] == {"other": True}               # Sonarr moved it a week
+
+
+async def test_anilist_is_not_called_and_nothing_changes_for_a_season_that_has_aired_fully(
+    client, monkeypatch
+):
+    """R1.0b (user 10-07): a season whose every episode has aired (the last over 14 days ago) is
+    history — no AniList call is spent on it and its dates never change."""
+    config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
+    monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
+    calls = []
+    schedule = {"episodes": 12, "nodes": [{"episode": 1, "airingAt": 1700000000}]}
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule",
+                        lambda anilist_id, *a, **kw: (calls.append(anilist_id), schedule)[1])
+    fake = _FakeSonarrClient(series={"id": 42}, episodes=[{
+        "seasonNumber": 1, "episodeNumber": 1, "airDateUtc": "2023-11-15T14:30:00Z",
+        "runtime": 24, "title": "Episode 1"}])
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+    show = await add_show(client, tvdbId=67890)
+    await gql(client, "mutation($id: ID!) { setSeasonMapping(showId: $id, seasonNumber: 1,"
+                      " anilistId: 12345) { id } }", {"id": show["id"]}, headers=auth_headers())
+    conn = db.get_connection()          # watched it long ago: the season is not planned any more
+    conn.execute("UPDATE season SET status = 'completed' WHERE show_id = ?", (show["id"],))
+    conn.commit()
+    calls.clear()
+    await gql(client, "mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }",
+              {"id": show["id"]}, headers=auth_headers())
+    data = await gql(client, "query($id: ID!) { show(id: $id) { episodes { edges { node {"
+                             " airDateUtc airDateSource } } } } }", {"id": show["id"]},
+                     headers=auth_headers())
+    ep = data["show"]["episodes"]["edges"][0]["node"]
+    assert (ep["airDateUtc"], ep["airDateSource"]) == ("2023-11-15T14:30:00Z", "SONARR")
+    assert calls == []
 
 
 async def test_anilist_air_date_reconciliation_does_not_overwrite_a_downloaded_episode_later(
@@ -3515,6 +3590,11 @@ async def test_anilist_air_date_reconciliation_still_applies_an_earlier_date_des
     can never legitimately become "hasn't aired yet" (the guard above),
     but AniList correctly knowing about an earlier legitimate release
     is exactly the case B.4 exists for; the guard must not block it."""
+    from lcars import air_sources
+
+    # these fixtures use fixed dates: treat them as recent (history protection is tested apart)
+    monkeypatch.setattr(air_sources, "HISTORY_DAYS", 10**5)
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 10**5)
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
     monkeypatch.setattr(
@@ -3711,6 +3791,9 @@ async def test_season_split_guard_closes_the_old_count_review_and_leaves_the_dri
     """10-06: reviews the count check opened before it stopped opening them are closed by the
     next pass that meets the mismatch; the schedule-drift review shares their entity, field and
     source and is not touched."""
+    from lcars import air_sources
+
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 10**5)  # fixed old dates: airing
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     _patch_fribb_dataset(
         monkeypatch, [{"tvdb_id": 67890, "anilist_id": 999, "mal_id": None, "season": {"tvdb": 2}}]
@@ -3851,6 +3934,11 @@ async def test_anilist_air_date_reconciliation_corrects_an_animeschedule_date_ea
     "whichever real date is earlier wins" between two different
     sources. AniList's fixture date (2025-01-01) is earlier than the
     stored animeschedule value here, so it must apply."""
+    from lcars import air_sources
+
+    # these fixtures use fixed dates: treat them as recent (history protection is tested apart)
+    monkeypatch.setattr(air_sources, "HISTORY_DAYS", 10**5)
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 10**5)
     config.set_current(config.Config(sonarr_url="http://sonarr:8989", sonarr_api_key="key"))
     monkeypatch.setattr(anilist_client, "fetch_media", lambda *a, **kw: FAKE_ANILIST_MEDIA)
     monkeypatch.setattr(
@@ -9256,6 +9344,64 @@ async def test_episodes_in_range_can_query_purely_in_the_past_windows(client, mi
     assert ids == {"e-oldold"}
 
 
+async def test_a_date_only_episode_is_in_the_window_of_its_own_local_day_for_any_zone(
+    client, migrated_db
+):
+    # R1.0e: a date-only episode is a calendar day, not an instant — a viewer in Tokyo (UTC+9) and
+    # one in Los Angeles (UTC-8) both find it on the 5th, though it is stored as the 5th 00:00Z
+    show = await add_show(client, titleRomaji="Day Show")
+    _insert_episode_with_air_date(migrated_db, "e-dayo01", show["id"], "2026-10-05T00:00:00Z")
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE episode SET air_precision = 'date', air_local_date = '2026-10-05',"
+        " air_aired_at = '2026-10-06T08:00:00Z' WHERE id = 'e-dayo01'"
+    )
+    conn.commit()
+    query = ("query($start: DateTime!, $end: DateTime!) {"
+             " episodesInRange(start: $start, end: $end) { edges { node {"
+             "   id airPrecision airLocalDate airedAt airChange { other } } } } }")
+    windows = {
+        "tokyo": ("2026-10-04T15:00:00Z", "2026-10-05T15:00:00Z"),       # the 5th in Tokyo
+        "los_angeles": ("2026-10-05T07:00:00Z", "2026-10-06T07:00:00Z"),  # the 5th in LA (UTC-7)
+        "dublin": ("2026-10-04T23:00:00Z", "2026-10-05T23:00:00Z"),
+    }
+    for _zone, (start, end) in windows.items():
+        data = await gql(client, query, variables={"start": start, "end": end},
+                         headers=auth_headers())
+        [edge] = data["episodesInRange"]["edges"]
+        assert edge["node"]["id"] == "e-dayo01"
+        node = edge["node"]
+        assert node["airPrecision"] == "DATE" and node["airLocalDate"] == "2026-10-05"
+        assert node["airedAt"] == "2026-10-06T08:00:00Z" and node["airChange"] is None
+    # the previous and the next local day do not show it
+    for start, end in (("2026-10-03T15:00:00Z", "2026-10-04T15:00:00Z"),
+                       ("2026-10-05T15:00:00Z", "2026-10-06T15:00:00Z")):
+        data = await gql(client, query, variables={"start": start, "end": end},
+                         headers=auth_headers())
+        assert data["episodesInRange"]["edges"] == []
+
+
+async def test_air_change_is_exposed_on_the_episode(client, migrated_db):
+    show = await add_show(client, titleRomaji="Moved Show")
+    _insert_episode_with_air_date(migrated_db, "e-mvd001", show["id"], _iso(-1))
+    from lcars import air_sources
+
+    conn = db.get_connection()
+    air_sources.record_candidate(conn, "e-mvd001", "syoboi", "7", "2026-10-12T15:00:00Z")
+    air_sources.record_candidate(conn, "e-mvd001", "syoboi", "7", "2026-10-19T15:00:00Z")
+    conn.commit()
+    data = await gql(
+        client,
+        "query($id: ID!) { episode(id: $id) { airPrecision airChange { other chosen"
+        " details { label hours followed previousAirDateUtc currentAirDateUtc } } } }",
+        variables={"id": "e-mvd001"}, headers=auth_headers(),
+    )
+    change = data["episode"]["airChange"]
+    assert data["episode"]["airPrecision"] == "TIME"
+    assert change["other"] is True and change["chosen"] is False
+    assert change["details"][0]["hours"] == 168.0 and change["details"][0]["followed"] is False
+
+
 async def test_episodes_in_range_end_bound_is_exclusive(client, migrated_db):
     # Half-open [start, end) — matches Data's own calendar_nav
     # CalendarState.date_range() convention (start <= local.date() < end).
@@ -12270,14 +12416,44 @@ async def test_due_for_metadata_refresh_excludes_a_show_whose_newest_episode_is_
     assert show["id"] not in await _due_ids(client)
 
 
-async def test_due_for_metadata_refresh_still_excludes_a_continuing_non_watching_show(
+async def test_due_for_metadata_refresh_still_excludes_a_continuing_dropped_show(
     client, migrated_db
 ):
-    show = await add_show(client, titleRomaji="Continuing But Planned")  # PLANNED
+    show = await add_show(client, titleRomaji="Continuing But Dropped")
+    conn = db.get_connection()
+    conn.execute("UPDATE show SET status = 'dropped' WHERE id = ?", (show["id"],))
+    conn.commit()
     _insert_episode_with_air_date(migrated_db, "e-due015", show["id"], "2020-01-01T00:00:00Z")
     _set_series_status(migrated_db, show["id"], "continuing")
     _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
     assert show["id"] not in await _due_ids(client)
+
+
+async def test_due_for_metadata_refresh_skips_a_planned_show_whose_seasons_have_all_aired(
+    client, migrated_db
+):
+    # user 10-07: no API call is spent on a show that has aired fully, even when Sonarr still
+    # calls the series continuing
+    show = await add_show(client, titleRomaji="Planned And Finished")  # PLANNED
+    _insert_episode_with_air_date(migrated_db, "e-due020", show["id"], "2020-01-01T00:00:00Z")
+    conn = db.get_connection()
+    conn.execute("UPDATE episode SET title = 'Episode 1' WHERE id = 'e-due020'")  # aired, titled
+    conn.commit()
+    _set_series_status(migrated_db, show["id"], "continuing")
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    assert show["id"] not in await _due_ids(client)
+    # the same planned show with an episode still to come is due
+    _insert_episode_with_air_date(migrated_db, "e-due021", show["id"], _iso(3), episode=2)
+    assert show["id"] in await _due_ids(client)
+
+
+async def test_due_for_metadata_refresh_includes_a_running_planned_show(client, migrated_db):
+    # R1.0c (user 10-07): a planned show's schedules are refreshed daily too (schedulesOnly)
+    show = await add_show(client, titleRomaji="Running And Planned")  # PLANNED
+    _insert_episode_with_air_date(migrated_db, "e-due016", show["id"], _iso(3))  # still airing
+    _set_series_status(migrated_db, show["id"], "continuing")
+    _set_metadata_last_refreshed_at(migrated_db, show["id"], None)
+    assert show["id"] in await _due_ids(client)
 
 
 # --- air-date schedules: airSchedules / setSeasonAirSchedule / clearSeasonAirSchedule / ----

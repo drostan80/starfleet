@@ -58,6 +58,12 @@ export async function gql(query, variables = {}) {
 
 /* ── Queries ──────────────────────────────────────────────── */
 
+/** R1.0e — what an air date is, and the change icons (! another source moved, ? the followed one). */
+const AIR_FIELDS = `
+  airPrecision airLocalDate airedAt
+  airChange { other chosen details { label hours previousAirDateUtc currentAirDateUtc followed } }
+`;
+
 const EPISODES_IN_RANGE_QUERY = `
   query CalendarRange($start: DateTime!, $end: DateTime!, $after: String) {
     episodesInRange(start: $start, end: $end, first: 200, after: $after) {
@@ -65,6 +71,7 @@ const EPISODES_IN_RANGE_QUERY = `
         id
         season episode title absoluteNumber kind
         airDateUtc runtimeMinutes
+        ${AIR_FIELDS}
         availableViaSonarr availableViaRadarr availableLocally
         filePathSonarr filePathRadarr
         state
@@ -315,6 +322,7 @@ const SHOW_DETAIL_QUERY = `
         edges { node {
           id season episode absoluteNumber kind title synopsis provisional
           airDateUtc runtimeMinutes state
+          ${AIR_FIELDS}
           availableViaSonarr availableViaRadarr availableLocally
           filePathSonarr filePathRadarr
           seasonEntity { malId status }
@@ -509,6 +517,7 @@ export async function fetchBacklog(first = 100) {
           id
           season episode title absoluteNumber
           airDateUtc
+          ${AIR_FIELDS}
           availableViaSonarr availableViaRadarr availableLocally
           filePathSonarr filePathRadarr
           state

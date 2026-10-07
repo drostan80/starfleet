@@ -23,7 +23,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
-from lcars import util
+from lcars import air_time, util
 
 log = logging.getLogger(__name__)
 
@@ -208,6 +208,8 @@ def fill_gaps(conn) -> int:
             if start:
                 filled += conn.execute(
                     "UPDATE episode SET air_date_utc = ?, air_date_source = 'syoboi'"
-                    " WHERE id = ? AND air_date_utc IS NULL", (start, episode_id),
+                    " WHERE id = ? AND air_date_utc IS NULL"
+                    f" AND NOT {air_time.LOCKED_SQL}",  # a chosen season has its own rule
+                    (start, episode_id),
                 ).rowcount
     return filled

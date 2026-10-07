@@ -9,7 +9,7 @@
  */
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=27';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=28';
 import { openArtPicker } from './art-picker.js?v=5';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -389,6 +389,60 @@ export function fmtAirTime(isoUtc) {
     + ' ' + (Intl.DateTimeFormat().resolvedOptions().timeZone?.split('/').pop()?.replace('_', ' ') || '');
 }
 
+/** R1.0e: a date-only episode is a calendar day (airLocalDate), not an instant. */
+export function isDateOnly(ep) {
+  return ep.airPrecision === 'DATE' && !!ep.airLocalDate;
+}
+
+/** When the episode counts as aired: its air time, or the end of its local day (date-only). */
+export function airedAtMs(ep) {
+  const iso = ep.airedAt || ep.airDateUtc;
+  return iso ? new Date(iso).getTime() : null;
+}
+
+export function hasAired(ep) {
+  const t = airedAtMs(ep);
+  return t !== null && t <= Date.now();
+}
+
+/** The air time for display: "all day" for a date-only episode, else the viewer's local time. */
+export function fmtEpAirTime(ep) {
+  if (isDateOnly(ep)) return 'all day';
+  return fmtAirTime(ep.airDateUtc);
+}
+
+/**
+ * The calendar's change icons next to an air time: "!" when a source the season does not follow
+ * moved its schedule by more than two hours, "?" when the schedule the season follows did.
+ * Returns a span (or null) with the details in the tooltip.
+ */
+export function airChangeBadge(ep) {
+  const change = ep.airChange;
+  if (!change || (!change.other && !change.chosen)) return null;
+  const wrap = document.createElement('span');
+  wrap.className = 'air-change';
+  const fmt = (iso) => new Date(iso).toLocaleString([], {
+    weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  });
+  const lines = (change.details || []).map((d) =>
+    `${d.followed ? 'Followed schedule' : 'Another source'} — ${d.label}: `
+    + `${fmt(d.previousAirDateUtc)} → ${fmt(d.currentAirDateUtc)} (${d.hours.toFixed(1)} h)`);
+  wrap.title = lines.join('\n');
+  if (change.chosen) {
+    const q = document.createElement('span');
+    q.className = 'air-change-chosen';
+    q.textContent = '?';
+    wrap.appendChild(q);
+  }
+  if (change.other) {
+    const b = document.createElement('span');
+    b.className = 'air-change-other';
+    b.textContent = '!';
+    wrap.appendChild(b);
+  }
+  return wrap;
+}
+
 /** Episode badge string: S01E08 or absolute ep number fallback. */
 export function fmtEpBadge(ep) {
   if (ep.season != null && ep.episode != null) {
@@ -423,7 +477,7 @@ export function availState(ep) {
   // UNAVAILABLE — distinguish airing-now vs aired (missing) vs future
   if (!ep.airDateUtc) return 'future';
   if (isEpisodeAiringNow(ep)) return 'airing';
-  return new Date(ep.airDateUtc) <= new Date() ? 'missing' : 'future';
+  return hasAired(ep) ? 'missing' : 'future';
 }
 
 /**
@@ -444,7 +498,7 @@ export function availState(ep) {
 const DEFAULT_RUNTIME_MINUTES = 60;
 
 export function isEpisodeAiringNow(ep) {
-  if (!ep.airDateUtc) return false;
+  if (!ep.airDateUtc || isDateOnly(ep)) return false;  // a day has no broadcast window
   const start = new Date(ep.airDateUtc);
   // `||`, not `??`: found live (user, 2026-09-20) that Sonarr stores a
   // real 0 for an unknown episode runtime, not null — `0 ?? X` evaluates
@@ -712,7 +766,7 @@ export function showTotal(show) {
  */
 export function buildCard(ep, cfg) {
   const avail  = availState(ep);
-  const aired  = ep.airDateUtc && new Date(ep.airDateUtc) <= new Date();
+  const aired  = hasAired(ep);
   const status = ep.seasonEntity?.status || ep.show.status || 'WATCHING';
   const externalIds = ep.show.externalIds.edges.map(e => e.node);
 
@@ -732,7 +786,9 @@ export function buildCard(ep, cfg) {
 
   const airtime = document.createElement('span');
   airtime.className = 'airtime';
-  airtime.textContent = fmtAirTime(ep.airDateUtc);
+  airtime.textContent = fmtEpAirTime(ep);
+  const changeBadge = airChangeBadge(ep);
+  if (changeBadge) airtime.appendChild(changeBadge);
   meta.appendChild(airtime);
 
   const availIcon = document.createElement('span');
@@ -970,7 +1026,9 @@ function groupByDay(episodes, range) {
     if (!activeStatuses.has(epStatus)) continue;  // status filter
     if (!_showWatched && ep.state === 'WATCHED') continue;
 
-    const localDate = ep.airDateUtc ? new Date(ep.airDateUtc) : null;
+    // a date-only episode sits on its own local day, whatever zone the viewer is in
+    const localDate = isDateOnly(ep) ? new Date(`${ep.airLocalDate}T00:00:00`)
+                    : ep.airDateUtc ? new Date(ep.airDateUtc) : null;
     const dateStr   = localDate ? localDateStr(localDate) : 'unknown';
 
     if (!groups[dateStr]) groups[dateStr] = { dateStr, localDate, episodes: [] };
@@ -1255,7 +1313,7 @@ function fmtTimeOnly(isoUtc) {
  */
 function buildPlannerCard(ep, cfg) {
   const avail  = availState(ep);
-  const aired  = ep.airDateUtc && new Date(ep.airDateUtc) <= new Date();
+  const aired  = hasAired(ep);
   const status = ep.seasonEntity?.status || ep.show.status || 'WATCHING';
 
   const card = document.createElement('article');
@@ -1325,11 +1383,13 @@ function buildPlannerCard(ep, cfg) {
   badge.className = 'planner-badge';
   badge.textContent = fmtEpBadge(ep);
   badgeRow.appendChild(badge);
-  const timeStr = fmtTimeOnly(ep.airDateUtc);
+  const timeStr = isDateOnly(ep) ? 'all day' : fmtTimeOnly(ep.airDateUtc);
   if (timeStr) {
     const airtime = document.createElement('span');
     airtime.className = 'planner-airtime';
     airtime.textContent = timeStr;
+    const changeBadge = airChangeBadge(ep);
+    if (changeBadge) airtime.appendChild(changeBadge);
     badgeRow.appendChild(airtime);
   }
   body.appendChild(badgeRow);

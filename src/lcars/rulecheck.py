@@ -666,6 +666,142 @@ def check_dated_have_a_source(conn):
     )
 
 
+def check_empty_dates_with_a_candidate(conn):
+    """R1.0b — an episode with no air date takes the earliest candidate there is (user 10-07):
+    an empty date with a schedule known for it means the refresh has not run."""
+    if not _has(conn, "episode_air_candidate", "first_air_date_utc"):
+        return _not_yet("R1.0b-empty", "Empty air dates with a candidate",
+                        "no candidate history yet")
+    return _finding(
+        conn,
+        "R1.0b-empty",
+        "An episode with no air date although a source has one for it",
+        "violation",
+        f"SELECT {_TITLE} AS show, e.season, e.episode,"
+        " (SELECT GROUP_CONCAT(DISTINCT c.source) FROM episode_air_candidate c"
+        "  WHERE c.episode_id = e.id) AS sources"
+        " FROM episode e JOIN show sh ON sh.id = e.show_id"
+        " WHERE sh.tracked = 1 AND sh.status IN ('watching', 'planned') AND e.kind = 'regular'"
+        " AND e.air_date_utc IS NULL AND EXISTS ("
+        "  SELECT 1 FROM episode_air_candidate c WHERE c.episode_id = e.id)"
+        " ORDER BY show, e.season, e.episode",
+        fmt=lambda r: f"{r['show']} S{r['season']}E{r['episode']} ({r['sources']})",
+    )
+
+
+def check_date_only_values_have_precision(conn):
+    """R1.0e — what AniDB and TVDB's own list give is a calendar day: stored as a time (no
+    `air_precision`) it would show an invented hour and count as aired too early."""
+    if not _has(conn, "episode", "air_precision"):
+        return _not_yet("R1.0e", "Date-only air dates carry their precision", "no precision yet")
+    return _finding(
+        conn,
+        "R1.0e",
+        "A date-only air date (AniDB, TVDB list) stored as a time",
+        "violation",
+        f"SELECT {_TITLE} AS show, e.season, e.episode, e.air_date_source FROM episode e"
+        " JOIN show sh ON sh.id = e.show_id"
+        " WHERE sh.tracked = 1 AND e.air_date_source IN ('tvdb', 'anidb')"
+        " AND e.air_date_utc IS NOT NULL AND e.air_precision IS NULL"
+        " ORDER BY show, e.season, e.episode",
+        fmt=lambda r: f"{r['show']} S{r['season']}E{r['episode']} ({r['air_date_source']})",
+    )
+
+
+def check_schedules_are_fresh(conn):
+    """R1.0b / R1.0c — every source's schedule is refreshed constantly (user 10-07). Judged on when
+    the sources were last **read**, not on the candidate rows (those are re-stamped from stored
+    data every pass and would stay green with nothing read): a watching or planned show that is
+    still running whose daily refresh (`metadata_last_refreshed_at`) is more than three days old,
+    or a TV show whose TVmaze episodes were last fetched more than three days ago."""
+    if not _has(conn, "episode_air_candidate", "first_air_date_utc"):
+        return _not_yet("R1.0b-fresh", "Schedules are refreshed", "no candidate history yet")
+    running = (
+        "sh.tracked = 1 AND sh.media_shape = 'episodic' AND sh.status IN ('watching', 'planned')"
+        " AND EXISTS (SELECT 1 FROM episode x WHERE x.show_id = sh.id AND x.kind = 'regular'"
+        "  AND (x.air_date_utc IS NULL OR COALESCE(x.air_aired_at, x.air_date_utc)"
+        "       > strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))"
+    )
+    stale = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-3 days')"
+    return _finding(
+        conn,
+        "R1.0b-fresh",
+        "A running show whose sources were last read more than three days ago",
+        "violation",
+        f"SELECT {_TITLE} AS show, sh.status, 'daily refresh' AS what,"
+        " COALESCE(sh.metadata_last_refreshed_at, 'never') AS last"
+        f" FROM show sh WHERE {running}"
+        f" AND (sh.metadata_last_refreshed_at IS NULL OR sh.metadata_last_refreshed_at < {stale})"
+        " UNION ALL"
+        f" SELECT {_TITLE} AS show, sh.status, 'TVmaze' AS what, MAX(te.fetched_at) AS last"
+        " FROM show sh JOIN show_external_id tm ON tm.show_id = sh.id AND tm.service = 'tvmaze'"
+        "  AND tm.external_id != '-1'"
+        " JOIN tvmaze_episode te ON te.tvmaze_show_id = CAST(tm.external_id AS INTEGER)"
+        f" WHERE sh.tracking_space != 'anime' AND {running}"
+        f" GROUP BY sh.id HAVING last < {stale}"
+        " ORDER BY last",
+        fmt=lambda r: f"{r['show']} ({r['status']}) — {r['what']} last {r['last']}",
+    )
+
+
+_SEASON_SPANS_SQL = (
+    "SELECT e.show_id, e.season, MIN(e.air_date_utc) AS first, MAX(e.air_date_utc) AS last"
+    " FROM episode e JOIN show sh ON sh.id = e.show_id"
+    " WHERE sh.tracked = 1 AND sh.tracking_space = 'anime' AND e.kind = 'regular'"
+    " AND e.season > 0 AND e.provisional = 0 AND e.air_date_utc IS NOT NULL"
+    " GROUP BY e.show_id, e.season"
+)
+
+
+def _seasons_starting_early(conn):
+    """(show title, season, first, previous season's last, is_copy, announced) for each anime
+    season that starts more than three days before the season before it ended."""
+    if not _has(conn, "episode", "provisional"):
+        return []
+    spans: dict = {}
+    for r in conn.execute(_SEASON_SPANS_SQL):
+        spans.setdefault(r["show_id"], {})[r["season"]] = (r["first"], r["last"])
+    found = []
+    for show_id, seasons in spans.items():
+        ordered = sorted(seasons)
+        for previous, season in zip(ordered, ordered[1:], strict=False):
+            first, last = seasons[season][0], seasons[previous][1]
+            if first >= last:
+                continue
+            gap = (_dt(last) - _dt(first)).total_seconds() / 86400
+            if gap <= 3:
+                continue
+            first_of_previous = seasons[previous][0]
+            title = conn.execute(f"SELECT {_TITLE} FROM show sh WHERE sh.id = ?",
+                                 (show_id,)).fetchone()[0]
+            titled = conn.execute(
+                "SELECT COUNT(*) FROM episode WHERE show_id = ? AND season = ? AND kind = 'regular'"
+                " AND provisional = 0 AND COALESCE(title, '') NOT IN ('', 'TBA')",
+                (show_id, season)).fetchone()[0]
+            found.append((title, season, first, last, first == first_of_previous, titled == 0))
+    return sorted(found)
+
+
+def _dt(iso: str):
+    import datetime as dt
+
+    return dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
+def check_season_copies_the_previous_one(conn):
+    """R1.6 — a season is aired in a space of time that follows the season before it. A season whose
+    first episode holds exactly the first episode's date of the season before it is a copy of it
+    (10-07: thirteen announced sequels carried their first season's premiere date, which made them
+    look aired — and let Syoboi's first-season run pass for theirs)."""
+    rows = [r for r in _seasons_starting_early(conn) if r[4] and r[5]]
+    return Finding(
+        "R1.6-copy", "An announced season dated exactly like the season before it", "violation",
+        len(rows),
+        [f"{t} S{n}: starts {first[:10]}, the season before ended {last[:10]}"
+         for t, n, first, last, _c, _t in rows[:SAMPLE_SIZE]],
+    )
+
+
 def check_anilist_count_vs_level(conn):
     """R1.11w — the episode count of a level's AniList entry (`episode_total`) against the
     episodes the level holds by its spans. Information only: it is what the width sweep used to
@@ -724,6 +860,10 @@ CHECKS: list[Callable[[sqlite3.Connection], Finding]] = [
     check_parts_in_span_order,
     check_levels_follow_episodes,
     check_dated_have_a_source,
+    check_empty_dates_with_a_candidate,
+    check_date_only_values_have_precision,
+    check_schedules_are_fresh,
+    check_season_copies_the_previous_one,
     check_anilist_count_vs_level,
 ]
 

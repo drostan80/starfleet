@@ -120,7 +120,7 @@ class LcarsClient:
         query = """
         query($after: String) {
           dueForMetadataRefresh(first: 50, after: $after) {
-            edges { node { id displayTitle } }
+            edges { node { id displayTitle status } }
             pageInfo { hasNextPage endCursor }
           }
         }
@@ -179,14 +179,19 @@ class LcarsClient:
                 after = connection["pageInfo"]["endCursor"]
         return seasons
 
-    async def refresh_show_metadata(self, show_id: str) -> dict:
+    async def refresh_show_metadata(self, show_id: str, schedules_only: bool = False) -> dict:
         """The exact same manual-retry mutation A.8 built
         (`refreshShowMetadata`) — Ops's daily pass and a client's own
         on-open trigger both call this one mutation, no Ops-specific
         variant (SCOPE.md §11.2's B.1 note)."""
-        query = """
-        mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }
-        """
+        if schedules_only:  # a planned show: only its schedules (R1.0c)
+            query = """
+            mutation($id: ID!) { refreshShowMetadata(showId: $id, schedulesOnly: true) { id } }
+            """
+        else:
+            query = """
+            mutation($id: ID!) { refreshShowMetadata(showId: $id) { id } }
+            """
         data = await self._query(query, {"id": show_id})
         return data["refreshShowMetadata"]
 

@@ -175,6 +175,7 @@ class TestRewireConditionParity:
                 sonarr_season INTEGER, sonarr_episode INTEGER,
                 created_at TEXT, updated_at TEXT, state TEXT DEFAULT 'unwatched',
                 season_id TEXT,
+                air_precision TEXT, air_local_date TEXT, air_aired_at TEXT,
                 UNIQUE(show_id, season, episode)
             );
             CREATE TABLE season_air_choice (
@@ -221,7 +222,7 @@ class TestRewireConditionParity:
             )
             conn.execute(
                 "INSERT INTO episode VALUES"
-                " (?, ?, 1, 1, 'regular', ?, ?, 1, 1, '', '', 'unwatched', NULL)",
+                " (?, ?, 1, 1, 'regular', ?, ?, 1, 1, '', '', 'unwatched', NULL, NULL, NULL, NULL)",
                 (episode_id, show_id, date, source),
             )
             conn.execute(

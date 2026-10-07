@@ -95,7 +95,9 @@ def _two_station_show(c):
     _ext(c, show, "syoboi", "100")
     c.execute(
         "INSERT INTO tvmaze_episode (tvmaze_show_id, season, episode, airdate, airstamp,"
-        " fetched_at) VALUES (900, 1, 1, '2026-10-04', '2026-10-04T14:50:00Z', ?)", (NOW,)
+        " airtime, fetched_at)"
+        " VALUES (900, 1, 1, '2026-10-04', '2026-10-04T14:50:00Z', '14:50', ?)",
+        (NOW,)
     )
     c.execute(
         "INSERT INTO anidb_episode (anidb_anime_id, anidb_season, anidb_epno, airdate, fetched_at)"

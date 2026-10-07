@@ -7,6 +7,33 @@ HANDOFF-2026-09-30-CUTOVER.md. The sections further down (v0.2.x) are history.
 
 ## Open work — consolidated 2026-09-30
 
+### A0. Air-date freshness and precision (user 10-07) — BUILT IN DEV on `dev-airing-sources`, uncommitted, NOT deployed (v0.4.7 candidate)
+
+- 🛠 **Why:** the calendar's whole purpose is correct air dates/times. Audit 10-07: Sonarr's date was read once at insert and never again (84 stale raw
+  dates; Kanojo no Tomodachi's 2011 placeholders made the AniList drift guard open a review nobody could dismiss), TVDB-direct/TVmaze/AniDB only filled empty
+  dates, the TVmaze drip fetched each show once (TV data frozen since 10-01), planned shows were never refreshed, TVmaze's noon `airstamp` and ~17k date-only
+  values were stored as real times (RULEBOOK R1.0b / R1.0c / R1.0e).
+- 🛠 **Built:** migration `b1c2d3e4f5a6` (episode `air_precision`/`air_local_date`/`air_aired_at` + Sonarr raw precision; candidate `precision`/`local_date`/
+  `first_air_date_utc`; `air_candidate_change`); `air_time.py` (JST/US end-of-day, `AIRED_AT`); `air_sources.refresh_show_schedules` (diffed candidates, earliest *timed*
+  candidate applied when one changes/appears, TV follows Sonarr, chosen schedule applies from then on and fills only dates it lacks); Sonarr raw date re-read on every
+  fetch; TVmaze re-fetched in the daily pass; AniList candidates recorded before the guards (a distrusted one is never applied automatically); daily refresh widened to
+  **planned** shows (`refreshShowMetadata(schedulesOnly: true)`, ops sends it for PLANNED — **lcars and ops must ship together**); fillers skip a chosen season;
+  `!`/`?` icons (`Episode.airChange`) on the calendar + show page; date-only shown all-day on its own local day; `aired` = end of local day through `AIRED_AT`;
+  drift review gets a choice and is skipped for a chosen season (Kanojo's closes itself on the first AniList pass); `AirDateSource` enum gained TVDB (latent API bug);
+  rulecheck R1.0b-empty / R1.0b-fresh / R1.0e.
+- 🛠 **Copied season dates (user 10-07) — data cleaned on prod 10-07 (snapshot `lcars.db.bak-20261007-pre-copied-season-dates`; script `scripts/clear_copied_season_dates_20261007.py`), guards built in dev (v0.4.7):**
+  13 announced sequels (10 planned, 3 completed) held a TBA placeholder S2E1 dated exactly like S1E1 (source AniList, written long ago — probably while the level
+  held S1's AniList id; unproven). It made the season look aired (never refreshed, completed shows marked it watched) and let S1's Syoboi run "fit": 60 provisional
+  episodes cloned from S1's broadcasts. Cleaned: 13 dates cleared, 60 provisional rows deleted. Guards (RULEBOOK R1.6a): the AniList writer skips an id another level
+  holds and a schedule that starts before the previous season ended; the provisional plan refuses a season that starts before the previous one ended; rulecheck
+  R1.6-copy (violation, announced seasons only; aired history such as Dr. Slump / Pokémon is never listed). A season is now airing / planned / history (user's rule: target airing AND planned
+  seasons); planned is refreshed WEEKLY, airing daily, history never. **OPEN (user's call): three completed shows (A-Rank Party, The Fable,
+  Saijaku Tamer) hold their unreleased S2 as COMPLETED with the TBA episode watched, and LCARS wrote COMPLETED/progress 1 to AniList for those 3 NOT_YET_RELEASED
+  "2nd Season" entries on 09-30 (list_baseline); origin (your list or the cutover write) unknown. R2.7/R2.16 say planned, episode unwatched — would push PLANNING to AniList.**
+- ⚠ **Before deploying:** the user must confirm the *proposed details* at the end of R1.0e (UTC-8 end of day for non-anime, 3-day upgrade window, TV 00:00 = no time,
+  45-day history); icons count only from the first refresh after deploy; **Android APK rebuild** needed for the icons/all-day display; dry run on a prod copy: see the
+  report in the session (≈300 episodes in 18 shows change, almost all TV streamers turning date-only).
+
 ### A. Left over from the rebuild
 
 **STATE 2026-10-05 night: v0.4.5 IS LIVE on tiny (UI: page auto-refresh on every page, pull-down + corner refresh button for touch and the app; snapshot `lcars.db.bak-20261005-pre-0.4.5`; the Android app bundles the UI, so it needs an APK REBUILD to get it, the user tests it another time). v0.4.4 is below.** v0.4.4 (tag v0.4.4, CI green, snapshot `lcars.db.bak-20261005-pre-0.4.4`; the compose backup is `starfleet.yml.bak-0.4.2-20261005`). It carries v0.4.3 (stale reviews close themselves, divided seasons keep no list id, nginx re-resolves lcars), provisional episodes (R1.2g), Syoboi runs per level (R1.22a), every source's schedule as a choice, Syoboi id seeding and links on every external id. Verified after the deploy: migration applied, DNS inside lcars/ops, web 302 (login), no nginx errors, first pass made 108 provisional episodes on 30 shows, 1,370 level Syoboi ids, 0 external ids without a link. **Prod data steps done at the deploy:** part order fixed (Bookworm S1, Dr. STONE S4, SAKAMOTO DAYS Part 2), Kusuriya S3's duplicate id dropped, the stale reviews closed (0 open), Bleach now reads dropped (S1 stays completed), MAL 54344 removed (it was a plain plan-to-watch on a skipped level). Earlier today: v0.4.0, v0.4.1, v0.4.2 and the starfleet.yml DNS fix. **To watch:** Syoboi options should rise above 79 shows once the next sync has fetched the 108 new level TIDs; the AniDB drip resuming after 00:00 UTC; no review noise returning.

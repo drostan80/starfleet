@@ -47,7 +47,11 @@ async def run_once(client: LcarsClient) -> int:
     refreshed = 0
     for show in shows:
         try:
-            await client.refresh_show_metadata(show["id"])
+            if show.get("status") == "PLANNED":
+                # R1.0c: a planned show is owed its schedules, not the full pass
+                await client.refresh_show_metadata(show["id"], schedules_only=True)
+            else:
+                await client.refresh_show_metadata(show["id"])
             refreshed += 1
         except LcarsError:
             logger.exception(

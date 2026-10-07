@@ -72,7 +72,7 @@ def level_episodes(conn, season) -> list:
     spans = conn.execute(
         "SELECT abs_from, abs_to FROM season_span WHERE season_id = ?", (season["id"],)
     ).fetchall()
-    cols = "id, season, episode, state, air_date_utc"
+    cols = "id, season, episode, state, air_date_utc, air_aired_at"
     if spans:
         where = " OR ".join("absolute_number BETWEEN ? AND ?" for _ in spans)
         return conn.execute(
@@ -297,7 +297,8 @@ def set_level_status(
     if status == "completed":
         eps = level_episodes(conn, season)
         unaired = [e for e in eps if e["state"] != "watched"
-                   and (e["air_date_utc"] is None or e["air_date_utc"] > now)]
+                   and (e["air_date_utc"] is None
+                        or (e["air_aired_at"] or e["air_date_utc"]) > now)]
         if unaired and not confirmed:
             raise NeedsConfirmation(
                 f"setting this season completed will mark {len(unaired)} unaired episode(s)"

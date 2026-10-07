@@ -180,8 +180,12 @@ class TestTvmazeAirdateFill:
         self.conn = sqlite3.connect(":memory:")
         # Minimal schema for the join
         self.conn.execute("""
-            CREATE TABLE show (id TEXT PRIMARY KEY, tracked INTEGER DEFAULT 1)
+            CREATE TABLE show (id TEXT PRIMARY KEY, tracked INTEGER DEFAULT 1,
+                               tracking_space TEXT DEFAULT 'tv')
         """)
+        self.conn.execute(
+            "CREATE TABLE season_air_choice (season_id TEXT PRIMARY KEY, source TEXT,"
+            " channel TEXT, chosen_at TEXT)")
         self.conn.execute("""
             CREATE TABLE show_external_id (
                 show_id TEXT, service TEXT, external_id TEXT,
@@ -196,7 +200,8 @@ class TestTvmazeAirdateFill:
                 kind TEXT DEFAULT 'regular',
                 air_date_utc TEXT,
                 air_date_source TEXT,
-                sonarr_season INTEGER, sonarr_episode INTEGER
+                sonarr_season INTEGER, sonarr_episode INTEGER,
+                season_id TEXT, air_precision TEXT, air_local_date TEXT, air_aired_at TEXT
             )
         """)
         self.conn.execute("""
@@ -210,7 +215,7 @@ class TestTvmazeAirdateFill:
 
         # Insert test data
         self.conn.execute(
-            "INSERT INTO show VALUES ('s-test01', 1)")
+            "INSERT INTO show (id, tracked) VALUES ('s-test01', 1)")
         self.conn.execute(
             "INSERT INTO show_external_id VALUES ('s-test01', 'tvmaze', '100', '', '')")
         # Episode with NULL airdate
@@ -272,9 +277,15 @@ class TestAnidbAirdateFill:
                 id TEXT PRIMARY KEY,
                 show_id TEXT, season INTEGER, episode INTEGER,
                 kind TEXT DEFAULT 'regular',
-                air_date_utc TEXT, air_date_source TEXT
+                air_date_utc TEXT, air_date_source TEXT,
+                season_id TEXT, air_precision TEXT, air_local_date TEXT, air_aired_at TEXT
             )
         """)
+        self.conn.execute("CREATE TABLE show (id TEXT PRIMARY KEY, tracking_space TEXT)")
+        self.conn.execute("INSERT INTO show VALUES ('s-anime1', 'anime')")
+        self.conn.execute(
+            "CREATE TABLE season_air_choice (season_id TEXT PRIMARY KEY, source TEXT,"
+            " channel TEXT, chosen_at TEXT)")
         self.conn.execute("""
             CREATE TABLE episode_anidb_mapping (
                 episode_id TEXT PRIMARY KEY,
@@ -294,8 +305,8 @@ class TestAnidbAirdateFill:
 
         # Episode with NULL airdate + mapping + AniDB data
         self.conn.execute("""
-            INSERT INTO episode VALUES
-            ('e-an0001', 's-anime1', 1, 1, 'regular', NULL, NULL)
+            INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, air_date_source)
+            VALUES ('e-an0001', 's-anime1', 1, 1, 'regular', NULL, NULL)
         """)
         self.conn.execute("""
             INSERT INTO episode_anidb_mapping VALUES

@@ -62,7 +62,12 @@ def conn(tmp_path):
             title TEXT,
             sonarr_season INTEGER,
             sonarr_episode INTEGER,
-            synopsis TEXT
+            synopsis TEXT,
+            air_precision TEXT, air_local_date TEXT, air_aired_at TEXT,
+            air_raw_sonarr_precision TEXT, air_raw_sonarr_local_date TEXT
+        );
+        CREATE TABLE season_air_choice (
+            season_id TEXT PRIMARY KEY, source TEXT, channel TEXT, chosen_at TEXT
         );
         CREATE TABLE season (
             id TEXT PRIMARY KEY,

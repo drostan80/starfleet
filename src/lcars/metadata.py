@@ -56,6 +56,7 @@ from datetime import datetime
 from lcars import (
     add_check,
     air_sources,
+    air_time,
     airdate_priority,
     anilist_client,
     art,
@@ -67,6 +68,7 @@ from lcars import (
     numbering,
     pending_review,
     radarr_client,
+    reviews,
     season_mapping,
     season_ranges,
     service_health,
@@ -74,6 +76,7 @@ from lcars import (
     sonarr_match,
     status_rules,
     tmdb_client,
+    tvmaze,
     util,
 )
 from lcars.config import get_current
@@ -136,6 +139,10 @@ def fetch_and_populate(conn, show_id: str) -> None:
         # genuinely different id than _fetch_anilist's single show-level
         # one (see _reconcile_air_dates's own docstring).
         _guarded(conn, show, "anilist", _reconcile_air_dates)
+    if show["media_shape"] == "episodic":
+        # every source's schedule, refreshed and brought up to date (user 10-07)
+        _guarded(conn, show, "tvmaze", _refresh_tvmaze)
+        _guarded(conn, show, "schedule", _refresh_schedules)
 
     # B.1, §6.7/§11.2 — stamped unconditionally, regardless of which (if
     # any) branch above actually succeeded: this is an "attempt" marker,
@@ -146,6 +153,58 @@ def fetch_and_populate(conn, show_id: str) -> None:
     # (Query.dueForMetadataRefresh) from re-attempting a show that was
     # just fetched, addShow's own inline call included, so a show created
     # today isn't immediately re-fetched by Ops's next poll the same day.
+    conn.execute(
+        "UPDATE show SET metadata_last_refreshed_at = ? WHERE id = ?",
+        (util.now_utc_iso(), show_id),
+    )
+
+
+def _refresh_tvmaze(conn, show: dict) -> None:
+    """TVmaze's episodes of a TV show (not anime: Syoboi/AniDB number those), re-read on every
+    refresh — its schedule is one of the sources the calendar follows, and it changes (user
+    10-07: the drip fetched each show once and never again). Best effort: no TVmaze id, or no
+    answer, leaves what is stored."""
+    if show["tracking_space"] == "anime":
+        return
+    tvmaze_id = _external_id(conn, show["id"], "tvmaze")
+    if tvmaze_id in (None, "-1") or not str(tvmaze_id).isdigit():
+        return
+    episodes = tvmaze.fetch_episodes(int(tvmaze_id), specials=True)
+    if not episodes:
+        return
+    now = util.now_utc_iso()
+    tvmaze.ingest_episodes(conn, int(tvmaze_id), episodes, now, store_specials=True)
+    tvmaze.mark_specials_fetched(conn, int(tvmaze_id), now)
+
+
+def _refresh_schedules(conn, show: dict) -> None:
+    air_sources.refresh_show_schedules(conn, show["id"])
+
+
+def refresh_schedules_only(conn, show_id: str) -> None:
+    """The daily refresh of a show the full pass is not owed to (a **planned** show, R1.0c):
+    only its schedules — Sonarr's dates for the episodes already held, TVmaze (TV), AniList's
+    airing schedule (anime) — and the rule applied to them. No episodes are added, nothing is
+    renumbered, no status moves, no AniList link is resolved."""
+    row = conn.execute("SELECT * FROM show WHERE id = ?", (show_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"no such show: {show_id}")
+    if freeze.frozen():
+        log.warning("automation frozen: schedule refresh skipped for %s", show_id)
+        return
+    show = dict(row)
+    if show["media_shape"] != "episodic":
+        return
+    if not air_sources.has_airing_season(conn, show_id):
+        # every season has aired fully: nothing to refresh, no API call (user 10-07)
+        conn.execute("UPDATE show SET metadata_last_refreshed_at = ? WHERE id = ?",
+                     (util.now_utc_iso(), show_id))
+        return
+    _guarded(conn, show, "sonarr", _refresh_sonarr_dates)
+    if show["tracking_space"] == "anime":
+        _guarded(conn, show, "anilist", _reconcile_air_dates)
+    _guarded(conn, show, "tvmaze", _refresh_tvmaze)
+    _guarded(conn, show, "schedule", _refresh_schedules)
     conn.execute(
         "UPDATE show SET metadata_last_refreshed_at = ? WHERE id = ?",
         (util.now_utc_iso(), show_id),
@@ -640,7 +699,19 @@ def _reconcile_air_dates(conn, show: dict) -> None:
         (show["id"],),
     ).fetchall()
     now = util.now_utc_iso()
+    finished = air_sources.finished_seasons(conn, show["id"])
     for season in seasons:
+        if season["season_number"] in finished:
+            continue  # a season that has aired fully: no API call, its dates never change (10-07)
+        if conn.execute(
+            "SELECT 1 FROM season o WHERE o.show_id = ? AND o.id != ? AND o.anilist_id = ?"
+            " AND o.status != 'skipped' LIMIT 1",
+            (show["id"], season["id"], season["anilist_id"]),
+        ).fetchone():
+            # R1.22: an AniList entry belongs to one level (an entry over several seasons,
+            # R1.22b, numbers its episodes across them, not per season): its schedule is not
+            # written onto this level's episodes, which would number it from 1 again
+            continue
         # §6.7, B.6 — hooked at the actual call, same reasoning
         # _fetch_anilist gives (not _guarded, which wraps this whole
         # function and would record "ok" even for a show with zero
@@ -660,6 +731,14 @@ def _reconcile_air_dates(conn, show: dict) -> None:
         if not result or not result["nodes"]:
             continue
 
+        first_node = min((n["airingAt"] for n in result["nodes"]), default=None)
+        if first_node is not None and air_sources.starts_before_previous_season_ended(
+            conn, show["id"], season["season_number"], util.unix_to_iso(first_node)
+        ):
+            # R1.6: this entry's schedule begins before the season before it ended — it is
+            # that season's (or another entry's) schedule, not this one's: no dates, no candidate
+            continue
+
         anilist_episode_count = result["episodes"]
         # AniList's episode N -> the LCARS episode: for a TVDB season its own episode N; for a
         # part (one cour of a TVDB season, its own AniList entry) the N-th episode of the part.
@@ -675,6 +754,29 @@ def _reconcile_air_dates(conn, show: dict) -> None:
                 conn, "season", season["id"], "anilist_id",
                 "a count difference is no longer a review (R1.11w)", source="anilist",
                 reason_like=_WIDTH_REVIEW_MARK,
+            )
+            continue
+
+        # Every read of AniList's schedule is kept as a candidate (air_sources) — before the
+        # wrong-entry guard below, so a schedule the guard distrusts can still be seen and chosen
+        # in the schedule chooser (user 10-07). The width guard above already skipped a season
+        # whose episodes the entry does not cover one-to-one.
+        for node in result["nodes"]:
+            candidate_episode = by_number.get(node["episode"])
+            if candidate_episode is not None:
+                air_sources.record_candidate(
+                    conn, candidate_episode, "anilist", "", util.unix_to_iso(node["airingAt"])
+                )
+
+        # A season that follows a schedule the user chose takes no AniList dates (nothing below
+        # writes to it), so a guard about whether AniList's link is right has nothing to protect
+        # (user 10-07: Kanojo no Tomodachi's stale review, a Syoboi schedule chosen).
+        if conn.execute(
+            "SELECT 1 FROM season_air_choice WHERE season_id = ?", (season["id"],)
+        ).fetchone():
+            pending_review.close_obsolete(
+                conn, "season", season["id"], "anilist_id",
+                "the season follows a schedule you chose", source="anilist",
             )
             continue
 
@@ -696,8 +798,11 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             if not pending_review.already_resolved_with(
                 conn, "season", season["id"], "anilist_id", reason
             ):
-                pending_review.open_or_extend(
-                    conn, "season", season["id"], "anilist_id", "anilist", None, reason
+                # R4.8b: a review always offers a way to resolve it (user 10-07: this one had none)
+                reviews.open_review(
+                    conn, "season", season["id"], "anilist_id", "anilist", reason, ["link_ok"],
+                    {"season_id": season["id"], "anilist_id": season["anilist_id"]},
+                    show_id=show["id"],
                 )
             continue
 
@@ -706,26 +811,30 @@ def _reconcile_air_dates(conn, show: dict) -> None:
             conn, "season", season["id"], "anilist_id",
             "the AniList schedule now agrees with the episodes", source="anilist",
         )
+        history_cutoff = util.utc_iso_offset(-air_sources.HISTORY_DAYS)
         for node in result["nodes"]:
             episode_id = by_number.get(node["episode"])
             episode_row = None if episode_id is None else conn.execute(
-                "SELECT id, air_date_utc, air_date_source, available_via_sonarr FROM episode"
-                " WHERE id = ?", (episode_id,),
+                "SELECT id, air_date_utc, air_date_source, air_precision, air_aired_at,"
+                " available_via_sonarr FROM episode WHERE id = ?", (episode_id,),
             ).fetchone()
             if episode_row is None:
                 continue  # not yet fetched into LCARS — A.8's Sonarr fetch's job, not this one's
             current_source = episode_row["air_date_source"]
             current_date = episode_row["air_date_utc"]
             new_air_date = util.unix_to_iso(node["airingAt"])
-            # Every read of AniList's schedule is kept as a candidate (air_sources), so the user
-            # can compare it with the other sources whether or not it is applied below.
-            air_sources.record_candidate(conn, episode_row["id"], "anilist", "", new_air_date)
             if current_date == new_air_date or airdate_priority.within_tolerance(
                 current_date, new_air_date
             ):
                 continue  # the same time to within a few minutes: no change, no review
             if air_sources.episode_is_locked(conn, episode_row["id"]):
                 continue  # the season follows a schedule the user chose (air_sources)
+            if current_date is not None and (
+                episode_row["air_aired_at"] or current_date
+            ) < history_cutoff:
+                # long aired (R1.0b): the file, not a schedule, is the truth; the candidate above
+                # stays visible, but history is not rewritten
+                continue
 
             # 2026-08-15 — real, user-caught bug: "Draw This, Then Die!"
             # episode 7. AniList's `airingSchedule` is one global value
@@ -754,12 +863,14 @@ def _reconcile_air_dates(conn, show: dict) -> None:
                 continue
 
             if not airdate_priority.should_apply(
-                "anilist", new_air_date, current_source, current_date
+                "anilist", new_air_date, current_source, current_date,
+                existing_precision=episode_row["air_precision"] or "time",
             ) or not status_rules.episode_followed(conn, episode_row["id"]):  # R2.10
                 continue  # see airdate_priority.py: same-source updates, else earliest wins
 
             conn.execute(
                 "UPDATE episode SET air_date_utc = ?, air_date_source = 'anilist',"
+                " air_precision = NULL, air_local_date = NULL, air_aired_at = NULL,"
                 " updated_at = ? WHERE id = ?",
                 (new_air_date, now, episode_row["id"]),
             )
@@ -1157,13 +1268,15 @@ def _availability_from_sonarr_episode(ep: dict) -> tuple[str, str | None]:
     return "unavailable", None
 
 
-def _fetch_sonarr(conn, show: dict, derive: bool = True) -> None:
+def _read_sonarr(conn, show: dict):
+    """Sonarr's series and episode list for a show, or None when there is nothing to read (no TVDB
+    id, Sonarr not configured, not in Sonarr's library). Records Sonarr's health at the call."""
     tvdb_id_str = _external_id(conn, show["id"], "tvdb")
     if tvdb_id_str is None:
-        return  # §5.1 — Sonarr's link is optional; nothing to fetch without it
+        return None  # §5.1 — Sonarr's link is optional; nothing to fetch without it
     cfg = get_current()
     if not cfg.sonarr_url or not cfg.sonarr_api_key:
-        return  # not configured — same as "not linked", not a failure to report
+        return None  # not configured — same as "not linked", not a failure to report
 
     # §6.7, B.6 — hooked at the actual outbound call, not _guarded (see
     # that function's own docstring): the two early returns above never
@@ -1181,7 +1294,58 @@ def _fetch_sonarr(conn, show: dict, derive: bool = True) -> None:
     service_health.record_success(conn, "sonarr")
     conn.commit()
     if series is None:
-        return  # not (yet) in Sonarr's own library — not an error, §5.1
+        return None  # not (yet) in Sonarr's own library — not an error, §5.1
+    return series, episodes
+
+
+def _sonarr_air_fields(
+    series: dict, ep: dict, anime: bool = False
+) -> tuple[str | None, str, str | None]:
+    """(raw UTC, precision, local date) of one Sonarr episode's air date. Sonarr's time is real
+    only when TVDB gives the *series* an air time; without one the date is a calendar day in the
+    network's zone (R1.0e) — `airDate`, the local date Sonarr itself keeps. A TV series (not
+    anime) whose air time is exactly 00:00 has none either: that is what a streaming release
+    that drops all at once is filed as (Last Seen on Apple TV: its files land at about 01:20Z, not
+    Sonarr's 04:00Z), while the weekly drops carry a real time (Reacher, Strange New Worlds: files
+    land 0.2–0.5 h after Sonarr's 03:00 ET). Midnight is a real time for anime (a 24:00 JST
+    slot)."""
+    raw = ep.get("airDateUtc") or None
+    local = ep.get("airDate") or (raw[:10] if raw else None)
+    air = (series.get("airTime") or "").strip()
+    has_time = bool(air) and (anime or air != "00:00")
+    return raw, (air_time.TIME if has_time else air_time.DATE), local
+
+
+def _refresh_sonarr_dates(conn, show: dict) -> None:
+    """Only Sonarr's schedule for the episodes LCARS already holds (the daily refresh of a planned
+    show, R1.0c): the raw date, its precision and local date are re-read — Sonarr's candidate
+    is then current — and nothing else is touched."""
+    read = _read_sonarr(conn, show)
+    if read is None:
+        return
+    series, episodes = read
+    finished = air_sources.finished_seasons(conn, show["id"])
+    for ep in episodes:
+        if ep.get("seasonNumber") is None or ep.get("episodeNumber") is None:
+            continue
+        existing = sonarr_match.find_episode(conn, [show["id"]], ep)
+        if existing is None or existing["season"] in finished:
+            continue
+        raw, precision, local = _sonarr_air_fields(
+            series, ep, show["tracking_space"] == "anime")
+        conn.execute(
+            "UPDATE episode SET air_date_raw_sonarr = ?, air_raw_sonarr_precision = ?,"
+            " air_raw_sonarr_local_date = ? WHERE id = ?",
+            (raw, precision if raw else None, local, existing["id"]),
+        )
+
+
+def _fetch_sonarr(conn, show: dict, derive: bool = True) -> None:
+    read = _read_sonarr(conn, show)
+    if read is None:
+        return
+    series, episodes = read
+    tvdb_id_str = _external_id(conn, show["id"], "tvdb")
 
     # Save poster URL from Sonarr's own image list (same COALESCE pattern as
     # _fetch_radarr: keeps any URL already set by AniList; fills the gap for
@@ -1259,6 +1423,7 @@ def _fetch_sonarr(conn, show: dict, derive: bool = True) -> None:
     )
 
     now = util.now_utc_iso()
+    finished_seasons = air_sources.finished_seasons(conn, show["id"])
     for ep, existing, season_number, episode_number in routed:
         season_id = season_ids_by_number.get(season_number)
         if existing is not None:
@@ -1299,16 +1464,33 @@ def _fetch_sonarr(conn, show: dict, derive: bool = True) -> None:
                 "UPDATE episode SET tvdb_absolute = ? WHERE id = ?",
                 (ep.get("absoluteEpisodeNumber"), existing["id"]),
             )
+            # R1.0b (user 10-07): Sonarr's own schedule, re-read on every fetch — its candidate in
+            # `episode_air_candidate` is current, and what the other sources are held against.
+            # Only the raw capture: whether the stored date follows it is `air_sources`' rule.
+            if existing["season"] not in finished_seasons:  # a season aired fully: history
+                raw, precision, local = _sonarr_air_fields(
+                    series, ep, show["tracking_space"] == "anime")
+                conn.execute(
+                    "UPDATE episode SET air_date_raw_sonarr = ?, air_raw_sonarr_precision = ?,"
+                    " air_raw_sonarr_local_date = ? WHERE id = ?",
+                    (raw, precision if raw else None, local, existing["id"]),
+                )
             continue
         episode_id = ids.generate_id(conn, "e")
         availability_status, availability_path = _availability_from_sonarr_episode(ep)
+        raw_air, air_precision, local_day = _sonarr_air_fields(
+            series, ep, show["tracking_space"] == "anime")
+        date_only = bool(raw_air) and air_precision == air_time.DATE and local_day is not None
         conn.execute(
             "INSERT INTO episode"
             " (id, show_id, season, season_id, episode, sonarr_season, sonarr_episode, kind,"
             "  absolute_number, tvdb_absolute, air_date_utc, air_date_source,"
             "  air_date_raw_sonarr, runtime_minutes, available_via_sonarr, file_path_sonarr,"
-            "  available_checked_at, title, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sonarr', ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  available_checked_at, title, created_at, updated_at,"
+            "  air_precision, air_local_date, air_aired_at,"
+            "  air_raw_sonarr_precision, air_raw_sonarr_local_date)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sonarr', ?, ?, ?, ?, ?, ?, ?, ?,"
+            "  ?, ?, ?, ?, ?)",
             (
                 episode_id,
                 show["id"],
@@ -1331,8 +1513,8 @@ def _fetch_sonarr(conn, show: dict, derive: bool = True) -> None:
                 "special" if season_number == 0 else "regular",
                 None,  # absolute_number: Memory Alpha sets it below (R1.2c)
                 ep.get("absoluteEpisodeNumber"),  # tvdb_absolute (phase 3.1)
-                ep.get("airDateUtc"),
-                ep.get("airDateUtc"),
+                air_time.date_instant(local_day) if date_only else raw_air,
+                raw_air,
                 ep.get("runtime"),
                 availability_status,
                 availability_path,
@@ -1347,6 +1529,12 @@ def _fetch_sonarr(conn, show: dict, derive: bool = True) -> None:
                 ep.get("title"),  # 2026-08-16 — Data thin-client swap's own last gap
                 now,
                 now,
+                air_time.DATE if date_only else None,
+                local_day if date_only else None,
+                (air_time.aired_at(local_day, show["tracking_space"] == "anime")
+                 if date_only else None),
+                air_precision if raw_air else None,
+                local_day,
             ),
         )
 

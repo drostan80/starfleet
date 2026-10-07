@@ -77,6 +77,7 @@ import logging
 
 from lcars import (
     air_sources,
+    air_time,
     airdate_priority,
     animeschedule_client,
     fuzzy,
@@ -148,7 +149,7 @@ def _show_is_airing(conn, show_id: str) -> bool:
     docstring)."""
     row = conn.execute(
         "SELECT 1 FROM episode"
-        " WHERE show_id = ? AND (air_date_utc IS NULL OR air_date_utc > ?) LIMIT 1",
+        f" WHERE show_id = ? AND (air_date_utc IS NULL OR {air_time.aired_at_sql('')} > ?) LIMIT 1",
         (show_id, util.now_utc_iso()),
     ).fetchone()
     return row is not None
@@ -157,7 +158,7 @@ def _show_is_airing(conn, show_id: str) -> bool:
 def _airing_seasons(conn, show_id: str) -> list[int]:
     rows = conn.execute(
         "SELECT DISTINCT season FROM episode"
-        " WHERE show_id = ? AND (air_date_utc IS NULL OR air_date_utc > ?)",
+        f" WHERE show_id = ? AND (air_date_utc IS NULL OR {air_time.aired_at_sql('')} > ?)",
         (show_id, util.now_utc_iso()),
     ).fetchall()
     return [r["season"] for r in rows]
@@ -184,7 +185,7 @@ def _apply_or_flag(conn, show_id: str, item: dict) -> str:
         )
     placeholders = ",".join("?" for _ in seasons)
     matches = conn.execute(
-        f"SELECT id, air_date_utc, air_date_source FROM episode"
+        f"SELECT id, air_date_utc, air_date_source, air_precision FROM episode"
         f" WHERE show_id = ? AND episode = ? AND season IN ({placeholders})",
         (show_id, item["episode"], *seasons),
     ).fetchall()
@@ -210,6 +211,7 @@ def _apply_or_flag(conn, show_id: str, item: dict) -> str:
         item["air_date_utc"],
         episode_row["air_date_source"],
         episode_row["air_date_utc"],
+        existing_precision=episode_row["air_precision"] or "time",
     ):
         return "unchanged"  # same-source unchanged, or a different source's earlier date wins
 
@@ -225,6 +227,7 @@ def _apply_or_flag(conn, show_id: str, item: dict) -> str:
     )
     conn.execute(
         "UPDATE episode SET air_date_utc = ?, air_date_source = 'animeschedule',"
+        " air_precision = NULL, air_local_date = NULL, air_aired_at = NULL,"
         " updated_at = ? WHERE id = ?",
         (item["air_date_utc"], now, episode_row["id"]),
     )

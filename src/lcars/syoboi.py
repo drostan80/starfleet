@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 
-from lcars import air_sources, airdate_priority, status_rules, util
+from lcars import air_sources, air_time, airdate_priority, status_rules, util
 
 log = logging.getLogger(__name__)
 
@@ -367,7 +367,8 @@ def fill_airdate_gaps(conn) -> int:
 
     Joins through episode_anidb_mapping → show_external_id(syoboi) →
     syoboi_program, matching anidb_epno = count.  NULL-only — never
-    overwrites existing airdates.  Stamps air_date_source = 'syoboi'.
+    overwrites existing airdates, and skips a season that follows a chosen schedule.
+    Stamps air_date_source = 'syoboi'.
 
     For multi-entry shows (multiple AniDB anime IDs under one Sonarr
     show), we restrict to episodes whose anidb_anime_id matches the
@@ -376,7 +377,7 @@ def fill_airdate_gaps(conn) -> int:
     Syoboi broadcast times.
     """
     cursor = conn.execute(
-        """UPDATE episode SET
+        f"""UPDATE episode SET
              air_date_utc = sp_min.earliest_utc,
              air_date_source = 'syoboi'
            FROM episode_anidb_mapping m,
@@ -398,6 +399,7 @@ def fill_airdate_gaps(conn) -> int:
              AND sp_min.count = m.anidb_epno
              AND m.anidb_season = 1
              AND episode.air_date_utc IS NULL
+             AND NOT {air_time.LOCKED_SQL}
              AND episode.kind = 'regular'"""
     )
     filled = cursor.rowcount
@@ -428,20 +430,31 @@ def _rewire_condition() -> str:
     exact failure mode). `tests/test_airdate_priority.py`'s parity test
     checks this SQL fragment's behavior against `should_apply()`
     directly so the two can't silently disagree again."""
+    time_rule = (
+        f" ABS(strftime('%s', episode.air_date_utc) - strftime('%s', sp_min.earliest_utc))"
+        f"   > {airdate_priority.AIR_DATE_TOLERANCE_SECONDS}"
+        " AND (episode.air_date_source IN ('syoboi', 'sonarr', 'tvdb')"
+        "      OR sp_min.earliest_utc < episode.air_date_utc)"
+    )
+    # a stored date-only value: a Syoboi time within three days of it is its time arriving (a
+    # precision upgrade, `airdate_priority.within_upgrade_window`); otherwise the ordinary rule
+    date_rule = (
+        f" (ABS(strftime('%s', episode.air_date_utc) - strftime('%s', sp_min.earliest_utc))"
+        f"   <= {(air_time.UPGRADE_WINDOW_DAYS * 24 + 24) * 3600}"
+        "  OR episode.air_date_source IN ('syoboi', 'sonarr', 'tvdb')"
+        "  OR sp_min.earliest_utc < episode.air_date_utc)"
+    )
     return (
         f"{status_rules.followed_sql()} AND "  # R2.10: skipped seasons aren't followed
         "episode.air_date_source != 'manual'"
         f" AND NOT {air_sources.LOCKED_SQL}"  # a season following a chosen schedule is left alone
         " AND episode.air_date_utc != sp_min.earliest_utc"
-        # within the tolerance two sources agree (airdate_priority.within_tolerance): no change
-        f" AND ABS(strftime('%s', episode.air_date_utc) - strftime('%s', sp_min.earliest_utc))"
-        f"     > {airdate_priority.AIR_DATE_TOLERANCE_SECONDS}"
-        " AND (episode.air_date_source IN ('syoboi', 'sonarr')"
-        "      OR sp_min.earliest_utc < episode.air_date_utc)"
+        " AND ((COALESCE(episode.air_precision, 'time') = 'time' AND" + time_rule + ")"
+        "      OR (episode.air_precision = 'date' AND" + date_rule + "))"
     )
 
 
-def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
+def rewire_airdates(conn, *, dry_run: bool = False, only_airing: bool = False) -> dict:
     """Overwrite existing airdates with Syoboi's minute-accurate JST times.
 
     Unlike fill_airdate_gaps (NULL-only), this replaces a lower-priority
@@ -451,12 +464,21 @@ def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
     updates, different source only wins earlier" logic, expressed as
     SQL since this is a bulk UPDATE, not a per-row Python loop).
 
-    Same multi-entry collision guard as fill_airdate_gaps.
+    Same multi-entry collision guard as fill_airdate_gaps. `only_airing` leaves every season
+    that has aired fully alone (its dates never change).
 
     Returns {updated: int, by_source: {old_source: count}}.
     If dry_run=True, returns counts without writing.
     """
     condition = _rewire_condition()
+    if only_airing:
+        # a season that has aired fully is history: its dates never change (user 10-07)
+        condition += (
+            " AND EXISTS (SELECT 1 FROM episode x WHERE x.show_id = episode.show_id"
+            "  AND x.season = episode.season AND x.kind = 'regular'"
+            "  AND (x.air_date_utc IS NULL OR COALESCE(x.air_aired_at, x.air_date_utc)"
+            f"       >= '{util.utc_iso_offset(-air_sources.FINISHED_GRACE_DAYS)}'))"
+        )
 
     # Count what would change, broken down by old source
     preview = conn.execute(
@@ -497,7 +519,8 @@ def rewire_airdates(conn, *, dry_run: bool = False) -> dict:
     cursor = conn.execute(
         f"""UPDATE episode SET
              air_date_utc = sp_min.earliest_utc,
-             air_date_source = 'syoboi'
+             air_date_source = 'syoboi',
+             air_precision = NULL, air_local_date = NULL, air_aired_at = NULL
            FROM episode_anidb_mapping m,
                 show_external_id sei_syoboi,
                 show_external_id sei_anidb,

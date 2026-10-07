@@ -13,6 +13,8 @@ import time
 
 import httpx
 
+from lcars import air_time
+
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://api.tvmaze.com"
@@ -496,14 +498,22 @@ def fill_airdate_gaps(conn) -> int:
 
     Joins on sonarr_season/sonarr_episode (TVDB-compatible numbering)
     via the show's tvmaze external_id.  NULL-only — never overwrites
-    existing airdates.  Stamps air_date_source = 'tvmaze'.
+    existing airdates, and skips a season that follows a chosen schedule (its own rule fills it,
+    `air_sources.apply_choice`).  Stamps air_date_source = 'tvmaze'.  An episode TVmaze gives no
+    air time is a date (its airstamp is then a noon placeholder): `air_precision = 'date'`.
     """
     # SQLite UPDATE...FROM: the target table (episode) is implicit in
     # the SET/WHERE clauses; the FROM builds the joined source rows.
+    no_time = "(te.airtime IS NULL OR te.airtime = '' OR te.airstamp IS NULL OR te.airstamp = '')"
+    day = "COALESCE(NULLIF(te.airdate, ''), substr(te.airstamp, 1, 10))"
     cursor = conn.execute(
-        """UPDATE episode SET
-             air_date_utc = COALESCE(te.airstamp, te.airdate || 'T00:00:00Z'),
-             air_date_source = 'tvmaze'
+        f"""UPDATE episode SET
+             air_date_utc = CASE WHEN {no_time} THEN {day} || 'T00:00:00Z' ELSE te.airstamp END,
+             air_date_source = 'tvmaze',
+             air_precision = CASE WHEN {no_time} THEN 'date' END,
+             air_local_date = CASE WHEN {no_time} THEN {day} END,
+             air_aired_at = CASE WHEN {no_time}
+                                 THEN {air_time.aired_at_from_date_sql(day)} END
            FROM show_external_id tm, tvmaze_episode te
            WHERE tm.show_id = episode.show_id
              AND tm.service = 'tvmaze'
@@ -512,6 +522,7 @@ def fill_airdate_gaps(conn) -> int:
              AND te.episode = episode.sonarr_episode
              AND episode.air_date_utc IS NULL
              AND episode.kind = 'regular'
+             AND NOT {air_time.LOCKED_SQL}
              AND (te.airstamp IS NOT NULL OR (te.airdate IS NOT NULL AND te.airdate != ''))"""
     )
     filled = cursor.rowcount

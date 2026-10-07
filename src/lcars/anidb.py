@@ -24,7 +24,7 @@ from pathlib import Path
 
 import httpx
 
-from lcars import db, fribb, sonarr_match, util
+from lcars import air_time, db, fribb, sonarr_match, util
 
 log = logging.getLogger(__name__)
 
@@ -746,7 +746,8 @@ def _parse_episode_map(text: str) -> list[tuple[int, int]]:
 
 
 def _air_date_arbiter(
-    conn, anidb_anime_id: int, air_date_utc: str | None, cache: dict[int, list]
+    conn, anidb_anime_id: int, air_date_utc: str | None, cache: dict[int, list],
+    air_day: datetime.date | None = None,
 ) -> tuple[int, int] | None:
     """Match an LCARS episode to a real AniDB episode by broadcast date,
     within the anime the community mapping already picked. See
@@ -777,7 +778,9 @@ def _air_date_arbiter(
     """
     if not air_date_utc:
         return None
-    date_part = air_date_utc[:10]
+    # AniDB's `airdate` is the calendar day in Japan (R1.0e): the episode's day there, never the
+    # UTC date of the instant — a 25:00 JST broadcast is the day before in UTC.
+    date_part = (air_day or air_time.jst_date(air_date_utc)).isoformat()
     if anidb_anime_id not in cache:
         cache[anidb_anime_id] = conn.execute(
             "SELECT anidb_season, anidb_epno, airdate FROM anidb_episode"
@@ -1030,14 +1033,18 @@ def derive_episode_mappings(conn) -> dict:
                       sonarr_season, sonarr_episode,
                       COALESCE(air_date_raw_sonarr,
                                CASE WHEN air_date_source IN ('anilist', 'anidb')
-                                    THEN NULL ELSE air_date_utc END)
+                                    THEN NULL ELSE air_date_utc END),
+                      CASE WHEN air_date_raw_sonarr IS NOT NULL
+                           THEN air_raw_sonarr_precision ELSE air_precision END,
+                      CASE WHEN air_date_raw_sonarr IS NOT NULL
+                           THEN air_raw_sonarr_local_date ELSE air_local_date END
                FROM episode
                WHERE show_id = ? AND kind = 'regular'""",
             (show_id,),
         ).fetchall()
 
         for (ep_id, lcars_season, lcars_ep, existing_abs, sonarr_season,
-             sonarr_episode, air_date_utc) in episodes:
+             sonarr_episode, air_date_utc, air_precision, air_local) in episodes:
             if sonarr_season is not None and sonarr_episode is not None:
                 season, ep_num = sonarr_season, sonarr_episode
             elif diverged:
@@ -1102,7 +1109,8 @@ def derive_episode_mappings(conn) -> dict:
             # community-mapping result, never guesses.
             confidence = "auto"
             air_date_result = _air_date_arbiter(
-                conn, anidb_anime_id, air_date_utc, _anidb_ep_cache
+                conn, anidb_anime_id, air_date_utc, _anidb_ep_cache,
+                air_day=air_time.day_in_japan(air_date_utc, air_precision, air_local),
             )
             if air_date_result is not None:
                 anidb_season, anidb_epno = air_date_result
@@ -1670,16 +1678,21 @@ def fill_airdate_gaps_anidb(conn) -> int:
     """
     # Same FROM shape as fill_title_gaps — episode_anidb_mapping JOIN
     # anidb_episode, filtered to episode.id = m.episode_id.
+    # AniDB's date is the Japanese calendar day: a date, not an instant (R1.0e)
     cursor = conn.execute(
-        """UPDATE episode SET
+        f"""UPDATE episode SET
              air_date_utc = ae.airdate || 'T00:00:00Z',
-             air_date_source = 'anidb'
+             air_date_source = 'anidb',
+             air_precision = 'date',
+             air_local_date = ae.airdate,
+             air_aired_at = {air_time.aired_at_from_date_sql('ae.airdate')}
            FROM episode_anidb_mapping m, anidb_episode ae
            WHERE ae.anidb_anime_id = m.anidb_anime_id
              AND ae.anidb_season = m.anidb_season
              AND ae.anidb_epno = m.anidb_epno
              AND episode.id = m.episode_id
              AND episode.air_date_utc IS NULL
+             AND NOT {air_time.LOCKED_SQL}
              AND ae.airdate IS NOT NULL
              AND ae.airdate != ''"""
     )
@@ -1982,7 +1995,7 @@ def poll_memory_alpha(conn) -> dict:
     # ── 8. Rewire anime airdates to Syoboi (idempotent) ──
     try:
         with db.undo_on_error(conn):
-            rw = syoboi.rewire_airdates(conn)
+            rw = syoboi.rewire_airdates(conn, only_airing=True)
             result["syoboi_airdates_rewired"] = rw["updated"]
     except Exception:
         log.exception("Syoboi airdate rewire failed")

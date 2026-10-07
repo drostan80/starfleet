@@ -158,6 +158,14 @@ def _plan(conn, show_id: str, season: int, now: str) -> dict | None:
     levels = [z for z in syoboi_levels.leaf_levels(conn, show_id) if z["season_number"] == season]
     if not levels:
         return None
+    from lcars import air_sources
+
+    first_dated = min((e["air_date_utc"] for e in syoboi_levels.level_episodes(conn, levels[-1])
+                       if e["air_date_utc"]), default=None)
+    if air_sources.starts_before_previous_season_ended(conn, show_id, season, first_dated):
+        # R1.6/R1.22a: a season does not start before the one before it ended — the dates that
+        # made a Syoboi run "fit" are another season's (ten planned shows, 10-07): not a run
+        return None
     alignment, eps, books = syoboi_levels.run_for_level(conn, show_id, levels[-1])
     if alignment is None or not eps:
         return None  # not the same run (a cumulative count, another cour, another season)

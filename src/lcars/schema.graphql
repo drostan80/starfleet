@@ -101,6 +101,14 @@ enum AirDateSource {
   TVMAZE
   ANIDB
   SYOBOI
+  "TVDB's own episode list (R1.2e) — a calendar date only."
+  TVDB
+}
+
+"R1.0e — what an air date is: an instant (TIME), or only a calendar day in the broadcaster's own time zone (DATE)."
+enum AirPrecision {
+  TIME
+  DATE
 }
 
 "§5.2 — distinct from watch_event's existence; state=SKIPPED still satisfies show-level completion."
@@ -323,6 +331,13 @@ type Episode {
 
   airDateUtc: DateTime
   airDateSource: AirDateSource
+  "R1.0e — TIME: airDateUtc is an instant. DATE: only the day is known (airLocalDate, in the broadcaster's own zone: Japan for anime); airDateUtc is that day at 00:00Z, airedAt is the end of the day. A client shows a DATE as an all-day entry on airLocalDate, with no time and no zone conversion."
+  airPrecision: AirPrecision!
+  airLocalDate: String
+  "When the episode counts as aired: its air time, or the end of its local day for a DATE."
+  airedAt: DateTime
+  "The calendar's ! and ? icons (user 10-07): a source or station whose schedule moved by more than two hours from the value it first reported. Null when nothing moved."
+  airChange: AirChange
   "Kept for diffing/debugging (§5.2) — the raw, uncorrected value Sonarr itself reported."
   airDateRawSonarr: DateTime
 
@@ -713,6 +728,24 @@ type ScoreChangeEdge {
 type ScoreChangeConnection {
   edges: [ScoreChangeEdge!]!
   pageInfo: PageInfo!
+}
+
+type AirChange {
+  "! — a source or station the season does not follow has moved more than two hours."
+  other: Boolean!
+  "? — the schedule the season follows (a chosen schedule) has moved more than two hours."
+  chosen: Boolean!
+  details: [AirChangeDetail!]!
+}
+
+type AirChangeDetail {
+  source: String!
+  channel: String!
+  label: String!
+  previousAirDateUtc: DateTime!
+  currentAirDateUtc: DateTime!
+  hours: Float!
+  followed: Boolean!
 }
 
 type AirDateChange {
@@ -1639,7 +1672,7 @@ type Query {
   "§8/§6.4 — cross-show next-up, across watching-status and paced/catch-up shows, soonest-available-first by default."
   nextUp(first: Int, after: String, last: Int, before: String): NextUpEntryConnection!
 
-  "§6.7/B.1 — watching-status shows still running (a known episode with no/future date, Sonarr series status continuing/upcoming, or an episode aired in the last 14 days) not yet metadata-refreshed since the start of today (home_timezone, §6.13). Ops's own daily-pass query; a client's on-open trigger calls this same query, not a separate mutation — whichever caller sees a show here first, refreshShowMetadata (A.8) satisfies it, and the ceiling is naturally 'not stacking' regardless of which fires first."
+  "§6.7/B.1 — watching- or planned-status shows still running (planned ones get their schedules refreshed only, R1.0c) (a known episode with no/future date, Sonarr series status continuing/upcoming, or an episode aired in the last 14 days) not yet metadata-refreshed since the start of today (home_timezone, §6.13). Ops's own daily-pass query; a client's on-open trigger calls this same query, not a separate mutation — whichever caller sees a show here first, refreshShowMetadata (A.8) satisfies it, and the ceiling is naturally 'not stacking' regardless of which fires first."
   dueForMetadataRefresh(first: Int, after: String, last: Int, before: String): ShowConnection!
 
   "§5.5/B.2 — every season of a watching+actively-airing show (all of that show's seasons, not just the one currently airing) not reconciled against the Fribb dataset in the last 7 days. Ops's own weekly-tier query — self-gating (a season only appears once genuinely stale), so it can be checked as often as convenient without over-reconciling."
@@ -1751,8 +1784,8 @@ type Mutation {
   a no-op that returns the existing show unchanged — use setStatus instead.
   """
   skipShow(input: AddShowInput!): Show!
-  "A.8 — re-runs the same on-demand metadata fetch addShow triggers at creation; the manual-retry half of its best-effort policy."
-  refreshShowMetadata(showId: ID!): Show!
+  "A.8 — re-runs the same on-demand metadata fetch addShow triggers at creation; the manual-retry half of its best-effort policy. schedulesOnly (the daily pass for a planned show, R1.0c): only the show's schedules are re-read and brought up to date — no episodes added, nothing renumbered, no status or link moves."
+  refreshShowMetadata(showId: ID!, schedulesOnly: Boolean = false): Show!
   """
   §5.2/§6.7, B.3 — the global availability sweep: polls Sonarr's and
   Radarr's own /history (grab and import events, not a re-check of

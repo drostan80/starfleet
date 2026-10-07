@@ -23,11 +23,11 @@ import {
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=27';
+} from './api.js?v=28';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
-  onStatusChange,
-} from './calendar.js?v=46';
+  onStatusChange, airChangeBadge, isDateOnly,
+} from './calendar.js?v=47';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -99,6 +99,34 @@ function el(tag, cls, text) {
 function fmtDate(iso) {
   if (!iso) return '—';
   return iso.slice(0, 10);
+}
+
+/**
+ * An episode's air date cell (R1.0e): a date-only episode shows its own calendar day; a timed one
+ * shows the day in the viewer's own zone (not the UTC date: a 25:00 JST broadcast is the day
+ * before in UTC), with the time on hover. The change icons (! another source moved its schedule,
+ * ? the followed schedule did, more than two hours) sit next to it.
+ */
+function airDateCell(ep) {
+  const cell = el('span', 'sp-ep-airdate', '');
+  if (!ep.airDateUtc) {
+    cell.textContent = '—';
+    return cell;
+  }
+  if (isDateOnly(ep)) {
+    cell.textContent = ep.airLocalDate;
+    cell.title = 'date only — the release time is not known';
+  } else {
+    const d = new Date(ep.airDateUtc);
+    cell.textContent = d.toLocaleDateString('en-CA');  // YYYY-MM-DD, viewer's zone
+    cell.title = d.toLocaleString([], {
+      weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+    });
+  }
+  const badge = airChangeBadge(ep);
+  if (badge) cell.appendChild(badge);
+  return cell;
 }
 
 /**
@@ -1484,7 +1512,7 @@ function renderAnidbOrder(show, container, cfg) {
       const titleCell = el('div', 'sp-ep-title-cell');
       titleCell.appendChild(el('span', 'sp-ep-title', ep.title || 'TBA'));
       row.appendChild(titleCell);
-      row.appendChild(el('span', 'sp-ep-airdate', fmtDate(ep.airDateUtc)));
+      row.appendChild(airDateCell(ep));
       epList.appendChild(row);
     }
     card.appendChild(epList);
@@ -1524,7 +1552,7 @@ function buildAnidbEpRow(ep, show, cfg) {
   row.appendChild(titleCell);
 
   // Air date
-  row.appendChild(el('span', 'sp-ep-airdate', fmtDate(ep.airDateUtc)));
+  row.appendChild(airDateCell(ep));
 
   // mpv play button
   const mpvCell = el('div', 'sp-ep-mpv');
@@ -2779,7 +2807,7 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     row.appendChild(titleCell);
 
     // Air date
-    row.appendChild(el('span', 'sp-ep-airdate', fmtDate(ep.airDateUtc)));
+    row.appendChild(airDateCell(ep));
 
     // mpv play button
     const mpvCell = el('div', 'sp-ep-mpv');

@@ -43,13 +43,61 @@ rule applies to TV series, ask — do not assume.
   follows** — the season's dates are then written from that schedule and no other source
   changes them, until you go back to automatic. A date you set by hand on an episode
   outranks a chosen schedule. Sources that only fill an empty date are unaffected.
+  `[decided 2026-10-07]` **Every source's schedule is refreshed constantly** — the calendar
+  exists to follow the real schedule — and each candidate remembers the value it **first**
+  reported and logs each later change. The automatic pick is the **earliest timed**
+  candidate, applied when a candidate **changes or appears** (earliest is how the likeliest
+  date is chosen at the onset, not a hard rule: a source that learns of a change may move a
+  date later, and a stale earlier source does not undo it). An **empty date** takes the
+  earliest candidate there is. **TV (not anime): Sonarr's date is the pick**; another
+  source only when Sonarr has none. **A chosen schedule applies from then on, until you
+  clear it** (a missed week moves the dates); only an episode the chosen source has **no
+  date for** takes the earliest candidate, until the source has one. A `manual` date
+  outranks all of it.
+  **Only seasons that are airing or planned** `[decided 2026-10-07]`: a season is **airing** (an
+  episode dated in the future or aired in the last 14 days, or with no date), **planned** (its
+  status is planned: a future season is planned, whatever date a source wrongly gave it) or
+  **history** (aired fully and not planned). A history season is not refreshed (no API call is
+  spent on it) and none of its dates changes by any automatic writer; only your own hand does (a
+  manual date, choosing a schedule). An airing season is refreshed daily, a planned one weekly.
+  **Change icons** `[decided 2026-10-07]`: next to an air date-time on the calendar and the
+  show page, **`!`** when a source or station the season does not follow has moved its
+  schedule by **more than two hours** from the value it first reported, **`?`** when the
+  schedule the season follows (a chosen one) has. They count from the first refresh after
+  the baseline was taken.
 - **R1.0c A show is refreshed daily while it is still running** `[decided 2026-10-04]`: a
   *watching* show gets the daily episode refresh when a known episode has no date or a
   future one, **or** Sonarr says the series is continuing/upcoming, **or** an episode aired
   in the last 14 days — so the episodes after the last known one are found. A show page
   has a **refresh** button that does this for that one show at once: episode data (TVmaze
   for TV; AniDB and Syoboi for anime, within AniDB's limits), every source's schedule, and
-  art.
+  art. `[decided 2026-10-07]` A **planned** show running by the same test is owed its
+  **schedules** daily (Sonarr's dates for the episodes held, TVmaze for TV, AniList's airing
+  schedule for anime — no episodes added, nothing renumbered, no status or link moved), and
+  **daily** while one of its seasons is airing, **weekly** while the only open seasons are
+  planned, and not at all when every season is history.
+- **R1.0e An air date is a time or a date** `[decided 2026-10-07]`: a **time** is an instant
+  (AniList, Syoboi, animeschedule, TVmaze with an air time, Sonarr when TVDB gives the series
+  an air time). A **date** is a calendar day in the broadcaster's own time zone (AniDB, TVDB's
+  own list, TVmaze with no air time — its noon `airstamp` is then a placeholder —, Sonarr when
+  the series has no air time, and a streaming release TVmaze knows has no air time, which
+  drops all at once). A date-only episode shows as an **all-day entry on its own day**, with
+  no time and no zone conversion, and **counts as aired at the end of its local day**: Japan
+  (UTC+9) for anime, the latest US zone (UTC-8) otherwise, so it is never called aired early.
+  A date and a time are never compared as if they were the same kind: a date-only candidate
+  fills an episode only when no timed one exists, and a timed one replaces a date-only value
+  within three days of it. The Japanese day of a time is its **JST date** — AniDB's dates and
+  AniList's start dates are compared on that, never on the UTC date.
+  **Proposed details, built but not yet confirmed by you** `[proposed 2026-10-07]` — these are
+  Claude's choices and become rules only on your yes: (a) "end of the local day" is Japan
+  (UTC+9) for anime and UTC-8 (the latest US zone) for everything else, a date-only value being
+  a day with no known zone; (b) a timed candidate replaces a date-only value within **three
+  days** of it; (c) a TV series whose air time in Sonarr is exactly **00:00** has no air time
+  (Last Seen: files land ~01:20Z against Sonarr's 04:00Z) while 03:00 weekly drops keep theirs
+  (Reacher, Strange New Worlds: files 0.2–0.5 h after it); (d) inside a season still airing, an anime
+  episode that aired more than **45 days** ago keeps its date when a source moves; (e) a Sonarr/TVDB date more than **60 days** from what a broadcast-aware source holds is not applied over it (a wrong link's dates, not a reschedule); (f) the change icons' baseline is
+  re-taken when a source gains or loses an air time, and an AniList schedule an open
+  wrong-entry review distrusts is a candidate to choose but never applied automatically.
 - **R1.2** Episodes are ordered by **absolute episode number**, derived from AniDB,
   Fribb and other sources. On disagreement, or where disambiguation is needed,
   order by **air date-time**.
@@ -83,6 +131,15 @@ rule applies to TV series, ask — do not assume.
   seasons may be divided into parts that other sources consider seasons — this is
   the first main reconciliation needed.
 - **R1.7** Sonarr/TVDB season division is the first guide (anime and TV series).
+- **R1.6a Seasons follow each other in time** `[decided 2026-10-07]`: a season does not start
+  before the season before it ended. A season dated like the season before it is a copy of it
+  (ten planned shows' announced sequels carried their first season's premiere date, which made
+  them look aired and let Syoboi's first-season run pass for theirs). So: an AniList schedule
+  that begins before the previous season ended, or for an id another level holds (R1.22), is
+  not written onto a level; a Syoboi run does not become a level's provisional episodes
+  (R1.2g) when that level starts before the previous season ended; `lcars rulecheck` R1.6-copy
+  (violation) lists an announced season dated exactly like the one before it. Aired history is
+  never listed or targeted.
 - **R1.8 Season 0 must not exist in our system.** `[clarified 2026-09-27]` Season
   0 exists in TVDB (a source bucket, kept only as that source's numbering); every
   episode in it must get an absolute number and be mapped per R1.8a–c. TVDB/Sonarr put side mini-series,
@@ -912,3 +969,5 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-10-06 — R1.22b (an entry filling several whole TVDB seasons is placed by its anime-lists episode range, one entry over those levels); R1.11w-note (a count difference is information, not a review); R3.7d-review (add-check reviews take a TVDB id from the note, and carry AniList/MAL/TVDB/Sonarr links).
 - 2026-10-06 — R2.14 and R2.7: season 0 (levels of kind special) exempt from both (rulecheck only; the status engine is unchanged).
 - 2026-10-06 (v0.4.6) — R3.7c built (independent sources: Fribb+anime-lists = one), R3.7d guarded, R3.7f link provenance + recheck (8.8.5), 8.8.3 evidence on the review, R4.9 one ordered list-hub task.
+- 2026-10-07 — R1.0b (only airing seasons are refreshed or changed; every schedule refreshed and diffed; earliest timed candidate applied on change; empty dates take the earliest; TV follows Sonarr; a chosen schedule applies from then on, filling only the dates it lacks; `!` / `?` change icons), R1.0c (planned shows owed their schedules daily), R1.0e (an air date is a time or a date: precision, JST/US end-of-day "aired at", all-day display).
+- 2026-10-07 — R1.6a (seasons follow each other in time; the guards against a copied season date), R1.0b/R1.0c (seasons are airing / planned / history; planned refreshed weekly).

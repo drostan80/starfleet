@@ -11,7 +11,7 @@ air time) can fill first and TVDB only takes what is still empty.
 
 from __future__ import annotations
 
-from lcars import ids, util
+from lcars import air_time, ids, util
 
 
 def insert_missing(conn, show_id: str, episodes: list[dict]) -> tuple[int, dict]:
@@ -46,11 +46,17 @@ def insert_missing(conn, show_id: str, episodes: list[dict]) -> tuple[int, dict]
 
 
 def fill_air_dates(conn, show_id: str, dates: dict) -> int:
-    """TVDB's date-only air date, only where the episode still has none."""
+    """TVDB's date-only air date, only where the episode still has none (and its season does not
+    follow a chosen schedule). It is a calendar day: `air_precision = 'date'` (R1.0e)."""
+    show = conn.execute("SELECT tracking_space FROM show WHERE id = ?", (show_id,)).fetchone()
+    anime = show is not None and show[0] == "anime"
     filled = 0
     for (season, episode), aired in dates.items():
         filled += conn.execute(
-            "UPDATE episode SET air_date_utc = ?, air_date_source = 'tvdb'"
-            " WHERE show_id = ? AND season = ? AND episode = ? AND air_date_utc IS NULL",
-            (aired + "T00:00:00Z", show_id, season, episode)).rowcount
+            "UPDATE episode SET air_date_utc = ?, air_date_source = 'tvdb', air_precision = 'date',"
+            " air_local_date = ?, air_aired_at = ?"
+            " WHERE show_id = ? AND season = ? AND episode = ? AND air_date_utc IS NULL"
+            f" AND NOT {air_time.LOCKED_SQL}",
+            (air_time.date_instant(aired), aired, air_time.aired_at(aired, anime),
+             show_id, season, episode)).rowcount
     return filled

@@ -27,7 +27,7 @@ import datetime as dt
 import logging
 import time
 
-from lcars import anilist_client, fribb, ids, level_parts, season_ranges, util
+from lcars import air_time, anilist_client, fribb, ids, level_parts, season_ranges, util
 
 log = logging.getLogger(__name__)
 
@@ -72,8 +72,7 @@ def facts_for(anilist_ids) -> dict[int, dict | None]:
 
 def jst_date(air_date_utc: str) -> dt.date:
     """AniList counts a start date as the calendar date in Japan; Sonarr stores UTC."""
-    d = dt.datetime.strptime(air_date_utc[:19], "%Y-%m-%dT%H:%M:%S") + dt.timedelta(hours=9)
-    return d.date()
+    return air_time.jst_date(air_date_utc)
 
 
 def _is_leftover(conn, z) -> bool:
@@ -136,7 +135,8 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
         return out
     by_season: dict[int, list] = {}
     for ep in conn.execute(
-        "SELECT season, absolute_number, air_date_utc FROM episode WHERE show_id = ? AND season > 0"
+        "SELECT season, absolute_number, air_date_utc, air_precision, air_local_date FROM episode"
+        " WHERE show_id = ? AND season > 0"
         " AND kind = 'regular' AND absolute_number IS NOT NULL ORDER BY absolute_number",
         (show_id,),
     ):
@@ -166,7 +166,9 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
         if fa["start"] is not None:  # the first episode that aired on its start date, in Japan
             for n, eps in by_season.items():
                 for ep in eps:
-                    if ep["air_date_utc"] and jst_date(ep["air_date_utc"]) == fa["start"]:
+                    if ep["air_date_utc"] and air_time.day_in_japan(
+                        ep["air_date_utc"], ep["air_precision"], ep["air_local_date"]
+                    ) == fa["start"]:
                         target, start_abs = n, ep["absolute_number"]
                         break
                 if target is not None:

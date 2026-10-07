@@ -1051,6 +1051,18 @@ body {
   white-space: nowrap;
 }
 
+.air-change {
+  display: inline-flex; gap: 2px; margin-left: 4px; vertical-align: middle; cursor: help;
+}
+.air-change-other, .air-change-chosen {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 13px; height: 13px; padding: 0 3px; border-radius: 7px;
+  font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 700; line-height: 1;
+  color: #0d0f14;
+}
+.air-change-other  { background: var(--st-planning); }   /* ! another source moved */
+.air-change-chosen { background: var(--accent); color: #fff; }  /* ? the followed schedule moved */
+
 .avail-icon {
   font-size: 10px;
   flex-shrink: 0;

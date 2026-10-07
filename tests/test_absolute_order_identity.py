@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from lcars import (
+    air_sources,
     anidb,
     anilist_client,
     config,
@@ -281,6 +282,7 @@ def test_ambiguous_evidence_leaves_the_stored_id_alone(conn):
 
 
 def test_anilist_air_dates_skip_a_season_whose_schedule_is_far_from_sonarr(conn, monkeypatch):
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 10**5)  # fixed old dates: airing
     # LCARS S4 (2024) wrongly linked to the 2026 entry — same episode count.
     conn.execute("UPDATE season SET anilist_id = 4004 WHERE id = 'z-sea004'")
     conn.execute(
@@ -310,6 +312,67 @@ def test_anilist_air_dates_skip_a_season_whose_schedule_is_far_from_sonarr(conn,
         "SELECT proposed_value_chain FROM pending_review WHERE entity_id = 'z-sea004'"
     ).fetchone()
     assert "wrong AniList entry" in review["proposed_value_chain"]
+
+
+def test_the_drift_review_offers_a_choice_and_it_stays_closed_once_answered(conn, monkeypatch):
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 10**5)  # fixed old dates: airing
+    # user 10-07: Kanojo no Tomodachi's review had no option to dismiss it
+    import json
+
+    from lcars import reviews
+
+    conn.execute("UPDATE season SET anilist_id = 4004 WHERE id = 'z-sea004'")
+    for n, raw in ((1, "2024-04-05T14:00:00Z"), (2, "2024-04-12T14:00:00Z"),
+                   (3, "2024-04-19T14:00:00Z")):
+        conn.execute(
+            "INSERT OR REPLACE INTO episode (id, show_id, season, episode, kind, air_date_utc,"
+            " air_date_source, air_date_raw_sonarr, season_id, created_at, updated_at)"
+            " VALUES (?, ?, 4, ?, 'regular', ?, 'sonarr', ?, 'z-sea004', 'x', 'x')",
+            (f"e-4{n}xxxx", SHOW, n, raw, raw),
+        )
+    conn.commit()
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda anilist_id: {
+        "episodes": 3, "nodes": [{"episode": 1, "airingAt": 1775224800},
+                                 {"episode": 2, "airingAt": 1775829600},
+                                 {"episode": 3, "airingAt": 1776434400}]})
+    metadata._reconcile_air_dates(conn, {"id": SHOW})
+    conn.commit()
+    review = conn.execute("SELECT * FROM pending_review WHERE entity_id = 'z-sea004'").fetchone()
+    assert [c["id"] for c in json.loads(review["choices"])] == ["link_ok"]
+    assert review["show_id"] == SHOW
+    reviews.resolve_choice(conn, review["id"], "link_ok", "holodeck", None)
+    metadata._reconcile_air_dates(conn, {"id": SHOW})
+    assert conn.execute("SELECT COUNT(*) FROM pending_review WHERE resolved_at IS NULL"
+                        ).fetchone()[0] == 0  # remembered: not opened again for the same finding
+
+
+def test_a_season_following_a_chosen_schedule_is_not_checked_and_its_review_closes(
+    conn, monkeypatch
+):
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 10**5)  # fixed old dates: airing
+    from lcars import pending_review
+
+    conn.execute("UPDATE season SET anilist_id = 4004 WHERE id = 'z-sea004'")
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, air_date_source,"
+        " air_date_raw_sonarr, season_id, created_at, updated_at)"
+        " VALUES ('e-43xxxx', ?, 4, 3, 'regular', '2024-04-19T14:00:00Z', 'syoboi',"
+        " '2011-04-19T14:00:00Z', 'z-sea004', 'x', 'x')", (SHOW,))
+    pending_review.open_or_extend(
+        conn, "season", "z-sea004", "anilist_id", "anilist", None,
+        "season 4: AniList media 4004's airing schedule is ~5451 days from Sonarr's own dates")
+    conn.execute("INSERT INTO season_air_choice (season_id, source, channel, chosen_at)"
+                 " VALUES ('z-sea004', 'syoboi', '128', 'x')")
+    conn.commit()
+    monkeypatch.setattr(anilist_client, "fetch_airing_schedule", lambda anilist_id: {
+        "episodes": 3, "nodes": [{"episode": n, "airingAt": 1775224800 + n * 604800}
+                                 for n in (1, 2, 3)]})
+    metadata._reconcile_air_dates(conn, {"id": SHOW})
+    assert conn.execute("SELECT COUNT(*) FROM pending_review WHERE resolved_at IS NULL"
+                        ).fetchone()[0] == 0
+    assert _episode(conn, 4, 3)["air_date_utc"] == "2024-04-19T14:00:00Z"   # nothing written
+    assert conn.execute("SELECT COUNT(*) FROM episode_air_candidate WHERE source = 'anilist'"
+                        ).fetchone()[0] >= 1   # but AniList's schedule is a candidate to choose
 
 
 def test_a_guess_never_shares_an_anidb_episode_with_a_confirmed_one(conn):

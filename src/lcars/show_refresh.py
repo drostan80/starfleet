@@ -150,13 +150,15 @@ def refresh_show_data(conn, show_id: str) -> dict:
 
     # 4. every schedule we now know, and the user's chosen ones re-applied
     try:
-        counts = air_sources.collect_candidates(conn, show_id)
-        applied = air_sources.apply_all_choices(conn, show_id)
+        result = air_sources.refresh_show_schedules(conn, show_id)
         conn.commit()
-        total = sum(counts.values())
+        total = result["candidates"]
         detail = f"{total} stored-source dates listed"
-        if applied["applied"]:
-            detail += f"; {applied['applied']} dates updated from the schedule you chose"
+        if result["filled"] or result["changed"]:
+            updated = result["filled"] + result["changed"]
+            detail += f"; {updated} dates updated by the automatic rule"
+        if result["chosen"]["applied"]:
+            detail += f"; {result['chosen']['applied']} dates updated from the schedule you chose"
         step("Schedules", True, detail)
         return {"steps": steps, "candidates": total}
     except Exception as e:

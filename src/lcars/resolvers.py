@@ -27,6 +27,7 @@ from graphql import GraphQLError
 
 from lcars import (
     air_sources,
+    air_time,
     anidb,
     anilist_client,
     animeschedule,
@@ -123,8 +124,9 @@ ENUMS = [
     _enum(
         "AirDateSource",
         "sonarr", "anilist", "animeschedule", "manual",
-        "tvmaze", "anidb", "syoboi",
+        "tvmaze", "anidb", "syoboi", "tvdb",
     ),
+    _enum("AirPrecision", "time", "date"),
     _enum("EpisodeState", "unwatched", "watched", "skipped"),
     _enum("PersonRoleType", "voice_actor", "actor", "staff"),
     _enum("StudioRoleType", "studio", "publisher", "network"),
@@ -863,12 +865,18 @@ def resolve_episodes_in_range(_, info, start, end, **page_args):
     arbitrarily far into the past or future — built for Data's own
     calendar render path (B.11f), which has no floor on how far back
     step_back() can go."""
+    # A date-only episode (R1.0e) belongs to its local day, not to an instant: it is in the window
+    # whose local days include `air_local_date`. The window's first local midnight is `start`, so
+    # `start + 12 h` falls on that day for any zone from UTC-12 to UTC+12.
     return pagination.paginate(
         db.get_connection(),
         "episode",
-        "air_date_utc IS NOT NULL AND air_date_utc >= ? AND air_date_utc < ?"
+        "((COALESCE(air_precision, 'time') = 'time' AND air_date_utc IS NOT NULL"
+        "   AND air_date_utc >= ? AND air_date_utc < ?)"
+        "  OR (air_precision = 'date' AND air_local_date >= date(?, '+12 hours')"
+        "      AND air_local_date < date(?, '+12 hours')))"
         f" AND {status_rules.followed_sql()}",
-        (start, end),
+        (start, end, start, end),
         **page_args,
     )
 
@@ -1008,11 +1016,24 @@ def resolve_due_for_metadata_refresh(_, info, **page_args):
     conn = db.get_connection()
     cutoff = util.start_of_today_utc(config.get_current().home_timezone)
     candidates = conn.execute(
-        "SELECT * FROM show WHERE status = 'watching'"
+        "SELECT * FROM show WHERE status IN ('watching', 'planned')"
         " AND (metadata_last_refreshed_at IS NULL OR metadata_last_refreshed_at < ?)",
         (cutoff,),
     ).fetchall()
-    due = [dict(show) for show in candidates if _show_needs_episode_refresh(conn, show)]
+    weekly = util.utc_iso_offset(-7)
+    due = []
+    for show in candidates:
+        if not _show_needs_episode_refresh(conn, show):
+            continue
+        if show["status"] == "planned":
+            # a planned show is owed only its schedules (R1.0c): daily while a season is airing,
+            # weekly while the only open seasons are planned, never when every
+            # season has aired fully
+            cadence = air_sources.refresh_cadence(conn, show["id"])
+            if cadence is None or (cadence == "weekly" and (
+                    show["metadata_last_refreshed_at"] or "") >= weekly):
+                continue
+        due.append(dict(show))
     return pagination.paginate_list(due, **page_args)
 
 
@@ -1830,6 +1851,22 @@ def resolve_episode_watch_events(obj, info, **page_args):
     )
 
 
+@episode_type.field("airPrecision")
+def resolve_episode_air_precision(obj, info):
+    return obj["air_precision"] or "time"
+
+
+@episode_type.field("airedAt")
+def resolve_episode_aired_at(obj, info):
+    return obj["air_aired_at"] or obj["air_date_utc"]
+
+
+@episode_type.field("airChange")
+def resolve_episode_air_change(obj, info):
+    flags = air_sources.air_change_flags(db.get_connection(), obj["id"])
+    return flags if flags["details"] else None
+
+
 @episode_type.field("airDateHistory")
 def resolve_episode_air_date_history(obj, info, **page_args):
     return pagination.paginate(
@@ -2183,7 +2220,7 @@ def resolve_skip_show(_, info, input):
 
 
 @mutation.field("refreshShowMetadata")
-def resolve_refresh_show_metadata(_, info, show_id):
+def resolve_refresh_show_metadata(_, info, show_id, schedules_only=False):
     """A.8 — the manual-retry half of the "best effort and system to
     try again... manual fix by user is also an option" policy
     (confirmed 2026-08-08): calls the exact same fetch_and_populate()
@@ -2194,7 +2231,10 @@ def resolve_refresh_show_metadata(_, info, show_id):
     nothing here writes to a changed_by-style column."""
     conn = db.get_connection()
     _require_show(conn, show_id)
-    metadata.fetch_and_populate(conn, show_id)
+    if schedules_only:
+        metadata.refresh_schedules_only(conn, show_id)
+    else:
+        metadata.fetch_and_populate(conn, show_id)
     conn.commit()
     return _get_show(conn, show_id)
 
@@ -3499,7 +3539,7 @@ def _show_is_airing(conn, show_id: str) -> bool:
     so it's always "non-airing" by this definition."""
     row = conn.execute(
         "SELECT 1 FROM episode"
-        " WHERE show_id = ? AND (air_date_utc IS NULL OR air_date_utc > ?) LIMIT 1",
+        f" WHERE show_id = ? AND (air_date_utc IS NULL OR {air_time.aired_at_sql('')} > ?) LIMIT 1",
         (show_id, util.now_utc_iso()),
     ).fetchone()
     return row is not None
@@ -3868,8 +3908,8 @@ def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
     watched_at = watched_at or now
     episodes = conn.execute(
         "SELECT episode FROM episode"
-        " WHERE show_id = ? AND season = ? AND air_date_utc IS NOT NULL AND air_date_utc <= ?"
-        " ORDER BY episode",
+        " WHERE show_id = ? AND season = ? AND air_date_utc IS NOT NULL"
+        f" AND {air_time.aired_at_sql('')} <= ? ORDER BY episode",
         (show_id, season, now),
     ).fetchall()
     created_ids = []
@@ -3884,7 +3924,8 @@ def resolve_mark_season_watched(_, info, show_id, season, watched_at=None):
     if created_ids:
         conn.execute(
             "UPDATE episode SET state = 'watched', updated_at = ?"
-            " WHERE show_id = ? AND season = ? AND air_date_utc IS NOT NULL AND air_date_utc <= ?",
+            " WHERE show_id = ? AND season = ? AND air_date_utc IS NOT NULL"
+            f" AND {air_time.aired_at_sql('')} <= ?",
             (now, show_id, season, now),
         )
         _stamp_season_started_at(conn, show_id, season, watched_at)  # write-mirror, todo.md
@@ -3954,7 +3995,8 @@ def resolve_set_episode_air_date(_, info, episode_id, air_date_utc):
     episode = _require_episode(conn, episode_id)
     now = util.now_utc_iso()
     conn.execute(
-        "UPDATE episode SET air_date_utc = ?, air_date_source = 'manual', updated_at = ?"
+        "UPDATE episode SET air_date_utc = ?, air_date_source = 'manual',"
+        " air_precision = NULL, air_local_date = NULL, air_aired_at = NULL, updated_at = ?"
         " WHERE id = ?",
         (air_date_utc, now, episode_id),
     )

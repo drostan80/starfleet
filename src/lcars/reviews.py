@@ -27,6 +27,9 @@ Kinds with choices:
   individual season.
 - `tvdb_recheck` — Fribb later gives another TVDB id than the stored link (8.8.5): keep mine /
   Fribb's is right (corrected on the show page, where Sonarr moves with it).
+- `anilist_id` (a schedule far from Sonarr's dates) — the AniList link is right, ignore the gap
+  (remembered: it is not opened again for the same finding). A season that follows a schedule
+  you chose is not checked at all.
 - `tvdb_candidate` — a TVDB id only one source suggests for an existing show (R3.7e): it is
   this show / it isn't / the TVDB id in your note is (R1.14 and R3.2a still apply).
 """
@@ -63,6 +66,7 @@ LABELS = {
     "retry_now": "Try to write it to the lists again now",
     "unlock": "Release the lock without confirming",
     "acknowledge": "Understood, leave it as it is",
+    "link_ok": "The AniList link is right — ignore this gap",
 }
 
 

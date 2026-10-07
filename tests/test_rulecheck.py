@@ -367,3 +367,41 @@ def test_r110a_a_level_with_a_list_id_and_no_episode_is_found_unless_it_is_tvdbs
     _lvl(db_path, "z-lvl004", "s-lvl001", "tvdb_season", number=4, anilist=444)
     found = _by_rule(db_path)["R1.10a"]
     assert found.count == 1 and "S4" in found.samples[0]
+
+
+def test_r10b_an_empty_date_with_a_candidate_a_stale_schedule_and_a_date_stored_as_a_time(db_path):
+    # user 10-07: the refresh keeps every schedule current and dates stay honest about precision
+    _show(db_path, "s-frsh01", "Fresh", status="watching")
+    _ep(db_path, "e-frsh01", "s-frsh01", 1, 1, 1, date=None, source=None)
+    _ep(db_path, "e-frsh02", "s-frsh01", 1, 2, 2, date="2999-01-01T00:00:00Z", source="tvdb")
+    _write(db_path, "INSERT INTO episode_air_candidate (episode_id, source, channel, air_date_utc,"
+                    " fetched_at) VALUES ('e-frsh01', 'sonarr', '', '2999-01-08T00:00:00Z',"
+                    " '2999-01-01T00:00:00Z')")  # re-stamped every pass: not what freshness reads
+    _write(db_path, "UPDATE show SET metadata_last_refreshed_at = '2020-01-01T00:00:00Z'"
+                    " WHERE id = 's-frsh01'")
+    found = _by_rule(db_path)
+    assert found["R1.0b-empty"].count == 1
+    assert found["R1.0e"].count == 1                       # a TVDB date with no precision
+    assert found["R1.0b-fresh"].count == 1                 # the daily refresh stopped in 2020
+    _write(db_path, "UPDATE episode SET air_precision = 'date' WHERE id = 'e-frsh02'")
+    _write(db_path, "UPDATE episode SET air_date_utc = '2999-01-08T00:00:00Z', air_date_source ="
+                    " 'sonarr' WHERE id = 'e-frsh01'")
+    _write(db_path, "UPDATE show SET metadata_last_refreshed_at = strftime('%Y-%m-%dT%H:%M:%SZ',"
+                    " 'now') WHERE id = 's-frsh01'")
+    found = _by_rule(db_path)
+    assert (found["R1.0b-empty"].count, found["R1.0e"].count, found["R1.0b-fresh"].count) \
+        == (0, 0, 0)
+
+
+def test_r16_an_announced_season_dated_like_the_season_before_it_is_a_violation(db_path):
+    _show(db_path, "s-copy01", "Copy", status="planned")
+    for eid, season, ep, date, title in (("e-copy01", 1, 1, "2024-01-03T14:30:00Z", "Pilot"),
+                                         ("e-copy02", 1, 2, "2024-03-27T14:30:00Z", "Finale"),
+                                         ("e-copy03", 2, 1, "2024-01-03T14:30:00Z", "TBA")):
+        _ep(db_path, eid, "s-copy01", season, ep, ep, date=date)
+        _write(db_path, "UPDATE episode SET title = ? WHERE id = ?", (title, eid))
+    assert _by_rule(db_path)["R1.6-copy"].count == 1
+    # an old, aired and titled show is history: never listed, whatever TVDB's numbering looks like
+    _write(db_path, "UPDATE episode SET title = 'Episode 1' WHERE id = 'e-copy03'")
+    assert _by_rule(db_path)["R1.6-copy"].count == 0
+    assert "R1.6" not in _by_rule(db_path)

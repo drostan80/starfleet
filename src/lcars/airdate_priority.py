@@ -48,6 +48,8 @@ corrects_a_sonarr_seeded_date`.)
 
 from datetime import datetime
 
+from lcars import air_time
+
 # Sources no automatic writer may ever overwrite.
 PROTECTED_SOURCES: frozenset[str] = frozenset({"manual"})
 
@@ -55,6 +57,7 @@ PROTECTED_SOURCES: frozenset[str] = frozenset({"manual"})
 # than a genuine competing broadcast — any different source may replace
 # it in either direction. See module docstring's exception to rule 3.
 _WEAK_SOURCES: frozenset[str] = frozenset({"sonarr", "tvdb"})
+WEAK_SOURCES = _WEAK_SOURCES
 
 # Two sources a few minutes apart (AniList 14:46 vs Sonarr 14:45) are saying the same thing, not
 # disagreeing: nothing changes and nothing is flagged (user 2026-10-05: no reviews that tell
@@ -76,11 +79,20 @@ def within_tolerance(date_a: str | None, date_b: str | None) -> bool:
     return abs((a - b).total_seconds()) <= AIR_DATE_TOLERANCE_SECONDS
 
 
+def within_upgrade_window(timed_date: str | None, date_only: str | None) -> bool:
+    """Is a timed value close enough to a date-only one to be the same broadcast (a precision
+    upgrade, not a different slot)? `date_only` is that day at 00:00Z."""
+    hours = air_time.hours_apart(timed_date, date_only)
+    return hours is not None and hours <= air_time.UPGRADE_WINDOW_DAYS * 24 + 24
+
+
 def should_apply(
     candidate_source: str,
     candidate_date: str | None,
     existing_source: str | None,
     existing_date: str | None,
+    candidate_precision: str = air_time.TIME,
+    existing_precision: str = air_time.TIME,
 ) -> bool:
     """Should `candidate_source`'s `candidate_date` overwrite what's
     currently stored (`existing_source`/`existing_date`)?
@@ -88,17 +100,29 @@ def should_apply(
     Every automatic writer should call this before overwriting an
     episode's air date. Dates are ISO strings — plain string comparison
     is correct as long as both sides are UTC ISO 8601 (true everywhere
-    this is called)."""
+    this is called).
+
+    Precision (2026-10-07): a date-only candidate never replaces a stored time; a timed candidate
+    replaces a stored date-only value when it falls within three days of it (the same broadcast,
+    its time now known), otherwise the ordinary rules below decide."""
     if existing_source is None or existing_date is None:
         return True  # nothing there yet — any real value beats nothing
     if existing_source in PROTECTED_SOURCES:
         return False
     if candidate_date is None:
         return False
-    if within_tolerance(candidate_date, existing_date):
+    if candidate_precision == air_time.DATE and existing_precision == air_time.TIME:
+        return False  # a day tells nothing a time doesn't
+    if candidate_precision == air_time.TIME and existing_precision == air_time.DATE:
+        if within_upgrade_window(candidate_date, existing_date):
+            return True
+    both_times = candidate_precision == air_time.TIME and existing_precision == air_time.TIME
+    if both_times and within_tolerance(candidate_date, existing_date):
         return False  # the same time to within a few minutes: no change, no flip-flop
+    if candidate_date == existing_date and candidate_precision == existing_precision:
+        return False
     if candidate_source == existing_source:
-        return candidate_date != existing_date
+        return True
     if existing_source in _WEAK_SOURCES:
         return candidate_date != existing_date
     return candidate_date < existing_date
