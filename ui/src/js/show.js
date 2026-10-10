@@ -33,6 +33,7 @@ import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS, withConfirmation, STATUS_ICON_CLASS,
 } from './status-picker.js?v=2';
+import { renderKeepBadge, remindKeep } from './keep.js?v=1';
 import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=16';
 import { startDownload } from './downloads.js?v=2';
 import { openArtPicker } from './art-picker.js?v=5';
@@ -399,6 +400,9 @@ function renderExtBadges(container, show, cfg) {
     }
   });
   container.appendChild(refreshBtn);
+
+  // ★ keep: the Sonarr/Radarr `keep` tag that stops Maintainerr cleaning this show off the server.
+  renderKeepBadge(container, show.id);
 }
 
 /* ── TMDB auto-search for external IDs ──────────────────── */
@@ -1004,6 +1008,7 @@ function renderHero(show, root, cfg) {
   // When show is marked COMPLETED, offer to bulk-mark all episodes as watched
   btnWrap.addEventListener('status-confirmed', async (e) => {
     if (e.detail.status !== 'COMPLETED') return;
+    remindKeep(show.id, 'completed');  // auto-clean applies once completed — offer the keep tag
     const allEps = show.episodes || [];
     const unwatched = allEps.filter(ep => {
       const isWatched = (ep.watchEvents?.edges?.length > 0) ||

@@ -14,7 +14,7 @@ review and never blocks the status change. Same for anime and TV (R5.10).
 
 from __future__ import annotations
 
-from lcars import config, pending_review, service_health, sonarr_client, util
+from lcars import arr_tags, config, pending_review, service_health, sonarr_client, util
 
 MONITOR = ("planned", "watching")
 STOP = ("paused", "dropped", "skipped")
@@ -38,7 +38,19 @@ def _tvdb_season(conn, season_id: str) -> tuple[str | None, int | None]:
 
 def apply(conn, changes: list[tuple[str, str | None, str]]) -> None:
     """`changes`: (season id, old status, new status), as the status engine
-    reports them."""
+    reports them. Sonarr's monitoring follows (below); the Maintainerr tags (`arr_tags`:
+    ongoing / purge, from the show's status) follow every change, completed included."""
+    _apply_monitoring(conn, changes)
+    show_ids = {
+        row[0]
+        for season_id, _old, _new in changes
+        if (row := conn.execute("SELECT show_id FROM season WHERE id = ?", (season_id,)).fetchone())
+        and row[0]
+    }
+    arr_tags.sync_shows(conn, show_ids)
+
+
+def _apply_monitoring(conn, changes: list[tuple[str, str | None, str]]) -> None:
     cfg = config.get_current()
     if not (cfg.sonarr_url and cfg.sonarr_api_key):
         return

@@ -71,7 +71,7 @@ def arr_write(service: str, method: str, path: str, body=None, params=None):
     (`lcars captured send` writes the link once it does)."""
     if method == "POST":
         key = (body or {}).get("tvdbId") or (body or {}).get("tmdbId")
-    elif path == "episode/monitor":
+    elif path in ("episode/monitor", "series/editor", "movie/editor"):
         key = None  # each call is its own change
     else:
         key = path

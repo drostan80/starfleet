@@ -31,6 +31,7 @@ from lcars import (
     anidb,
     anilist_client,
     animeschedule,
+    arr_tags,
     art,
     availability,
     browse,
@@ -3222,6 +3223,8 @@ def _apply_status_change(
             _unmonitor_in_arr_on_drop(conn, show_id)
         elif not now_paused and was_paused:
             _remonitor_in_arr_on_resume(conn, show_id)
+        arr_tags.sync_shows(conn, [show_id])  # a dropped movie gets `purge` (clearing house)
+        conn.commit()
     return _get_show(conn, show_id)
 
 
@@ -3478,6 +3481,23 @@ def _remonitor_in_arr_on_resume(conn, show_id: str) -> None:
                 conn, "show", show_id, "radarr_remonitor", "radarr", None, str(e)
             )
     conn.commit()
+
+
+@show_type.field("keep")
+def resolve_show_keep(obj, info):
+    return arr_tags.keep_state(db.get_connection(), obj["id"])
+
+
+@mutation.field("setShowKeep")
+def resolve_set_show_keep(_, info, show_id, keep):
+    conn = db.get_connection()
+    require_client(info)
+    try:
+        arr_tags.set_keep(conn, show_id, keep)
+    except arr_tags.ArrTagError as e:
+        raise GraphQLError(str(e)) from e
+    conn.commit()
+    return _get_show(conn, show_id)
 
 
 @mutation.field("setTracked")

@@ -211,6 +211,8 @@ type Show {
 
   status: ShowStatus!
   tracked: Boolean!
+  "Whether the show carries the `keep` tag in Sonarr/Radarr (Maintainerr's cleanup skips a kept show). A live read, so ask for it on the show page only; null when the show is not in Sonarr/Radarr or the service cannot be reached."
+  keep: Boolean
   score: Float
   totalEpisodes: Int
   durationMinutes: Int
@@ -2089,6 +2091,8 @@ type Mutation {
   """
   setStatus(showId: ID!, status: ShowStatus!, confirmed: Boolean = false): Show!
   setTracked(showId: ID!, tracked: Boolean!): Show!
+  "Adds or removes the `keep` tag on the show in Sonarr/Radarr (Maintainerr's cleanup skips a kept show). A dropped show is purged and purge wins over keep, so it cannot be kept until un-dropped. Fails with a message when the show is not in Sonarr/Radarr."
+  setShowKeep(showId: ID!, keep: Boolean!): Show!
   """
   2026-08-18 — `trackingSpace` used to be set-once, at creation only, decided purely from
   whatever the Fribb crowd-dataset happened to know at that exact moment (`show_backfill.py`'s

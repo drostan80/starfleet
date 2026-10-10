@@ -224,6 +224,21 @@ class SonarrClient:
         auto-unmonitor-on-drop path (resolvers.py)."""
         return self._put(f"series/{series['id']}", json=series)
 
+    def tags(self) -> list[dict]:
+        """Every tag Sonarr knows: `{id, label}` (labels are lower-case)."""
+        return self._get("tag")
+
+    def create_tag(self, label: str) -> dict:
+        """POST /tag. While external writes are captured the answer has no id."""
+        return self._post("tag", json={"label": label})
+
+    def edit_tags(self, series_ids: list[int], tag_ids: list[int], apply: str) -> object:
+        """`PUT /series/editor`: `apply` is "add" or "remove" — the given tags on the given
+        series, nothing else on them changes."""
+        return self._put(
+            "series/editor", {"seriesIds": series_ids, "tags": tag_ids, "applyTags": apply}
+        )
+
     def monitor_episodes(self, episode_ids: list[int], monitored: bool) -> object:
         """Phase 6 (R2.12): per-episode monitoring — `PUT /episode/monitor`."""
         return self._put(

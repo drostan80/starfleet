@@ -199,6 +199,21 @@ class RadarrClient:
         auto-unmonitor-on-drop path, movie-level `monitored` only."""
         return self._put(f"movie/{movie['id']}", json=movie)
 
+    def tags(self) -> list[dict]:
+        """Every tag Radarr knows: `{id, label}` (labels are lower-case)."""
+        return self._get("tag")
+
+    def create_tag(self, label: str) -> dict:
+        """POST /tag. While external writes are captured the answer has no id."""
+        return self._post("tag", json={"label": label})
+
+    def edit_tags(self, movie_ids: list[int], tag_ids: list[int], apply: str) -> object:
+        """`PUT /movie/editor`: `apply` is "add" or "remove" — the given tags on the given
+        movies, nothing else on them changes."""
+        return self._put(
+            "movie/editor", {"movieIds": movie_ids, "tags": tag_ids, "applyTags": apply}
+        )
+
     def movie_by_tmdb_id(self, tmdb_id: int) -> dict | None:
         """The matching movie already in Radarr's own library, or None
         if this tmdb_id isn't tracked there at all — not an error. Its

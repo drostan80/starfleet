@@ -12603,3 +12603,40 @@ async def test_due_for_season_reconciliation_excludes_a_level_with_no_season_num
     data = await gql(client, DUE_FOR_SEASON_RECONCILIATION_QUERY, headers=auth_headers())
     season_ids = {e["node"]["id"] for e in data["dueForSeasonReconciliation"]["edges"]}
     assert "z-dsr090" in season_ids and "z-dsr091" not in season_ids
+
+
+# --- the `keep` tag (arr_tags): Show.keep and setShowKeep -------------------
+
+
+async def test_show_keep_and_set_show_keep_follow_arr_tags(client, monkeypatch):
+    from lcars import arr_tags
+
+    show = await add_show(client, titleRomaji="Kept Show")
+    calls = []
+    monkeypatch.setattr(arr_tags, "keep_state", lambda conn, show_id: True)
+    monkeypatch.setattr(arr_tags, "set_keep", lambda conn, show_id, keep: calls.append(keep))
+    data = await gql(client, "query($id: ID!) { show(id: $id) { keep } }", {"id": show["id"]},
+                     headers=auth_headers())
+    assert data["show"]["keep"] is True
+    data = await gql(
+        client,
+        "mutation($id: ID!) { setShowKeep(showId: $id, keep: false) { id keep } }",
+        {"id": show["id"]}, headers=auth_headers())
+    assert calls == [False] and data["setShowKeep"]["id"] == show["id"]
+
+
+async def test_set_show_keep_refusal_is_a_graphql_error(client, monkeypatch):
+    from lcars import arr_tags
+
+    show = await add_show(client, titleRomaji="Dropped Show")
+
+    def refuse(conn, show_id, keep):
+        raise arr_tags.ArrTagError("a dropped show is purged and purge wins over keep")
+
+    monkeypatch.setattr(arr_tags, "set_keep", refuse)
+    response = await client.post(
+        "/",
+        json={"query": "mutation($id: ID!) { setShowKeep(showId: $id, keep: true) { id } }",
+              "variables": {"id": show["id"]}},
+        headers=auth_headers())
+    assert "purge wins over keep" in response.json()["errors"][0]["message"]

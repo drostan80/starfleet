@@ -19,6 +19,7 @@ import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS, withConfirmation,
 } from './status-picker.js?v=2';
+import { remindKeep } from './keep.js?v=1';
 import { _anilistSvg, _malSvg, _tvdbSvg, _imdbSvg, _tmdbMarkSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg } from './icons.js?v=16';
 
 // ── Constants ────────────────────────────────────────────
@@ -1260,6 +1261,7 @@ async function onAnimeChipClick(card, item, status) {
     item.lcarsShowId = show.id;
     item.lcarsStatus = show.status || status;
     refreshCard(card, item);
+    remindKeep(show.id, 'added');  // an already-aired show may be auto-cleaned: offer the keep tag
     showBanner(`Added: ${show.displayTitle} [${STATUS_LABELS[status]}]`, 'ok');
 
   } catch (err) {
@@ -1522,6 +1524,7 @@ async function onTmdbChipClick(card, item, status) {
     item.lcarsShowId = show.id;
     item.lcarsStatus = show.status || status;
     refreshCard(card, item);
+    remindKeep(show.id, 'added');  // an already-aired show may be auto-cleaned: offer the keep tag
     showBanner(`Added: ${show.displayTitle} [${STATUS_LABELS[status]}]`, 'ok');
 
   } catch (err) {

@@ -1,18 +1,19 @@
 # Next up
 
-Compacted 2026-10-07. The full previous NEXT_UP (every v0.2.x–v0.4.x section, ship checklists, build notes) is kept unchanged in
+Compacted 2026-10-07; State and Open refreshed 2026-10-10. The full previous NEXT_UP (every v0.2.x–v0.4.x section, ship checklists, build notes) is kept unchanged in
 **NEXT_UP-ARCHIVE-2026-10-07.md**. Records: PLAN-DATA.md "Cutover (2026-09-30)", HANDOFF-2026-09-30-CUTOVER.md, HANDOFF-2026-10-06.md.
 Rules live in RULEBOOK.md (absolute); items marked "decision" below are open to re-discussion.
 
 ## State
 
-- **Prod (tiny): v0.4.7 live** (2026-10-07). Alembic head on prod: `b1c2d3e4f5a6`.
-- **v0.4.8: tagged** (`v0.4.8` = `5f4655d`, branch `dev-airing-sources`), CI run 37643897144 **running** at the time of writing.
-  **Not deployed — deploy only after the user says CI is green** (verify by job conclusions: `test success` + `docker success`).
-- Deploy recipe: snapshot (sqlite online backup inside the lcars container, name `lcars.db.bak-20261007-pre-0.4.8`) → back up `~/stacks/starfleet.yml`
+- **Prod (tiny): v0.4.8 live** (verified 2026-10-10: lcars/ops/web containers on `0.4.8`, up 2 days; alembic head `c2d3e4f5a6b7`). v0.4.7 shipped 10-07.
+- Branch `dev-airing-sources` = tag `v0.4.8` (`5f4655d`) + docs commits; CI for v0.4.8 was green (`test success`, `docker success`).
+- Deploy recipe: snapshot (sqlite online backup inside the lcars container) → back up `~/stacks/starfleet.yml`
   → `/-web/!` sed pair on all three image lines → `docker compose pull` / `up -d` → verify. SSH: `ssh tiny@192.168.1.77` only.
-  After the deploy check: alembic head `c2d3e4f5a6b7`, ops POST 200, web 302, review `r-gv6b0m` now shows the Confirm form.
 - Prod facts: `LCARS_EXTERNAL_WRITES=send`, `LCARS_AUTOMATION_FROZEN=0`.
+- **Prod check 2026-10-10 (read-only):** **0 open reviews** (4,039 total, all resolved). Ops list-hub healthy (`list_hub` / `anilist_activity` every ~4 min, `mal_reconcile` hourly,
+  last 06:21Z); 3 transient `anilist_activity` sweep failures in 72 h (10-08 04:46Z, 10-08 12:07Z, 10-10 02:09Z; AniList HTTP 429 or "could not connect"), each recovered next interval.
+  AniDB drip **finished** (queue empty; last fetches 10-07 = 190 anime, 10-08 = 1; no ban). Rulecheck: 1 red row (see Open), the rest `ok` or "for a look".
 
 ## Shipped 2026-10-07
 
@@ -32,7 +33,7 @@ TVDB/TVmaze/AniDB only filling empty dates, the TVmaze drip fetching each show o
 - Rulecheck: R1.0b-empty, R1.0b-fresh, R1.0e, R1.6-copy.
 - Confirmed by the user 10-07 as **decisions (not rules)**: UTC-8 end of day for non-anime, 3-day upgrade window, TV `00:00` = no time (anime `00:00` is real), 45-day history, 60-day Sonarr guard.
 
-### v0.4.8 — tagged, awaiting CI + go
+### v0.4.8 — live
 - Sonarr/Radarr deep links follow a renamed series: the catalog sweep updates a stale `titleSlug` (`write_arr_external_id(replace=True)`, matched by TVDB/TMDB id).
 - Fribb id reviews say what happened ("Fribb added MAL ID …"), keep the links, and are **confirmed, not dismissed** (choice `confirm`; `reviews.open_review(previous=…)`; migration `c2d3e4f5a6b7`).
 
@@ -48,18 +49,38 @@ The 3 completed shows holding an unreleased S2 as COMPLETED (A-Rank Party, The F
 
 ## Open / to watch
 
-- **Deploy v0.4.8** once the user confirms CI green (see State).
-- Kanojo no Tomodachi drift review `r-npgwej` should close itself on the first AniList pass after the v0.4.7 deploy — **not yet seen closing**.
-- Review `r-gv6b0m` (a `mal_id` Fribb review created before v0.4.7) converts to the Confirm form with v0.4.8; the user then confirms it.
-- `!` / `?` icons only appear for changes seen after each show's first refresh.
-- **Android APK rebuild** (user: another time): the app bundles the UI — it needs a rebuild for the `!`/`?` icons, the always-visible play triangle, the all-day display, and the v0.4.5 page auto-refresh.
-- Auto-refresh works in the app but not the desktop page (user 10-05, not diagnosed): candidates — stale cached JS, `viewerIsBusy()` true on desktop, only a 60 s tick with no visible stamp. Test: dispatch `starfleet:auto-refresh` in the console.
-- Findings reported, no change: the 12:40 outage coincided with a Memory Alpha pass of 74 items (the user's own date import); Rayearth ep 1's file arrived ~21 h early from a ToonsHub streaming rip (no public source lists it; "marker not needed").
-- A scratch preview server may still run on port 8891 (staged-icon prod copy) — stop it when the user says.
-- AniDB drip: running, 200/day cap (the user's cap, not a known AniDB limit; ban seen ~250 requests per VPN IP on 09-28). Re-look at the 138 width checks and 131 Fribb-unmatched once it finishes.
-- Data TUI rework.
-- Key rotation at project end (Sonarr/Radarr/TMDB keys, MAL `client_id`, LCARS AniList `client_secret`); secrets out of plaintext `config.ini`.
-- AniList metadata fallback is scalar-only (relations / studios / genres degrade on an outage); franchise function deferred.
+Priority order (user 2026-10-10):
+
+0. 🔴 **Maintainerr alignment + tag system — BUILT in dev (v0.4.9 candidate), not deployed.** User OK 10-10 to build in this order: (1) optional deep-link cleanup, (2) tag code, (3) backfill, (4) Maintainerr switch.
+   - Code (branch `dev-airing-sources`): `src/lcars/arr_tags.py` (tags `keep` yours / `ongoing` = planned+watching+paused, episodic only / `purge` = dropped, purge wins over keep+ongoing; matched by **TVDB id** (TMDB for movies), never by the stored Sonarr slug); Sonarr/Radarr client tag methods; synced on every status change (hook inside `sonarr_sync.apply`, covers all 5 callers) + on movie status changes + hourly (`reconcile_arr_state`); GraphQL `Show.keep` and `setShowKeep`; UI `ui/src/js/keep.js` (★ keep badge on the show page, reminder on add and on completion — **unverified in a browser**). 25 + 2 new tests.
+   - Not needed after all: the "un-drop future-only" fix. `_remonitor_in_arr_on_resume` is only reached for movies; episodic un-drop already monitors future episodes only (via `sonarr_sync`).
+   - Scripts, dry-run first: `scripts/arr_tags_backfill_20261010.py` (dry run on a prod copy + real Sonarr/Radarr: 147 × `ongoing`, 31 × `purge` = 480 GB = the vetted list, `keep` off Under the Banner of Heaven, nothing else) and `scripts/fix_arr_deep_links_20261010.py` (dry run: 1 slug repointed, 36 wrong rows removed).
+   - Deploy order after the user's go: release → backfill `--apply` (tags only, log file for undo) → deep-link cleanup → Maintainerr rules: `Housekeeping` (season, unaired=false, last ep >10 d, has files, no keep/ongoing/purge tag, season monitored → UNMONITOR, 0 d) and `Checkout` (same, season NOT monitored → DELETE, 15 d); clearing house becomes "has tag purge", 15 d. Maintainerr is NOT changed before the tags exist.
+   - Data findings 10-10: 8 TMDB ids shared by two tracked movie shows each (skipped by the tagger, logged); Radarr row for *Rascal Does Not Dream of a Dear Friend* matches no TMDB entry; HxH (2011, TVDB 252322) is dropped and not in Sonarr — if it is ever added, "purge wins" would purge it (needs an exemption if unwanted).
+1. 🟠 **Android APK rebuild** — high on the list, not for today. The app bundles the UI: it needs a rebuild for the `!`/`?` icons, the always-visible play triangle, the all-day display, and the v0.4.5 page auto-refresh.
+2. 🟠 **API hardening: a backup source for every API call** — ongoing. Partly built (this is why most data has several sources); not fully hardened because aligning sources to the exact need is hard.
+   Includes the AniList metadata fallback, still scalar-only (relations / studios / genres degrade on an outage; `_fetch_mal_fallback`); franchise function deferred.
+3. 🟠 **Data TUI rework** — not for today.
+4. 👀 AniDB: weekly refreshes of watching/planned shows only from now on (423 anime in scope; the 200/day cap spreads them — the 10-06/07 batches come due 10-13/14 and take ~2 days, oldest first). Any ban/HTTP error → stop and ask.
+5. 🔑 Key rotation at project end (Sonarr/Radarr/TMDB keys, MAL `client_id`, LCARS AniList `client_secret`; secrets out of plaintext `config.ini`) — not there yet.
+
+- 🔴 **Add-check root cause (unexplained, not yet looked at):** on 10-05 the add check proposed "part of S1" for AniList 212144 although TVDB already held S2's 12 episodes (R1.10a says the entry goes to that TVDB season). Find why before the next sequel; explain first, wait for the yes.
+- 👀 *With Vengeance* S1 lists: AniList 195209 / MAL 59961 baselines read `completed` with remote progress 0 (the old part level held 0 episodes). S1 now holds 12 watched episodes; a push of progress 12 is offered to the user, not sent.
+- Auto-refresh on the desktop page: works, "not perfect but fine enough" (user 10-10) — parked.
+
+### Closed 2026-10-10
+- ✅ Legend of Earthsea S1 set completed (2 episodes watched), snapshot `lcars.db.bak-20261010-pre-earthsea`. Benidorm Is Murder: already in LCARS + Sonarr, S1 fully watched — nothing to do.
+- ✅ *With Vengeance, Sincerely, Your Broken Saintess*: S1 set completed by the user; the empty "part 2" (it held S2's AniList 212144 / MAL 64180 / Syoboi 8062) and part 1 removed, ids placed on TVDB S1 (195209 / 59961 / 7531) and S2 (212144 / 64180 / 8062, watching, list sync on), AniList + MAL for S2 written back to watching, progress 1.
+  Script `scripts/vengeance_levels_20261010.py`, snapshot `lcars.db.bak-20261010-pre-vengeance-s2`. Rulecheck 0 violations afterwards. (Marking part 2 completed had written completed/0 to the S2 entries at 06:35Z.)
+- ✅ v0.4.8 deployed; alembic head `c2d3e4f5a6b7` confirmed on prod.
+- ✅ Kanojo no Tomodachi drift review `r-npgwej`: resolved 10-07 23:57Z ("the season follows a schedule you chose").
+- ✅ Review `r-gv6b0m`: dismissed by the user 10-07 14:06Z (before v0.4.8), so no Confirm form needed.
+- ✅ Ops list-hub watch (item 1 of the 10-06 must-watch list): healthy.
+- ✅ `!` / `?` change icons: appear fine (user).
+- ✅ Occasional AniList 429 / connection errors: AniList-side, closed (the remedy is the API-hardening item above).
+- ✅ Scratch preview server on 8891: not running (checked local + tiny).
+- ✅ AniDB drip finished. The 138 width checks (closed as information, R1.11w, 09-30/10-06) and the 131 Fribb-unmatched (closed 10-05 "AniList ids live on seasons, R1.23; information only") are no longer reviews.
+- ✅ Findings (no change): the 12:40 outage coincided with a Memory Alpha pass of 74 items (the user's own date import); Rayearth ep 1's file arrived ~21 h early from a ToonsHub streaming rip.
 
 ## Parked ideas
 

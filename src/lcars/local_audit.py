@@ -48,6 +48,7 @@ import re
 
 from lcars import (
     add_check,
+    arr_tags,
     pending_review,
     radarr_client,
     service_health,
@@ -869,6 +870,13 @@ def reconcile_arr_state(conn) -> dict:
             logger.exception("reconcile_arr_state: Radarr pass failed — skipped this tick")
             service_health.record_failure(conn, "radarr", str(e))
             conn.commit()
+
+    try:  # the Maintainerr tags (ongoing / purge) against the whole library — arr_tags.py
+        result["tags"] = arr_tags.reconcile(conn)
+        conn.commit()
+    except Exception:  # never let a tag pass cost the rest of this tick
+        logger.exception("reconcile_arr_state: tag pass failed — skipped this tick")
+        conn.rollback()
 
     return result
 
