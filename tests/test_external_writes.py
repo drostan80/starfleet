@@ -125,3 +125,33 @@ def test_send_respects_the_limit(conn, monkeypatch):
     conn.commit()
     monkeypatch.setattr(anilist_client, "save_media_list_entry", lambda token, aid, **kw: kw)
     assert external_writes.send_pending(conn, limit=2) == {"sent": 2, "failed": 0, "left": 1}
+
+
+def test_jellyfin_marks_are_captured_deduped_and_replayed(conn, monkeypatch):
+    from lcars import jellyfin_client
+
+    config.set_current(config.Config(jellyfin_url="http://jf:8096", jellyfin_api_key="jk",
+                                     jellyfin_user="media"))
+    _no_http(monkeypatch)
+    with jellyfin_client.JellyfinClient("http://jf:8096", "jk") as client:
+        client.mark_played("item1", "u1", "2026-03-04T20:30:00Z")
+        client.mark_played("item1", "u1", "2026-03-05T20:30:00Z")  # same item: one pending line
+        client.mark_unplayed("item2", "u1")
+    pending = _pending(conn)
+    assert sorted((p["service"], p["op"]) for p in pending) == [
+        ("jellyfin", "DELETE /UserPlayedItems/item2"), ("jellyfin", "POST /UserPlayedItems/item1")]
+
+    sent = []
+    monkeypatch.undo()  # the real client again, with its HTTP call recorded instead of made
+
+    def record(self, method, path, params=None):
+        sent.append((method, path, params))
+        return httpx.Response(204)
+
+    monkeypatch.setattr(jellyfin_client.JellyfinClient, "_send", record)
+    for row in pending:
+        external_writes.send_one(conn, row)
+    assert sorted(sent) == [
+        ("DELETE", "/UserPlayedItems/item2", {"userId": "u1"}),
+        ("POST", "/UserPlayedItems/item1",
+         {"userId": "u1", "datePlayed": "2026-03-05T20:30:00Z"})]

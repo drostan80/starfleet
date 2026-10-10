@@ -46,6 +46,7 @@ from lcars import (
     fuzzy,
     identity_mismatch,
     ids,
+    jellyfin_sync,
     level_parts,
     level_reconcile,
     list_baseline,
@@ -3486,6 +3487,14 @@ def _remonitor_in_arr_on_resume(conn, show_id: str) -> None:
 @show_type.field("keep")
 def resolve_show_keep(obj, info):
     return arr_tags.keep_state(db.get_connection(), obj["id"])
+
+
+@mutation.field("syncJellyfinWatched")
+def resolve_sync_jellyfin_watched(_, info, dry_run=True, show_id=None, limit=500,
+                                  import_since=None):
+    require_client(info)
+    return jellyfin_sync.run(db.get_connection(), dry_run=dry_run, limit=limit, show_id=show_id,
+                             import_since=import_since)
 
 
 @mutation.field("setShowKeep")

@@ -69,7 +69,9 @@ def arr_write(service: str, method: str, path: str, body=None, params=None):
     with a stand-in answer. An added series/movie comes back with no id and
     no titleSlug, so nothing links to an entry that doesn't exist yet
     (`lcars captured send` writes the link once it does)."""
-    if method == "POST":
+    if service == "jellyfin":
+        key = path  # one pending mark per item
+    elif method == "POST":
         key = (body or {}).get("tvdbId") or (body or {}).get("tmdbId")
     elif path in ("episode/monitor", "series/editor", "movie/editor"):
         key = None  # each call is its own change
@@ -93,6 +95,7 @@ def send_one(conn, row) -> None:
     recorded now."""
     from lcars import (
         anilist_client,
+        jellyfin_client,
         list_baseline,
         mal_client,
         radarr_client,
@@ -120,6 +123,12 @@ def send_one(conn, row) -> None:
             mal_client.delete_my_list_status(cfg.mal_access_token, args["mal_id"])
             conn.execute("DELETE FROM list_baseline WHERE service = 'mal'"
                          " AND external_id = ?", (args["mal_id"],))
+        elif service == "jellyfin":
+            with jellyfin_client.JellyfinClient(cfg.jellyfin_url, cfg.jellyfin_api_key) as client:
+                if op.startswith("POST"):
+                    client._post(args["path"], args["params"])
+                else:
+                    client._delete(args["path"], args["params"])
         elif service in ("sonarr", "radarr"):
             method = op.split(" ", 1)[0]
             if service == "sonarr":

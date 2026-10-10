@@ -1,6 +1,6 @@
 # Proposal: LCARS marks episodes and movies watched in Jellyfin (2026-10-10)
 
-Status: **proposal, nothing built.** Needs your validation (RULEBOOK §7: explain the change and its
+Status: **decided 2026-10-10 (answers in section 9); phase 1 built in dev, not deployed.** Needs your validation (RULEBOOK §7: explain the change and its
 consequences first, then wait for the yes). Read-only facts below were measured on prod on 2026-10-10.
 
 ## 1. What and why
@@ -105,3 +105,38 @@ it, so I will not reuse it.
 - Jellyfin versions: the endpoint names differ between releases; confirmed against the running server first.
 - A show present in Jellyfin without TVDB ids (as KAMUI was until today) cannot be matched until it is identified.
 - Plex is also installed on tiny; this proposal does not touch it.
+
+## 9. Decisions (user, 2026-10-10)
+
+1. **Direction:** LCARS → Jellyfin first. LCARS *reading* Jellyfin's watch state is "a fair extra": phase 2, below.
+2. Only episodes/movies that have a file, user `media`: yes.
+3. Un-watching in LCARS un-marks it in Jellyfin: yes (built; only what both sides last agreed was played).
+4. Periodic difference sync: yes (built into the hourly arr reconcile, off until switched on).
+5. One-off catch-up after a dry run and one show: yes.
+6. Dedicated Jellyfin API key: created by the user; still to be placed where LCARS reads it.
+7. Recorded as a **decision**, not a rule. "Link to Jellyfin is a good to have": nice-to-have, not urgent.
+
+## 10. What phase 1 is (built, 2026-10-10)
+
+`jellyfin_client.py` (reads: users, series, movies, a series' episodes with the user's played marks;
+writes: mark played with the watch time / mark unplayed), `jellyfin_sync.py` (the difference sync above),
+table `jellyfin_watch_sync` (migration `d3e4f5a6b7c8`), config keys `jellyfin_url`, `jellyfin_api_key`,
+`jellyfin_user`, `jellyfin_sync` (`on` lets the hourly reconcile run it; default off), GraphQL
+`syncJellyfinWatched(dryRun: true, showId, limit: 500)` for the dry run, one show, and the catch-up
+(the per-pass cap spreads it over several calls), capture mode honoured (`lcars captured send` replays).
+Verified against Jellyfin 12.1.0's OpenAPI document; the Jellyfin side is **unverified against the live
+server** until the key is in place.
+
+## 11. Phase 2 (not built): LCARS reads Jellyfin's plays — what it would mean
+
+A play in Jellyfin (an episode with no agreed mark) would become a watch in LCARS at Jellyfin's
+`LastPlayedDate`. This is not "just a read": a new LCARS watch follows the normal R4.8 path — it moves the
+season to *watching* (R2.14), can complete a season (R2.15), and is **pushed to AniList and MAL** as progress
+and to Sonarr as monitoring. So it needs the conflict rules R4.10 already gives the lists, applied here:
+- compare against `jellyfin_watch_sync` (the last agreed state): a side that changed alone wins; both changed,
+  **LCARS wins** (a tie is LCARS's);
+- an LCARS un-watch is never reversed by an older Jellyfin mark;
+- an unmatched Jellyfin play is reported, never guessed.
+To validate before it is built: (a) are you happy that a Jellyfin play can move an AniList/MAL list entry?
+(b) should a Jellyfin play of a *planned* show start it (R2.14), as an mpv play would? Until you answer, only
+phase 1 exists.

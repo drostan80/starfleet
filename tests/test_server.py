@@ -12640,3 +12640,31 @@ async def test_set_show_keep_refusal_is_a_graphql_error(client, monkeypatch):
               "variables": {"id": show["id"]}},
         headers=auth_headers())
     assert "purge wins over keep" in response.json()["errors"][0]["message"]
+
+
+async def test_sync_jellyfin_watched_mutation_passes_its_arguments(client, monkeypatch):
+    from lcars import jellyfin_sync
+
+    seen = {}
+
+    def fake_run(conn, *, dry_run, limit, show_id, import_since):
+        seen.update(dry_run=dry_run, limit=limit, show_id=show_id, import_since=import_since)
+        return {"configured": True, "dry_run": dry_run, "shows_checked": 3, "episodes_matched": 9,
+                "marked_played": 2, "marked_unplayed": 1, "movies_marked": 0, "agreed": 6,
+                "unmatched": ["Show: 1 watched episode(s) not in Jellyfin"], "capped": False,
+                "failed": False, "imported": 4, "older_plays": 7}
+
+    monkeypatch.setattr(jellyfin_sync, "run", fake_run)
+    data = await gql(
+        client,
+        "mutation { syncJellyfinWatched(showId: \"s-abcdef\", limit: 10,"
+        " importSince: \"2026-10-10T12:00:00Z\") { configured dryRun showsChecked markedPlayed"
+        " markedUnplayed agreed unmatched capped failed imported olderPlays } }",
+        headers=auth_headers())
+    assert seen == {"dry_run": True, "limit": 10, "show_id": "s-abcdef",
+                    "import_since": "2026-10-10T12:00:00Z"}  # dry run by default
+    assert data["syncJellyfinWatched"]["imported"] == 4
+    assert data["syncJellyfinWatched"]["olderPlays"] == 7
+    assert data["syncJellyfinWatched"]["markedPlayed"] == 2
+    unmatched = data["syncJellyfinWatched"]["unmatched"]
+    assert unmatched == ["Show: 1 watched episode(s) not in Jellyfin"]

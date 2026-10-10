@@ -49,6 +49,7 @@ import re
 from lcars import (
     add_check,
     arr_tags,
+    jellyfin_sync,
     pending_review,
     radarr_client,
     service_health,
@@ -870,6 +871,13 @@ def reconcile_arr_state(conn) -> dict:
             logger.exception("reconcile_arr_state: Radarr pass failed — skipped this tick")
             service_health.record_failure(conn, "radarr", str(e))
             conn.commit()
+
+    if (cfg.jellyfin_sync or "").strip().lower() == "on":
+        try:  # LCARS → Jellyfin watched marks (jellyfin_sync.py), only when switched on
+            result["jellyfin"] = jellyfin_sync.run(conn)
+        except Exception:  # never let it cost the rest of this tick
+            logger.exception("reconcile_arr_state: Jellyfin sync failed — skipped this tick")
+            conn.rollback()
 
     try:  # the Maintainerr tags (ongoing / purge) against the whole library — arr_tags.py
         result["tags"] = arr_tags.reconcile(conn)

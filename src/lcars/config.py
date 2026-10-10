@@ -94,6 +94,18 @@ class Config:
     # for tracking_space = anime).
     sonarr_url: str | None = None
     sonarr_api_key: str | None = None
+    # Jellyfin (2026-10-10): LCARS marks what you watched as played for this user — see
+    # jellyfin_sync.py. `jellyfin_user` is the user's name (or id) in Jellyfin. Not configured
+    # means no Jellyfin sync, the same as an unlinked service anywhere else.
+    jellyfin_url: str | None = None
+    jellyfin_api_key: str | None = None
+    jellyfin_user: str | None = None
+    # "on" lets the hourly arr reconcile run the Jellyfin sync by itself; anything else leaves it to
+    # the explicit `syncJellyfinWatched` mutation (the dry run, one show, the catch-up).
+    jellyfin_sync: str | None = None
+    # Plays in Jellyfin at or after this moment (ISO, UTC) become LCARS watches (jellyfin_sync.py,
+    # phase 2). Unset means nothing is imported; older plays are only counted.
+    jellyfin_import_since: str | None = None
     radarr_url: str | None = None
     radarr_api_key: str | None = None
     # 2026-08-18 — a real bug caught live: sonarr_url/radarr_url above are
@@ -244,6 +256,11 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
                 cfg.db_path = Path(db_path)
             cfg.sonarr_url = parser["lcars"].get("sonarr_url", fallback=None)
             cfg.sonarr_api_key = parser["lcars"].get("sonarr_api_key", fallback=None)
+            cfg.jellyfin_url = parser["lcars"].get("jellyfin_url", fallback=None)
+            cfg.jellyfin_api_key = parser["lcars"].get("jellyfin_api_key", fallback=None)
+            cfg.jellyfin_user = parser["lcars"].get("jellyfin_user", fallback=None)
+            cfg.jellyfin_sync = parser["lcars"].get("jellyfin_sync", fallback=None)
+            cfg.jellyfin_import_since = parser["lcars"].get("jellyfin_import_since", fallback=None)
             cfg.sonarr_public_url = parser["lcars"].get("sonarr_public_url", fallback=None)
             cfg.radarr_url = parser["lcars"].get("radarr_url", fallback=None)
             cfg.radarr_api_key = parser["lcars"].get("radarr_api_key", fallback=None)
@@ -287,6 +304,12 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
         cfg.db_path = Path(env_db_path)
     cfg.sonarr_url = os.environ.get("LCARS_SONARR_URL", cfg.sonarr_url)  # not a secret
     cfg.sonarr_api_key = _resolve_secret(cfg.sonarr_api_key, "LCARS_SONARR_API_KEY")
+    cfg.jellyfin_url = os.environ.get("LCARS_JELLYFIN_URL", cfg.jellyfin_url)  # not a secret
+    cfg.jellyfin_api_key = _resolve_secret(cfg.jellyfin_api_key, "LCARS_JELLYFIN_API_KEY")
+    cfg.jellyfin_user = os.environ.get("LCARS_JELLYFIN_USER", cfg.jellyfin_user)  # not a secret
+    cfg.jellyfin_sync = os.environ.get("LCARS_JELLYFIN_SYNC", cfg.jellyfin_sync)
+    cfg.jellyfin_import_since = os.environ.get(
+        "LCARS_JELLYFIN_IMPORT_SINCE", cfg.jellyfin_import_since)
     cfg.sonarr_public_url = os.environ.get(  # not a secret
         "LCARS_SONARR_PUBLIC_URL", cfg.sonarr_public_url
     )

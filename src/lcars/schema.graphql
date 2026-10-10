@@ -1035,6 +1035,30 @@ type LocalFileAuditResult {
   untrackedShows: [UntrackedRemoteShow!]!
 }
 
+"What one Jellyfin watched-sync pass found and did (jellyfin_sync.py). dryRun passes write nothing: the counts say what a real pass would send."
+type JellyfinSyncResult {
+  "False when Jellyfin is not configured (jellyfin_url / jellyfin_api_key / jellyfin_user)."
+  configured: Boolean!
+  dryRun: Boolean!
+  showsChecked: Int!
+  episodesMatched: Int!
+  markedPlayed: Int!
+  markedUnplayed: Int!
+  "Movies marked played or unplayed."
+  moviesMarked: Int!
+  "Episodes or movies both sides already agreed on."
+  agreed: Int!
+  "Up to 25 shows with watched episodes Jellyfin does not have (no file, or a numbering that does not match)."
+  unmatched: [String!]!
+  "The per-pass cap on marks (or on imported plays) was reached; run again to continue."
+  capped: Boolean!
+  failed: Boolean!
+  "Plays that exist only in Jellyfin and were (or, in a dry run, would be) turned into LCARS watches: recent plays only, see importSince."
+  imported: Int!
+  "Plays that exist only in Jellyfin and are older than importSince: counted, never imported."
+  olderPlays: Int!
+}
+
 "reconcileArrState's own confirmation summary. pausedShowIds/resumedShowIds are the show ids that actually changed status this pass (monitored<->status disagreed and got reconciled); showsCreatedFailed is a count only — failures are also opened as pending_review rows, same as every other best-effort write in this schema."
 type ArrReconcileResult {
   episodesCorrected: Int!
@@ -2091,6 +2115,8 @@ type Mutation {
   """
   setStatus(showId: ID!, status: ShowStatus!, confirmed: Boolean = false): Show!
   setTracked(showId: ID!, tracked: Boolean!): Show!
+  "Marks what LCARS holds as watched as played in Jellyfin for the configured user, and un-marks what LCARS un-watched (RULEBOOK decision, 2026-10-10). dryRun (default true) writes nothing; showId limits the pass to one show; limit caps the marks sent; importSince (ISO, UTC) overrides the jellyfin_import_since setting: Jellyfin plays at or after it become LCARS watches (also pushed to AniList/MAL like any watch), older ones are only counted."
+  syncJellyfinWatched(dryRun: Boolean = true, showId: ID, limit: Int = 500, importSince: String): JellyfinSyncResult!
   "Adds or removes the `keep` tag on the show in Sonarr/Radarr (Maintainerr's cleanup skips a kept show). A dropped show is purged and purge wins over keep, so it cannot be kept until un-dropped. Fails with a message when the show is not in Sonarr/Radarr."
   setShowKeep(showId: ID!, keep: Boolean!): Show!
   """
