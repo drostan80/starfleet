@@ -59,7 +59,8 @@ Priority order (user 2026-10-10):
 1. 🟠 **Android APK rebuild** — high on the list, not for today. The app bundles the UI: it needs a rebuild for the `!`/`?` icons, the always-visible play triangle, the all-day display, and the v0.4.5 page auto-refresh.
 2. 🟠 **API hardening: a backup source for every API call** — ongoing. Partly built (this is why most data has several sources); not fully hardened because aligning sources to the exact need is hard.
    Includes the AniList metadata fallback, still scalar-only (relations / studios / genres degrade on an outage; `_fetch_mal_fallback`); franchise function deferred.
-3. 🟠 **UI review item:** the ★ keep badge on the show page is serviceable but small and sits in the id-badge row — next UI review, make it bigger and put it under the show name (user 10-10).
+3. 🟠 **Jellyfin watched-mark mirror (LCARS → Jellyfin, user `media`)** — PROPOSAL written 10-10, awaiting the user's validation: `PROPOSAL-jellyfin-watched-mirror-2026-10-10.md` (7 decisions inside; needs a dedicated Jellyfin API key).
+3b. 🟠 **UI review item:** the ★ keep badge on the show page is serviceable but small and sits in the id-badge row — next UI review, make it bigger and put it under the show name (user 10-10).
 4. 🟠 **Data TUI rework** — not for today.
 4. 👀 AniDB: weekly refreshes of watching/planned shows only from now on (423 anime in scope; the 200/day cap spreads them — the 10-06/07 batches come due 10-13/14 and take ~2 days, oldest first). Any ban/HTTP error → stop and ask.
 5. 🔑 Key rotation at project end (Sonarr/Radarr/TMDB keys, MAL `client_id`, LCARS AniList `client_secret`; secrets out of plaintext `config.ini`) — not there yet.
