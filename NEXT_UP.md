@@ -6,14 +6,11 @@ Rules live in RULEBOOK.md (absolute); items marked "decision" below are open to 
 
 ## State
 
-- **Prod (tiny): v0.4.8 live** (verified 2026-10-10: lcars/ops/web containers on `0.4.8`, up 2 days; alembic head `c2d3e4f5a6b7`). v0.4.7 shipped 10-07.
-- Branch `dev-airing-sources` = tag `v0.4.8` (`5f4655d`) + docs commits; CI for v0.4.8 was green (`test success`, `docker success`).
-- Deploy recipe: snapshot (sqlite online backup inside the lcars container) → back up `~/stacks/starfleet.yml`
-  → `/-web/!` sed pair on all three image lines → `docker compose pull` / `up -d` → verify. SSH: `ssh tiny@192.168.1.77` only.
+- **Prod (tiny): v0.4.9 live** (2026-10-10 ~12:40Z; tag `v0.4.9` = 6b60d8f; CI `test success` + `docker success`; snapshot `lcars.db.bak-20261010-pre-0.4.9`; compose backup `starfleet.yml.bak-0.4.8-20261010`). Alembic head `c2d3e4f5a6b7` (no migration). v0.4.9 = the Maintainerr tag system (`keep` / `ongoing` / `purge`, matched by TVDB id) + `Show.keep` / `setShowKeep` + the keep badge and reminders in the web UI (UI unverified in a browser).
+- **Done on prod 10-10 after the deploy:** Sonarr tags are on (the new code's reconcile applied them itself): 147 `ongoing`, 31 `purge` (the vetted 480 GB list), none overlapping `keep`/`ongoing`; `keep` removed from Under the Banner of Heaven (undo log `/db/arr_tags_backfill_20261010.json` in the lcars container); the 37 wrong Sonarr deep-link rows fixed (1 repointed, 36 removed; all 351 rows now right). Hunter x Hunter (2011) stays dropped (user: "I'll deal with consequences if any later").
+- **NOT done — Maintainerr is unchanged** (the permission system declined writing to it): `scripts/maintainerr_housekeeping_20261010.py` is ready (dry run verified: stage 1 create `Housekeeping` ×2, stage 2 `spring cleaning`→`Checkout` ×2, stage 3 `clearing house` ×3 become "tag purge", 15 days). Backup `/opt/appdata/maintainerr/maintainerr.sqlite.bak-20261010-pre-housekeeping`. Until it is applied the OLD rules still run: 115 seasons queued 10-07 are deleted ~11-06 (planned/watching ones now carry `ongoing` but the old rule ignores that tag).
+- Deploy recipe: snapshot (sqlite online backup inside the lcars container) → back up `~/stacks/starfleet.yml` → `/-web/!` sed pair on all three image lines → `docker compose pull` / `up -d` → verify. SSH: `ssh tiny@192.168.1.77` only.
 - Prod facts: `LCARS_EXTERNAL_WRITES=send`, `LCARS_AUTOMATION_FROZEN=0`.
-- **Prod check 2026-10-10 (read-only):** **0 open reviews** (4,039 total, all resolved). Ops list-hub healthy (`list_hub` / `anilist_activity` every ~4 min, `mal_reconcile` hourly,
-  last 06:21Z); 3 transient `anilist_activity` sweep failures in 72 h (10-08 04:46Z, 10-08 12:07Z, 10-10 02:09Z; AniList HTTP 429 or "could not connect"), each recovered next interval.
-  AniDB drip **finished** (queue empty; last fetches 10-07 = 190 anime, 10-08 = 1; no ban). Rulecheck: 1 red row (see Open), the rest `ok` or "for a look".
 
 ## Shipped 2026-10-07
 
