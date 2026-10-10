@@ -99,6 +99,7 @@ class _Pass:
         self.conn, self.client, self.user_id = conn, client, user_id
         self.dry_run, self.limit, self.import_since = dry_run, limit, import_since
         self.record = not dry_run and not external_writes.capturing()
+        self.seen_shows: set[str] = set()
         self.stats = {"configured": True, "dry_run": dry_run, "shows_checked": 0,
                       "episodes_matched": 0, "marked_played": 0, "marked_unplayed": 0,
                       "agreed": 0, "movies_marked": 0, "unmatched": [], "capped": False,
@@ -185,6 +186,19 @@ class _Pass:
             for entity_id in entity_ids:
                 _remember(self.conn, kind, entity_id, item["Id"], "played")
 
+    def note_item(self, kind: str, entity_id: str, item_id: str) -> None:
+        """Remember which Jellyfin item this is, for the Jellyfin links in the UI (local data, not
+        an external write: kept in capture mode too, never in a dry run)."""
+        if kind == "show":
+            self.seen_shows.add(entity_id)
+        if self.dry_run:
+            return
+        self.conn.execute(
+            "INSERT INTO jellyfin_item (kind, entity_id, jellyfin_item_id, seen_at)"
+            " VALUES (?, ?, ?, ?) ON CONFLICT (kind, entity_id) DO UPDATE SET"
+            " jellyfin_item_id = excluded.jellyfin_item_id, seen_at = excluded.seen_at",
+            (kind, entity_id, item_id, util.now_utc_iso()))
+
     def note_unmatched(self, text: str) -> None:
         if len(self.stats["unmatched"]) < UNMATCHED_SAMPLE:
             self.stats["unmatched"].append(text)
@@ -211,6 +225,7 @@ class _Pass:
             if series_id is None:
                 continue  # not in Jellyfin: no files to mark
             self.stats["shows_checked"] += 1
+            self.note_item("show", show["id"], series_id)
             self._show(show, series_id)
             if self.stats["capped"]:
                 return
@@ -224,6 +239,7 @@ class _Pass:
         ):
             by_number.setdefault((e["sonarr_season"], e["sonarr_episode"]), []).append(e)
         covered: set[tuple[int, int]] = set()
+        seen_episodes: set[str] = set()
         for item in self.client.series_episodes(series_id, self.user_id):
             first, season = item.get("IndexNumber"), item.get("ParentIndexNumber")
             if first is None or season is None:
@@ -233,6 +249,9 @@ class _Pass:
             covered.update(numbers)
             if not eps:
                 continue
+            for e in eps:
+                self.note_item("episode", e["id"], item["Id"])
+                seen_episodes.add(e["id"])
             self.stats["episodes_matched"] += len(eps)
             latest = max((_last_watched(self.conn, show["id"], e["season"], e["episode"]) or ""
                           for e in eps), default="") or None
@@ -240,6 +259,12 @@ class _Pass:
                         [e["state"] == "watched" for e in eps], latest, show["id"], eps)
             if self.stats["capped"]:
                 return
+        if not self.dry_run:  # an episode that is no longer in Jellyfin has no link any more
+            marks = ",".join("?" * len(seen_episodes)) or "NULL"
+            self.conn.execute(
+                "DELETE FROM jellyfin_item WHERE kind = 'episode' AND entity_id IN"
+                " (SELECT id FROM episode WHERE show_id = ?)"
+                f" AND entity_id NOT IN ({marks})", (show["id"], *seen_episodes))
         missing = [n for n, eps in by_number.items()
                    if n not in covered and any(e["state"] == "watched" for e in eps)]
         if missing:
@@ -266,10 +291,46 @@ class _Pass:
             if item is None:
                 continue
             when = _last_watched(self.conn, show["id"], None, None)
+            self.note_item("show", show["id"], item["Id"])
             self.decide("movie", [show["id"]], item, [show["status"] == "completed"], when,
                         show["id"])
             if self.stats["capped"]:
                 return
+
+
+def _forget_shows_not_seen(conn, seen: set[str]) -> None:
+    """After a complete pass: a show (or movie) Jellyfin no longer has loses its links, and so do
+    its episodes."""
+    marks = ",".join("?" * len(seen)) or "NULL"
+    ids = tuple(seen)
+    conn.execute(f"DELETE FROM jellyfin_item WHERE kind = 'show' AND entity_id NOT IN ({marks})",
+                 ids)
+    conn.execute(
+        "DELETE FROM jellyfin_item WHERE kind = 'episode' AND entity_id IN"
+        f" (SELECT id FROM episode WHERE show_id NOT IN ({marks}))", ids)
+
+
+def link_for(conn, show_id: str, episode_id: str | None = None) -> str | None:
+    """The address a browser opens in Jellyfin: the episode's own page when it has one; for a movie
+    (or when no episode is asked about) the show's own page. An episode Jellyfin does not have has
+    no link — so the Jellyfin icon appears exactly when the mpv one can play. None when the sync
+    has not met it, or Jellyfin is not configured."""
+    cfg = config.get_current()
+    base = (cfg.jellyfin_public_url or cfg.jellyfin_url or "").rstrip("/")
+    if not base:
+        return None
+    row = None
+    if episode_id:
+        row = conn.execute("SELECT jellyfin_item_id FROM jellyfin_item WHERE kind = 'episode'"
+                           " AND entity_id = ?", (episode_id,)).fetchone()
+    show_page = not episode_id  # asked about the show itself
+    if episode_id:  # a movie has no episodes of its own: its page is the show's
+        shape = conn.execute("SELECT media_shape FROM show WHERE id = ?", (show_id,)).fetchone()
+        show_page = shape is not None and shape[0] == "movie"
+    if row is None and show_page:
+        row = conn.execute("SELECT jellyfin_item_id FROM jellyfin_item WHERE kind = 'show'"
+                           " AND entity_id = ?", (show_id,)).fetchone()
+    return f"{base}/web/#/details?id={row[0]}" if row else None
 
 
 def _empty(configured: bool, dry_run: bool, failed: bool = False) -> dict:
@@ -295,8 +356,10 @@ def run(conn, *, dry_run: bool = False, limit: int = DEFAULT_LIMIT, show_id: str
                 one.episodes(show_id)
                 if not one.stats["capped"]:
                     one.movies(show_id)
+                if not dry_run and show_id is None and not one.stats["capped"]:
+                    _forget_shows_not_seen(conn, one.seen_shows)
             finally:
-                if one.record:
+                if not dry_run:
                     conn.commit()
             return one.stats
     except jellyfin_client.JellyfinError as e:

@@ -73,7 +73,7 @@ const EPISODES_IN_RANGE_QUERY = `
         airDateUtc runtimeMinutes
         ${AIR_FIELDS}
         availableViaSonarr availableViaRadarr availableLocally
-        filePathSonarr filePathRadarr
+        filePathSonarr filePathRadarr jellyfinUrl
         state
         seasonEntity { malId status }
         watchEvents(first: 1) { edges { node { id } } }
@@ -292,7 +292,7 @@ const SHOW_DETAIL_QUERY = `
       posterUrl bannerUrl synopsis genresRaw durationMinutes
       posterArtNotFoundAt bannerArtNotFoundAt
       specialPosterUrl ovaPosterUrl bonusMoviePosterUrl
-      availableViaRadarr filePathRadarr
+      availableViaRadarr filePathRadarr jellyfinUrl
       studioCredits(first: 5) {
         edges { node { roleType studio { name } } }
       }
@@ -324,7 +324,7 @@ const SHOW_DETAIL_QUERY = `
           airDateUtc runtimeMinutes state
           ${AIR_FIELDS}
           availableViaSonarr availableViaRadarr availableLocally
-          filePathSonarr filePathRadarr
+          filePathSonarr filePathRadarr jellyfinUrl
           seasonEntity { malId status }
           linkedMovieShow { id posterUrl displayTitle }
           anidbMapping {
@@ -519,7 +519,7 @@ export async function fetchBacklog(first = 100) {
           airDateUtc
           ${AIR_FIELDS}
           availableViaSonarr availableViaRadarr availableLocally
-          filePathSonarr filePathRadarr
+          filePathSonarr filePathRadarr jellyfinUrl
           state
           seasonEntity { malId status }
           watchEvents(first: 1) { edges { node { id } } }

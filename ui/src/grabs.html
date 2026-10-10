@@ -6,7 +6,7 @@
   <title>STARFLEET — Grabs</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=26">
+  <link rel="stylesheet" href="css/main.css?v=27">
   <style>
     /* ── Grabs page ──────────────────────────────────────────── */
     .grabs-layout {
@@ -391,8 +391,8 @@
 
 <script type="module">
   import { bootstrapConfig, getConfig, applyAppName } from './js/config.js?v=5';
-  import { initSearch } from './js/search.js?v=3';
-  import { fetchRecentGrabs } from './js/api.js?v=28';
+  import { initSearch } from './js/search.js?v=7';
+  import { fetchRecentGrabs } from './js/api.js?v=29';
 
   applyAppName();
   await bootstrapConfig();
@@ -575,7 +575,7 @@
 
       // ── Step 1: look up show in LCARS to get its TMDB ID ──
       try {
-        const { gql } = await import('./js/api.js?v=28');
+        const { gql } = await import('./js/api.js?v=29');
         const data = await gql(`
           query GrabPoster($q: String!) {
             search(query: $q, first: 3) {

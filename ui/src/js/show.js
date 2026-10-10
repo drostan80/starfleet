@@ -23,20 +23,20 @@ import {
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=28';
+} from './api.js?v=29';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange, airChangeBadge, isDateOnly,
-} from './calendar.js?v=47';
+} from './calendar.js?v=48';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS, withConfirmation, STATUS_ICON_CLASS,
 } from './status-picker.js?v=2';
-import { renderKeepBadge, remindKeep } from './keep.js?v=1';
-import { SVC_ICONS, _mpvSvg, _downloadSvg } from './icons.js?v=16';
+import { renderKeepBadge, remindKeep } from './keep.js?v=2';
+import { SVC_ICONS, _mpvSvg, _jellyfinSvg, _downloadSvg } from './icons.js?v=17';
 import { startDownload } from './downloads.js?v=2';
-import { openArtPicker } from './art-picker.js?v=5';
+import { openArtPicker } from './art-picker.js?v=6';
 
 /* ── Constants ───────────────────────────────────────────── */
 
@@ -233,6 +233,18 @@ function attachScoreEditor(container, valSpan, getCurrentVal, commitFn, opts = {
 
 /* ── Rendering ───────────────────────────────────────────── */
 
+/** A link that opens something in Jellyfin (the host follows the one this page was loaded from). */
+function jellyfinLink(url, cls = 'sp-jf-btn') {
+  const a = el('a', cls);
+  a.innerHTML = _jellyfinSvg;
+  a.title = 'Open in Jellyfin';
+  a.href = rewriteHost(url, location.hostname);
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.addEventListener('click', (e) => e.stopPropagation());
+  return a;
+}
+
 function renderBanner(show, root) {
   const banner = el('div', 'sp-banner sp-banner-clickable');
   let bannerImg = null;
@@ -401,8 +413,6 @@ function renderExtBadges(container, show, cfg) {
   });
   container.appendChild(refreshBtn);
 
-  // ★ keep: the Sonarr/Radarr `keep` tag that stops Maintainerr cleaning this show off the server.
-  renderKeepBadge(container, show.id);
 }
 
 /* ── TMDB auto-search for external IDs ──────────────────── */
@@ -986,6 +996,17 @@ function renderHero(show, root, cfg) {
   let subtitleEl = null;
   buildTitleSubtitle(show, titleRow);
   header.appendChild(titleRow);
+
+  // Under the title: the keep switch (the Sonarr/Radarr `keep` tag that stops Maintainerr cleaning
+  // this show off the server) and the show's page in Jellyfin.
+  const actionRow = el('div', 'sp-action-row');
+  renderKeepBadge(actionRow, show.id);
+  if (show.jellyfinUrl) {
+    const jf = jellyfinLink(show.jellyfinUrl, 'sp-keep-btn sp-jf-show');
+    jf.appendChild(el('span', '', 'Jellyfin'));
+    actionRow.appendChild(jf);
+  }
+  header.appendChild(actionRow);
 
   // Meta row
   const metaRow = el('div', 'sp-meta-row');
@@ -1594,6 +1615,7 @@ function buildAnidbEpRow(ep, show, cfg) {
     });
     mpvCell.appendChild(mpvBtn);
   }
+  if (ep.jellyfinUrl) mpvCell.appendChild(jellyfinLink(ep.jellyfinUrl));  // next to mpv
   row.appendChild(mpvCell);
 
   // Watch toggle
@@ -2832,6 +2854,7 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
       mpvIcon.textContent = avail === 'downloading' ? '⬇' : avail === 'airing' ? '●' : '◷';
     }
     mpvCell.appendChild(mpvIcon);
+    if (ep.jellyfinUrl) mpvCell.appendChild(jellyfinLink(ep.jellyfinUrl));  // next to mpv
     row.appendChild(mpvCell);
 
     // Download button — triggers browser-native download

@@ -100,6 +100,9 @@ class Config:
     jellyfin_url: str | None = None
     jellyfin_api_key: str | None = None
     jellyfin_user: str | None = None
+    # The address a browser opens for the Jellyfin links (defaults to jellyfin_url, which is what
+    # LCARS itself calls). The web UI swaps the host for the one it was loaded from, like Sonarr's.
+    jellyfin_public_url: str | None = None
     # "on" lets the hourly arr reconcile run the Jellyfin sync by itself; anything else leaves it to
     # the explicit `syncJellyfinWatched` mutation (the dry run, one show, the catch-up).
     jellyfin_sync: str | None = None
@@ -259,6 +262,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.jellyfin_url = parser["lcars"].get("jellyfin_url", fallback=None)
             cfg.jellyfin_api_key = parser["lcars"].get("jellyfin_api_key", fallback=None)
             cfg.jellyfin_user = parser["lcars"].get("jellyfin_user", fallback=None)
+            cfg.jellyfin_public_url = parser["lcars"].get("jellyfin_public_url", fallback=None)
             cfg.jellyfin_sync = parser["lcars"].get("jellyfin_sync", fallback=None)
             cfg.jellyfin_import_since = parser["lcars"].get("jellyfin_import_since", fallback=None)
             cfg.sonarr_public_url = parser["lcars"].get("sonarr_public_url", fallback=None)
@@ -307,6 +311,8 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
     cfg.jellyfin_url = os.environ.get("LCARS_JELLYFIN_URL", cfg.jellyfin_url)  # not a secret
     cfg.jellyfin_api_key = _resolve_secret(cfg.jellyfin_api_key, "LCARS_JELLYFIN_API_KEY")
     cfg.jellyfin_user = os.environ.get("LCARS_JELLYFIN_USER", cfg.jellyfin_user)  # not a secret
+    cfg.jellyfin_public_url = os.environ.get(  # not a secret
+        "LCARS_JELLYFIN_PUBLIC_URL", cfg.jellyfin_public_url)
     cfg.jellyfin_sync = os.environ.get("LCARS_JELLYFIN_SYNC", cfg.jellyfin_sync)
     cfg.jellyfin_import_since = os.environ.get(
         "LCARS_JELLYFIN_IMPORT_SINCE", cfg.jellyfin_import_since)

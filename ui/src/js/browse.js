@@ -13,14 +13,14 @@ import {
   browseSeasonalAnime, browseTmdb,
   searchArrCandidates, addShowWithArr, addShow, skipShow,
   setStatus, setSeasonStatus, setSeasonMapping,
-} from './api.js?v=28';
-import { showBanner } from './calendar.js?v=47';
+} from './api.js?v=29';
+import { showBanner } from './calendar.js?v=48';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS, withConfirmation,
 } from './status-picker.js?v=2';
-import { remindKeep } from './keep.js?v=1';
-import { _anilistSvg, _malSvg, _tvdbSvg, _imdbSvg, _tmdbMarkSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg } from './icons.js?v=16';
+import { remindKeep } from './keep.js?v=2';
+import { _anilistSvg, _malSvg, _tvdbSvg, _imdbSvg, _tmdbMarkSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg } from './icons.js?v=17';
 
 // ── Constants ────────────────────────────────────────────
 

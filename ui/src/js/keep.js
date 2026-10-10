@@ -5,7 +5,7 @@
  * whichever api.js version a page has cached.
  */
 
-import { gql } from './api.js?v=28';
+import { gql } from './api.js?v=29';
 
 const KEEP_QUERY = `
   query ShowKeep($id: ID!) {
@@ -37,22 +37,22 @@ export async function setKeep(showId, keep) {
   return data.setShowKeep.keep;
 }
 
-/** The "keep" switch for the show page's id-badge row. Hidden while loading and when the show is
+/** The "keep" switch, shown under the show's name. Hidden while loading and when the show is
  *  not in Sonarr/Radarr (nothing to tag). Click toggles the tag. */
 export function renderKeepBadge(container, showId) {
   const btn = document.createElement('button');
-  btn.className = 'sp-ext-badge sp-keep-badge';
+  btn.className = 'sp-keep-btn';
   btn.style.display = 'none';
   container.appendChild(btn);
 
   let kept = null;
   const paint = () => {
     btn.style.display = kept === null ? 'none' : '';
-    btn.textContent = kept ? '★ keep' : '☆ keep';
+    btn.classList.toggle('kept', !!kept);
+    btn.textContent = kept ? '★ Kept' : '☆ Keep';
     btn.title = kept
       ? 'Kept: Maintainerr will not clean this show off the server. Click to un-keep.'
       : 'Not kept: its watched seasons are cleaned off the server after they finish airing. Click to keep.';
-    btn.style.color = kept ? 'var(--accent)' : '';
   };
 
   gql(KEEP_QUERY, { id: showId })

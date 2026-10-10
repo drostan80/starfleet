@@ -1140,7 +1140,10 @@ body {
 .svc-tvmaze   { background: #fff; border-radius: 4px; }
 .svc-sonarr,
 .svc-radarr,
+.svc-jellyfin,
 .svc-player  { background: transparent; border-radius: 50%; }
+/* A fully linked show has 12 icons: tighten the strip so they all fit the card's height */
+.svc-strip:has(> .svc:nth-child(11)) { gap: 3px; padding: 4px 0; }
 
 /* cover art */
 .card-art {

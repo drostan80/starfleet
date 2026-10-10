@@ -412,3 +412,82 @@ def test_a_failed_import_is_reported_and_does_not_stop_the_pass(conn, monkeypatc
     stats = run(conn, monkeypatch, fake, import_since=SINCE)
     assert stats["failed"] is True and stats["imported"] == 0
     assert conn.execute("SELECT COUNT(*) FROM jellyfin_watch_sync").fetchone()[0] == 0
+
+
+# ── the Jellyfin links: which Jellyfin item is which ─────────────────────────
+
+
+def items(conn):
+    return {(r["kind"], r["entity_id"]): r["jellyfin_item_id"]
+            for r in conn.execute("SELECT * FROM jellyfin_item")}
+
+
+def test_the_sync_remembers_every_matched_item_even_with_nothing_to_mark(conn, monkeypatch):
+    add_show(conn, "s-aaaaaa", 42)
+    add_episode(conn, "e-aaaaa1", "s-aaaaaa", 1, 1, "unwatched")
+    add_episode(conn, "e-aaaaa2", "s-aaaaaa", 1, 2, "watched", "2026-03-04T20:30:00Z")
+    add_show(conn, "s-movie1", 777, shape="movie", status="planned")
+    fake = FakeJellyfin([series(42, "J-S1")],
+                        {"J-S1": [jf_episode("J-E1", 1, 1), jf_episode("J-E2", 1, 2, played=True)]},
+                        movies=[{"Id": "J-M1", "ProviderIds": {"Tmdb": "777"},
+                                 "UserData": {"Played": False}}])
+    run(conn, monkeypatch, fake)
+    assert items(conn) == {("show", "s-aaaaaa"): "J-S1", ("episode", "e-aaaaa1"): "J-E1",
+                           ("episode", "e-aaaaa2"): "J-E2", ("show", "s-movie1"): "J-M1"}
+
+
+def test_a_dry_run_remembers_nothing(conn, monkeypatch):
+    add_show(conn, "s-aaaaaa", 42)
+    add_episode(conn, "e-aaaaa1", "s-aaaaaa", 1, 1, "unwatched")
+    run(conn, monkeypatch, FakeJellyfin([series(42)], {"J-S1": [jf_episode("J-E1", 1, 1)]}),
+        dry_run=True)
+    assert items(conn) == {}
+
+
+def test_what_left_jellyfin_loses_its_link(conn, monkeypatch):
+    add_show(conn, "s-aaaaaa", 42)
+    add_show(conn, "s-bbbbbb", 43)
+    add_episode(conn, "e-aaaaa1", "s-aaaaaa", 1, 1, "unwatched")
+    add_episode(conn, "e-aaaaa2", "s-aaaaaa", 1, 2, "unwatched")
+    add_episode(conn, "e-bbbbb1", "s-bbbbbb", 1, 1, "unwatched")
+    both = FakeJellyfin([series(42, "J-S1"), series(43, "J-S2")], {
+        "J-S1": [jf_episode("J-E1", 1, 1), jf_episode("J-E2", 1, 2)],
+        "J-S2": [jf_episode("J-F1", 1, 1)]})
+    run(conn, monkeypatch, both)
+    assert len(items(conn)) == 5
+    # the second episode's file and the whole second show are gone from Jellyfin
+    run(conn, monkeypatch, FakeJellyfin([series(42, "J-S1")], {"J-S1": [jf_episode("J-E1", 1, 1)]}))
+    assert items(conn) == {("show", "s-aaaaaa"): "J-S1", ("episode", "e-aaaaa1"): "J-E1"}
+
+
+def test_a_single_show_pass_leaves_other_shows_links_alone(conn, monkeypatch):
+    add_show(conn, "s-aaaaaa", 42)
+    add_show(conn, "s-bbbbbb", 43)
+    add_episode(conn, "e-aaaaa1", "s-aaaaaa", 1, 1, "unwatched")
+    add_episode(conn, "e-bbbbb1", "s-bbbbbb", 1, 1, "unwatched")
+    fake = FakeJellyfin([series(42, "J-S1"), series(43, "J-S2")], {
+        "J-S1": [jf_episode("J-E1", 1, 1)], "J-S2": [jf_episode("J-F1", 1, 1)]})
+    run(conn, monkeypatch, fake)
+    run(conn, monkeypatch, fake, show_id="s-aaaaaa")
+    assert ("show", "s-bbbbbb") in items(conn) and ("episode", "e-bbbbb1") in items(conn)
+
+
+def test_link_for_uses_the_episode_page_the_movie_page_and_the_public_url(conn):
+    add_show(conn, "s-aaaaaa", 42)
+    add_show(conn, "s-movie1", 777, shape="movie", status="planned")
+    conn.execute("INSERT INTO jellyfin_item VALUES ('show', 's-aaaaaa', 'J-S1', ?)", (NOW,))
+    conn.execute("INSERT INTO jellyfin_item VALUES ('episode', 'e-aaaaa1', 'J-E1', ?)", (NOW,))
+    conn.execute("INSERT INTO jellyfin_item VALUES ('show', 's-movie1', 'J-M1', ?)", (NOW,))
+    assert jellyfin_sync.link_for(conn, "s-aaaaaa", "e-aaaaa1") == "http://j/web/#/details?id=J-E1"
+    # an episode Jellyfin does not have gets no link: the icon appears only when mpv can play too
+    assert jellyfin_sync.link_for(conn, "s-aaaaaa", "e-other") is None
+    # the show's own page, and a movie (whatever its episode row)
+    assert jellyfin_sync.link_for(conn, "s-aaaaaa") == "http://j/web/#/details?id=J-S1"
+    assert jellyfin_sync.link_for(conn, "s-movie1", "e-movie1") == "http://j/web/#/details?id=J-M1"
+    assert jellyfin_sync.link_for(conn, "s-zzzzzz", "e-zzzzz1") is None
+    config.set_current(
+        config.Config(jellyfin_url="http://j", jellyfin_public_url="http://jf.lan:8096/"))
+    assert jellyfin_sync.link_for(conn, "s-aaaaaa", "e-aaaaa1") == (
+        "http://jf.lan:8096/web/#/details?id=J-E1")
+    config.set_current(config.Config())
+    assert jellyfin_sync.link_for(conn, "s-aaaaaa", "e-aaaaa1") is None  # Jellyfin not configured

@@ -787,6 +787,13 @@ An episode can be unaired but watched (pre-air showing, leak…).
 - Never write to AniList/MAL until the value is known correct.
 - Never derive rules; if not entirely sure, ask. Check past work and code.
 - Validate data against this rulebook before building on it.
+- **A UI change is validated by the user on a test server before any tag or CI** `[decided
+  2026-10-10, user]`. Whenever a change touches `ui/` (pages, scripts, styles, the GraphQL fields they
+  read), Claude starts the UI test server (`scripts/ui_test_server.sh start`: the branch's `ui/src` on a
+  copy of the production database, real reads, every write captured, the Jellyfin links forwarded), gives
+  the user the address and says what to look at, and waits for the user's go. No version tag (which starts
+  CI and publishes) and no deploy before that go. Claude cannot see a browser here, so "tested" for a UI
+  change means the user looked at it. Backend-only changes are unaffected.
 
 ## 8. Glossary
 
@@ -975,3 +982,4 @@ Asked 2026-09-27. Answers move into the rules above and are logged in §10.
 - 2026-10-06 (v0.4.6) — R3.7c built (independent sources: Fribb+anime-lists = one), R3.7d guarded, R3.7f link provenance + recheck (8.8.5), 8.8.3 evidence on the review, R4.9 one ordered list-hub task.
 - 2026-10-07 — R1.0b (only airing seasons are refreshed or changed; every schedule refreshed and diffed; earliest timed candidate applied on change; empty dates take the earliest; TV follows Sonarr; a chosen schedule applies from then on, filling only the dates it lacks; `!` / `?` change icons), R1.0c (planned shows owed their schedules daily), R1.0e (an air date is a time or a date: precision, JST/US end-of-day "aired at", all-day display).
 - 2026-10-07 — R1.6a (seasons follow each other in time; the guards against a copied season date), R1.0b/R1.0c (seasons are airing / planned / history; planned refreshed weekly).
+- 2026-10-10 — §7: a UI change is validated by the user on a test server (`scripts/ui_test_server.sh`) before any tag or CI.

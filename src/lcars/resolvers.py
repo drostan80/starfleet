@@ -3484,6 +3484,16 @@ def _remonitor_in_arr_on_resume(conn, show_id: str) -> None:
     conn.commit()
 
 
+@show_type.field("jellyfinUrl")
+def resolve_show_jellyfin_url(obj, info):
+    return jellyfin_sync.link_for(db.get_connection(), obj["id"])
+
+
+@episode_type.field("jellyfinUrl")
+def resolve_episode_jellyfin_url(obj, info):
+    return jellyfin_sync.link_for(db.get_connection(), obj["show_id"], obj["id"])
+
+
 @show_type.field("keep")
 def resolve_show_keep(obj, info):
     return arr_tags.keep_state(db.get_connection(), obj["id"])

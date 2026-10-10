@@ -12668,3 +12668,23 @@ async def test_sync_jellyfin_watched_mutation_passes_its_arguments(client, monke
     assert data["syncJellyfinWatched"]["markedPlayed"] == 2
     unmatched = data["syncJellyfinWatched"]["unmatched"]
     assert unmatched == ["Show: 1 watched episode(s) not in Jellyfin"]
+
+
+async def test_jellyfin_url_on_episode_and_show(client, migrated_db, monkeypatch):
+    show = await add_show(client, titleRomaji="Linked Show")
+    _insert_next_up_episode(migrated_db, "e-jl0001", show["id"], episode=1, state="unwatched")
+    _insert_next_up_episode(migrated_db, "e-jl0002", show["id"], episode=2, state="unwatched")
+    conn = db.get_connection()
+    conn.execute("INSERT INTO jellyfin_item VALUES ('show', ?, 'J-SHOW', 'x')", (show["id"],))
+    conn.execute("INSERT INTO jellyfin_item VALUES ('episode', 'e-jl0001', 'J-EP1', 'x')")
+    conn.commit()
+    config.set_current(config.Config(jellyfin_url="http://jf:8096", bearer_token=BEARER_TOKEN))
+    data = await gql(
+        client,
+        "query($id: ID!) { show(id: $id) { jellyfinUrl episodes(first: 10) { edges { node {"
+        " episode jellyfinUrl } } } } }", {"id": show["id"]}, headers=auth_headers())
+    edges = data["show"]["episodes"]["edges"]
+    urls = {e["node"]["episode"]: e["node"]["jellyfinUrl"] for e in edges}
+    assert data["show"]["jellyfinUrl"] == "http://jf:8096/web/#/details?id=J-SHOW"
+    assert urls == {1: "http://jf:8096/web/#/details?id=J-EP1",   # its own page
+                    2: None}  # not in Jellyfin: no link (the icon shows only when mpv can play)

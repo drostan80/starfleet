@@ -86,3 +86,12 @@ new release — there is no separate rsync/deploy.sh step.
 The nginx config (`nginx.conf`) is baked into the `-web` image and serves
 static files at `/ui/`, raw media at `/files/`, and proxies everything
 else to LCARS at `http://lcars:8000`.
+
+## UI changes are validated on a test server first (user rule, 2026-10-10)
+
+Before ANY tag (which starts CI and publishes) for a change that touches `ui/`, run
+`scripts/ui_test_server.sh start`, give the user the address it prints (`http://<LAN IP>:8891/ui/`), say what
+to look at, and wait for their go. The server uses a copy of the production database (real data), captures
+every external write, and forwards the Jellyfin links. Stop it with `scripts/ui_test_server.sh stop`. There
+is no browser/screenshot tool in the agent's environment, so the user's look is the test. After a UI change
+also remember: bump the `?v=` of every changed file and of every file that imports it.

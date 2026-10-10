@@ -9,14 +9,14 @@
  */
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=28';
-import { openArtPicker } from './art-picker.js?v=5';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=29';
+import { openArtPicker } from './art-picker.js?v=6';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,
   STATUS_ICONS, STATUS_ICON_CLASS, withConfirmation,
 } from './status-picker.js?v=2';
-import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg, SVC_ICONS } from './icons.js?v=16';
+import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _jellyfinSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg, SVC_ICONS } from './icons.js?v=17';
 import { startDownload } from './downloads.js?v=2';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 
@@ -668,8 +668,10 @@ export async function launchMpv(filePath, cfg, ctx = null) {
  * filePath: server-side file path (filePathSonarr or filePathRadarr), or null
  * availableLocally: bool
  * ctx: optional {showId, season, episode} (episodeCtx(ep)) for watched-status reporting
+ * jellyfinUrl: where this episode is in Jellyfin (ep.jellyfinUrl), or null — a link next to mpv's
  */
-export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cfg, ctx = null) {
+export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cfg, ctx = null,
+                              jellyfinUrl = null) {
   const byService = {};
   for (const ei of externalIds) {
     // prefer the real link over the :add synthetic link
@@ -740,6 +742,18 @@ export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cf
     playerA.style.opacity = '';
   });
   strip.appendChild(playerA);
+
+  // Jellyfin: the same episode, opened in Jellyfin's own web player (next to the mpv icon)
+  if (jellyfinUrl) {
+    const jf = document.createElement('a');
+    jf.className = 'svc svc-jellyfin on';
+    jf.title = 'Open in Jellyfin';
+    jf.innerHTML = _jellyfinSvg;
+    jf.href = rewriteHost(jellyfinUrl, location.hostname);
+    jf.target = '_blank';
+    jf.rel = 'noopener noreferrer';
+    strip.appendChild(jf);
+  }
 
   return strip;
 }
@@ -822,7 +836,8 @@ export function buildCard(ep, cfg) {
   // Service strip
   const filePath = ep.show.mediaShape === 'MOVIE' ? ep.filePathRadarr : ep.filePathSonarr;
   const malId    = ep.seasonEntity?.malId ?? null;
-  body.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg, episodeCtx(ep)));
+  body.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg, episodeCtx(ep),
+                               ep.jellyfinUrl));
 
   // Cover art — use posterUrl if available; otherwise use TMDB cache or trigger a fetch
   const art = document.createElement('div');
@@ -1326,7 +1341,8 @@ function buildPlannerCard(ep, cfg) {
   // Service strip — same vertical icon bar as regular calendar cards
   const externalIds = ep.show.externalIds?.edges?.map(e => e.node) || [];
   const malId = ep.seasonEntity?.malId ?? null;
-  card.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg, episodeCtx(ep)));
+  card.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg, episodeCtx(ep),
+                               ep.jellyfinUrl));
 
   // Cover image — full poster, scaled (not cropped)
   const cover = document.createElement('div');

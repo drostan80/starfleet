@@ -213,6 +213,8 @@ type Show {
   tracked: Boolean!
   "Whether the show carries the `keep` tag in Sonarr/Radarr (Maintainerr's cleanup skips a kept show). A live read, so ask for it on the show page only; null when the show is not in Sonarr/Radarr or the service cannot be reached."
   keep: Boolean
+  "Where this show (series or movie) is in Jellyfin, once the Jellyfin sync has met it; null otherwise."
+  jellyfinUrl: String
   score: Float
   totalEpisodes: Int
   durationMinutes: Int
@@ -322,6 +324,8 @@ type Episode {
   "Nullable — not every episode has been linked to a season row yet (A.8/A.4's reconciliation populates it)."
   seasonEntity: Season
   episode: Int!
+  "Where this episode is in Jellyfin (its own page, else its show's), once the Jellyfin sync has met it; null otherwise. The Jellyfin link next to the mpv one."
+  jellyfinUrl: String
   kind: EpisodeKind!
   "Decimal-capable synthesized numbering (§5.2, e.g. 12.1) — null until sourced or synthesized."
   absoluteNumber: Float
