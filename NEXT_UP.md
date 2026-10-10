@@ -10,7 +10,7 @@ Rules live in RULEBOOK.md (absolute); items marked "decision" below are open to 
 - **Done on prod 10-10 after the deploy:** Sonarr tags are on (the new code's reconcile applied them itself): 147 `ongoing`, 31 `purge` (the vetted 480 GB list), none overlapping `keep`/`ongoing`; `keep` removed from Under the Banner of Heaven (undo log `/db/arr_tags_backfill_20261010.json` in the lcars container); the 37 wrong Sonarr deep-link rows fixed (1 repointed, 36 removed; all 351 rows now right). Hunter x Hunter (2011) stays dropped (user: "I'll deal with consequences if any later").
 - **Maintainerr switched 10-10 ~13:00 Dublin (user's go, `--apply --execute`):** `Housekeeping` (id 7) and `Housekeeping (series)` (id 8) created; `spring cleaning` → `Checkout` / `Checkout (series)` (ids 2, 4; 15 days; the season must be unmonitored); the three `clearing house` collections (ids 1, 3, 5) are now "tag purge", 15 days. Rules executed; membership read before any action: clearing house 28 shows (all LCARS-dropped), Checkout 15 seasons (14 completed + 1 manual), Housekeeping 77 seasons (all LCARS-completed shows). Backup `/opt/appdata/maintainerr/maintainerr.sqlite.bak-20261010-pre-housekeeping`; undo = restore it.
   - **What happens next (Dublin time):** rules re-run 16:00; handler 00:00 tonight unmonitors the 77 Housekeeping seasons (files kept); Checkout deletes ~10-22 (15 seasons); clearing house deletes ~10-25/26 (28 shows, ~480 GB on disk — Maintainerr's own GB figures are ~2× the real size).
-  - **Open:** *CIA S1* is a MANUAL member of `Checkout (series)` (added by hand; LCARS has the show *watching*, tagged `ongoing`) — Maintainerr never removes manual members, so it will be deleted ~10-22 unless removed by hand. *KAMUI: He's Behind You* is tagged `purge` but not in the clearing house (not in Jellyfin's listing yet).
+  - **Open (user decisions 10-10 pm):** *CIA S1* stays in `Checkout (series)` and is cleared ~10-22 as intended (S2 is airing and the show carries `ongoing`, so it is safe). *KAMUI: He's Behind You* carries `purge` in Sonarr but Jellyfin never identified it (item named after its folder, all provider ids empty), so Maintainerr cannot match it to Sonarr and it will NOT purge on its own: fix = in Jellyfin, Identify the show as TheTVDB 473913 (the Jellyfin key stored in Maintainerr is rejected with HTTP 401, so I could not do it); it then joins the clearing house at the next rule run. Until then it is not covered.
 - Deploy recipe: snapshot (sqlite online backup inside the lcars container) → back up `~/stacks/starfleet.yml` → `/-web/!` sed pair on all three image lines → `docker compose pull` / `up -d` → verify. SSH: `ssh tiny@192.168.1.77` only.
 - Prod facts: `LCARS_EXTERNAL_WRITES=send`, `LCARS_AUTOMATION_FROZEN=0`.
 
@@ -59,12 +59,13 @@ Priority order (user 2026-10-10):
 1. 🟠 **Android APK rebuild** — high on the list, not for today. The app bundles the UI: it needs a rebuild for the `!`/`?` icons, the always-visible play triangle, the all-day display, and the v0.4.5 page auto-refresh.
 2. 🟠 **API hardening: a backup source for every API call** — ongoing. Partly built (this is why most data has several sources); not fully hardened because aligning sources to the exact need is hard.
    Includes the AniList metadata fallback, still scalar-only (relations / studios / genres degrade on an outage; `_fetch_mal_fallback`); franchise function deferred.
-3. 🟠 **Data TUI rework** — not for today.
+3. 🟠 **UI review item:** the ★ keep badge on the show page is serviceable but small and sits in the id-badge row — next UI review, make it bigger and put it under the show name (user 10-10).
+4. 🟠 **Data TUI rework** — not for today.
 4. 👀 AniDB: weekly refreshes of watching/planned shows only from now on (423 anime in scope; the 200/day cap spreads them — the 10-06/07 batches come due 10-13/14 and take ~2 days, oldest first). Any ban/HTTP error → stop and ask.
 5. 🔑 Key rotation at project end (Sonarr/Radarr/TMDB keys, MAL `client_id`, LCARS AniList `client_secret`; secrets out of plaintext `config.ini`) — not there yet.
 
-- 🔴 **Add-check root cause (unexplained, not yet looked at):** on 10-05 the add check proposed "part of S1" for AniList 212144 although TVDB already held S2's 12 episodes (R1.10a says the entry goes to that TVDB season). Find why before the next sequel; explain first, wait for the yes.
-- 👀 *With Vengeance* S1 lists: AniList 195209 / MAL 59961 baselines read `completed` with remote progress 0 (the old part level held 0 episodes). S1 now holds 12 watched episodes; a push of progress 12 is offered to the user, not sent.
+- 🔴 **Add-check root cause (explained to the user 10-10; waiting on their yes to look):** on 10-05 the add check proposed "part of S1" for AniList 212144 although TVDB already held S2's 12 episodes (R1.10a says the entry goes to that TVDB season). Find why before the next sequel; explain first, wait for the yes.
+- ✅ *With Vengeance* S1 pushed to AniList 195209 / MAL 59961: completed 12/12, read back from both (10-10).
 - Auto-refresh on the desktop page: works, "not perfect but fine enough" (user 10-10) — parked.
 
 ### Closed 2026-10-10
