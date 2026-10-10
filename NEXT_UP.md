@@ -75,7 +75,7 @@ Priority order (user 2026-10-10):
 4. 👀 AniDB: weekly refreshes of watching/planned shows only from now on (423 anime in scope; the 200/day cap spreads them — the 10-06/07 batches come due 10-13/14 and take ~2 days, oldest first). Any ban/HTTP error → stop and ask.
 5. 🔑 Key rotation at project end (Sonarr/Radarr/TMDB keys, MAL `client_id`, LCARS AniList `client_secret`; secrets out of plaintext `config.ini`) — not there yet.
 
-- 🔴 **Add-check root cause (explained to the user 10-10; waiting on their yes to look):** on 10-05 the add check proposed "part of S1" for AniList 212144 although TVDB already held S2's 12 episodes (R1.10a says the entry goes to that TVDB season). Find why before the next sequel; explain first, wait for the yes.
+- 🔴 **Add-check root cause: FOUND, proposal written, awaiting the user's two answers** — `DECISION-episode-level-placement-2026-10-10.md`. R1.10a (place an entry by its episodes) exists only in the Fribb-driven reconciler; the add check's no-TVDB-id branch and entries Fribb does not list never get it. Fix = one `place_by_episodes` function used by both, the reconciler also seeing held entries, and the add check proposing the TVDB season with evidence. Reproduced on the pre-fix snapshot.
 - ✅ *With Vengeance* S1 pushed to AniList 195209 / MAL 59961: completed 12/12, read back from both (10-10).
 - Auto-refresh on the desktop page: works, "not perfect but fine enough" (user 10-10) — parked.
 
