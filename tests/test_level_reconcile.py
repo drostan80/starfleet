@@ -326,3 +326,77 @@ def test_the_weekly_season_mapping_does_not_give_a_divided_season_its_first_cour
     parent = conn.execute("SELECT anilist_id, mal_id FROM season WHERE id = 'z-s30000'").fetchone()
     assert tuple(parent) == (None, None)
     assert conn.execute("SELECT COUNT(*) FROM season WHERE anilist_id = 195516").fetchone()[0] == 1
+
+
+# ── 2026-10-10: With Vengeance, Sincerely, Your Broken Saintess ──────────────
+# TVDB S1 and S2 (12 episodes each); AniList 195209 and 212144; Fribb lists only 195209. The add
+# check had made "part 2 of S1" for 212144 (empty, source auto) and S1 was divided into an empty
+# part 1. Nothing placed 212144 for five days: the reconciler only looked at Fribb's entries.
+
+
+def vengeance(conn):
+    tvdb_season(conn, "z-v10000", 1, 1, 12, "2025-07-09T15:30:00Z")
+    tvdb_season(conn, "z-v20000", 2, 13, 12, "2026-10-01T15:00:00Z", status="watching")
+    for zid, part, aid, mal in (("z-vp1000", 1, 195209, 59961), ("z-vp2000", 2, 212144, 64180)):
+        conn.execute(
+            "INSERT INTO season (id, show_id, season_number, part_number, kind, parent_id,"
+            " anilist_id, mal_id, status, source, created_at, updated_at) VALUES (?, 's-lr0001',"
+            " 1, ?, 'part', 'z-v10000', ?, ?, 'planned', 'auto', ?, ?)",
+            (zid, part, aid, mal, T, T))
+    conn.commit()
+    return ([entry(195209, 1, 59961)],  # Fribb knows the first entry only
+            Facts({195209: (dt.date(2025, 7, 10), 12), 212144: (dt.date(2026, 10, 2), 12)}))
+
+
+def test_an_entry_fribb_does_not_list_is_placed_by_its_episodes_from_the_part_that_holds_it(conn):
+    entries, facts = vengeance(conn)
+    r = run(conn, entries, facts)
+    assert (r["linked"], r["parts_made"], r["left"]) == (2, 0, 0)
+    held = {row["season_number"]: (row["kind"], row["anilist_id"], row["mal_id"])
+            for row in conn.execute("SELECT * FROM season WHERE kind = 'tvdb_season'")}
+    assert held == {1: ("tvdb_season", 195209, 59961), 2: ("tvdb_season", 212144, 64180)}
+    assert conn.execute("SELECT COUNT(*) FROM season WHERE kind = 'part'").fetchone()[0] == 0
+
+
+def test_a_second_pass_changes_nothing(conn):
+    entries, facts = vengeance(conn)
+    run(conn, entries, facts)
+    again = run(conn, entries, facts)
+    assert (again["linked"], again["parts_made"], again["left"], again["shows"]) == (0, 0, 0, 0)
+
+
+def test_a_held_entry_is_placed_by_a_start_date_never_by_a_count_alone(conn):
+    entries, _ = vengeance(conn)
+    undated = Facts({195209: (dt.date(2025, 7, 10), 12), 212144: (None, 12)})
+    r = run(conn, entries, undated)
+    assert r["linked"] == 1  # 195209 only
+    assert conn.execute("SELECT parent_id FROM season WHERE id = 'z-vp2000'").fetchone()[0] \
+        == "z-v10000"  # 212144 stays where it was: reported, not guessed
+    assert r["plan"][0]["left"] == [(212144, "no episode of the show aired on its start date")]
+
+
+def test_a_part_you_placed_by_hand_is_never_moved(conn):
+    entries, facts = vengeance(conn)
+    conn.execute("UPDATE season SET source = 'manual' WHERE id = 'z-vp2000'")
+    conn.commit()
+    run(conn, entries, facts)
+    assert conn.execute("SELECT kind FROM season WHERE id = 'z-vp2000'").fetchone()[0] == "part"
+
+
+def test_a_part_with_spans_is_a_settled_part_and_stays(conn):
+    entries, facts = vengeance(conn)
+    conn.execute("INSERT INTO season_span (season_id, abs_from, abs_to)"
+                 " VALUES ('z-vp2000', 13, 24)")
+    conn.commit()
+    run(conn, entries, facts)
+    assert conn.execute("SELECT kind, parent_id FROM season WHERE id = 'z-vp2000'").fetchone()[:] \
+        == ("part", "z-v10000")
+
+
+def test_a_part_inside_a_season_you_placed_by_hand_is_your_structure_and_stays(conn):
+    entries, facts = vengeance(conn)
+    conn.execute("UPDATE season SET source = 'manual', manual_override = 1 WHERE id = 'z-v10000'")
+    conn.commit()
+    r = run(conn, entries, facts)
+    assert conn.execute("SELECT kind FROM season WHERE id = 'z-vp2000'").fetchone()[0] == "part"
+    assert r["linked"] == 0 or r["plan"][0]["left"] == []  # nothing inside S1 was moved

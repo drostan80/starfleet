@@ -1,6 +1,6 @@
 # Decision pending: every list entry is placed by its episodes — one rule, one function (2026-10-10)
 
-Status: **analysis and proposal; nothing built.** RULEBOOK §7: the change and its consequences are explained
+Status: **decided by the user 2026-10-10 and BUILT in dev (not released).** Decisions: (1) two agreeing sources attach by themselves, one source asks; (2) yes, the reconciler also sees held entries. RULEBOOK §7: the change and its consequences are explained
 here first; Claude waits for your yes. Evidence below was measured read-only (the production snapshot taken
 before the With Vengeance fix, `lcars.db.bak-20261010-pre-vengeance-s2`, plus Fribb's real dataset).
 
@@ -83,3 +83,24 @@ level; disagreeing dates/counts ask. Plus the existing reconciler tests unchange
    revisit after a few cases.*
 2. **C (the reconciler also sees held entries):** yes? *Recommended — it is what makes the mapping systematic.*
 3. Anything else you want the planner to report (a review, a notification), or is the rulecheck line enough?
+
+
+## 7. What was built (2026-10-10)
+
+- `level_reconcile.place_entry()` — the placement for ONE entry (start date = an air date in Japan, else the
+  season whose free episodes are its own); `plan_show` uses the same start-date helper.
+- `plan_show` also takes the entries held by an **empty part** (not manual, not inside a season you placed by
+  hand); placed by a start date only, never by a count alone. Specials/OVAs holding list-only entries are
+  untouched (R1.11, R1.8). A season whose only parts are empty leftovers becomes a plain season.
+- `add_check.classify`: the no-TVDB-id branch and the "TVDB id known, no season named" fallback call
+  `_by_episodes`: exact (start date = the first free episode's air date AND count = free episodes) +
+  the prequel link / the confirmed TVDB id -> automatic `link_season` / `part`; one source -> `needs_user`
+  with the evidence; TVDB places it nowhere -> `needs_user` whose default is worded as the guess it is.
+- `Decision.then` + the review payload `place`: "Add to the proposed show" now does what the text says
+  (before, it always made a part of the prequel's own season).
+- Verified: the With Vengeance replay (reconciler + add check), plus a dry run of the reconciler on a copy of
+  production with real Fribb and AniList data: **identical to the code before the change** (nothing that
+  exists today moves). Two scope errors were caught by that dry run and fixed (specials and a hand-placed
+  season's part).
+- Tests: tests/test_level_reconcile.py (+6), tests/test_add_check.py (+9, and it now passes on its own);
+  tests/conftest.py keeps AniList offline in tests. Full suite 1,971 passed.

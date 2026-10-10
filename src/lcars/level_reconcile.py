@@ -16,6 +16,12 @@ level with no episodes — and decides, at episode level:
   3. Anything else (the dates and counts disagree, or the season has no spans yet) is left as it
      is and reported — no review: nobody can answer it better than the episodes will.
 
+The entries come from two places: Fribb's list for the show's TVDB id, **and every entry a level of
+the show already holds with nothing else on it** (an empty part, a special, a season level) — Fribb
+need not know a brand-new sequel for it to be placed by its episodes (2026-10-10: With Vengeance S2,
+AniList 212144, sat on an empty "part 2 of S1" for five days because only Fribb's entries were
+considered). `place_entry` is the same placement for ONE entry, used by the add check.
+
 A level the user placed by hand (`source = 'manual'` or `manual_override`) is never moved.
 AniList facts (start date, episode count) are fetched only for shows that have an unplaced entry
 and are remembered for six hours, so a settled show costs no call.
@@ -83,6 +89,14 @@ def _is_leftover(conn, z) -> bool:
         return False
     if z["kind"] == "special":
         return not level_parts._busy(conn, z)
+    if z["kind"] == "part":  # a part with no episode, span or child was made for want of a place
+        if z["source"] == "manual" or z["manual_override"]:
+            return False
+        parent = conn.execute("SELECT source, manual_override FROM season WHERE id = ?",
+                              (z["parent_id"],)).fetchone()
+        if parent is not None and (parent["source"] == "manual" or parent["manual_override"]):
+            return False  # inside a season you placed by hand: your structure, never moved
+        return not level_parts._busy(conn, z)
     if z["kind"] != "tvdb_season" or z["source"] == "manual" or z["manual_override"]:
         return False
     if conn.execute(
@@ -91,6 +105,20 @@ def _is_leftover(conn, z) -> bool:
     ).fetchone():
         return False
     return not level_parts._busy(conn, z)
+
+
+def _season_by_start(by_season: dict, start) -> tuple[int | None, float | None]:
+    """The TVDB season (and the absolute number) of the first episode that aired on `start`, as a
+    calendar date in Japan, where AniList counts it. (None, None) when no episode did."""
+    if start is None:
+        return None, None
+    for n, eps in by_season.items():
+        for ep in eps:
+            if ep["air_date_utc"] and air_time.day_in_japan(
+                ep["air_date_utc"], ep["air_precision"], ep["air_local_date"]
+            ) == start:
+                return n, ep["absolute_number"]
+    return None, None
 
 
 def _show_entries(conn, show_id: str, tvdb_id: int, index: dict) -> list[dict]:
@@ -112,8 +140,6 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
     "left": [(anilist_id, reason)]}. Nothing is written."""
     out: dict = {"parts": [], "links": [], "future": [], "left": []}
     entries = _show_entries(conn, show_id, tvdb_id, index)
-    if not entries:
-        return out
     levels = [
         z for z in conn.execute(
             "SELECT * FROM season WHERE show_id = ? AND kind IN ('tvdb_season', 'part')"
@@ -126,6 +152,17 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
         (show_id,),
     ):
         held.setdefault(sp["anilist_id"], sp)
+    # An entry Fribb does not list but an EMPTY PART of the show holds (a cour put where no
+    # episode is) is placed by its episodes too — a start-date match only: with no Fribb season to
+    # go by, a count alone is too weak to move it. Specials and OVAs holding a list-only entry
+    # are legitimate season-0 pieces (R1.11, R1.8) and are left alone.
+    known = {e["anilist_id"] for e in entries}
+    for aid, z in held.items():
+        if aid not in known and z["kind"] == "part" and _is_leftover(conn, z):
+            entries.append({"anilist_id": int(aid), "mal_id": z["mal_id"], "hint": None,
+                            "held": True})
+    if not entries:
+        return out
     unplaced = [
         e for e in entries
         if e["anilist_id"] not in held or (held[e["anilist_id"]] is not None
@@ -162,17 +199,8 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
         if fa is None:
             out["left"].append((e["anilist_id"], "AniList has no such entry"))
             continue
-        target = start_abs = None
-        if fa["start"] is not None:  # the first episode that aired on its start date, in Japan
-            for n, eps in by_season.items():
-                for ep in eps:
-                    if ep["air_date_utc"] and air_time.day_in_japan(
-                        ep["air_date_utc"], ep["air_precision"], ep["air_local_date"]
-                    ) == fa["start"]:
-                        target, start_abs = n, ep["absolute_number"]
-                        break
-                if target is not None:
-                    break
+        # the first episode that aired on its start date, in Japan
+        target, start_abs = _season_by_start(by_season, fa["start"])
         if target is None:
             undated.append((e, fa))
             continue
@@ -182,6 +210,9 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
         )
     unresolved: list[tuple[dict, dict]] = []
     for e, fa in undated:  # no usable start date: the season whose free episodes are its own
+        if e.get("held"):  # not in Fribb: a start date or nothing
+            out["left"].append((e["anilist_id"], "no episode of the show aired on its start date"))
+            continue
         target = _fit_by_count(conn, e, fa, by_season, holders_in, f, placed)
         if target is None:
             if e["hint"] == last_tvdb + 1 or (
@@ -223,9 +254,9 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
     order = {e["anilist_id"]: i for i, e in enumerate(entries)}
     for n, new in sorted(placed.items()):
         parent = parents[n]
-        existing_parts = conn.execute(
-            "SELECT 1 FROM season WHERE parent_id = ? AND kind = 'part' LIMIT 1", (parent["id"],)
-        ).fetchone()
+        existing_parts = any(  # parts with episodes or spans; empty ones are consumed by this pass
+            not _is_leftover(conn, part) for part in conn.execute(
+                "SELECT * FROM season WHERE parent_id = ? AND kind = 'part'", (parent["id"],)))
         group = list(new)
         if parent["anilist_id"] is not None and not existing_parts:  # the season's own entry
             fa = f.get(parent["anilist_id"])
@@ -249,6 +280,60 @@ def plan_show(conn, show_id: str, tvdb_id: int, index: dict, facts=facts_for) ->
             out["left"].extend((x["anilist_id"], str(r)) for x in new)
             continue
         out["parts"].append((parent, p))
+    return out
+
+
+def place_entry(conn, show_id: str, anilist_id: int, facts=facts_for) -> dict:
+    """Where ONE entry belongs by the show's episodes (R1.10a) — the add check's question, answered
+    with the same evidence the reconciler uses. AniList's start date and episode count come from
+    `facts`; an unreachable AniList (or an id AniList does not know) gives how = "unknown".
+
+    Returns {"how", "season", "start", "start_abs", "count", "free", "exact", "last_season"}:
+      how "start"  — an episode of TVDB season `season` aired on the entry's start date (Japan);
+      how "count"  — no start date matches; the one season whose free episodes are its own;
+      how "none"   — TVDB's episodes place it nowhere (TVDB may not list its season yet);
+      how "unknown"— no facts.
+    `exact` = two independent sources agree: the start date is the air date of the season's first
+    free episode AND the entry's episode count is exactly the season's free episodes."""
+    out = {"how": "unknown", "season": None, "start": None, "start_abs": None, "count": None,
+           "free": None, "exact": False, "last_season": 0}
+    by_season: dict[int, list] = {}
+    for ep in conn.execute(
+        "SELECT season, absolute_number, air_date_utc, air_precision, air_local_date FROM episode"
+        " WHERE show_id = ? AND season > 0 AND kind = 'regular' AND absolute_number IS NOT NULL"
+        " ORDER BY absolute_number", (show_id,)
+    ):
+        by_season.setdefault(ep["season"], []).append(ep)
+    out["last_season"] = max(by_season, default=0)
+    levels = [z for z in conn.execute(
+        "SELECT * FROM season WHERE show_id = ? AND kind IN ('tvdb_season', 'part')"
+        " AND season_number > 0", (show_id,))]
+    holders_in = {
+        n: [z for z in levels if z["season_number"] == n and z["anilist_id"] is not None
+            and z["anilist_id"] != anilist_id and not _is_leftover(conn, z)]
+        for n in by_season
+    }
+    try:
+        f = facts([anilist_id] + [z["anilist_id"] for hs in holders_in.values() for z in hs])
+    except anilist_client.AniListError:
+        return out
+    fa = f.get(anilist_id)
+    if fa is None:
+        return out
+    out.update(how="none", start=fa["start"], count=fa["episodes"])
+    target, start_abs = _season_by_start(by_season, fa["start"])
+    how = "start"
+    if target is None:
+        target = _fit_by_count(conn, {"hint": None}, fa, by_season, holders_in, f, {})
+        how, start_abs = "count", None
+    if target is None:
+        return out
+    free = _free(conn, target, by_season, holders_in, f, {})
+    first_free = by_season[target][len(by_season[target]) - free]["absolute_number"] \
+        if 0 < free <= len(by_season[target]) else None
+    out.update(how=how, season=target, start_abs=start_abs, free=free)
+    out["exact"] = bool(how == "start" and fa["episodes"] and fa["episodes"] == free
+                        and start_abs == first_free)
     return out
 
 

@@ -177,7 +177,14 @@ def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | N
             add_check.USER, anilist_id=payload.get("anilist_id"), mal_id=payload.get("mal_id"),
             titles=payload.get("titles") or [], media_type=payload.get("media_type"),
         )
-        if choice == "add_to_show":
+        if choice == "add_to_show" and payload.get("place"):
+            # the placement the review proposed (R1.10a): what the text said is what is done
+            place = payload["place"]
+            add_check.apply_decision(conn, add_check.Decision(
+                place["kind"], payload["show_id"], place.get("season_id"), payload.get("tvdb_id"),
+                place.get("season_number"),
+            ), candidate)
+        elif choice == "add_to_show":
             prequel = conn.execute(
                 "SELECT * FROM season WHERE id = ?", (payload["season_id"],)
             ).fetchone()

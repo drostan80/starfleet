@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from lcars import add_check
+from lcars import add_check, config
 from lcars.add_check import LIST, RELATION, SONARR, USER, Candidate
 
 NOW = "2026-01-01T00:00:00Z"
@@ -36,6 +36,7 @@ def conn(tmp_path):
         check=True,
         capture_output=True,
     )
+    config.set_current(config.Config())  # the file passes on its own, not by another test's config
     c = sqlite3.connect(path)
     c.row_factory = sqlite3.Row
     c.execute(
@@ -422,3 +423,132 @@ def test_your_tvdb_id_in_the_note_runs_the_check_again(conn, monkeypatch):
                         (row2["id"],)).fetchone()[0] is not None
     assert conn.execute("SELECT season_number FROM season WHERE anilist_id = 217434"
                         ).fetchone()[0] == 4
+
+
+# ── 2026-10-10: an entry Fribb does not know is placed by the show's episodes (R1.10a) ───────
+# With Vengeance, Sincerely, Your Broken Saintess: TVDB S1 and S2 hold 12 episodes each, AniList
+# 212144 is S2 (starts 2026-10-02, 12 episodes), its prequel 195209 is S1. The add check used to say
+# "TVDB doesn't list it yet — part of S1" and the button made exactly that part.
+
+import datetime as dt  # noqa: E402
+
+from lcars import anilist_client, reviews  # noqa: E402
+
+WV = 454916
+
+
+def with_vengeance(conn, *, s2_episodes=12):
+    conn.execute(
+        "INSERT INTO show (id, media_shape, tracking_space, title_romaji, primary_title, status,"
+        " tracked, created_at, updated_at) VALUES ('s-wv0001', 'episodic', 'anime',"
+        " 'With Vengeance, Sincerely, Your Broken Saintess', 'romaji', 'completed', 1, ?, ?)",
+        (NOW, NOW))
+    conn.execute("INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+                 " VALUES ('s-wv0001', 'tvdb', ?, '', ?)", (str(WV), NOW))
+    for zid, n, anilist, first, count, start in (
+            ("z-wv1000", 1, 195209, 1, 12, "2025-07-09T15:30:00Z"),
+            ("z-wv2000", 2, None, 13, s2_episodes, "2026-10-01T15:00:00Z")):
+        conn.execute(
+            "INSERT INTO season (id, show_id, season_number, kind, anilist_id, status, source,"
+            " created_at, updated_at) VALUES (?, 's-wv0001', ?, 'tvdb_season', ?, 'watching',"
+            " 'fribb', ?, ?)", (zid, n, anilist, NOW, NOW))
+        base = dt.datetime.fromisoformat(start.replace("Z", ""))
+        for i in range(count):
+            when = (base + dt.timedelta(days=7 * i)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            conn.execute(
+                "INSERT INTO episode (id, show_id, season, episode, kind, absolute_number,"
+                " air_date_utc, state, season_id, created_at, updated_at) VALUES (?, 's-wv0001',"
+                " ?, ?, 'regular', ?, ?, 'unwatched', ?, ?, ?)",
+                (f"e-{n}{i:05d}", n, i + 1, first + i, when, zid, NOW, NOW))
+    conn.commit()
+
+
+def sequel(**kw):
+    return Candidate(RELATION, anilist_id=212144, mal_id=64180, prequel_anilist_ids=[195209],
+                     titles=["With Vengeance, Sincerely, Your Broken Saintess Season 2"], **kw)
+
+
+def wv_facts(start=dt.date(2026, 10, 2), episodes=12):
+    return lambda ids: {i: {"start": start, "episodes": episodes if i == 212144 else 12,
+                            "status": "x"} for i in ids}
+
+
+def test_two_sources_agree_so_the_sequel_attaches_to_the_season_its_episodes_sit_in(conn):
+    with_vengeance(conn)
+    d = add_check.classify(conn, sequel(), [], facts=wv_facts())
+    assert (d.kind, d.season_id, d.season_number) == ("link_season", "z-wv2000", 2)
+    assert "two sources agree" in d.reason and "2026-10-02" in d.reason  # R1.10a
+    assert d.kind in add_check.AUTOMATIC
+
+
+def test_a_count_that_does_not_match_the_free_episodes_asks_with_the_evidence(conn):
+    with_vengeance(conn)
+    d = add_check.classify(conn, sequel(), [], facts=wv_facts(episodes=13))
+    assert (d.kind, d.season_id, d.then, d.season_number) == ("needs_user", "z-wv2000",
+                                                              "link_season", 2)
+    assert "13 episodes against 12 free" in d.reason and "TVDB season 2" in d.proposal
+
+
+def test_when_no_start_date_matches_the_one_season_with_exactly_its_free_episodes_is_proposed(conn):
+    with_vengeance(conn)
+    d = add_check.classify(conn, sequel(), [], facts=wv_facts(start=dt.date(2027, 4, 1)))
+    assert (d.kind, d.then, d.season_id) == ("needs_user", "link_season", "z-wv2000")  # one source
+    assert "TVDB season 2 has exactly its 12 episodes free" in d.reason
+
+
+def test_when_tvdb_lacks_its_episodes_nothing_is_guessed_and_the_default_says_so(conn):
+    with_vengeance(conn)
+    facts = wv_facts(start=dt.date(2027, 4, 1), episodes=10)  # no start date, no count fits
+    d = add_check.classify(conn, sequel(), [], facts=facts)
+    assert (d.kind, d.then, d.season_id) == ("needs_user", "part", "z-wv1000")
+    assert "TVDB does not list its episodes yet" in d.reason
+    assert "if it is another cour of that season" in d.proposal and "after AniList 195209" \
+        in d.proposal
+
+
+def test_unreadable_anilist_facts_ask_instead_of_guessing(conn):
+    with_vengeance(conn)
+
+    def down(ids):
+        raise anilist_client.AniListError("down")
+
+    d = add_check.classify(conn, sequel(), [], facts=down)
+    assert d.kind == "needs_user" and "couldn't be read" in d.reason
+
+
+def test_the_button_does_what_the_proposal_says(conn):
+    with_vengeance(conn)
+    c = sequel()
+    d = add_check.classify(conn, c, [], facts=wv_facts(episodes=13))  # one source: you confirm
+    add_check.review(conn, "anilist:212144", d, "anilist_relation", c)
+    row = conn.execute("SELECT id FROM pending_review WHERE entity_id = 'anilist:212144'"
+                       ).fetchone()
+    reviews.resolve_choice(conn, row["id"], "add_to_show", "captains_log", None)
+    s2 = conn.execute("SELECT anilist_id, mal_id FROM season WHERE id = 'z-wv2000'").fetchone()
+    assert tuple(s2) == (212144, 64180)  # on TVDB S2 itself ...
+    parts = conn.execute("SELECT COUNT(*) FROM season WHERE kind = 'part'").fetchone()[0]
+    assert parts == 0  # ... and not a part of S1, which is what the old button made
+
+
+def test_a_second_cour_inside_a_bigger_season_is_a_part_with_the_count_fitting(conn):
+    with_vengeance(conn, s2_episodes=24)  # S2 has two cours of 12; the first one is held
+    conn.execute("UPDATE season SET anilist_id = 300001 WHERE id = 'z-wv2000'")
+    conn.commit()
+    c = Candidate(RELATION, anilist_id=300002, prequel_anilist_ids=[300001], titles=["x"])
+    second_cour = dt.date(2026, 10, 2) + dt.timedelta(days=84)  # its 13th weekly episode
+
+    def facts(ids):
+        return {i: {"start": second_cour if i == 300002 else dt.date(2026, 10, 2),
+                    "episodes": 12, "status": "x"} for i in ids}
+
+    d = add_check.classify(conn, c, [], facts=facts)
+    assert (d.kind, d.season_id, d.season_number) == ("part", "z-wv2000", 2)
+
+
+def test_a_known_tvdb_id_with_no_named_season_is_placed_by_the_episodes_too(conn):
+    with_vengeance(conn)
+    # Sonarr gives the TVDB id; Fribb and the anime-lists name no season for this entry
+    c = Candidate(SONARR, anilist_id=212144, mal_id=64180, tvdb_id=WV,
+                  titles=["With Vengeance, Sincerely, Your Broken Saintess"])
+    d = add_check.classify(conn, c, [], facts=wv_facts())
+    assert (d.kind, d.season_id) == ("link_season", "z-wv2000")

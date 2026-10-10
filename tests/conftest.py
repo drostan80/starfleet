@@ -27,7 +27,7 @@ hypothetical. Reset alongside the throttle for the same reason.
 
 import pytest
 
-from lcars import anilist_client, watch_reconcile
+from lcars import anilist_client, level_reconcile, watch_reconcile
 
 
 @pytest.fixture(autouse=True)
@@ -62,3 +62,14 @@ def _external_writes_sent_by_default(monkeypatch):
     """External writes are captured by default (PLAN-CODE 9.0); the suite
     tests the sending behaviour against mocks. Capture tests set it back."""
     monkeypatch.setenv("LCARS_EXTERNAL_WRITES", "send")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_anilist_facts(monkeypatch):
+    """The add check asks AniList for an entry's start date and episode count to place it by the
+    show's episodes (level_reconcile.place_entry). A test never reaches the network: AniList is
+    "unreachable" unless the test passes its own `facts`."""
+    def offline(ids):
+        raise anilist_client.AniListError("AniList is not reachable in tests")
+
+    monkeypatch.setattr(level_reconcile, "facts_for", offline)

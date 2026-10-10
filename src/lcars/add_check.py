@@ -71,6 +71,9 @@ class Decision:
     reason: str = ""
     proposal: str = ""
     season_numbers: list[int] = field(default_factory=list)  # a `span`: the TVDB seasons it fills
+    # A `needs_user` that proposes a placement: the automatic decision "Add to the proposed show"
+    # carries out (link_season / part / new_season), so the button does what the text says.
+    then: str | None = None
 
 
 def _season_by_list_id(conn, anilist_id, mal_id, exclude_season_id=None):
@@ -231,7 +234,74 @@ def _span_decision(conn, show, tvdb_id: int, numbers: list[int]) -> Decision:
                     season_numbers=numbers)
 
 
-def classify(conn, c: Candidate, dataset: list[dict], *, exclude_season_id=None) -> Decision:
+def _show_tvdb_id(conn, show_id: str) -> int | None:
+    row = conn.execute("SELECT external_id FROM show_external_id WHERE show_id = ? AND"
+                       " service = 'tvdb'", (show_id,)).fetchone()
+    try:
+        return int(row[0]) if row else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _by_episodes(conn, c: Candidate, show, tvdb_id: int, facts, *, prequel: tuple | None,
+                 sources: str) -> Decision | None:
+    """The entry placed by the show's own episodes (RULEBOOK R1.10a) — the same evidence the
+    reconciler uses (`level_reconcile.place_entry`).
+
+    Two independent sources agreeing attach it by itself: `sources` (what already ties the entry
+    to the show: its AniList prequel, or Fribb's TVDB id) and TVDB's episodes (the start date is
+    the air date of the season's first free episode, AND the count is exactly the season's free
+    episodes). One source alone is yours to confirm, with the evidence. When TVDB's episodes
+    place it nowhere (TVDB may not list its season yet), nothing is guessed: with a prequel the
+    default stays "another part of the prequel's season", worded as the guess it is.
+    `prequel` = (the prequel's AniList id, its TVDB season level id, its TVDB season number).
+    None when there is no AniList id to ask about."""
+    from lcars import level_reconcile
+
+    if c.anilist_id is None:
+        return None
+    pl = level_reconcile.place_entry(conn, show["id"], c.anilist_id, facts)
+    title = _show_titles(show)[0]
+    if pl["season"] is not None:
+        n = pl["season"]
+        d = place_in_season(conn, c, show, tvdb_id, n)
+        if d.kind in ("link_season", "part"):
+            if pl["how"] == "start":
+                evidence = (f"its first episode aired {pl['start']}, the air date of TVDB season"
+                            f" {n}'s episode {pl['start_abs']:g}")
+            else:
+                evidence = f"TVDB season {n} has exactly its {pl['count']} episodes free"
+            if pl["exact"]:
+                d.reason = (f"{evidence}; {pl['count']} episodes = what is free in the season;"
+                            f" and {sources} (R1.10a, two sources agree)")
+                return d
+            return Decision("needs_user", show["id"], d.season_id, tvdb_id, n, then=d.kind,
+                            reason=f"{evidence}, but {pl['count']} episodes against"
+                                   f" {pl['free']} free in the season",
+                            proposal=f"TVDB season {n} of {title} — or an individual season")
+        return d  # special / new_season
+    if prequel is None:
+        return Decision("needs_user", show["id"], None, tvdb_id,
+                        reason="no episode of the show aired on its start date or fits its count",
+                        proposal=f"which TVDB season of {title}? (\"season 2\" in the note)")
+    prequel_id, prequel_season_id, prequel_n = prequel
+    why = ("AniList's start date and episode count couldn't be read" if pl["how"] == "unknown"
+           else "no episode of TVDB's seasons aired on its start date or fits its count"
+                " — TVDB does not list its episodes yet")
+    return Decision(
+        "needs_user", show["id"], prequel_season_id, tvdb_id, prequel_n, then="part",
+        reason=f"TVDB doesn't list it yet (Fribb); {why}, so nothing places it by its episodes",
+        proposal=f"part of {title} season {prequel_n}, after AniList {prequel_id}, if it is another"
+                 f" cour of that season — otherwise its TVDB season in the note (\"season 2\"),"
+                 " or an individual season")
+
+
+def classify(conn, c: Candidate, dataset: list[dict], *, exclude_season_id=None,
+             facts=None) -> Decision:
+    if facts is None:
+        from lcars import level_reconcile
+
+        facts = level_reconcile.facts_for
     existing = _season_by_list_id(conn, c.anilist_id, c.mal_id, exclude_season_id)
     if existing is not None:
         return Decision("already_tracked", existing["show_id"], existing["id"])
@@ -268,6 +338,24 @@ def classify(conn, c: Candidate, dataset: list[dict], *, exclude_season_id=None)
                 show = conn.execute("SELECT * FROM show WHERE id = ?",
                                     (season["show_id"],)).fetchone()
                 if show is not None and show["tracked"]:
+                    # Not "part of the prequel's season" by default: the show's own episodes say
+                    # where the entry goes (R1.10a); AniList's prequel link is one source, TVDB's
+                    # episodes the other.
+                    show_tvdb = _show_tvdb_id(conn, show["id"])
+                    level = conn.execute("SELECT id, season_number, kind, parent_id FROM season"
+                                         " WHERE id = ?", (season["id"],)).fetchone()
+                    tvdb_level = level
+                    if level["kind"] == "part" and level["parent_id"]:  # a cour: its TVDB season
+                        tvdb_level = conn.execute(
+                            "SELECT id, season_number FROM season WHERE id = ?",
+                            (level["parent_id"],)).fetchone() or level
+                    placed = _by_episodes(
+                        conn, c, show, show_tvdb, facts,
+                        prequel=(prequel, tvdb_level["id"], tvdb_level["season_number"]),
+                        sources=f"AniList says it follows AniList {prequel}") \
+                        if show_tvdb is not None else None
+                    if placed is not None:
+                        return placed
                     return Decision(
                         "needs_user", show["id"], season["id"],
                         reason="TVDB doesn't list it yet (Fribb)",
@@ -327,6 +415,11 @@ def classify(conn, c: Candidate, dataset: list[dict], *, exclude_season_id=None)
             if len(seasons) > 1 and 0 not in seasons:
                 return _span_decision(conn, show, tvdb_id, sorted(seasons))
     if len(seasons) != 1:
+        placed = _by_episodes(conn, c, show, tvdb_id, facts, prequel=None,
+                              sources="its TVDB id is confirmed by " + ", ".join(
+                                  sorted(set(verified_by) - {"tracked show"})))
+        if placed is not None and placed.kind in ("link_season", "part"):
+            return placed  # the episodes name its season, and two sources agree
         return Decision("needs_user", show["id"], tvdb_id=tvdb_id, reason=NO_SEASON,
                         proposal=f"which season of {_show_titles(show)[0]}? (\"season 2\" in the"
                                  " note, with your TVDB id)")
@@ -381,7 +474,7 @@ def review(
     if open_row is not None and value in json.loads(open_row[0]):
         return  # already waiting for you
     choices = ["individual", "dont_add"]
-    if decision.show_id and decision.season_id:
+    if decision.show_id and (decision.season_id or decision.then):
         choices = ["add_to_show", *choices]
     if decision.season_numbers and decision.show_id:
         _levels, missing, taken, _skipped = span_levels(conn, decision.show_id,
@@ -391,6 +484,9 @@ def review(
     choices.append("use_tvdb_id")  # R3.7d: a TVDB id you have goes in the note
     payload = {"show_id": decision.show_id, "season_id": decision.season_id,
                "tvdb_id": decision.tvdb_id, "span_seasons": decision.season_numbers}
+    if decision.then:  # the placement "Add to the proposed show" carries out
+        payload["place"] = {"kind": decision.then, "season_id": decision.season_id,
+                            "season_number": decision.season_number}
     if candidate is not None:
         payload.update(anilist_id=candidate.anilist_id, mal_id=candidate.mal_id,
                        titles=candidate.titles, media_type=candidate.media_type,
