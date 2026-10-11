@@ -1266,7 +1266,8 @@ ANIDB_API_URL = "http://api.anidb.net:9001/httpapi"
 ANIDB_CLIENT = "memalpha"
 ANIDB_CLIENT_VER = 1
 ANIDB_RATE_LIMIT_SECONDS = 4.0  # AniDB asks >= 2 s; 4 s stays well clear (user 09-30)
-ANIDB_REFRESH_DAYS = 7  # watching/planned anime are re-fetched weekly once the backlog is done
+ANIDB_REFRESH_DAYS = 7  # a watching/planned anime is re-fetched about once in this many days
+ANIDB_REFRESH_FLOOR_DAYS = 6  # ...and never sooner than this: AniDB is strict on request volume
 ANIDB_BAN_BACKOFF_SECONDS = 24 * 3600
 _banned_until: float = 0.0  # in-process: a restart forgets it (one request, then back off)
 ANIDB_DAILY_CAP = 200  # anime per UTC day (user, 2026-09-28)
@@ -1470,17 +1471,7 @@ def _write_tombstone(conn, anidb_anime_id: int, fetched_at: str):
     conn.commit()
 
 
-def drip_queue(conn, limit: int, now: str) -> list[int]:
-    """The AniDB anime to fetch next (user order 2026-09-28/30): every AniDB id behind a tracked
-    anime show (TVDB → anime-lists, or an AniDB id the show holds). First the ones with no
-    data — watching shows, then planned, then the rest; then refreshes — anime of watching or
-    planned shows whose data is older than ANIDB_REFRESH_DAYS, oldest first."""
-    if limit <= 0:
-        return []
-    cutoff = util.add_days(now, -ANIDB_REFRESH_DAYS)
-    rank = ("CASE sh.status WHEN 'watching' THEN 0 WHEN 'planned' THEN 1 ELSE 2 END")
-    rows = conn.execute(
-        f"""WITH wanted AS (
+_WANTED_SQL = """WITH wanted AS (
               SELECT ale.anidb_id AS aid, {rank} AS rk
               FROM show sh
               JOIN show_external_id x ON x.show_id = sh.id AND x.service = 'tvdb'
@@ -1490,17 +1481,44 @@ def drip_queue(conn, limit: int, now: str) -> list[int]:
               SELECT CAST(x.external_id AS INTEGER), {rank}
               FROM show sh JOIN show_external_id x ON x.show_id = sh.id AND x.service = 'anidb'
               WHERE sh.tracked = 1 AND sh.tracking_space = 'anime'),
-            best AS (SELECT aid, MIN(rk) AS rk FROM wanted WHERE aid > 0 GROUP BY aid),
+            best AS (SELECT aid, MIN(rk) AS rk FROM wanted WHERE aid > 0 GROUP BY aid)"""
+_RANK_SQL = "CASE sh.status WHEN 'watching' THEN 0 WHEN 'planned' THEN 1 ELSE 2 END"
+
+
+def refresh_target(conn) -> int:
+    """How many anime to refresh per day: the watching/planned anime spread evenly over
+    ANIDB_REFRESH_DAYS (423 → 61, 500 → 72). Recomputed on every call, so adding or finishing
+    shows moves the target by itself and the refreshes never bunch up (user 2026-10-11)."""
+    n = conn.execute(
+        _WANTED_SQL.format(rank=_RANK_SQL) + " SELECT COUNT(*) FROM best WHERE rk <= 1"
+    ).fetchone()[0]
+    return -(-n // ANIDB_REFRESH_DAYS)
+
+
+def drip_queue(conn, limit: int, now: str, refresh_room: int | None = None) -> list[int]:
+    """The AniDB anime to fetch next (user order 2026-09-28/30): every AniDB id behind a tracked
+    anime show (TVDB → anime-lists, or an AniDB id the show holds). First the ones with no
+    data — watching shows, then planned, then the rest; then refreshes — anime of watching or
+    planned shows whose data is older than ANIDB_REFRESH_FLOOR_DAYS, watching before planned,
+    oldest first within each. `refresh_room` caps the refreshes (the day's target minus what
+    was already fetched today); None = no cap. Backlog fetches use the room too."""
+    if limit <= 0:
+        return []
+    cutoff = util.add_days(now, -ANIDB_REFRESH_FLOOR_DAYS)
+    rows = conn.execute(
+        _WANTED_SQL.format(rank=_RANK_SQL) + """,
             have AS (SELECT anidb_anime_id AS aid, MAX(fetched_at) AS at FROM anidb_episode
                      GROUP BY anidb_anime_id)
-            SELECT b.aid FROM best b LEFT JOIN have h ON h.aid = b.aid
+            SELECT b.aid, h.aid IS NOT NULL FROM best b LEFT JOIN have h ON h.aid = b.aid
             WHERE h.aid IS NULL OR (b.rk <= 1 AND h.at < ?)
-            ORDER BY h.aid IS NOT NULL, CASE WHEN h.aid IS NULL THEN b.rk ELSE 0 END,
-                     h.at, b.aid
-            LIMIT ?""",
-        (cutoff, limit),
+            ORDER BY h.aid IS NOT NULL, b.rk, h.at, b.aid""",
+        (cutoff,),
     ).fetchall()
-    return [r[0] for r in rows]
+    backlog = [r[0] for r in rows if not r[1]][:limit]
+    refreshes = [r[0] for r in rows if r[1]]
+    if refresh_room is not None:
+        refreshes = refreshes[:max(0, refresh_room - len(backlog))]
+    return (backlog + refreshes)[:limit]
 
 
 def _fetch_and_store_anime(conn, client, anidb_id: int, now: str, stats: dict) -> bool:
@@ -1546,7 +1564,8 @@ def _fetch_and_store_anime(conn, client, anidb_id: int, now: str, stats: dict) -
 
 def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
     """Fetch AniDB episodes for up to `limit` anime from `drip_queue`: the backlog first, then
-    weekly refreshes of watching/planned shows. At most ANIDB_DAILY_CAP anime per UTC day
+    refreshes of watching/planned shows, at most `refresh_target` anime per UTC day so the
+    weekly refreshes are spread evenly. At most ANIDB_DAILY_CAP anime per UTC day in all
     (refreshes count); after a ban, nothing is asked for ANIDB_BAN_BACKOFF_SECONDS.
     Returns stats: {fetched, episodes_stored, skipped, banned}.
     """
@@ -1561,8 +1580,9 @@ def drip_fetch_episodes(conn, *, limit: int = 5) -> dict:
         "SELECT COUNT(DISTINCT anidb_anime_id) FROM anidb_episode WHERE fetched_at >= ?",
         (now[:10],),
     ).fetchone()[0]
+    refresh_room = max(0, refresh_target(conn) - fetched_today)
     limit = min(limit, max(0, ANIDB_DAILY_CAP - fetched_today))
-    rows = [(aid,) for aid in drip_queue(conn, limit, now)]
+    rows = [(aid,) for aid in drip_queue(conn, limit, now, refresh_room)]
     if not rows:
         return stats
 
