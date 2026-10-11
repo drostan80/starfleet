@@ -212,13 +212,14 @@
 
 /* ── Inline ext-ID badges (hero) ──────────────────────── */
 .sp-ext-inline {
-  display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px;
+  display: flex; flex-direction: column; gap: 8px; margin-top: 6px;
 }
+.sp-ext-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .sp-ext-badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-family: 'DM Mono', monospace; font-size: 10px;
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: 'DM Mono', monospace; font-size: 13px;
   color: var(--muted); text-decoration: none;
-  padding: 2px 8px 2px 3px; border-radius: 4px;
+  padding: 5px 14px 5px 6px; border-radius: 999px;
   background: var(--surface-3); transition: color .12s, background .12s;
 }
 .sp-ext-badge:hover { color: var(--accent); background: rgba(91,140,255,0.12); }
@@ -230,14 +231,14 @@
 .sp-ext-editable:hover::after { opacity: 1; }
 .sp-ext-add {
   border: 1px dashed var(--muted); background: transparent;
-  color: var(--muted); cursor: pointer; font-size: 12px;
-  padding: 2px 8px; line-height: 16px;
+  color: var(--muted); cursor: pointer; font-size: 16px;
+  padding: 5px 14px; line-height: 24px;
 }
 .sp-ext-add:hover { border-color: var(--accent); color: var(--accent); }
 .sp-ext-amend-inline {
   border: 1px solid var(--status-paused); background: transparent;
-  color: var(--status-paused); cursor: pointer; font-size: 11px;
-  padding: 2px 6px; line-height: 16px;
+  color: var(--status-paused); cursor: pointer; font-size: 16px;
+  padding: 5px 14px; line-height: 24px;
 }
 .sp-ext-amend-inline:hover { background: var(--status-paused); color: #fff; }
 
@@ -347,13 +348,13 @@
 .sp-ext-search-link:hover { text-decoration: underline; }
 
 /* Wide icons (wordmark logos like TMDB, IMDb) */
-.sp-ext-badge-icon.wide { width: 32px; }
-.sp-ext-badge-icon.extra-wide { width: 48px; }
+.sp-ext-badge-icon.wide { width: 40px; border-radius: 6px; }
+.sp-ext-badge-icon.extra-wide { width: 60px; border-radius: 6px; }
 
 .sp-ext-badge-icon {
-  width: 16px; height: 16px; border-radius: 3px;
+  width: 24px; height: 24px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 8px; font-weight: 500; color: #fff; flex-shrink: 0;
+  font-size: 10px; font-weight: 500; color: #fff; flex-shrink: 0;
   overflow: hidden;
 }
 .sp-ext-badge-icon img, .sp-ext-badge-icon svg {

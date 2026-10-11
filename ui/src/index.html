@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=27">
+  <link rel="stylesheet" href="css/main.css?v=28">
 </head>
 <body>
 
@@ -40,7 +40,7 @@
     <button class="sf-pill active" data-status="PAUSED" style="--pill-color:var(--st-paused)">
       <span class="sf-dot" style="background:var(--st-paused)"></span>Paused
     </button>
-    <button class="sf-pill active" data-status="DROPPED" style="--pill-color:var(--st-dropped)">
+    <button class="sf-pill" data-status="DROPPED" style="--pill-color:var(--st-dropped)">
       <span class="sf-dot" style="background:var(--st-dropped)"></span>Dropped
     </button>
   </div>
@@ -77,7 +77,7 @@
 <div class="calendar" id="calendar"></div>
 
 <script type="module">
-  import { init } from './js/calendar.js?v=48';
+  import { init } from './js/calendar.js?v=50';
   import { initSearch } from './js/search.js?v=7';
   await init();
   initSearch();

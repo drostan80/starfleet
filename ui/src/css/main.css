@@ -659,10 +659,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.5rem;
+  font-size: 2.1rem;
   /* always shown on an available episode: the triangle 80% visible, the scrim only on hover */
-  color: rgba(255,255,255,0.8);
-  text-shadow: 0 1px 6px rgba(0,0,0,0.65);
+  color: rgba(255,255,255,0.92);
+  text-shadow: 0 0 3px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.95), 0 2px 8px rgba(0,0,0,0.9);
+  -webkit-text-stroke: 1px rgba(0,0,0,0.55);
   background: transparent;
   transition: color 0.15s ease, background 0.15s ease, text-shadow 0.15s ease;
   pointer-events: none;
@@ -670,7 +671,8 @@ body {
 .planner-cover.art-playable:hover::after {
   color: #fff;
   background: rgba(0,0,0,0.45);
-  text-shadow: none;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+  -webkit-text-stroke: 0;
 }
 
 .planner-body {
@@ -1171,10 +1173,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 2rem;
+  font-size: 2.7rem;
   /* always shown on an available episode: the triangle 80% visible, the scrim only on hover */
-  color: rgba(255,255,255,0.8);
-  text-shadow: 0 1px 6px rgba(0,0,0,0.65);
+  color: rgba(255,255,255,0.92);
+  text-shadow: 0 0 3px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.95), 0 2px 8px rgba(0,0,0,0.9);
+  -webkit-text-stroke: 1px rgba(0,0,0,0.55);
   background: transparent;
   transition: color 0.15s ease, background 0.15s ease, text-shadow 0.15s ease;
   pointer-events: none;
@@ -1182,7 +1185,8 @@ body {
 .card-art.art-playable:hover::after {
   color: #fff;
   background: rgba(0,0,0,0.45);
-  text-shadow: none;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+  -webkit-text-stroke: 0;
 }
 
 .art-score {

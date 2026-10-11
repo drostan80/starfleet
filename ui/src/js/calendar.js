@@ -270,7 +270,7 @@ function loadStatusFilter() {
       if (Array.isArray(parsed)) return new Set(parsed);
     }
   } catch {}
-  return new Set(STATUSES); // default: all on
+  return new Set(STATUSES.filter(s => s !== 'DROPPED')); // default: all on except Dropped
 }
 
 function saveStatusFilter() {
@@ -516,16 +516,16 @@ export function isEpisodeAiringNow(ep) {
 
 
 const SVC_DEFS = [
-  { key: 'anilist', cls: 'svc-al',     title: 'AniList', rewrite: false, svg: _anilistSvg,         always: true  },
-  { key: 'mal',     cls: 'svc-mal',    title: 'MAL',     rewrite: false, svg: _malSvg,              always: true  },
-  { key: 'tvdb',    cls: 'svc-tvdb',   title: 'TVDB',    rewrite: false, svg: _tvdbSvg,             always: false },
-  { key: 'imdb',    cls: 'svc-imdb',   title: 'IMDb',    rewrite: false, svg: _imdbMarkSvg,         always: false },
-  { key: 'tmdb',    cls: 'svc-tmdb',   title: 'TMDB',    rewrite: false, svg: _tmdbMarkSvg,         always: false },
-  { key: 'anidb',   cls: 'svc-anidb',  title: 'AniDB',   rewrite: false, svg: _anidbMarkSvg,      always: false },
-  { key: 'syoboi',  cls: 'svc-syoboi', title: 'Syoboi',  rewrite: false, svg: _syoboiSvg,         always: false },
-  { key: 'tvmaze',  cls: 'svc-tvmaze', title: 'TVmaze',  rewrite: false, svg: _tvmazeMarkSvg,     always: false },
-  { key: 'sonarr',  cls: 'svc-sonarr', title: 'Sonarr',  rewrite: true,  svg: arrIcon('#00C8FF'), always: true  },
-  { key: 'radarr',  cls: 'svc-radarr', title: 'Radarr',  rewrite: true,  svg: arrIcon('#FFC230'), always: true  },
+  { key: 'anilist', cls: 'svc-al',     title: 'AniList', rewrite: false, svg: _anilistSvg },
+  { key: 'mal',     cls: 'svc-mal',    title: 'MAL',     rewrite: false, svg: _malSvg },
+  { key: 'tvdb',    cls: 'svc-tvdb',   title: 'TVDB',    rewrite: false, svg: _tvdbSvg },
+  { key: 'imdb',    cls: 'svc-imdb',   title: 'IMDb',    rewrite: false, svg: _imdbMarkSvg },
+  { key: 'tmdb',    cls: 'svc-tmdb',   title: 'TMDB',    rewrite: false, svg: _tmdbMarkSvg },
+  { key: 'anidb',   cls: 'svc-anidb',  title: 'AniDB',   rewrite: false, svg: _anidbMarkSvg },
+  { key: 'syoboi',  cls: 'svc-syoboi', title: 'Syoboi',  rewrite: false, svg: _syoboiSvg },
+  { key: 'tvmaze',  cls: 'svc-tvmaze', title: 'TVmaze',  rewrite: false, svg: _tvmazeMarkSvg },
+  { key: 'sonarr',  cls: 'svc-sonarr', title: 'Sonarr',  rewrite: true,  svg: arrIcon('#00C8FF') },
+  { key: 'radarr',  cls: 'svc-radarr', title: 'Radarr',  rewrite: true,  svg: arrIcon('#FFC230') },
 ];
 
 /* ── mpv launcher ────────────────────────────────────────── */
@@ -693,17 +693,14 @@ export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cf
   const strip = document.createElement('div');
   strip.className = 'svc-strip';
 
+  // Only icons that lead somewhere are drawn (user 2026-10-11): no greyed-out Radarr on a TV
+  // series, no anime databases on a western show, no mpv without a local file.
   for (const def of SVC_DEFS) {
-    const realLink = byService[def.key];          // actual followed link
-    const addLink  = byService[`${def.key}:add`]; // synthetic add-new link
-    const linked   = realLink || addLink;
-
-    // Conditional icons (tvdb/imdb/tmdb) only appear when a link exists
-    if (!def.always && !realLink) continue;
+    const realLink = byService[def.key];
+    if (!realLink) continue;
 
     const a = document.createElement('a');
-    // Full colour (.on) only for real links, not :add synthetics
-    a.className = `svc ${def.cls}${realLink ? ' on' : ''}`;
+    a.className = `svc ${def.cls} on`;
     a.title = def.title;
     if (def.svg) {
       a.innerHTML = def.svg;
@@ -714,34 +711,27 @@ export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cf
       a.style.lineHeight = '1';
     }
 
-    if (linked) {
-      const url = def.rewrite
-        ? rewriteHost(linked.url, location.hostname)
-        : linked.url;
-      a.href = url;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-    } else {
-      a.href = '#';
-      a.addEventListener('click', e => e.preventDefault());
-    }
+    a.href = def.rewrite ? rewriteHost(realLink.url, location.hostname) : realLink.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
     strip.appendChild(a);
   }
 
-  // Player icon
-  const playerA = document.createElement('a');
-  playerA.className = `svc svc-player${availableLocally ? ' on' : ''}`;
-  playerA.title = availableLocally ? 'Play in mpv' : 'No local file';
-  playerA.innerHTML = _mpvSvg;
-  playerA.href = '#';
-  playerA.addEventListener('click', async e => {
-    e.preventDefault();
-    if (!availableLocally) return;
-    playerA.style.opacity = '0.5';
-    await launchMpv(filePath, cfg, ctx);
-    playerA.style.opacity = '';
-  });
-  strip.appendChild(playerA);
+  // Player icon: only when the file is on disk
+  if (availableLocally) {
+    const playerA = document.createElement('a');
+    playerA.className = 'svc svc-player on';
+    playerA.title = 'Play in mpv';
+    playerA.innerHTML = _mpvSvg;
+    playerA.href = '#';
+    playerA.addEventListener('click', async e => {
+      e.preventDefault();
+      playerA.style.opacity = '0.5';
+      await launchMpv(filePath, cfg, ctx);
+      playerA.style.opacity = '';
+    });
+    strip.appendChild(playerA);
+  }
 
   // Jellyfin: the same episode, opened in Jellyfin's own web player (next to the mpv icon)
   if (jellyfinUrl) {

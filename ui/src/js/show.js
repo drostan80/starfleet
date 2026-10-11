@@ -27,7 +27,7 @@ import {
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange, airChangeBadge, isDateOnly,
-} from './calendar.js?v=48';
+} from './calendar.js?v=50';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -413,6 +413,15 @@ function renderExtBadges(container, show, cfg) {
   });
   container.appendChild(refreshBtn);
 
+  // Lay the pills out on two rows, split evenly (the editors open below them, in the container).
+  const items = [...container.children];
+  const half = Math.ceil(items.length / 2);
+  for (const part of [items.slice(0, half), items.slice(half)]) {
+    if (!part.length) continue;
+    const row = el('div', 'sp-ext-row');
+    for (const item of part) row.appendChild(item);
+    container.appendChild(row);
+  }
 }
 
 /* ── TMDB auto-search for external IDs ──────────────────── */

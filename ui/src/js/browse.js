@@ -14,7 +14,7 @@ import {
   searchArrCandidates, addShowWithArr, addShow, skipShow,
   setStatus, setSeasonStatus, setSeasonMapping,
 } from './api.js?v=29';
-import { showBanner } from './calendar.js?v=48';
+import { showBanner } from './calendar.js?v=50';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS, withConfirmation,

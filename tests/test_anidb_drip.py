@@ -1,7 +1,7 @@
 """The AniDB drip queue (user 2026-09-30): the backlog first — watching, planned, the rest —
 then refreshes of watching/planned anime, spread evenly (a day's target = in-scope anime / 7,
-user 2026-10-11); 200 a day; after a ban, nothing is asked for a day. (Before: the queue read an episode-mapping table that is empty on prod, so
-nothing was ever fetched.)"""
+user 2026-10-11); 200 a day; after a ban, nothing is asked for a day. (Before: the queue read an
+episode-mapping table that is empty on prod, so nothing was ever fetched.)"""
 
 import os
 import sqlite3
