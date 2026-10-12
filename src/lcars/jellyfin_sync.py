@@ -11,7 +11,9 @@ not a hook on each of the ten places an episode becomes watched:
 - anything else is left alone.
 
 Matching (never guessed): the show by its TVDB id (a movie: TMDB id), the episode by the TVDB season
-and episode numbers Sonarr names the files with (`sonarr_season` / `sonarr_episode`). One Jellyfin
+and episode numbers Sonarr names the files with (`sonarr_season` / `sonarr_episode`). Jellyfin gives
+no numbers to date-named files (Last Week Tonight, ...): those match by the file's exact path
+(`file_path_sonarr`) instead. One Jellyfin
 file covering several episodes (S01E01-E02) is played only when all of them are watched, and
 unplayed only when none is. What cannot be matched is reported.
 
@@ -238,14 +240,25 @@ class _Pass:
             (show["id"],),
         ):
             by_number.setdefault((e["sonarr_season"], e["sonarr_episode"]), []).append(e)
+        by_path: dict[str, list] = {}
+        for e in self.conn.execute(
+            "SELECT id, state, season, episode, sonarr_season, sonarr_episode, file_path_sonarr"
+            " FROM episode WHERE show_id = ? AND file_path_sonarr IS NOT NULL"
+            " AND file_path_sonarr != ''", (show["id"],),
+        ):
+            by_path.setdefault(e["file_path_sonarr"], []).append(e)
         covered: set[tuple[int, int]] = set()
         seen_episodes: set[str] = set()
         for item in self.client.series_episodes(series_id, self.user_id):
             first, season = item.get("IndexNumber"), item.get("ParentIndexNumber")
-            if first is None or season is None:
-                continue
-            numbers = [(season, n) for n in range(first, (item.get("IndexNumberEnd") or first) + 1)]
-            eps = [e for number in numbers for e in by_number.get(number, [])]
+            if first is None or season is None:  # a date-named file: matched by its exact path
+                eps = by_path.get(item.get("Path") or "", [])
+                numbers = [(e["sonarr_season"], e["sonarr_episode"]) for e in eps
+                           if e["sonarr_season"] is not None]
+            else:
+                numbers = [(season, n)
+                           for n in range(first, (item.get("IndexNumberEnd") or first) + 1)]
+                eps = [e for number in numbers for e in by_number.get(number, [])]
             covered.update(numbers)
             if not eps:
                 continue

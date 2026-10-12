@@ -189,6 +189,23 @@ def test_nothing_is_guessed_an_unmatched_episode_is_reported(conn, monkeypatch):
     assert any("S01E05" in text for text in stats["unmatched"])
 
 
+def test_a_date_named_file_without_numbers_is_matched_by_its_exact_path(conn, monkeypatch):
+    add_show(conn, "s-aaaaaa", 42)
+    add_episode(conn, "e-aaaaa1", "s-aaaaaa", 13, 26, "watched", "2026-10-12T09:09:49Z")
+    add_episode(conn, "e-aaaaa2", "s-aaaaaa", 13, 27, "watched", "2026-10-12T09:10:00Z")
+    conn.execute("UPDATE episode SET file_path_sonarr = '/data/LWT/2026-10-11.mkv'"
+                 " WHERE id = 'e-aaaaa1'")
+    conn.execute("UPDATE episode SET file_path_sonarr = '/data/LWT/2026-10-18.mkv'"
+                 " WHERE id = 'e-aaaaa2'")
+    unnumbered = {"Id": "J-E1", "Path": "/data/LWT/2026-10-11.mkv", "UserData": {"Played": False}}
+    elsewhere = {"Id": "J-E9", "Path": "/data/other/x.mkv", "UserData": {"Played": False}}
+    fake = FakeJellyfin([series(42)], {"J-S1": [unnumbered, elsewhere]})
+    stats = run(conn, monkeypatch, fake)
+    assert fake.played == [("J-E1", "2026-10-12T09:09:49Z")]  # the unknown path is not guessed
+    assert stats["episodes_matched"] == 1
+    assert any("S13E27" in text for text in stats["unmatched"])
+
+
 def test_a_show_jellyfin_does_not_have_costs_nothing(conn, monkeypatch):
     add_show(conn, "s-aaaaaa", 42)
     add_episode(conn, "e-aaaaa1", "s-aaaaaa", 1, 1, "watched", "2026-03-04T20:30:00Z")

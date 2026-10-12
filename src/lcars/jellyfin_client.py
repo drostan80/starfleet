@@ -108,9 +108,10 @@ class JellyfinClient:
         return self._listing("Movie", user_id, played_data=True)
 
     def series_episodes(self, series_id: str, user_id: str) -> list[dict]:
-        """A series' episodes with ParentIndexNumber / IndexNumber and `UserData.Played`."""
+        """A series' episodes with ParentIndexNumber / IndexNumber (absent for date-named files),
+        `Path` and `UserData.Played`."""
         return self._get(f"/Shows/{series_id}/Episodes", {
-            "userId": user_id, "enableUserData": "true", "fields": "ProviderIds",
+            "userId": user_id, "enableUserData": "true", "fields": "ProviderIds,Path",
         }).get("Items", [])
 
     # ── writes ───────────────────────────────────────────────────────────────
