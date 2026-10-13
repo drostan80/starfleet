@@ -668,12 +668,12 @@
 
 <script type="module">
   import { bootstrapConfig, applyAppName } from './js/config.js?v=5';
-  import { initSearch } from './js/search.js?v=7';
+  import { initSearch } from './js/search.js?v=9';
   import {
     gql, fetchPendingReviews, resolvePendingReview, setSeasonScore,
     linkShowExternalId, setSeasonMapping, unlinkShowExternalId,
     resolveTvdbConsolidation, resolveReviewChoice,
-  } from './js/api.js?v=29';
+  } from './js/api.js?v=31';
 
   applyAppName();
   await bootstrapConfig();
@@ -917,6 +917,7 @@
     if (r.field === 'tvdb_candidate') return 'TVDB id: is it this show?';
     if (r.field === 'tvdb_recheck') return 'TVDB id: Fribb now disagrees';
     if (r.field === 'tvdb_link') return 'TVDB link';
+    if (r.field === 'tvdb_replace') return 'TVDB id: deleted on TheTVDB';
     if (r.field.startsWith('add_check:')) return 'add check: needs you';
     if (r.field === 'sonarr_deleted') return 'deleted from Sonarr';
     if (r.field === 'radarr_deleted') return 'deleted from Radarr';
@@ -1256,6 +1257,89 @@
     _selected = r.id;
     renderList();
     renderDetail(r);
+  }
+
+  /** PLAN-CODE phase 10 — "TVDB id: deleted on TheTVDB", laid out the way it is decided:
+   *  1. why, 2. the LCARS record as it is, 3. the proposed id (or: none available), 4. the choice. */
+  function replaceReviewHtml(r) {
+    let p = {};
+    try { p = JSON.parse(r.payload || '{}'); } catch {}
+    const uid = r.id.replace(/[^a-z0-9]/gi, '');
+    const L = p.lcars || {}, pr = p.proposed, sn = p.sonarr || {};
+    const facts = ((p.columns || [])[1] || {}).facts || {};
+    const old = p.tvdb_id;
+    const choiceIds = (r.choices || []).map(c => c.id);
+    const row = (k, v) => v == null || v === '' ? '' : `<span class="dg-key">${esc(k)}</span><span class="dg-val">${v}</span>`;
+    const tvdbLink = (id, text) => `<a href="https://thetvdb.com/dereferrer/series/${esc(id)}" target="_blank" rel="noopener" style="color:var(--accent)">${esc(text || id)} ↗</a>`;
+    const seasons = (L.seasons || []).map(x => `S${x.season}${x.part > 1 ? '.' + x.part : ''} ${esc(x.status || '')}`).join(' · ');
+    const section = (label, body) => `<div class="detail-section"><div class="detail-section-label">${label}</div>${body}</div>`;
+
+    const why = section('1 · Why this review',
+      `<div style="font-size:13px">Sonarr flagged <strong>TVDB id ${esc(old)}</strong> as <strong style="color:var(--st-dropped)">deleted</strong> — TheTVDB removed that entry (it usually re-creates the show under a new id). Until the id is updated this show cannot refresh from TVDB.</div>`);
+
+    const record = section('2 · The LCARS record as it is now',
+      `<div class="detail-grid">
+        ${row('Show', `<a href="show.html?id=${encodeURIComponent(r.entityId)}" style="color:var(--accent)">${esc(L.title || r.entityId)}</a> · ${esc(L.status || '')}`)}
+        ${row('TVDB id', L.tvdb_id ? `<strong style="color:var(--st-dropped)">${esc(L.tvdb_id)}</strong> ${tvdbLink(L.tvdb_id, 'open')} <span style="color:var(--faint)">← deleted, to be replaced${L.tvdb_source ? ' · source: ' + esc(L.tvdb_source) : ''}</span>` : `<strong>none</strong> <span style="color:var(--faint)">(logged without one; Sonarr still holds ${esc(old)})</span>`)}
+        ${row('AniList / MAL', [L.anilist, L.mal].filter(Boolean).map(esc).join(' / '))}
+        ${row('IMDb / TMDB', [L.imdb, L.tmdb].filter(Boolean).map(esc).join(' / '))}
+        ${row('Seasons', seasons)}
+        ${row('In Sonarr', sn.series_id ? `series #${esc(sn.series_id)} · ${esc(sn.files ?? 0)} of ${esc(sn.episodes ?? 0)} episodes on disk · tags: ${esc((sn.tags || []).join(', ') || 'none')} · ${esc(sn.path || '')}` : '')}
+      </div>`);
+
+    let proposed;
+    if (pr) {
+      proposed = section('3 · The proposed TVDB id',
+        `<div style="display:flex;gap:14px;align-items:flex-start">
+          ${facts.poster ? `<img src="${esc(facts.poster)}" alt="" style="max-height:130px;border-radius:4px" onerror="this.style.display='none'">` : ''}
+          <div>
+            <div class="detail-grid">
+              ${row('TVDB id', `<strong style="color:var(--st-watching)">${esc(pr.tvdb_id)}</strong> ${tvdbLink(pr.tvdb_id, 'open on TVDB')}`)}
+              ${row('Title', esc(pr.title))}
+              ${row('First aired', esc(pr.year))}
+              ${row('Language', esc(facts.language))}
+              ${row('TVDB seasons', esc((facts.seasons || []).join(', ')))}
+            </div>
+            <div style="margin-top:8px;font-size:12px">${(p.checks || []).map(c => `<span style="color:var(--st-watching)">✓ ${esc(c)}</span>`).join(' &nbsp; ')}</div>
+            ${(p.mismatches || []).length ? `<ul style="color:var(--st-dropped);font-size:12px;margin:8px 0 0">${p.mismatches.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
+            ${pr.blocked ? `<div style="color:var(--st-dropped);font-size:12px;margin-top:8px">Can't be applied: ${esc(pr.blocked)}</div>` : ''}
+            ${(p.others || []).length ? `<div style="font-size:12px;margin-top:8px;color:var(--muted)">Other candidates: ${p.others.map(o => tvdbLink(o.tvdb_id, `TVDB ${o.tvdb_id} ${o.title || ''} (${o.year ?? '?'})`)).join(' · ')}</div>` : ''}
+          </div>
+        </div>`);
+    } else {
+      proposed = section('3 · The proposed TVDB id',
+        `<div style="font-size:13px;padding:10px 12px;border:1px solid var(--st-dropped);border-radius:6px"><strong>No replacement TVDB id is available.</strong> Sonarr's lookup found no TVDB show that matches this show's IMDb / TMDB ids or title.</div>`);
+    }
+
+    let choice;
+    const field = (label) => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <span style="font-size:13px">${label}</span>
+        <input type="text" id="resolve-note-${uid}" placeholder="TVDB id" inputmode="numeric" style="width:120px;padding:6px 8px">
+        <button class="btn-primary btn-approve btn-choice" data-choice="replace_other_tvdb">Use this id</button>
+      </div>`;
+    const noId = `<div style="margin-top:12px"><button class="btn-primary btn-choice" data-choice="log_no_tvdb">Log without a TVDB id for now</button> <span style="font-size:11px;color:var(--muted)">(the deleted id is removed; it will be corrected in time)</span></div>`;
+    if (r.resolvedAt) {
+      choice = section('Resolution', `<div class="detail-grid">
+        ${row('Resolved', fmtDate(r.resolvedAt))}
+        ${row('By', esc(r.resolvedByClient || 'LCARS (automatic)'))}
+        ${row('Result', esc(r.resolutionNote || ''))}</div>`);
+    } else if (pr && !pr.blocked) {
+      const yes = choiceIds.includes('replace_tvdb_despite') ? 'replace_tvdb_despite' : 'replace_tvdb';
+      choice = section('4 · Your choice', `
+        <div><button class="btn-primary btn-approve btn-choice" data-choice="${yes}">Yes — update to TVDB ${esc(pr.tvdb_id)}</button></div>
+        ${field('No, that id is wrong — use this TVDB id:')}
+        <div style="margin-top:12px"><button class="btn-primary btn-choice" data-choice="log_no_tvdb">Neither — log without a TVDB id for now</button></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:10px">Yes / use this id: edits TVDB id on Sonarr series #${esc(sn.series_id)} in place, refreshes it and checks that the files, tags, path and monitoring are unchanged, then updates LCARS. If a check fails Sonarr is put back and LCARS is not changed.</div>
+        <span class="action-status" id="action-status-${uid}"></span>`);
+    } else {
+      choice = section('4 · Your choice', `
+        <div style="font-size:13px">${pr ? "The proposed id can't be applied, so either:" : 'There is no id to propose, so either:'}</div>
+        ${noId}
+        ${field('or provide the new TVDB id:')}
+        <div style="font-size:11px;color:var(--muted);margin-top:10px"><a href="https://thetvdb.com/search?query=${encodeURIComponent(L.title || '')}" target="_blank" rel="noopener" style="color:var(--accent)">Search TVDB for "${esc(L.title || '')}" →</a> · a later hourly pass looks again and asks if it finds one.</div>
+        <span class="action-status" id="action-status-${uid}"></span>`);
+    }
+    return why + record + proposed + choice;
   }
 
   function renderDetail(r) {
@@ -1782,7 +1866,9 @@
         </div>`;
     }
 
-    detailEl.innerHTML = headerHtml + metaHtml + linksHtml + diffHtml + chainHtml + evidenceHtml + actionsHtml;
+    detailEl.innerHTML = r.field === 'tvdb_replace'
+      ? headerHtml + replaceReviewHtml(r)
+      : headerHtml + metaHtml + linksHtml + diffHtml + chainHtml + evidenceHtml + actionsHtml;
 
     // Wire up chain toggle
     const chainToggle = document.getElementById('chain-toggle');
@@ -2206,7 +2292,7 @@
       }
 
       // PLAN-CODE 8.8: "despite" stays off until you tick that you know they differ.
-      const despite = detailEl.querySelector('.btn-choice[data-choice="link_tvdb_despite"]');
+      const despite = detailEl.querySelector('.btn-choice[data-choice="link_tvdb_despite"], .btn-choice[data-choice="replace_tvdb_despite"]');
       if (despite) {
         despite.disabled = true;
         const ack = document.createElement('label');
@@ -2220,19 +2306,24 @@
       for (const btn of detailEl.querySelectorAll('.btn-choice')) {
         btn.addEventListener('click', async () => {
           for (const b of detailEl.querySelectorAll('.btn-choice')) b.disabled = true;
-          setStatus('Applying…');
+          setStatus(r.field === 'tvdb_replace' && btn.dataset.choice !== 'leave_tvdb'
+            ? 'Changing Sonarr, checking it, then LCARS… (a few seconds)' : 'Applying…');
           try {
-            const note = noteVal() || null;
+            // on a TVDB replacement only "use this id" reads the field
+            const note = (r.field === 'tvdb_replace' && btn.dataset.choice !== 'replace_other_tvdb')
+              ? null : (noteVal() || null);
             const done = await resolveReviewChoice(r.id, btn.dataset.choice, note);
             r.resolvedAt = done.resolvedAt;
             r.resolutionNote = done.resolutionNote;
             renderList();
             renderPills();
             renderBulkBar();
-            const nextOpen = filteredReviews().find(x => !x.resolvedAt && x.id !== r.id);
+            // a TVDB replacement stays on screen: its result (files, status, tags) is the thing to read
+            const nextOpen = r.field === 'tvdb_replace' ? null
+              : filteredReviews().find(x => !x.resolvedAt && x.id !== r.id);
             if (nextOpen) selectReview(nextOpen); else renderDetail(r);
           } catch (err) {
-            if (r.field === 'tvdb_link') {
+            if (r.field === 'tvdb_link' || r.field === 'tvdb_replace') {
               // The review may carry a new candidate now (your note's TVDB id).
               await loadReviews();
               const again = _reviews.find(x => x.id === r.id);

@@ -560,6 +560,95 @@ the write list — until then a deploy of this code captures instead of pushing.
 
 ---
 
+## Phase 10 — TVDB recreated-series repair (R1.14, R3.7c) — BUILT 2026-10-13 in dev, awaiting your look on the test server (not deployed)
+
+**Why.** On 2026-10-13 TheTVDB deleted four anime and re-created them under new ids
+(465973→483430, 468809→483427, 468049→483424, 468399→483755). Sonarr kept the old series with
+status `deleted` and logged "was not found, it may have been removed from TheTVDB"; the old ids can
+no longer refresh, so new episodes and date changes never arrive. Fixed once by hand the same day
+(one-off script; recipe in memory `sonarr-tvdb-id-swap-in-place`). Nothing in LCARS noticed, and
+`tvdb_guard` never overwrites a show's TVDB id, so it can't self-heal.
+
+**What the job does** (daily, with the other Sonarr checks):
+1. **Detect** — Sonarr series with status `deleted` (also the "removed from TheTVDB" log line).
+2. **Find the replacement** — Sonarr's lookup by title + year, confirmed by a second source
+   (the lookup's own IMDb/TMDB ids matching the show's, or TMDB `external_ids`). TVmaze and
+   anime-lists/Fribb lag behind and don't count as confirming. Same two-source principle as R3.7c.
+3. **Act**
+   - Sources agree: back the Sonarr series up (JSON), change its `tvdbId` in place (PUT, then
+     `RefreshSeries`), update LCARS `show_external_id` (id, url, `source = 'manual:tvdb-recreated-<date>'`)
+     in one transaction. Episode tvdb ids are `season:episode` and the Sonarr slug/path
+     don't change, so nothing else moves.
+   - Disagree / no match / the new id is already held by another show (R1.14): open a review with
+     the candidates; change nothing.
+4. **Verify afterwards** — refresh succeeds, file count unchanged, tags and monitoring unchanged,
+   status no longer `deleted`; otherwise the review stays open with the reason.
+
+**A review you can validate and act on** (user, 2026-10-13). A `tvdb_replace` review is only
+opened if it can be decided from the page alone, reusing the 8.8.3 evidence panel and the
+`tvdb_link` mechanics:
+- **The layout (user, 2026-10-13, after the first build was too cluttered)**, four steps in this order:
+  1. **Why**: "Sonarr flagged TVDB id N as deleted".
+  2. **The LCARS record as it is now**: show, status, the TVDB id to be replaced (and its source),
+     AniList/MAL/IMDb/TMDB ids, seasons, the Sonarr series (files, tags, path).
+  3. **The proposed TVDB id** (title, year, language, seasons, what agrees, mismatches) — or, when
+     none is available, it says so plainly.
+  4. **The choice**. With a proposal: *Yes, update to TVDB N* / *No, that id is wrong — use this
+     TVDB id:* [field] / *Neither — log without a TVDB id for now*. Without one: *Log without a TVDB
+     id for now (it will be corrected in time)* / *provide the new TVDB id:* [field].
+  A typed id is re-checked by the server (R1.14, R3.2a, 8.8.4 hard stops; a misfit becomes the
+  proposal and offers "despite", with a tick box); never bulk-resolvable.
+- **"Log without a TVDB id for now"** removes the deleted id from the show (a stale id is worse than
+  none) and leaves Sonarr alone; the show is still found by its Sonarr slug, so the hourly pass asks
+  again when a replacement appears (a different finding = a new review). Meanwhile the sources
+  (Fribb, anime-lists, TVmaze) cannot write the deleted id back (`tvdb_guard.DELETED`), and a
+  `deleted` Sonarr series is not an "untracked show" (it would otherwise be re-created as a duplicate).
+- **Acting is one click and verified**: Replace runs the whole swap (backup, Sonarr edit,
+  refresh, LCARS update, verify) server-side and the page then shows the result — new id, file
+  count before/after, status — or the exact failure with nothing half-applied (Sonarr change
+  rolled back if the LCARS write or verify fails).
+- **Not "OK by default"**: unlike the audit pages, a no-click is not consent here; the review
+  stays open and shows on the reviews page until decided (no notification channel exists).
+- **Tests**: server tests for each choice and each failure path; the reviews page clicked through
+  in headless Firefox; the UI on a test server for your validation before any tag/CI (see
+  memory `ui-test-server-before-ci`).
+
+**Needs.**
+- One explicit, recorded "replace" path in `tvdb_guard` (today: existing id is never overwritten).
+- Quiet the review noise from anime-lists/Fribb still offering the old id until they catch up.
+- Dry-run mode first (list what it would change), per the external-writes capture rule.
+- Out of scope: renaming the `{tvdb-<old id>}` folders (cosmetic; paths feed
+  `episode.file_path_sonarr` and Jellyfin file matching).
+
+**Built (2026-10-13)** — `src/lcars/tvdb_replace.py`, review kind `tvdb_replace`:
+- `scan` rides the hourly TVDB backfill (one `GET /series` from Sonarr; lookups only for a series that
+  is `deleted` and linked by a tracked show); idempotent — an open review, or one answered with the
+  same finding, is left alone. Candidates come from Sonarr's lookup by the show's IMDb/TMDB ids, then
+  its titles; a result whose IMDb/TMDB id differs from the show's is never a candidate.
+- Choices: yes (or yes despite the mismatches) / no, use the id I give / log without a TVDB id for
+  now. An id that doesn't fit becomes the review's proposal with its mismatches (the `reopen` path).
+- `apply`: refuses (nothing touched) in capture mode, when another show holds the id (R1.14), when
+  Sonarr already has a series under the new id, or when the new entry lacks a season that has files.
+  Then: snapshot (kept in the review payload as `backup`), PUT `tvdbId`, RefreshSeries, check status /
+  files / tags / path / monitoring, then LCARS `show_external_id` (source `recreated:<old id>`); any
+  failure puts Sonarr back from the snapshot. The resolved review keeps the result sentence.
+- `lcars.ini` `tvdb_replace = review` (default) | `auto` (applies only when IMDb/TMDB id **and** title
+  **and** year agree, one candidate, no mismatches; kept as a resolved review) | `off`. **The open
+  question stays yours: switch to `auto`?** Default is `review` until you've seen one.
+- **Every show is covered, history and dropped included** (user, 2026-10-13: a finished show may get a
+  new season, a dropped one may be un-dropped, a stale TVDB id is never acceptable — this overrides the
+  "history is never listed" rule for this one check; my first build skipped history shows and was
+  wrong). The LCARS write goes through `tvdb_guard.replace` (R1.14, R3.2a); the source is
+  `you` when you chose, `recreated:<old id>` for an `auto` swap. **No notification channel exists in
+  LCARS** (checked: schema, ops, UI) — a review shows on the reviews page like every other; the earlier
+  "in notifications" line is dropped. Ops' `backfillTvdbIds` call now has a 300 s timeout.
+- `tvdb_recheck` no longer flags a `recreated:` link while Fribb still gives the deleted id.
+- Tests: `tests/test_tvdb_replace.py` (22). Dry run against live Sonarr lookups: all four shows get
+  the right proposal with IMDb + TMDB + title + year agreeing. `refresh_series` run once against live
+  Sonarr (series 1077): completed in 2 s, nothing changed.
+
+---
+
 ## Data plan — outline, filled in after code approval
 
 1. Copy the 09-06 snapshot (`.backup`, not `cp`).

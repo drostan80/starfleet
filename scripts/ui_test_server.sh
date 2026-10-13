@@ -54,8 +54,10 @@ except Exception as e:  # an older branch without the Jellyfin tables: the UI st
     print("no Jellyfin ids filled:", e)
 PY
 echo "4/4 start the Jellyfin forward and the server"
+# the browser caches the token it is served: keep it across restarts (a new one = "LCARS HTTP 401")
+[ -s $T/token ] || echo "uitest-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')" > $T/token
 nohup .venv/bin/python scripts/ui_test_forward.py > $T/forward.log 2>&1 & echo $! > $T/forward.pid
-LCARS_BEARER_TOKEN="uitest-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
+LCARS_BEARER_TOKEN="$(cat $T/token)" \
   nohup .venv/bin/lcars serve --host 0.0.0.0 --port 8891 > $T/server.log 2>&1 & echo $! > $T/server.pid
 sleep 8
 IP=$(ip -4 addr show | grep -oP '192\.168\.\d+\.\d+' | head -1)

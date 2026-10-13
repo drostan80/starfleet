@@ -12,7 +12,7 @@ import { broadcastWatched } from './auto-refresh.js?v=1';
  * CAN set. Once that lands, implement subscriptions here.
  */
 
-import { getConfig } from './config.js?v=5';
+import { getConfig, syncConfig } from './config.js?v=5';
 
 /**
  * Execute a GraphQL query or mutation against LCARS.
@@ -28,15 +28,30 @@ export async function gql(query, variables = {}) {
   // LCARS answers at / (not /graphql — confirmed from TUI client's _query).
   // A0 — same-origin fetch, not cfg.lcars_url (removed): works unchanged on
   // LAN vs Tailscale, no derived-vs-stale-stored-value risk.
-  const res = await fetch('/', {
+  const send = (token) => fetch('/', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${cfg.lcars_token}`,
+      'Authorization': `Bearer ${token}`,
       'X-LCARS-Client': 'holodeck',
     },
     body: JSON.stringify({ query, variables }),
   });
+  let res = await send(cfg.lcars_token);
+
+  // 401: the cached token is stale (LCARS was given a new one — a key rotation, a test server
+  // restart). The server hands the current one to a logged-in session (A0): fetch it once and
+  // retry, instead of leaving every page on "LCARS HTTP 401" until the site data is cleared.
+  if (res.status === 401) {
+    const fresh = await syncConfig();
+    if (fresh?.lcars_token && fresh.lcars_token !== cfg.lcars_token) {
+      res = await send(fresh.lcars_token);
+    } else if (!fresh) {
+      // no session either (a restarted test server forgets them; an expired one): log in again
+      window.location.href = '/ui/login.html?next=' + encodeURIComponent(location.pathname + location.search);
+      return;
+    }
+  }
 
   // Expired session: nginx 302 → login.html, fetch follows → HTML 200.
   if (res.redirected && res.url.includes('login.html')) {

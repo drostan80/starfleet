@@ -961,10 +961,10 @@
 
 <!-- ── Scripts ─────────────────────────────────────────── -->
 <script type="module">
-import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=29';
+import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=31';
 import { bootstrapConfig, applyAppName } from './js/config.js?v=5';
-import { showBanner, hideBanner } from './js/calendar.js?v=50';
-import { initSearch } from './js/search.js?v=7';
+import { showBanner, hideBanner } from './js/calendar.js?v=52';
+import { initSearch } from './js/search.js?v=9';
 import { withConfirmation } from './js/status-picker.js?v=2';
 import {
   initBrowse, teardownBrowse, setBrowseType,
@@ -972,7 +972,7 @@ import {
   parseTvdbCheck, confirmTvdbCheck,
   parseLaterSeasonError, confirmAddSeason1,
   pickCorrectParent, attachSequelToChosenParent,
-} from './js/browse.js?v=18';
+} from './js/browse.js?v=20';
 
 applyAppName();
 await bootstrapConfig();

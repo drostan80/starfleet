@@ -35,12 +35,12 @@ fallback only; a real backfill for them would need new work (a
 title-based TMDB search, with its own real risk of a wrong match) not
 built here.
 
-**Cadence**: no live outbound Sonarr/Radarr call at all (unlike
-`pollCatalogServicePresence`) — the candidate query is plain SQL, and
+**Cadence**: one local `GET /series` from Sonarr (phase 10, `tvdb_replace.scan`: a series TheTVDB
+deleted), a few lookups only when that finds one — otherwise the candidate query is plain SQL, and
 `fribb.load_dataset()` is a cache hit except once every 7 days (its own
 on-disk/in-process caching). Negligible enough to ride Ops's hourly
 tick (`run_daily_and_weekly_once`, scheduler.py) rather than B.2's
-real-N×M-cost monthly one, same "no external HTTP call, cheap enough to
+real-N×M-cost monthly one, same "cheap enough to
 share" reasoning `reconcileEpisodeMovieLinks` already gets. Safe to
 call anytime and repeatedly: the candidate query itself excludes any
 show that already has a `tvdb` link, so a show this pass can't resolve
@@ -49,7 +49,7 @@ free — no separate due-tracking of its own — and a show this pass does
 resolve is never reconsidered.
 """
 
-from lcars import fribb, season_ranges, tvdb_guard, tvdb_recheck
+from lcars import fribb, season_ranges, tvdb_guard, tvdb_recheck, tvdb_replace
 
 
 def backfill_tvdb_ids(conn) -> int:
@@ -68,6 +68,7 @@ def backfill_tvdb_ids(conn) -> int:
         anilist_id = season_ranges.show_list_id(conn, row[0], "anilist")  # R1.23
         if anilist_id is not None:
             candidates.append({"show_id": row[0], "anilist_id": anilist_id})
+    tvdb_replace.scan(conn)  # phase 10: a Sonarr series TheTVDB deleted and re-created
     tvdb_recheck.recheck(conn)  # 8.8.5: links Fribb now disagrees with (loads the dataset lazily)
     conn.commit()
     if not candidates:

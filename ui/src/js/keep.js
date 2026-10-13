@@ -5,7 +5,7 @@
  * whichever api.js version a page has cached.
  */
 
-import { gql } from './api.js?v=29';
+import { gql } from './api.js?v=31';
 
 const KEEP_QUERY = `
   query ShowKeep($id: ID!) {

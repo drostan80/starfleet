@@ -4713,7 +4713,12 @@ def resolve_resolve_review_choice(_, info, id, choice, note=None):
     except (reviews.ReviewError, shows.ShowInputError, ValueError) as e:
         conn.rollback()
         reopen = getattr(e, "reopen", None)
-        if reopen:  # the review keeps the new candidate's evidence (8.8)
+        if reopen and reopen.get("replace_review"):  # phase 10: your id becomes the proposal
+            from lcars import tvdb_replace
+
+            tvdb_replace.reopen(conn, reopen)
+            conn.commit()
+        elif reopen:  # the review keeps the new candidate's evidence (8.8)
             from lcars import tvdb_vetting
 
             tvdb_vetting.open_link_review(conn, reopen["season_id"], reopen)

@@ -194,6 +194,10 @@ class Config:
     # (and blocks the MAL token refresh) instead of sending it; `send` sends.
     # Capture unless `send` is set explicitly (external_writes.py).
     external_writes: str = "capture"
+    # What happens when TheTVDB deletes and re-creates a tracked show (tvdb_replace.py): `review`
+    # (default) opens a review and changes nothing until you choose; `auto` also applies a
+    # replacement that the IMDb/TMDB ids, title and year all agree on; `off` doesn't look.
+    tvdb_replace: str = "review"
     mal_client_id: str | None = None
     mal_client_secret: str | None = None
     mal_access_token: str | None = None
@@ -293,6 +297,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> Config:
             cfg.list_intake_enabled = parser["lcars"].getboolean(
                 "list_intake_enabled", fallback=False)
             cfg.external_writes = parser["lcars"].get("external_writes", fallback="capture")
+            cfg.tvdb_replace = parser["lcars"].get("tvdb_replace", fallback="review")
             cfg.mal_client_id = parser["lcars"].get("mal_client_id", fallback=None)
             cfg.mal_client_secret = parser["lcars"].get("mal_client_secret", fallback=None)
             cfg.mal_access_token = parser["lcars"].get("mal_access_token", fallback=None)

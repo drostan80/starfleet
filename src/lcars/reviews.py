@@ -33,6 +33,10 @@ Kinds with choices:
 - `anilist_id` (a schedule far from Sonarr's dates) — the AniList link is right, ignore the gap
   (remembered: it is not opened again for the same finding). A season that follows a schedule
   you chose is not checked at all.
+- `tvdb_replace` — TheTVDB deleted a tracked show's entry and re-created it (PLAN-CODE phase 10):
+  yes, update to the proposed TVDB id (despite its mismatches) / no, use the TVDB id you give /
+  log the show without a TVDB id for now. Replacing changes the Sonarr series' TVDB id in place
+  and LCARS's link together, and puts Sonarr back if any check after it fails.
 - `tvdb_candidate` — a TVDB id only one source suggests for an existing show (R3.7e): it is
   this show / it isn't / the TVDB id in your note is (R1.14 and R3.2a still apply).
 """
@@ -57,6 +61,10 @@ LABELS = {
     "revert_watching": "Revert to watching, don't mark the episodes",
     "skip_later": "Skip the later seasons too",
     "keep_later": "Keep the later seasons planned",
+    "replace_tvdb": "Yes, update to the proposed TVDB id",
+    "replace_tvdb_despite": "Yes, update to the proposed TVDB id despite the mismatches",
+    "replace_other_tvdb": "No, that id is wrong — use the TVDB id I gave",
+    "log_no_tvdb": "Log without a TVDB id for now (it will be corrected in time)",
     "link_tvdb": "Link this TVDB show",
     "link_tvdb_despite": "Link this TVDB show despite the mismatches",
     "link_other_tvdb": "Link the TVDB id in my note instead",
@@ -171,6 +179,7 @@ def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | N
         raise ReviewError(f"{choice!r} isn't one of this review's choices {offered}")
     payload = json.loads(row["payload"] or "{}")
     field = row["field"]
+    outcome = None  # what a choice did, kept with the resolution
 
     if field == "add_check:needs_user":
         candidate = add_check.Candidate(
@@ -277,6 +286,10 @@ def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | N
         from lcars import tvdb_recheck
 
         tvdb_recheck.resolve(conn, row["entity_id"], choice)
+    elif field == "tvdb_replace":
+        from lcars import tvdb_replace
+
+        outcome = tvdb_replace.resolve(conn, row, payload, choice, note, client)
     elif field == "tvdb_candidate":
         from lcars import tvdb_guard
 
@@ -289,7 +302,7 @@ def resolve_choice(conn, review_id: str, choice: str, client: str, note: str | N
     conn.execute(
         "UPDATE pending_review SET resolved_at = ?, resolved_by_client = ?, resolution_note = ?"
         " WHERE id = ?",
-        (util.now_utc_iso(), client, f"{LABELS[choice]}" + (f" — {note}" if note else ""),
-         review_id),
+        (util.now_utc_iso(), client, f"{LABELS[choice]}" + (f" — {note}" if note else "")
+         + (f" — {outcome}" if outcome else ""), review_id),
     )
     conn.commit()

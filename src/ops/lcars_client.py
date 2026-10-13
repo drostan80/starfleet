@@ -506,7 +506,9 @@ class LcarsClient:
         query = """
         mutation { backfillTvdbIds { showsUpdated } }
         """
-        data = await self._query(query)
+        # phase 10: the pass also asks Sonarr whether a series was deleted on TheTVDB and, in
+        # `auto` mode, may refresh one (up to 90 s) — the default 10 s would log a failure
+        data = await self._query(query, timeout=300.0)
         return data["backfillTvdbIds"]
 
     async def poll_show_merges(self) -> dict:

@@ -59,6 +59,9 @@ def recheck(conn, dataset=None) -> int:
                        if str(e.get("tvdb_id", "")).isdigit()}
         if not theirs or int(row["external_id"]) in theirs:
             continue
+        old = (row["source"] or "").removeprefix("recreated:")
+        if (row["source"] or "").startswith("recreated:") and old.isdigit() and int(old) in theirs:
+            continue  # TheTVDB re-created the entry (phase 10); Fribb still has the deleted id
         text = (f"TVDB {row['external_id']} is stored ({row['source'] or 'source not recorded'});"
                 f" Fribb now gives {', '.join(str(t) for t in sorted(theirs))}")
         if pending_review.already_resolved_with(conn, "show", row["show_id"], FIELD, text):

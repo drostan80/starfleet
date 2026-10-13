@@ -228,7 +228,9 @@ def _untracked_sonarr_entries(all_series: list[dict], known_tvdb_ids: set[str]) 
             or [1],
         }
         for series in all_series
-        if str(series["tvdbId"]) not in known_tvdb_ids
+        # a series TheTVDB deleted (status "deleted") can't be added as a show: its id is dead
+        # (tvdb_replace.py moves or clears the link of the show it belongs to)
+        if str(series["tvdbId"]) not in known_tvdb_ids and series.get("status") != "deleted"
     ]
 
 

@@ -16,7 +16,8 @@ Enforced, not only checked:
 
 What a caller that already has two agreeing sources, or your own word, passes is
 `confirmed=True`: the R1.14 and R3.2a refusals still apply. A show that already has a TVDB
-id is never overwritten here.
+id is never overwritten by `offer`; `replace` is the one deliberate exception (TheTVDB itself
+deleted the id and re-created the show, phase 10).
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ HELD = "held_by_other_show"  # R1.14
 FILM = "film"  # R3.2a
 REVIEW = "review"  # R3.7e
 INVALID = "invalid"
+DELETED = "deleted_on_tvdb"  # TheTVDB deleted this id (tvdb_replace.py): never offered again
 
 # Fribb is built partly from anime-lists: the two do not confirm each other (user, 2026-10-06)
 INDEPENDENCE = {"fribb": "community", "anime-lists": "community"}
@@ -86,6 +88,12 @@ def offer(conn, show_id: str, tvdb_id, source: str, *, confirmed: bool = False) 
     if conn.execute("SELECT 1 FROM show_external_id WHERE show_id = ? AND service = 'tvdb'",
                     (show_id,)).fetchone():
         return EXISTS
+    if not confirmed and is_deleted_id(conn, value):
+        # Fribb, anime-lists and TVmaze keep giving an id TheTVDB deleted for a while: writing it
+        # would make the stale id come back after it was removed
+        logger.info("tvdb guard: %s from %s for %s was deleted on TheTVDB — not offered", value,
+                    source, show_id)
+        return DELETED
     other = conn.execute(
         "SELECT show_id FROM show_external_id WHERE service = 'tvdb' AND external_id = ?"
         " AND show_id != ?", (value, show_id)).fetchone()
@@ -127,6 +135,56 @@ def offer(conn, show_id: str, tvdb_id, source: str, *, confirmed: bool = False) 
             [CONFIRM, REJECT, OTHER], {"tvdb_id": value, "source": source, **facts},
             show_id=show_id)
     return REVIEW
+
+
+def is_deleted_id(conn, tvdb_id) -> bool:
+    """Has Sonarr flagged this TVDB id as deleted (a `tvdb_replace` review exists for it)?"""
+    return conn.execute(
+        "SELECT 1 FROM pending_review WHERE field = 'tvdb_replace' AND"
+        " CAST(json_extract(payload, '$.tvdb_id') AS TEXT) = ? LIMIT 1",
+        (str(tvdb_id),)).fetchone() is not None
+
+
+def clear(conn, show_id: str, old_id) -> str:
+    """"Log without a TVDB id for now" (phase 10): the deleted id is removed from the show —
+    a stale id is worse than none — and Sonarr is left alone. A later hourly pass finds the
+    replacement and asks again (R1.14 and the two-source rule apply to it as to any id). Returns
+    the sentence the resolved review keeps; the caller commits."""
+    cur = conn.execute("DELETE FROM show_external_id WHERE show_id = ? AND service = 'tvdb' AND"
+                       " external_id = ?", (show_id, str(old_id)))
+    if cur.rowcount:
+        return (f"TVDB {old_id} removed from the show; it has no TVDB id for now (Sonarr "
+                "unchanged) and will be corrected when a replacement is found")
+    return "the show holds no TVDB id (already removed); nothing to change"
+
+
+def replace(conn, show_id: str, old_id, new_id, source: str) -> None:
+    """The one deliberate way a show's TVDB id changes without you typing it on the show page
+    (PLAN-CODE phase 10): TheTVDB deleted `old_id` and re-created the show as `new_id`
+    (`tvdb_replace.py`; the Sonarr series has already moved). R1.14 and R3.2a still refuse, the
+    show must still hold `old_id` (or none — logged without an id —, or already `new_id`), and
+    the source is recorded (`you` when you chose it, `recreated:<old id>` when LCARS did on its
+    own). Raises `reviews.ReviewError`; the caller commits."""
+    old, new = str(old_id), str(new_id)
+    if not new.isdigit() or int(new) <= 0:
+        raise reviews.ReviewError(f"{new_id!r} is not a TVDB series id")
+    current = conn.execute("SELECT external_id FROM show_external_id WHERE show_id = ? AND"
+                           " service = 'tvdb'", (show_id,)).fetchone()
+    if current is not None and current[0] not in (old, new):
+        raise reviews.ReviewError(f"the show's TVDB id is {current[0]} now, not {old} — look at "
+                                  "the show page")
+    other = conn.execute("SELECT show_id FROM show_external_id WHERE service = 'tvdb' AND"
+                         " external_id = ? AND show_id != ?", (new, show_id)).fetchone()
+    if other is not None:
+        raise reviews.ReviewError(f"TVDB {new} already belongs to show {other[0]} (R1.14)")
+    show = conn.execute("SELECT media_shape FROM show WHERE id = ?", (show_id,)).fetchone()
+    if show is None or show[0] == "movie":
+        raise reviews.ReviewError("a film has no TVDB series id (R3.2a)")
+    if current is None:  # logged without an id earlier (`clear`)
+        _write(conn, show_id, new, source)
+    else:
+        conn.execute("UPDATE show_external_id SET external_id = ?, url = ?, source = ? WHERE"
+                     " show_id = ? AND service = 'tvdb'", (new, URL.format(new), source, show_id))
 
 
 def link_by_hand(conn, show_id: str, tvdb_id) -> str:

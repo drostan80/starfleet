@@ -88,6 +88,7 @@ proposed here; the code plan and data plan come after the Q answers.
 
 ## Not in the rules (to confirm they stay)
 
+- **TVDB id replaced because TheTVDB deleted and re-created the show** (PLAN-CODE phase 10, `tvdb_replace.py`, `tvdb_guard.replace`): the one deliberate exception to "an existing TVDB id is never overwritten"; R1.14 and R3.2a still refuse, the source is recorded (`you`, or `recreated:<old id>` for LCARS's own `auto` swap), every tracked show is covered, history and dropped included (user 2026-10-13: a stale TVDB id is never acceptable — an explicit exception to "history is never listed"). Proposed RULEBOOK wording, for the user to accept or change: *"R3.7g When TheTVDB deletes a tracked show's entry and re-creates it, the show's TVDB id moves to the new one only after the Sonarr series has moved with it and checked out; you choose unless `tvdb_replace = auto` and the IMDb/TMDB ids, title and year all agree."*
 - Automated show-merge detection (review-only now, `pollShowMerges`).
 - Scores (the user said scoring rules are separate).
 - Paced mode, `tracked = 0` soft delete, hard delete.

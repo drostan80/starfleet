@@ -49,7 +49,11 @@ def tvdb_facts(conn, tvdb_id: int) -> dict | None:
         return None  # Sonarr unreachable: the facts are unknown
     if not results:
         return None
-    e = results[0]
+    return facts_from_lookup(results[0], tvdb_id)
+
+
+def facts_from_lookup(e: dict, tvdb_id: int) -> dict:
+    """The fields of one Sonarr lookup result that the evidence and the hard stops read."""
     language = e.get("originalLanguage") or {}
     return {
         "tvdb_id": tvdb_id,

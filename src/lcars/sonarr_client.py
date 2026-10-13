@@ -216,6 +216,26 @@ class SonarrClient:
             },
         )
 
+    def series(self, series_id: int) -> dict:
+        """One series by Sonarr's own id (the full object, as `update_series` wants it back)."""
+        return self._get(f"series/{series_id}")
+
+    def refresh_series(self, series_id: int, wait_seconds: float = 90.0) -> dict:
+        """Runs Sonarr's RefreshSeries and waits for it. Raises SonarrError when it fails or does
+        not finish in `wait_seconds` (the series is then left as Sonarr has it)."""
+        import time
+
+        command = self._post("command", json={"name": "RefreshSeries", "seriesId": series_id})
+        deadline = time.monotonic() + wait_seconds
+        while time.monotonic() < deadline:
+            state = self._get(f"command/{command['id']}")
+            if state.get("status") == "completed":
+                return state
+            if state.get("status") in ("failed", "aborted", "cancelled"):
+                raise SonarrError(f"Sonarr's refresh {state.get('status')}: {state.get('message')}")
+            time.sleep(1.0)
+        raise SonarrError("Sonarr's refresh did not finish in time")
+
     def update_series(self, series: dict) -> dict:
         """B.21 — PUT the full series object back; Sonarr's update
         endpoint wants the whole thing, not a partial patch. Caller
