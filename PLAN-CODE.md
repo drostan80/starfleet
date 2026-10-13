@@ -633,8 +633,9 @@ opened if it can be decided from the page alone, reusing the 8.8.3 evidence pane
   files / tags / path / monitoring, then LCARS `show_external_id` (source `recreated:<old id>`); any
   failure puts Sonarr back from the snapshot. The resolved review keeps the result sentence.
 - `lcars.ini` `tvdb_replace = review` (default) | `auto` (applies only when IMDb/TMDB id **and** title
-  **and** year agree, one candidate, no mismatches; kept as a resolved review) | `off`. **The open
-  question stays yours: switch to `auto`?** Default is `review` until you've seen one.
+  **and** year agree, one candidate, no mismatches; kept as a resolved review) | `off`. **Decided by the user
+  2026-10-13: it stays `review`** — replacements are rare and an auto-matched id can still be wrong
+  when nobody checks it; `auto` remains available but is not wanted.
 - **Every show is covered, history and dropped included** (user, 2026-10-13: a finished show may get a
   new season, a dropped one may be un-dropped, a stale TVDB id is never acceptable — this overrides the
   "history is never listed" rule for this one check; my first build skipped history shows and was
