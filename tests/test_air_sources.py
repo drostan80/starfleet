@@ -16,6 +16,13 @@ NOW = "2026-10-04T10:00:00Z"
 FUTURE = "2999-01-01T00:00:00Z"
 
 
+@pytest.fixture(autouse=True)
+def _fixtures_are_dated_early_october(monkeypatch):
+    # The fixtures use dates around 2026-10-04 as "just aired"; without this they would turn
+    # into history (FINISHED_GRACE_DAYS) as the real clock moves on.
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 100_000)
+
+
 @pytest.fixture
 def conn(tmp_path):
     path = tmp_path / "air.db"

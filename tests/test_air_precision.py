@@ -19,6 +19,13 @@ SOON = "2999-01-01T00:00:00Z"
 
 
 @pytest.fixture
+def early_october(monkeypatch):
+    # For tests whose fixtures treat dates around 2026-10-04 as "just aired": without this they
+    # turn into history (FINISHED_GRACE_DAYS) as the real clock moves on.
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 100_000)
+
+
+@pytest.fixture
 def conn(tmp_path):
     path = tmp_path / "prec.db"
     subprocess.run(
@@ -289,7 +296,7 @@ def test_with_only_a_date_known_the_episode_holds_the_date_and_its_end_of_day(co
     assert row["air_aired_at"] == "2026-10-05T15:00:00Z"  # anime: the end of the Japanese day
 
 
-def test_a_time_arriving_for_a_date_only_episode_upgrades_it(conn):
+def test_a_time_arriving_for_a_date_only_episode_upgrades_it(conn, early_october):
     show = _show(conn)
     e = _episode(conn, show, 1)
     _anidb(conn, show, e, 1, "2026-10-05")
@@ -323,7 +330,7 @@ def test_a_long_aired_anime_episode_keeps_its_date_when_a_source_moves(conn):
 # ── TV: Sonarr wins ──────────────────────────────────────────────────────────────────────────────
 
 
-def test_a_tv_show_follows_sonarr_even_over_an_earlier_tvmaze(conn):
+def test_a_tv_show_follows_sonarr_even_over_an_earlier_tvmaze(conn, early_october):
     show = _show(conn, space="tv")
     e = _episode(conn, show, 1, "2026-10-04T13:00:00Z", "tvmaze")
     _tvmaze(conn, show, 1, "2026-10-04", "2026-10-04T13:00:00Z", "13:00")
@@ -370,7 +377,7 @@ def test_a_tv_series_filed_at_midnight_is_a_date_but_an_anime_at_midnight_is_a_t
     assert metadata._sonarr_air_fields({"airTime": "03:00"}, ep)[1] == "time"
 
 
-def test_a_source_gaining_an_air_time_has_not_moved_its_schedule(conn):
+def test_a_source_gaining_an_air_time_has_not_moved_its_schedule(conn, early_october):
     """TVmaze's noon placeholder (a date) becoming a real 21:00 must not light the ! icon."""
     show = _show(conn, space="tv")
     e = _episode(conn, show, 1)
@@ -427,7 +434,7 @@ def test_tvmaze_with_an_air_time_stays_a_time(conn):
 # ── a chosen schedule ────────────────────────────────────────────────────────────────────────────
 
 
-def test_a_chosen_schedule_wins_and_every_refresh_keeps_following_it(conn):
+def test_a_chosen_schedule_wins_and_every_refresh_keeps_following_it(conn, early_october):
     show, e = _anime_with_syoboi(conn, stored="2026-10-07T16:00:00Z")
     air_sources.refresh_show_schedules(conn, show)
     _cand(conn, e, "anilist", "2026-10-04T16:05:00Z")          # earlier, but not the chosen one
@@ -524,7 +531,7 @@ def test_sonarrs_time_is_real_only_when_the_series_has_an_air_time():
     assert metadata._sonarr_air_fields({}, {"airDateUtc": None}) == (None, "date", None)
 
 
-def test_a_sonarr_date_months_from_a_curated_one_is_not_applied_over_it(conn):
+def test_a_sonarr_date_months_from_a_curated_one_is_not_applied_over_it(conn, early_october):
     """Kanojo no Tomodachi: Sonarr's placeholder dates were 15 years early — 'earliest' must not
     let them replace Syoboi's; a plausible earlier Sonarr date (a few days) still does."""
     show, e = _anime_with_syoboi(conn, stored="2026-10-07T16:00:00Z")
