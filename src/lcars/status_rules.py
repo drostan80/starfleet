@@ -107,12 +107,20 @@ def last_season(conn, show_id: str):
 
 
 def followed_sql(alias: str = "episode") -> str:
-    """SQL condition: the episode's TVDB season isn't skipped (R2.10) — for
-    lists (calendar, next-up, backlog), availability and air-date updates."""
+    """SQL condition: the episode isn't in a skipped level (R2.10) — for lists
+    (calendar, next-up, backlog), availability and air-date updates. A level is
+    its TVDB season, or the level the episode is placed under (a special, a part).
+    A season-0 episode no level holds is not followed once the show is dropped or
+    skipped (R2.13c)."""
     return (
-        f"NOT EXISTS (SELECT 1 FROM season z WHERE z.show_id = {alias}.show_id"
+        f"(NOT EXISTS (SELECT 1 FROM season z WHERE z.show_id = {alias}.show_id"
         f" AND z.kind = 'tvdb_season' AND z.season_number = {alias}.season"
         " AND z.status = 'skipped')"
+        f" AND NOT EXISTS (SELECT 1 FROM season z WHERE z.id = {alias}.season_id"
+        " AND z.status = 'skipped')"
+        f" AND NOT ({alias}.season = 0 AND {alias}.season_id IS NULL"
+        f" AND EXISTS (SELECT 1 FROM show sh WHERE sh.id = {alias}.show_id"
+        " AND sh.status IN ('dropped', 'skipped'))))"
     )
 
 
@@ -358,6 +366,12 @@ def watched_in_skipped_season(conn, show_id: str, season_number: int | None,
     return fx
 
 
+def _last_watched_is_completed(seasons) -> bool:
+    """R2.13c: the last season you have a status on (not planned / skipped) is completed."""
+    touched = [s for s in seasons if s["status"] in WATCHED_STATUSES]
+    return bool(touched) and touched[-1]["status"] == "completed"
+
+
 def set_show_status(
     conn, show_id: str, status: str, changed_by: str, *, confirmed: bool = False
 ) -> Effects:
@@ -372,6 +386,10 @@ def set_show_status(
         raise NeedsConfirmation(
             "this show has skipped seasons — pass confirmed: true to proceed"
         )  # R2.13b (1)
+    if status == "dropped" and _last_watched_is_completed(seasons):
+        # R2.13c: dropping after a completed season leaves it completed; later seasons
+        # (untouched, planned) are skipped and the show reads dropped (the R2.13b exception).
+        return _skip_show(conn, show_id, changed_by, confirmed=confirmed)
     if has_skipped and status in ("completed", "watching", "planned"):
         # R2.13b (2)/(b): these go on the show's last season, skipped or not.
         _clear_skip_picked(conn, show_id)
@@ -426,5 +444,11 @@ def _skip_show(conn, show_id: str, changed_by: str, *, confirmed: bool) -> Effec
         if later["season_number"] > after and later["status"] in ("planned", None):
             _set(conn, later, "skipped", changed_by if not in_progress else AUTO,
                  not in_progress, fx)
+    # Planned specials the engine added (not ones you set) stop being followed too (R2.13c).
+    for special in conn.execute(
+        "SELECT * FROM season WHERE show_id = ? AND kind = 'special' AND status_set_manually = 0"
+        " AND COALESCE(status, 'planned') = 'planned'", (show_id,)
+    ).fetchall():
+        _set(conn, special, "skipped", AUTO, False, fx)
     conn.execute("UPDATE show SET skip_picked = 1 WHERE id = ?", (show_id,))
     return fx.merge(after_episodes_changed(conn, show_id, changed_by))

@@ -69,15 +69,15 @@ class TestArmSeedSyoboiIds:
         conn.executescript("""
             CREATE TABLE show (
                 id TEXT PRIMARY KEY, tracked INTEGER DEFAULT 1,
-                tracking_space TEXT DEFAULT 'anime'
+                tracking_space TEXT DEFAULT 'anime', status TEXT
             );
             CREATE TABLE show_external_id (
                 show_id TEXT, service TEXT, external_id TEXT,
                 url TEXT, created_at TEXT,
                 UNIQUE(show_id, service)
             );
-            INSERT INTO show VALUES ('s-001', 1, 'anime');
-            INSERT INTO show VALUES ('s-002', 1, 'anime');
+            INSERT INTO show (id, tracked, tracking_space) VALUES ('s-001', 1, 'anime');
+            INSERT INTO show (id, tracked, tracking_space) VALUES ('s-002', 1, 'anime');
             INSERT INTO show_external_id VALUES ('s-001', 'anilist', '1', '', '');
             INSERT INTO show_external_id VALUES ('s-002', 'anilist', '2', '', '');
         """)
@@ -105,14 +105,14 @@ class TestArmSeedSyoboiIds:
         conn.executescript("""
             CREATE TABLE show (
                 id TEXT PRIMARY KEY, tracked INTEGER DEFAULT 1,
-                tracking_space TEXT DEFAULT 'anime'
+                tracking_space TEXT DEFAULT 'anime', status TEXT
             );
             CREATE TABLE show_external_id (
                 show_id TEXT, service TEXT, external_id TEXT,
                 url TEXT, created_at TEXT,
                 UNIQUE(show_id, service)
             );
-            INSERT INTO show VALUES ('s-001', 1, 'anime');
+            INSERT INTO show (id, tracked, tracking_space) VALUES ('s-001', 1, 'anime');
             INSERT INTO show_external_id VALUES ('s-001', 'anilist', '1', '', '');
             INSERT INTO show_external_id VALUES ('s-001', 'syoboi', '100', '', '');
         """)
@@ -255,7 +255,7 @@ class TestFillAirdateGaps:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript("""
-            CREATE TABLE show (id TEXT PRIMARY KEY);
+            CREATE TABLE show (id TEXT PRIMARY KEY, status TEXT);
             CREATE TABLE season (
                 id TEXT PRIMARY KEY, show_id TEXT, season_number INTEGER,
                 kind TEXT, status TEXT
@@ -295,7 +295,7 @@ class TestFillAirdateGaps:
                 fetched_at TEXT NOT NULL
             );
 
-            INSERT INTO show VALUES ('s-001');
+            INSERT INTO show (id) VALUES ('s-001');
             INSERT INTO show_external_id VALUES ('s-001', 'syoboi', '100', '', '');
             INSERT INTO show_external_id VALUES ('s-001', 'anidb', '1000', '', '');
 
@@ -361,7 +361,7 @@ class TestFillAirdateGaps:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript("""
-            CREATE TABLE show (id TEXT PRIMARY KEY);
+            CREATE TABLE show (id TEXT PRIMARY KEY, status TEXT);
             CREATE TABLE season (
                 id TEXT PRIMARY KEY, show_id TEXT, season_number INTEGER,
                 kind TEXT, status TEXT
@@ -401,7 +401,7 @@ class TestFillAirdateGaps:
                 fetched_at TEXT NOT NULL
             );
 
-            INSERT INTO show VALUES ('s-001');
+            INSERT INTO show (id) VALUES ('s-001');
             INSERT INTO show_external_id VALUES ('s-001', 'syoboi', '100', '', '');
             INSERT INTO show_external_id VALUES ('s-001', 'anidb', '1000', '', '');
             INSERT INTO episode VALUES (
@@ -430,7 +430,7 @@ class TestFillAirdateGaps:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript("""
-            CREATE TABLE show (id TEXT PRIMARY KEY);
+            CREATE TABLE show (id TEXT PRIMARY KEY, status TEXT);
             CREATE TABLE season (
                 id TEXT PRIMARY KEY, show_id TEXT, season_number INTEGER,
                 kind TEXT, status TEXT
@@ -470,7 +470,7 @@ class TestFillAirdateGaps:
                 fetched_at TEXT NOT NULL
             );
 
-            INSERT INTO show VALUES ('s-001');
+            INSERT INTO show (id) VALUES ('s-001');
             -- Primary AniDB is 1000 (S1), Syoboi TID 100 (maps to S1)
             INSERT INTO show_external_id VALUES ('s-001', 'syoboi', '100', '', '');
             INSERT INTO show_external_id VALUES ('s-001', 'anidb', '1000', '', '');
@@ -520,7 +520,7 @@ class TestRewireAirdates:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript("""
-            CREATE TABLE show (id TEXT PRIMARY KEY);
+            CREATE TABLE show (id TEXT PRIMARY KEY, status TEXT);
             CREATE TABLE season (
                 id TEXT PRIMARY KEY, show_id TEXT, season_number INTEGER,
                 kind TEXT, status TEXT
@@ -562,7 +562,7 @@ class TestRewireAirdates:
                 fetched_at TEXT NOT NULL
             );
 
-            INSERT INTO show VALUES ('s-001');
+            INSERT INTO show (id) VALUES ('s-001');
             INSERT INTO show_external_id VALUES ('s-001', 'syoboi', '100', '', '');
             INSERT INTO show_external_id VALUES ('s-001', 'anidb', '1000', '', '');
 

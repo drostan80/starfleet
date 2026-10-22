@@ -239,6 +239,87 @@ def test_skipping_after_a_completed_season_reads_dropped(conn):
     assert _show(conn) == "dropped"  # the one exception to R2.13
 
 
+# ── R2.13c: dropped picked on the show after a completed season ───────
+
+
+def _completed_with_count(conn, zid, n, count):
+    _season(conn, zid, n, "completed")
+    conn.execute("UPDATE season SET episode_total = ? WHERE id = ?", (count, zid))
+    _eps(conn, n, count, state="watched")
+
+
+def test_dropping_after_a_completed_season_keeps_it_completed_and_skips_later_ones(conn):
+    # Made in Abyss: every episode watched, count confirmed (R2.15b would flip a season
+    # set dropped straight back to completed); S3 was auto-added planned.
+    _completed_with_count(conn, "z-s10000", 1, 3)
+    _completed_with_count(conn, "z-s20000", 2, 3)
+    _season(conn, "z-s30000", 3, "planned")
+    status_rules.set_show_status(conn, "s-stat01", "dropped", "web")
+    statuses = [_status(conn, z) for z in ("z-s10000", "z-s20000", "z-s30000")]
+    assert statuses == ["completed", "completed", "skipped"]
+    assert _show(conn) == "dropped"
+
+
+def test_the_drop_holds_when_the_last_season_is_the_completed_one(conn):
+    _completed_with_count(conn, "z-s10000", 1, 3)
+    status_rules.set_show_status(conn, "s-stat01", "dropped", "web")
+    assert _status(conn, "z-s10000") == "completed"
+    assert _show(conn) == "dropped"
+    status_rules.recompute_show(conn, "s-stat01", "test")  # a later refresh keeps it
+    assert _show(conn) == "dropped"
+
+
+def test_dropping_ends_when_another_status_is_picked(conn):
+    _completed_with_count(conn, "z-s10000", 1, 3)
+    _season(conn, "z-s20000", 2, "planned")
+    status_rules.set_show_status(conn, "s-stat01", "dropped", "web")
+    with pytest.raises(status_rules.NeedsConfirmation, match="skipped seasons"):
+        status_rules.set_show_status(conn, "s-stat01", "planned", "web")
+    status_rules.set_show_status(conn, "s-stat01", "planned", "web", confirmed=True)
+    assert _show(conn) == "planned"  # R2.13b (c)
+
+
+def test_dropping_a_season_in_progress_still_goes_on_that_season(conn):
+    _completed_with_count(conn, "z-s10000", 1, 3)
+    _season(conn, "z-s20000", 2, "watching")
+    status_rules.set_show_status(conn, "s-stat01", "dropped", "web")
+    assert (_status(conn, "z-s10000"), _status(conn, "z-s20000")) == ("completed", "dropped")
+    assert _show(conn) == "dropped"
+
+
+def test_dropping_skips_planned_specials_but_not_ones_you_set(conn):
+    _completed_with_count(conn, "z-s10000", 1, 3)
+    _season(conn, "z-sp0000", None, "planned", kind="special")
+    _season(conn, "z-sp1000", None, "planned", kind="special", part=2, manual=1)
+    status_rules.set_show_status(conn, "s-stat01", "dropped", "web")
+    assert _status(conn, "z-sp0000") == "skipped"
+    assert _status(conn, "z-sp1000") == "planned"
+
+
+def test_an_unplaced_special_of_a_dropped_show_is_not_followed(conn):
+    _completed_with_count(conn, "z-s10000", 1, 3)
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, state,"
+        " created_at, updated_at) VALUES ('e-spc001', 's-stat01', 0, 16, 'special', ?,"
+        " 'unwatched', ?, ?)", (FUTURE, NOW, NOW))
+    assert status_rules.episode_followed(conn, "e-spc001")
+    status_rules.set_show_status(conn, "s-stat01", "dropped", "web")
+    assert not status_rules.episode_followed(conn, "e-spc001")
+    assert status_rules.episode_followed(conn, "e-100001")  # the watched season's own
+
+
+def test_an_episode_under_a_skipped_level_is_not_followed(conn):
+    _season(conn, "z-s10000", 1, "watching")
+    _season(conn, "z-sp0000", None, "skipped", kind="special")
+    _eps(conn, 1, 1)
+    conn.execute(
+        "INSERT INTO episode (id, show_id, season, episode, kind, air_date_utc, state,"
+        " season_id, created_at, updated_at) VALUES ('e-spc002', 's-stat01', 0, 1, 'special',"
+        " ?, 'unwatched', 'z-sp0000', ?, ?)", (FUTURE, NOW, NOW))
+    assert not status_rules.episode_followed(conn, "e-spc002")
+    assert status_rules.episode_followed(conn, "e-100001")
+
+
 def test_skipping_with_a_season_in_progress_warns_then_drops_it(conn):
     _season(conn, "z-s10000", 1, "completed")
     _season(conn, "z-s20000", 2, "watching")

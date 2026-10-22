@@ -485,6 +485,15 @@ An episode can be unaired but watched (pre-air showing, leak…).
     (d) **every season after a skipped season stays skipped unless you say
     otherwise** — watching an episode of a skipped season doesn't un-skip later
     seasons (this replaces "later seasons → planned" above).
+- **R2.13c Dropped picked on the show after a completed season** `[clarified 2026-10-22,
+  Made in Abyss]`: you can drop a show after completing a season. When the last non-skipped
+  season is **completed**, picking dropped on the show does **not** change that season (it
+  stays completed; R2.15b does not turn the pick back). The show-level exception of R2.13b
+  applies instead: the show reads **dropped** and **every later season is skipped**,
+  including seasons LCARS auto-added as planned (correctly planned at the time; the drop is
+  what turns them skipped, R2.16). Same end state as skipped picked on the show (R2.13b);
+  the show-level "dropped" ends under R2.13b (c). A last season that is *not* completed is
+  unchanged: the pick goes on that season (R2.13a).
 - **R2.14** Season planned + one episode set watched → season watching. This is
   the **only** automatic path to watching (R2.6). `[clarified 2026-09-27, Q-B]`
   `[decided 2026-10-06]` **Season 0 is exempt** (specials, OVAs, films of a series: the levels of

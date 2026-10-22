@@ -157,7 +157,7 @@ class TestRewireConditionParity:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript("""
-            CREATE TABLE show (id TEXT PRIMARY KEY);
+            CREATE TABLE show (id TEXT PRIMARY KEY, status TEXT);
             CREATE TABLE season (
                 id TEXT PRIMARY KEY, show_id TEXT, season_number INTEGER,
                 kind TEXT, status TEXT
@@ -211,7 +211,7 @@ class TestRewireConditionParity:
         for i, (episode_id, source, date) in enumerate(cases):
             show_id = f"s-{i:03d}"
             tid = 1000 + i
-            conn.execute("INSERT INTO show VALUES (?)", (show_id,))
+            conn.execute("INSERT INTO show (id) VALUES (?)", (show_id,))
             conn.execute(
                 "INSERT INTO show_external_id VALUES (?, 'syoboi', ?, '', '')",
                 (show_id, str(tid)),

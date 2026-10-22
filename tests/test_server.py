@@ -4575,7 +4575,9 @@ async def test_set_status_maps_every_real_show_status_value_to_mal_without_crash
             headers=auth_headers(),
         )
         assert data["setStatus"]["status"] == status  # the local write always succeeds
-    assert len(calls) == 5
+    # DROPPED comes after COMPLETED: the season stays completed and the show reads dropped
+    # (RULEBOOK R2.13c), so there is no fifth write to MAL.
+    assert len(calls) == 4
 
 
 async def test_mal_push_failure_logs_pending_review_against_season(client, monkeypatch):
