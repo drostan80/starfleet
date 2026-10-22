@@ -22,7 +22,7 @@ import { startDownload } from './downloads.js?v=2';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   registerHelpers, getDesign, buildCardV2, buildBannerRow, buildMonthTile, patchBannerRows,
-} from './cards-v2.js?v=5';
+} from './cards-v2.js?v=6';
 
 /* ── Constants ────────────────────────────────────────────── */
 

@@ -27,7 +27,7 @@ import {
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange, airChangeBadge, isDateOnly,
-} from './calendar.js?v=59';
+} from './calendar.js?v=60';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,

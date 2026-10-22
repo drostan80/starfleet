@@ -345,6 +345,7 @@
 
 /* ── Month view ────────────────────────────────────────── */
 .month-grid {
+  padding-right: 36px;  /* room for the status flower of the last column */
   display: grid;
   grid-template-columns: repeat(7, minmax(190px, 1fr));
   gap: 8px;
@@ -373,7 +374,9 @@
 .month-cell.day-today .month-num, .month-cell.day-today .month-dname { color: var(--accent); }
 .month-body { display: flex; flex-direction: column; gap: 7px; padding: 7px; }
 
-.mt { border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
+.mt { position: relative; z-index: 0; border: 1px solid var(--border); border-radius: 7px;
+      background: var(--surface-2); }
+.mt:has(.status-btn-wrap.radial-open) { z-index: 100; }
 .mt:hover { border-color: var(--faint); }
 .mt-banner { min-height: 52px; border-radius: 6px 6px 0 0; }
 .mt-banner .bn-img { width: 100%; height: auto; }
@@ -453,3 +456,16 @@
   .mt-frost { opacity: 1; background: rgba(14, 17, 26, 0.35); }
   .mt-frost .mt-ep-title { display: none; }
 }
+
+/* the status picker at the end of a Month tile's link bar */
+.mt .svc-strip.h { align-items: center; }
+.mt .status-btn-wrap.status-in-bar {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  margin-left: auto;
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+.mt .status-in-bar .status-icon-btn { width: 18px; height: 18px; font-size: 10px; }

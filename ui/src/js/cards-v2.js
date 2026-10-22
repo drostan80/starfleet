@@ -377,8 +377,8 @@ export function buildBannerRow(ep, cfg, { withCard = false } = {}) {
 
 /**
  * One show airing on a day of the month grid: its banner, the play triangle when the episode is
- * available, the art picker on the left and the indicator on the right, the link bar under it;
- * the title, SxxExx, episode name and air time appear on hover.
+ * available, the art picker on the left and the indicator on the right, the link bar under it (the
+ * status picker at its end); the title, SxxExx, episode name and air time appear on hover.
  */
 export function buildMonthTile(ep, cfg) {
   const tile = el('article', 'mt');
@@ -427,6 +427,12 @@ export function buildMonthTile(ep, cfg) {
     frost.appendChild(epTitle);
   }
   box.appendChild(frost);
+
+  // the status picker lives at the end of the link bar (user 2026-10-22)
+  const status = ep.seasonEntity?.status || ep.show.status || 'WATCHING';
+  const flower = buildStatusBtn({ id: ep.show.id, currentStatus: status, onPick: H.onStatusChange });
+  flower.classList.add('status-in-bar');
+  strip.appendChild(flower);
 
   tile.append(box, strip);
   return tile;
