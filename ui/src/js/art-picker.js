@@ -42,13 +42,18 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
   };
   const assets = (show.artAssets || [])
     .filter(a => slotMatch(a) && (a.episodeKind || 'REGULAR') === episodeKind);
-  // Regular-slot candidates offered as "borrow" options for a special/OVA/
-  // bonus-movie picker — none of AniList/TVDB/TMDB/TVmaze/MAL know about a
-  // per-episode-kind cover, so this is the only way "Fetch Art from
-  // Sources" is actually useful here: it populates the regular pool, and
-  // this list lets the user adopt one of those into this kind's own slot.
-  const borrowable = isRegular ? [] : (show.artAssets || [])
-    .filter(a => slotMatch(a) && (a.episodeKind || 'REGULAR') === 'REGULAR');
+  // Candidates offered as "borrow" options from the show's own pool (show level, regular slot):
+  // - a special/OVA/bonus-movie picker — none of AniList/TVDB/TMDB/TVmaze/MAL know about a
+  //   per-episode-kind cover, so this is the only way "Fetch Art from Sources" is actually useful
+  //   there: it populates the regular pool, and this list lets the user adopt one of those;
+  // - a season picker (user 2026-10-23): a season's own images are only the few a source filed under
+  //   that season, so every show-level candidate of the full search can be adopted for the season too
+  //   (it becomes the season's own art asset, selected).
+  const seasonLevel = !!seasonId && isRegular;
+  const borrowable = (isRegular && !seasonLevel) ? [] : (show.artAssets || [])
+    .filter(a => kindSet.has(a.kind.toLowerCase()) && !a.seasonId
+      && (a.episodeKind || 'REGULAR') === 'REGULAR'
+      && !assets.some(x => x.url === a.url));
 
   // Build overlay
   const overlay = el('div', 'sp-art-overlay');
@@ -211,8 +216,9 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
   // Borrow-from-regular section — only for a special/OVA/bonus-movie
   // picker, and only once there's actually something to borrow.
   if (borrowable.length) {
-    modal.appendChild(el('p', 'sp-art-borrow-label',
-      `Or use one of the show's own ${kind} candidates:`));
+    modal.appendChild(el('p', 'sp-art-borrow-label', seasonLevel
+      ? `Or use one of the show's other ${kind} candidates (every source) for this season:`
+      : `Or use one of the show's own ${kind} candidates:`));
     const borrowGrid = el('div', `sp-art-grid sp-art-grid-borrow${isBannerKind ? ' sp-art-grid-wide' : ''}`);
     for (const asset of borrowable) {
       const card = el('div', 'sp-art-card sp-art-card-borrow');
@@ -227,7 +233,7 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
       info.appendChild(el('span', 'sp-art-source', asset.source));
       card.appendChild(info);
 
-      card.title = 'Use this for this episode kind too';
+      card.title = seasonLevel ? 'Use this for this season' : 'Use this for this episode kind too';
       card.addEventListener('click', async () => {
         try {
           await adoptUrl(asset.url);

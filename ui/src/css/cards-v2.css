@@ -139,7 +139,7 @@
   top: 0;
   left: 0;
   right: 0;
-  padding: 8px 34px 8px 34px;  /* clear of the picker (left) and the indicator (right) */
+  padding: 8px 8px 8px 8px;
   text-align: center;
   background: rgba(14, 17, 26, 0.46);
   -webkit-backdrop-filter: blur(9px) saturate(1.2);
@@ -149,6 +149,9 @@
 .card2-title {
   display: block;
   pointer-events: auto;
+  box-sizing: border-box;
+  padding: 0 26px;        /* clear of the picker (left) and the indicator (right) */
+  min-height: 24px;       /* a one-line title still leaves room for them: the line below starts under them */
   color: #fff;
   font: 600 13px/1.25 'DM Sans', sans-serif;
   text-decoration: none;
@@ -170,8 +173,8 @@
   color: rgba(255, 255, 255, 0.88);
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
 }
-.card2-time { white-space: nowrap; }
-.card2-badge { white-space: nowrap; }
+.card2-time { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.card2-badge { white-space: nowrap; flex: none; }
 
 /* Cover-art picker: top left, on hover */
 .card2-art-btn {
@@ -378,7 +381,8 @@
       background: var(--surface-2); }
 .mt:has(.status-btn-wrap.radial-open) { z-index: 100; }
 .mt:hover { border-color: var(--faint); }
-.mt-banner { min-height: 52px; border-radius: 6px 6px 0 0; }
+.mt-banner { min-height: 0; border-radius: 6px 6px 0 0; }  /* the banner's own height; .bn-banner's 96px is for 3D rows */
+.mt-banner:not(.has-img) { min-height: 44px; }
 .mt-banner .bn-img { width: 100%; height: auto; }
 .mt-fallback {
   position: absolute;
@@ -402,59 +406,49 @@
   position: absolute;
   inset: 0;
   margin: auto;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   border: none;
   border-radius: 50%;
   background: transparent;
   color: rgba(255, 255, 255, 0.92);
-  font-size: 22px;
+  font-size: 20px;
   text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 2px 8px rgba(0, 0, 0, 0.9);
   cursor: pointer;
   z-index: 3;
   transition: transform 0.12s, color 0.12s;
 }
 .mt-play:hover { transform: scale(1.15); color: #fff; }
-/* hover: title, SxxExx, episode name and air time on frosted glass */
-.mt-frost {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  padding: 6px 30px;
-  background: rgba(14, 17, 26, 0.55);
-  -webkit-backdrop-filter: blur(7px) saturate(1.2);
-  backdrop-filter: blur(7px) saturate(1.2);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.18s ease;
-}
-.mt:hover .mt-frost { opacity: 1; }
-.mt-title {
-  pointer-events: auto;
-  align-self: center;
-  max-width: 100%;
+/* hover: title - SxxExx, episode name and air time in a small frosted popup beside the tile */
+.mt-tip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 280px;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: rgba(16, 19, 30, 0.74);
+  -webkit-backdrop-filter: blur(12px) saturate(1.3);
+  backdrop-filter: blur(12px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
   color: #fff;
-  font: 600 12px/1.25 'DM Sans', sans-serif;
-  text-align: center;
-  text-decoration: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.12s ease;
 }
-.mt-title:hover { color: var(--accent); }
-.mt-ep-title { font: 400 11px 'DM Sans', sans-serif; color: rgba(255, 255, 255, 0.8); text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mt-frost .card2-line { margin-top: 0; font-size: 10px; }
+.mt-tip.show { visibility: visible; opacity: 1; }
+.mt-tip-head { font: 700 12px/1.35 'DM Sans', sans-serif; }
+.mt-tip-ep { margin-top: 2px; font: 700 13px/1.35 'DM Sans', sans-serif; }
+.mt-tip-time { margin-top: 6px; font: 600 11px 'DM Mono', monospace; color: #f59e0b; letter-spacing: 0.03em; }
 
-/* Touchscreens have no hover: show what hover reveals (the glass title band, the art pickers). */
+/* Touchscreens have no hover: the small art-picker buttons stay visible (they can't be reached
+   otherwise) and a long press shows the band / popup (cards-v2.js attachInfo). The band is hover-only
+   otherwise (user 2026-10-23: it showed all the time). */
+.card2.info-on .card2-frost { opacity: 1; }
 @media (hover: none) {
-  .card2-frost { opacity: 1; }
   .card2-art-btn, .bn-art, .mt .bn-art { opacity: 0.8; }
-  .mt-frost { opacity: 1; background: rgba(14, 17, 26, 0.35); }
-  .mt-frost .mt-ep-title { display: none; }
+  .card2-art, .mt-banner { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 }
 
 /* the status picker at the end of a Month tile's link bar */

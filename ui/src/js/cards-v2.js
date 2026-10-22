@@ -153,6 +153,74 @@ function airTimeText(ep, withZone = true) {
   return withZone ? H.fmtAirTime(ep.airDateUtc) : H.fmtTimeOnly(ep.airDateUtc);
 }
 
+/* ── Showing the hover band without a mouse ─────────────── */
+
+let _infoDismissWired = false;
+
+/**
+ * Show / hide a card's details (class `info-on`; an `info-change` event {on, x, y} lets a tile open its
+ * popup where the press happened).
+ */
+function setInfo(root, on, pt = {}) {
+  root.classList.toggle('info-on', on);
+  root.dispatchEvent?.(new CustomEvent('info-change', { detail: { on, x: pt.x, y: pt.y } }));
+}
+
+/** A tap anywhere outside a card that shows its band hides it again. */
+function wireInfoDismiss() {
+  if (_infoDismissWired) return;
+  _infoDismissWired = true;
+  document.addEventListener('touchstart', (e) => {
+    document.querySelectorAll('.info-on').forEach((n) => {
+      if (!n.contains(e.target)) setInfo(n, false);
+    });
+  }, { passive: true });
+}
+
+/**
+ * Touchscreens have no hover (user 2026-10-23): a long press on the card shows its band / popup (the
+ * press that ends the hold neither plays the episode nor opens the browser's menu); a tap elsewhere
+ * hides it.
+ */
+function attachInfo(root) {
+  wireInfoDismiss();
+  let timer = null;
+  let held = false;
+  let sx = 0;
+  let sy = 0;
+  const cancel = () => clearTimeout(timer);
+  root.addEventListener('touchstart', (e) => {
+    if (e.target.closest?.('button, a')) return;
+    held = false;
+    const t = e.touches[0];
+    sx = t.clientX;
+    sy = t.clientY;
+    cancel();
+    timer = setTimeout(() => {
+      held = true;
+      setInfo(root, true, { x: sx, y: sy });
+      navigator.vibrate?.(15);
+    }, 450);
+  }, { passive: true });
+  root.addEventListener('touchmove', (e) => {
+    const t = e.touches[0];
+    if (Math.hypot(t.clientX - sx, t.clientY - sy) > 10) cancel();
+  }, { passive: true });
+  root.addEventListener('touchend', cancel);
+  root.addEventListener('touchcancel', cancel);
+  // capture: the click that ends a long press must not reach the art's play handler
+  root.addEventListener('click', (e) => {
+    if (held) {
+      held = false;
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
+  root.addEventListener('contextmenu', (e) => {
+    if (held || root.classList.contains('info-on')) e.preventDefault();
+  });
+}
+
 /* ── The card ────────────────────────────────────────────── */
 
 /**
@@ -255,6 +323,7 @@ export function buildCardV2(ep, cfg, { plain = false } = {}) {
   top.append(title, line);
   frost.append(top);
   art.appendChild(frost);
+  attachInfo(card);
 
   card.appendChild(art);
   card.appendChild(buildStatusTab(ep));
@@ -374,12 +443,63 @@ export function buildBannerRow(ep, cfg, { withCard = false } = {}) {
   return row;
 }
 
+/* ── The Month tile's popup: a small frosted box at the pointer (hover, or a long press) ── */
+
+let _tip = null;
+
+function tipEl() {
+  if (!_tip) {
+    _tip = el('div', 'mt-tip');
+    document.body.appendChild(_tip);
+    window.addEventListener('scroll', () => _tip.classList.remove('show'), { passive: true });
+  }
+  return _tip;
+}
+
+function hideTip() {
+  _tip?.classList.remove('show');
+}
+
+function placeTip(x, y) {
+  const tip = tipEl();
+  const w = tip.offsetWidth;
+  const h = tip.offsetHeight;
+  let left = x + 14;
+  if (left + w > window.innerWidth - 8) left = Math.max(8, x - w - 14);
+  let top = y + 16;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, y - h - 12);
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
+/** Open the popup for a tile's episode at the pointer (x, y) — it then follows the mouse. */
+function showTip(ep, x, y) {
+  const tip = tipEl();
+  tip.replaceChildren();
+  const head = el('div', 'mt-tip-head');
+  head.textContent = `${ep.show.displayTitle} - ${H.fmtEpBadge(ep)}`;
+  tip.appendChild(head);
+  if (ep.title) {
+    const name = el('div', 'mt-tip-ep');
+    name.textContent = ep.title;
+    tip.appendChild(name);
+  }
+  const time = el('div', 'mt-tip-time');
+  time.textContent = airTimeText(ep);
+  const change = H.airChangeBadge(ep);
+  if (change) time.appendChild(change);
+  tip.appendChild(time);
+  tip.classList.add('show');
+  placeTip(x ?? 0, y ?? 0);
+}
+
 /* ── The month view tile ─────────────────────────────────── */
 
 /**
  * One show airing on a day of the month grid: its banner, the play triangle when the episode is
  * available, the art picker on the left and the indicator on the right, the link bar under it (the
- * status picker at its end); the title, SxxExx, episode name and air time appear on hover.
+ * status picker at its end); the title, SxxExx, episode name and air time appear in a small popup
+ * at the pointer on hover (a long press on a touchscreen).
  */
 export function buildMonthTile(ep, cfg) {
   const tile = el('article', 'mt');
@@ -414,26 +534,19 @@ export function buildMonthTile(ep, cfg) {
   box.appendChild(buildBannerPicker(ep, cfg));
   box.appendChild(buildIndicator(ep));
 
-  const frost = el('div', 'mt-frost');
-  const title = el('a', 'mt-title');
-  title.href = `show.html?id=${encodeURIComponent(ep.show.id)}`;
-  title.textContent = ep.show.displayTitle;
-  title.title = ep.show.displayTitle;
-  const badge = el('span');
-  badge.textContent = H.fmtEpBadge(ep);
-  const time = el('span');
-  time.textContent = airTimeText(ep);
-  const change = H.airChangeBadge(ep);
-  if (change) time.appendChild(change);
-  const line = el('div', 'card2-line');
-  line.append(time, badge);
-  frost.append(title, line);
-  if (ep.title) {
-    const epTitle = el('div', 'mt-ep-title');
-    epTitle.textContent = ep.title;
-    frost.appendChild(epTitle);
-  }
-  box.appendChild(frost);
+  attachInfo(tile);
+  // the details (title - SxxExx, episode name, air time) in a small popup, not over the banner
+  tile.addEventListener('mouseenter', (e) => showTip(ep, e.clientX, e.clientY));
+  tile.addEventListener('mousemove', (e) => placeTip(e.clientX, e.clientY));
+  tile.addEventListener('mouseleave', hideTip);
+  tile.addEventListener('info-change', (e) =>
+    (e.detail.on ? showTip(ep, e.detail.x, e.detail.y) : hideTip()));
+  // a click on the banner itself opens the show
+  box.style.cursor = 'pointer';
+  box.addEventListener('click', (e) => {
+    if (e.target.closest('button, a')) return;
+    window.location.href = `show.html?id=${encodeURIComponent(ep.show.id)}`;
+  });
 
   // the status picker lives at the end of the link bar (user 2026-10-22)
   const status = ep.seasonEntity?.status || ep.show.status || 'WATCHING';

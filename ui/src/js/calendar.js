@@ -11,7 +11,7 @@
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
 import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=33';
-import { openArtPicker } from './art-picker.js?v=11';
+import { openArtPicker } from './art-picker.js?v=12';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,
@@ -22,7 +22,7 @@ import { startDownload } from './downloads.js?v=2';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   registerHelpers, getDesign, buildCardV2, buildBannerRow, buildMonthTile, patchBannerRows,
-} from './cards-v2.js?v=7';
+} from './cards-v2.js?v=10';
 
 /* ── Constants ────────────────────────────────────────────── */
 
