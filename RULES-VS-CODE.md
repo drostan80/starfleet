@@ -92,3 +92,12 @@ proposed here; the code plan and data plan come after the Q answers.
 - Automated show-merge detection (review-only now, `pollShowMerges`).
 - Scores (the user said scoring rules are separate).
 - Paced mode, `tracked = 0` soft delete, hard delete.
+
+## Added 2026-10-22
+
+- **R2.13c** (dropped picked on the show after a completed season) — built in v0.4.15: `status_rules.set_show_status`
+  routes it to `_skip_show` when the last season you have a status on is completed; the season stays completed
+  (R2.15b no longer turns the pick back), later seasons and the engine's planned specials are skipped, the show reads
+  dropped. Tests in `tests/test_status_rules.py`.
+- **R2.10** follow check: `followed_sql` also hides episodes under a skipped level and season-0 episodes no level
+  holds once the show is dropped or skipped.

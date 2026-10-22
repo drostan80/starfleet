@@ -154,7 +154,10 @@ function airTimeText(ep, withZone = true) {
 
 /* ── The card ────────────────────────────────────────────── */
 
-/** The cover-art picker: sets the poster of the show on every card showing it. */
+/**
+ * The cover-art picker (top left of a card): picks for the slot the card shows — the shared cover of
+ * a special / OVA / bonus movie, else the episode's season — and updates every card sharing it.
+ */
 function buildPosterPicker(ep) {
   const pick = el('button', 'card2-art-btn');
   pick.title = 'Choose cover art';
@@ -162,20 +165,28 @@ function buildPosterPicker(ep) {
   pick.addEventListener('click', async (e) => {
     e.stopPropagation();
     pick.disabled = true;
+    const key = H.artKey(ep);
+    const kindSlot = key.startsWith('kind:') ? ep.kind : 'REGULAR';
+    const seasonId = key.startsWith('season:') ? ep.seasonEntity.id : null;
     try {
       const result = await H.getShowArtAssets(ep.show.id);
-      H.openArtPicker({ id: ep.show.id, artAssets: result.artAssets || [] }, null, 'poster', null, (url) => {
-        ep.show.posterUrl = url;
-        H.posterCache.set(ep.show.id, url);
-        document.querySelectorAll(`.card-art[data-show-id="${ep.show.id}"]`).forEach((art) => {
+      H.openArtPicker({ id: ep.show.id, artAssets: result.artAssets || [] }, seasonId, 'poster', null, (url) => {
+        if (kindSlot === 'SPECIAL') ep.show.specialPosterUrl = url;
+        else if (kindSlot === 'OVA') ep.show.ovaPosterUrl = url;
+        else if (kindSlot === 'BONUS_MOVIE') ep.show.bonusMoviePosterUrl = url;
+        else if (seasonId) ep.seasonEntity.posterUrl = url;
+        else ep.show.posterUrl = url;
+        if (!seasonId && kindSlot === 'REGULAR') H.posterCache.set(ep.show.id, url);
+        document.querySelectorAll(`.card-art[data-art-key="${key}"]`).forEach((art) => {
           let img = art.querySelector('img');
           if (!img) {
             img = document.createElement('img');
             art.prepend(img);
           }
-          img.src = url;
+          if (url) img.src = url;
+          else img.remove();  // deselected: the next page load shows the fallback
         });
-      }, (msg) => H.showBanner(msg, 'error'));
+      }, (msg) => H.showBanner(msg, 'error'), kindSlot);
     } catch {
       /* the picker reports its own errors; nothing to undo */
     }
@@ -195,11 +206,12 @@ export function buildCardV2(ep, cfg, { plain = false } = {}) {
 
   const art = el('div', 'card-art card2-art');
   art.dataset.showId = ep.show.id;
+  art.dataset.artKey = H.artKey(ep);
   if (ep.availableLocally) {
     art.classList.add('art-playable');
     art.addEventListener('click', () => H.launchMpv(filePath, cfg, H.episodeCtx(ep)));
   }
-  const posterUrl = ep.show.posterUrl || H.posterCache.get(ep.show.id) || null;
+  const posterUrl = H.coverFor(ep) || H.posterCache.get(ep.show.id) || null;
   if (posterUrl) {
     const img = document.createElement('img');
     img.src = posterUrl;

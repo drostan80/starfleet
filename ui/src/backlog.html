@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="css/main.css?v=31">
-  <link rel="stylesheet" href="css/cards-v2.css?v=4">
+  <link rel="stylesheet" href="css/cards-v2.css?v=6">
   <style>
     /* ── Backlog card size — 20% larger than calendar default ── */
     #backlog-grid {
@@ -274,13 +274,13 @@
 
 <script type="module">
   import { getConfig, bootstrapConfig, applyAppName } from './js/config.js?v=5';
-  import { initSearch } from './js/search.js?v=9';
-  import { fetchBacklog, fetchRecentGrabs, gql } from './js/api.js?v=31';
+  import { initSearch } from './js/search.js?v=10';
+  import { fetchBacklog, fetchRecentGrabs, gql } from './js/api.js?v=32';
   import {
     buildCard,
     showBanner, hideBanner,
     fetchTmdbPoster,
-  } from './js/calendar.js?v=58';
+  } from './js/calendar.js?v=59';
   import { buildWatchedToggle } from './js/watched-toggle.js?v=1';
 
   applyAppName();

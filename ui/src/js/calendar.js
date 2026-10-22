@@ -10,8 +10,8 @@
  */
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=31';
-import { openArtPicker } from './art-picker.js?v=9';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=32';
+import { openArtPicker } from './art-picker.js?v=10';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,
@@ -22,7 +22,7 @@ import { startDownload } from './downloads.js?v=2';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   registerHelpers, getDesign, buildCardV2, buildBannerRow, buildMonthTile, patchBannerRows,
-} from './cards-v2.js?v=4';
+} from './cards-v2.js?v=5';
 
 /* ── Constants ────────────────────────────────────────────── */
 
@@ -768,6 +768,30 @@ export function buildSvcStrip(externalIds, malId, filePath, availableLocally, cf
   return strip;
 }
 
+/* ── The cover a card shows ───────────────────────────────── */
+
+/**
+ * The episode's own cover (user 2026-10-22): a special / OVA / bonus movie shows its shared cover;
+ * any other episode shows its season's (selected season art → selected show art → the show's
+ * column, as Season.posterUrl resolves it); the show's cover only when nothing more specific exists.
+ */
+export function coverFor(ep) {
+  const show = ep.show;
+  const byKind = { SPECIAL: show.specialPosterUrl, OVA: show.ovaPosterUrl,
+                   BONUS_MOVIE: show.bonusMoviePosterUrl }[ep.kind];
+  return byKind || ep.seasonEntity?.posterUrl || show.posterUrl || null;
+}
+
+/** Which cover slot a card shows — cards with the same key share a cover (a pick updates them all). */
+export function artKey(ep) {
+  if (ep.kind && ep.kind !== 'REGULAR'
+      && { SPECIAL: ep.show.specialPosterUrl, OVA: ep.show.ovaPosterUrl,
+           BONUS_MOVIE: ep.show.bonusMoviePosterUrl }[ep.kind]) {
+    return `kind:${ep.show.id}:${ep.kind}`;
+  }
+  return ep.seasonEntity?.id ? `season:${ep.seasonEntity.id}` : `show:${ep.show.id}`;
+}
+
 /* ── Per-show episode stats ───────────────────────────────── */
 
 /**
@@ -861,7 +885,8 @@ export function buildCard(ep, cfg) {
     art.addEventListener('click', () => launchMpv(filePath, cfg, episodeCtx(ep)));
   }
 
-  const posterUrl = ep.show.posterUrl || posterCache.get(ep.show.id) || null;
+  const posterUrl = coverFor(ep) || posterCache.get(ep.show.id) || null;
+  art.dataset.artKey = artKey(ep);
   if (posterUrl) {
     const img = document.createElement('img');
     img.src = posterUrl;
@@ -1131,7 +1156,7 @@ function buildGroupCard(showGroup, cfg, cardBuilder) {
 
   const artDiv = document.createElement('div');
   artDiv.className = 'group-art';
-  const posterUrl = showGroup.show.posterUrl;
+  const posterUrl = coverFor(showGroup.episodes[0]) || showGroup.show.posterUrl;
   if (posterUrl) {
     const img = document.createElement('img');
     img.src = posterUrl;
@@ -1402,7 +1427,7 @@ function buildPlannerCard(ep, cfg) {
   const cover = document.createElement('div');
   cover.className = 'planner-cover';
   cover.dataset.showId = ep.show.id;
-  const posterUrl = ep.show.posterUrl || posterCache.get(ep.show.id) || null;
+  const posterUrl = coverFor(ep) || posterCache.get(ep.show.id) || null;
   if (posterUrl) {
     const img = document.createElement('img');
     img.src = posterUrl;
@@ -1755,7 +1780,7 @@ function syncLayoutBtn() {
 /* ── Init ────────────────────────────────────────────────── */
 
 registerHelpers({
-  isEpisodeAiringNow, hasAired, availState, fmtEpBadge, fmtAirTime, fmtTimeOnly, isDateOnly,
+  coverFor, artKey, isEpisodeAiringNow, hasAired, availState, fmtEpBadge, fmtAirTime, fmtTimeOnly, isDateOnly,
   airChangeBadge, buildSvcStrip, onWatchToggle, onStatusChange, launchMpv, episodeCtx,
   fetchTmdbPoster, fetchTmdbBackdrop, posterCache, backdropCache, startDownload,
   downloadSvg: _downloadSvg, getShowArtAssets, openArtPicker, showBanner,

@@ -445,3 +445,11 @@
 .mt-title:hover { color: var(--accent); }
 .mt-ep-title { font: 400 11px 'DM Sans', sans-serif; color: rgba(255, 255, 255, 0.8); text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mt-frost .card2-line { margin-top: 0; font-size: 10px; }
+
+/* Touchscreens have no hover: show what hover reveals (the glass title band, the art pickers). */
+@media (hover: none) {
+  .card2-frost { opacity: 1; }
+  .card2-art-btn, .bn-art, .mt .bn-art { opacity: 0.8; }
+  .mt-frost { opacity: 1; background: rgba(14, 17, 26, 0.35); }
+  .mt-frost .mt-ep-title { display: none; }
+}

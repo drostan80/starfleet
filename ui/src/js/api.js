@@ -90,7 +90,7 @@ const EPISODES_IN_RANGE_QUERY = `
         availableViaSonarr availableViaRadarr availableLocally
         filePathSonarr filePathRadarr jellyfinUrl
         state
-        seasonEntity { malId status }
+        seasonEntity { id malId status posterUrl }
         watchEvents(first: 1) { edges { node { id } } }
         show {
           id displayTitle status score mediaShape trackingSpace tracked
@@ -530,17 +530,17 @@ export async function fetchBacklog(first = 100) {
       backlog(first: $first, after: $after) {
         edges { node {
           id
-          season episode title absoluteNumber
+          season episode title absoluteNumber kind
           airDateUtc
           ${AIR_FIELDS}
           availableViaSonarr availableViaRadarr availableLocally
           filePathSonarr filePathRadarr jellyfinUrl
           state
-          seasonEntity { malId status }
+          seasonEntity { id malId status posterUrl }
           watchEvents(first: 1) { edges { node { id } } }
           show {
             id displayTitle status score mediaShape trackingSpace tracked
-            totalEpisodes posterUrl
+            totalEpisodes posterUrl specialPosterUrl ovaPosterUrl bonusMoviePosterUrl
             externalIds(first: 20) {
               edges { node { service externalId url } }
             }
