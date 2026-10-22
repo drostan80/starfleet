@@ -92,6 +92,21 @@ log = logging.getLogger(__name__)
 _TMDB_TV_URL_TEMPLATE = "https://www.themoviedb.org/tv/{id}"
 
 
+# A show's poster/banner column is what the calendar and lists display. A source refresh
+# (AniList) must not replace it while an art asset is selected for that slot: the selection
+# is the user's (or the cascade's) choice and the column mirrors it (art.sync_show_art_columns).
+_KEEP_SELECTED_POSTER = (
+    "CASE WHEN EXISTS (SELECT 1 FROM art_asset a WHERE a.show_id = show.id"
+    " AND a.season_id IS NULL AND a.episode_kind = 'regular' AND a.kind = 'poster'"
+    " AND a.selected = 1) THEN poster_url ELSE "
+)
+_KEEP_SELECTED_BANNER = (
+    "CASE WHEN EXISTS (SELECT 1 FROM art_asset a WHERE a.show_id = show.id"
+    " AND a.season_id IS NULL AND a.episode_kind = 'regular'"
+    " AND a.kind IN ('banner', 'background') AND a.selected = 1) THEN banner_url ELSE "
+)
+
+
 def fetch_and_populate(conn, show_id: str) -> None:
     """Best-effort, never raises — see module docstring. Call once
     inline from addShow (creation) or any time after (retry/refresh)."""
@@ -376,8 +391,8 @@ def _fetch_anilist(conn, show: dict) -> None:
     genres = media.get("genres")
     conn.execute(
         "UPDATE show SET"
-        "  poster_url = COALESCE(?, poster_url),"
-        "  banner_url = COALESCE(?, banner_url),"
+        f"  poster_url = {_KEEP_SELECTED_POSTER}COALESCE(?, poster_url) END,"
+        f"  banner_url = {_KEEP_SELECTED_BANNER}COALESCE(?, banner_url) END,"
         "  synopsis = COALESCE(?, synopsis),"
         "  genres_raw = COALESCE(?, genres_raw),"
         "  total_episodes = COALESCE(?, total_episodes),"

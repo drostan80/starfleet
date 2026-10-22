@@ -84,18 +84,78 @@ _KIND_TO_SHOW_COLUMN: dict[str, str] = {
 }
 
 
+# The banner slot shows both kinds, so a show has ONE selected banner/background
+# at the show level (a second one is what let the column and the picker disagree).
+_BANNER_KINDS = ("banner", "background")
+
+
+def _slot_kinds(kind: str) -> tuple[str, ...]:
+    return _BANNER_KINDS if kind in _BANNER_KINDS else (kind,)
+
+
+def sync_show_art_columns(conn, show_id: str, *, clear: bool = True) -> None:
+    """Make ``show.banner_url`` / ``show.poster_url`` say what is selected at the
+    show level (regular slot): the URL of the selected asset, NULL when nothing is.
+    The calendar, backlog and lists read these columns instead of art_asset, so they
+    must never drift from the selection (user 2026-10-22: a picked banner reverted
+    on other views). Several selected banner/background assets (older data): the one
+    already in the column, else the 'banner' kind, else the first. `clear=False` leaves a
+    column alone when nothing is selected for it (the repair pass: a show whose art never
+    went through art_asset keeps the poster Sonarr/AniList gave it)."""
+    for column, kinds in (("banner_url", _BANNER_KINDS), ("poster_url", ("poster",))):
+        marks = ",".join("?" for _ in kinds)
+        rows = conn.execute(
+            f"SELECT kind, url FROM art_asset WHERE show_id = ? AND season_id IS NULL"
+            f" AND episode_kind = 'regular' AND selected = 1 AND kind IN ({marks})"
+            f" ORDER BY created_at, id",
+            (show_id, *kinds),
+        ).fetchall()
+        current = conn.execute(
+            f"SELECT {column} FROM show WHERE id = ?", (show_id,)
+        ).fetchone()
+        if current is None:
+            return
+        if not rows and not clear:
+            continue
+        url = None
+        if rows:
+            urls = [r["url"] for r in rows]
+            if current[0] in urls:
+                url = current[0]
+            else:
+                url = next((r["url"] for r in rows if r["kind"] == "banner"), urls[0])
+        if url != current[0]:
+            conn.execute(f"UPDATE show SET {column} = ? WHERE id = ?", (url, show_id))
+
+
+def sync_all_show_art_columns(conn) -> int:
+    """One repair pass over every show (after the sync was missing): returns how many
+    shows had a column changed. Only shows with a selection are touched."""
+    changed = 0
+    for row in conn.execute("SELECT id, banner_url, poster_url FROM show").fetchall():
+        sync_show_art_columns(conn, row["id"], clear=False)
+        after = conn.execute(
+            "SELECT banner_url, poster_url FROM show WHERE id = ?", (row["id"],)).fetchone()
+        if (after["banner_url"], after["poster_url"]) != (row["banner_url"], row["poster_url"]):
+            changed += 1
+    conn.commit()
+    return changed
+
+
 def select_asset(conn, asset_id: str) -> dict:
     """Mark an asset as the selected art for its (show, season, kind,
     episode_kind) slot, deselecting whatever was previously selected in
-    that slot.
+    that slot. At the show level the banner slot is one slot for both
+    'banner' and 'background' (see _BANNER_KINDS). Selecting an asset that is
+    already selected is fine: it just re-writes the columns.
 
     For show-level assets (season_id IS NULL) with episode_kind='regular'
     only, also writes the URL back to the corresponding ``show`` column
     (``banner_url`` / ``poster_url``) so that fast-path resolvers
     (calendar, lists) return the correct value without an ``art_asset``
-    lookup. A non-'regular' episode_kind has no denormalised column —
-    it's a manual-only, rarer feature; resolvers query art_asset
-    directly for it (see ``resolve_show_special_poster_url`` etc.).
+    lookup (``sync_show_art_columns``). A non-'regular' episode_kind has no
+    denormalised column — it's a manual-only, rarer feature; resolvers query
+    art_asset directly for it (see ``resolve_show_special_poster_url`` etc.).
 
     Returns the updated asset row.
     """
@@ -106,11 +166,14 @@ def select_asset(conn, asset_id: str) -> dict:
 
     # Deselect any existing selection in the same slot
     if asset["season_id"] is None:
+        regular = asset["episode_kind"] == "regular"
+        kinds = _slot_kinds(asset["kind"]) if regular else (asset["kind"],)
+        marks = ",".join("?" for _ in kinds)
         conn.execute(
-            "UPDATE art_asset SET selected = 0"
-            " WHERE show_id = ? AND season_id IS NULL AND kind = ? AND episode_kind = ?"
-            "   AND selected = 1",
-            (asset["show_id"], asset["kind"], asset["episode_kind"]),
+            f"UPDATE art_asset SET selected = 0"
+            f" WHERE show_id = ? AND season_id IS NULL AND kind IN ({marks}) AND episode_kind = ?"
+            f"   AND selected = 1",
+            (asset["show_id"], *kinds, asset["episode_kind"]),
         )
     else:
         conn.execute(
@@ -125,12 +188,11 @@ def select_asset(conn, asset_id: str) -> dict:
     # Denormalise: write URL back to the show row so calendar/list
     # resolvers (which skip the art_asset table) return the right art.
     if asset["season_id"] is None and asset["episode_kind"] == "regular":
+        # the asset just chosen wins over any column value
         col = _KIND_TO_SHOW_COLUMN.get(asset["kind"])
         if col:
             conn.execute(
-                f"UPDATE show SET {col} = ? WHERE id = ?",
-                (asset["url"], asset["show_id"]),
-            )
+                f"UPDATE show SET {col} = ? WHERE id = ?", (asset["url"], asset["show_id"]))
 
     conn.commit()
     asset["selected"] = 1
@@ -161,9 +223,10 @@ def delete_asset(conn, asset_id: str) -> None:
 def deselect_asset(conn, asset_id: str) -> dict:
     """Clear the selected flag on an asset.
 
-    For show-level assets with episode_kind='regular', also clears the
-    corresponding ``show`` column (``banner_url`` / ``poster_url``) so
-    the fast-path resolvers don't keep serving the old art. A non-
+    For show-level assets with episode_kind='regular', also re-derives the
+    corresponding ``show`` column (``banner_url`` / ``poster_url``) from the
+    remaining selection so the fast-path resolvers don't keep serving the old
+    art. A non-
     'regular' episode_kind has no denormalised column to clear (see
     ``select_asset``'s own docstring) — deselecting one must NOT touch
     the show's regular poster/banner column, which is a real bug this
@@ -176,16 +239,11 @@ def deselect_asset(conn, asset_id: str) -> dict:
         raise ValueError(f"Art asset {asset_id} not found")
     conn.execute("UPDATE art_asset SET selected = 0 WHERE id = ?", (asset_id,))
 
-    # Clear the denormalised show column so fast-path resolvers return
-    # NULL (which lets the client fall through to its own fallback).
+    # Re-derive the denormalised show column from what is still selected (NULL when
+    # nothing is) — never blindly NULL it: another banner/background may still be selected.
     asset = dict(asset)
     if asset["season_id"] is None and asset["episode_kind"] == "regular":
-        col = _KIND_TO_SHOW_COLUMN.get(asset["kind"])
-        if col:
-            conn.execute(
-                f"UPDATE show SET {col} = NULL WHERE id = ?",
-                (asset["show_id"],),
-            )
+        sync_show_art_columns(conn, asset["show_id"])
 
     conn.commit()
     asset["selected"] = 0
@@ -456,6 +514,15 @@ def auto_select_best(conn, show_id: str) -> None:
     ).fetchall()
 
     for slot in unselected:
+        if (slot["season_id"] is None and slot["episode_kind"] == "regular"
+                and slot["kind"] in _BANNER_KINDS):
+            # one banner slot: a selected banner OR background already fills it
+            filled = conn.execute(
+                "SELECT 1 FROM art_asset WHERE show_id = ? AND season_id IS NULL"
+                " AND episode_kind = 'regular' AND kind IN ('banner', 'background')"
+                " AND selected = 1 LIMIT 1", (slot["show_id"],)).fetchone()
+            if filled:
+                continue
         # Pick best candidate: anilist first, then by source_score desc
         best = conn.execute(
             """

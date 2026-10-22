@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=29">
+  <link rel="stylesheet" href="css/main.css?v=31">
   <link rel="stylesheet" href="css/cards-v2.css?v=4">
   <style>
     /* ── Backlog card size — 20% larger than calendar default ── */
@@ -190,8 +190,46 @@
       gap: 10px;
     }
   </style>
+
+<style>
+  .nav-controls .bl-note { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted);
+                           letter-spacing: 0.04em; white-space: nowrap; }
+  .nav-controls .date-range-label { min-width: 0; text-align: left; white-space: nowrap; }
+
+  /* Added recently: grabs from Sonarr and Radarr, newest first, scrolling sideways */
+  .added-recent { padding: 10px 20px 0; }
+  .added-recent[hidden] { display: none; }
+  .ar-title { margin: 0 0 8px; font: 600 11px 'DM Sans', sans-serif; letter-spacing: 0.08em;
+              text-transform: uppercase; color: var(--muted); }
+  .ar-strip { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 10px;
+              -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+  .ar-item { flex: 0 0 118px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .ar-art { position: relative; aspect-ratio: 2 / 3; border-radius: 7px; overflow: hidden;
+            background: linear-gradient(155deg, #141c2e 0%, #1a2340 50%, #202840 100%);
+            border: 1px solid var(--border); }
+  .ar-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .ar-art .ar-noart { position: absolute; inset: 0; display: flex; align-items: center;
+                      justify-content: center; padding: 8px; text-align: center;
+                      font: 600 11px 'DM Sans', sans-serif; color: var(--muted); }
+  .ar-badge { position: absolute; left: 5px; top: 5px; z-index: 2; padding: 1px 5px; border-radius: 4px;
+              font: 500 9px 'DM Mono', monospace; letter-spacing: 0.04em; color: #fff;
+              background: rgba(10, 12, 18, 0.7); }
+  .ar-badge.sonarr { color: var(--svc-sonarr); }
+  .ar-badge.radarr { color: var(--svc-radarr); }
+  .ar-play { position: absolute; inset: 0; margin: auto; width: 34px; height: 34px; border: none;
+             border-radius: 50%; background: transparent; color: rgba(255, 255, 255, 0.92);
+             font-size: 22px; cursor: pointer; z-index: 2;
+             text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 2px 8px rgba(0, 0, 0, 0.9); }
+  .ar-play:hover { transform: scale(1.15); color: #fff; }
+  .ar-title-link { color: var(--text); font: 500 11.5px/1.25 'DM Sans', sans-serif;
+                   text-decoration: none; overflow: hidden; display: -webkit-box;
+                   -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  a.ar-title-link:hover { color: var(--accent); }
+  .ar-meta { display: flex; justify-content: space-between; gap: 6px;
+             font: 500 10px 'DM Mono', monospace; color: var(--muted); white-space: nowrap; }
+</style>
 </head>
-<body>
+<body class="has-nav-controls">
 
 <!-- ── Top nav ─────────────────────────────────────────── -->
 <nav class="top-nav">
@@ -200,28 +238,22 @@
     <li><a href="index.html">Calendar</a></li>
     <li><a href="backlog.html" class="active">Backlog</a></li>
     <li><a href="list.html">List</a></li>
-    <li><a href="grabs.html">Grabs</a></li>
     <li><a href="add.html">Add</a></li>
     <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
   </ul>
+  <div class="nav-controls">
+    <span class="bl-note">Available · unwatched</span>
+    <div class="ctrl-sep"></div>
+    <span class="date-range-label" id="backlog-count-label">—</span>
+  </div>
   <div class="nav-spacer"></div>
   <div class="status-filter" id="status-filter">
     <span class="status-filter-label">Show:</span>
-    <button class="sf-pill active" data-status="WATCHING" style="--pill-color:var(--st-watching)">
-      <span class="sf-dot" style="background:var(--st-watching)"></span>Watching
-    </button>
-    <button class="sf-pill active" data-status="COMPLETED" style="--pill-color:var(--st-completed)">
-      <span class="sf-dot" style="background:var(--st-completed)"></span>Completed
-    </button>
-    <button class="sf-pill active" data-status="PLANNED" style="--pill-color:var(--st-planning)">
-      <span class="sf-dot" style="background:var(--st-planning)"></span>Planned
-    </button>
-    <button class="sf-pill active" data-status="PAUSED" style="--pill-color:var(--st-paused)">
-      <span class="sf-dot" style="background:var(--st-paused)"></span>Paused
-    </button>
-    <button class="sf-pill" data-status="DROPPED" style="--pill-color:var(--st-dropped)">
-      <span class="sf-dot" style="background:var(--st-dropped)"></span>Dropped
-    </button>
+    <button class="sf-pill sf-ico-pill active" data-status="WATCHING" title="Watching"><span class="sf-ico si-watching">👁</span></button>
+    <button class="sf-pill sf-ico-pill active" data-status="COMPLETED" title="Completed"><span class="sf-ico si-completed">✓</span></button>
+    <button class="sf-pill sf-ico-pill active" data-status="PLANNED" title="Planned"><span class="sf-ico si-planning">◷</span></button>
+    <button class="sf-pill sf-ico-pill active" data-status="PAUSED" title="Paused"><span class="sf-ico si-paused">⏸</span></button>
+    <button class="sf-pill sf-ico-pill" data-status="DROPPED" title="Dropped"><span class="sf-ico si-dropped">✕</span></button>
   </div>
   <span id="watched-toggle-mount"></span>
     <a href="downloads.html" class="nav-icon-btn" title="Downloads">DL</a>
@@ -231,14 +263,11 @@
 
 <div id="status-banner" class="status-banner hidden"></div>
 
-<!-- ── Backlog controls ──────────────────────────────────── -->
-<div class="view-controls">
-  <span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--muted);letter-spacing:0.04em">
-    Available · unwatched
-  </span>
-  <div class="ctrl-sep"></div>
-  <span class="date-range-label" id="backlog-count-label">—</span>
-</div>
+<!-- ── Added recently: the latest Sonarr + Radarr grabs, side to side ──────────── -->
+<section class="added-recent" id="added-recent" hidden>
+  <h2 class="ar-title">Added recently</h2>
+  <div class="ar-strip" id="ar-strip"></div>
+</section>
 
 <!-- ── Backlog card grid ─────────────────────────────────── -->
 <div class="calendar" id="backlog-grid"></div>
@@ -246,12 +275,12 @@
 <script type="module">
   import { getConfig, bootstrapConfig, applyAppName } from './js/config.js?v=5';
   import { initSearch } from './js/search.js?v=9';
-  import { fetchBacklog } from './js/api.js?v=31';
+  import { fetchBacklog, fetchRecentGrabs, gql } from './js/api.js?v=31';
   import {
     buildCard,
     showBanner, hideBanner,
     fetchTmdbPoster,
-  } from './js/calendar.js?v=56';
+  } from './js/calendar.js?v=58';
   import { buildWatchedToggle } from './js/watched-toggle.js?v=1';
 
   applyAppName();
@@ -530,14 +559,121 @@
     }
   }
 
+
+  /* ── Added recently: the latest grabs from Sonarr and Radarr, in order of the grab ── */
+  const AR_LIMIT = 30;   // items shown
+  const AR_FETCH = 60;   // grabs read per service, so duplicates dropped still leave 30
+
+  function agoText(iso) {
+    const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (mins < 60) return `${mins || 1} min ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 48) return `${hrs} h ago`;
+    return `${Math.round(hrs / 24)} d ago`;
+  }
+
+  async function loadAddedRecently() {
+    const box = document.getElementById('added-recent');
+    const strip = document.getElementById('ar-strip');
+    try {
+      const both = await Promise.allSettled([
+        fetchRecentGrabs('sonarr', 1, AR_FETCH), fetchRecentGrabs('radarr', 1, AR_FETCH)]);
+      const seen = new Set();
+      const grabs = both.flatMap(r => (r.status === 'fulfilled' ? r.value : []))
+        .filter(g => g.date)
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        // the same episode / film grabbed more than once: only the latest grab shows
+        .filter(g => {
+          const key = `${g.service}|${g.showId || g.title}|${g.seasonNumber ?? ''}|${g.episodeNumber ?? ''}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, AR_LIMIT);
+      box.hidden = grabs.length === 0;
+      strip.replaceChildren();
+      if (!grabs.length) return;
+
+      // posters of the shows LCARS knows (one request)
+      const ids = [...new Set(grabs.map(g => g.showId).filter(Boolean))];
+      const posters = {};
+      if (ids.length) {
+        try {
+          const q = '{ ' + ids.map((id, i) => `s${i}: show(id: ${JSON.stringify(id)}) { id posterUrl }`).join(' ') + ' }';
+          const data = await gql(q);
+          for (const v of Object.values(data)) if (v) posters[v.id] = v.posterUrl;
+        } catch (err) { console.warn('Added recently: posters failed:', err); }
+      }
+
+      const cfg = getConfig();
+      for (const g of grabs) {
+        const item = document.createElement('div');
+        item.className = 'ar-item';
+
+        const art = document.createElement('div');
+        art.className = 'ar-art';
+        const poster = g.showId ? posters[g.showId] : null;
+        if (poster) {
+          const img = document.createElement('img');
+          img.src = poster;
+          img.alt = g.title;
+          img.onerror = () => img.remove();
+          art.appendChild(img);
+        } else {
+          const none = document.createElement('div');
+          none.className = 'ar-noart';
+          none.textContent = g.title;
+          art.appendChild(none);
+        }
+        const badge = document.createElement('span');
+        badge.className = `ar-badge ${g.service}`;
+        badge.textContent = g.service === 'radarr' ? 'Radarr' : 'Sonarr';
+        art.appendChild(badge);
+        if (g.filePath) {
+          const play = document.createElement('button');
+          play.className = 'ar-play';
+          play.title = 'Play in mpv';
+          play.textContent = '▶';
+          play.addEventListener('click', () => launchMpv(g.filePath, cfg,
+            g.showId ? { showId: g.showId, season: g.seasonNumber ?? null, episode: g.episodeNumber ?? null } : null));
+          art.appendChild(play);
+        }
+        item.appendChild(art);
+
+        const title = document.createElement(g.showId ? 'a' : 'span');
+        title.className = 'ar-title-link';
+        if (g.showId) title.href = `show.html?id=${encodeURIComponent(g.showId)}`;
+        title.textContent = g.title;
+        title.title = g.releaseTitle || g.title;
+        item.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'ar-meta';
+        const ep = (g.seasonNumber != null && g.episodeNumber != null)
+          ? `S${String(g.seasonNumber).padStart(2, '0')}E${String(g.episodeNumber).padStart(2, '0')}` : 'Film';
+        const left = document.createElement('span');
+        left.textContent = ep;
+        const right = document.createElement('span');
+        right.textContent = agoText(g.date);
+        right.title = new Date(g.date).toLocaleString();
+        meta.append(left, right);
+        item.appendChild(meta);
+        strip.appendChild(item);
+      }
+    } catch (err) {
+      console.warn('Added recently failed to load:', err);
+    }
+  }
+
   load();
+  loadAddedRecently();
   initSearch();
 
   // A just-watched episode needs to drop out of this list — see
   // launchMpv() in calendar.js for why the refresh is delayed.
   window.addEventListener('starfleet:refresh-after-watch', () => load(true));
   // every so often, and when the tab comes back into view (auto-refresh.js)
-  window.addEventListener('starfleet:auto-refresh', () => load(true));
+  window.addEventListener('starfleet:auto-refresh', () => { load(true); loadAddedRecently(); });
 </script>
 
 </body>

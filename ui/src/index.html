@@ -10,10 +10,10 @@
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=29">
-  <link rel="stylesheet" href="css/cards-v2.css?v=4">
+  <link rel="stylesheet" href="css/main.css?v=31">
+  <link rel="stylesheet" href="css/cards-v2.css?v=5">
 </head>
-<body>
+<body class="has-nav-controls">
 
 <!-- ── Top nav ─────────────────────────────────────────── -->
 <nav class="top-nav">
@@ -22,28 +22,36 @@
     <li><a href="index.html" class="active">Calendar</a></li>
     <li><a href="backlog.html">Backlog</a></li>
     <li><a href="list.html">List</a></li>
-    <li><a href="grabs.html">Grabs</a></li>
     <li><a href="add.html">Add</a></li>
     <li><a href="reviews.html" data-nav="reviews">Reviews</a></li>
   </ul>
+  <div class="nav-controls">
+    <div class="view-modes">
+      <button class="view-mode" data-mode="today">Today</button>
+      <button class="view-mode" data-mode="1d">1D</button>
+      <button class="view-mode active" data-mode="3d">3D</button>
+      <button class="view-mode" data-mode="week">Week</button>
+      <button class="view-mode" data-mode="month">Month</button>
+    </div>
+    <button class="view-mode layout-toggle" id="planner-btn" title="Planner view">▥</button>
+    <div class="ctrl-sep"></div>
+    <div class="date-nav">
+      <button class="date-btn" id="prev-period-btn" title="Previous period">«</button>
+      <button class="date-btn" id="prev-day-btn" title="Previous day">‹</button>
+      <span class="date-range-label" id="date-range-label">—</span>
+      <button class="date-btn" id="next-day-btn" title="Next day">›</button>
+      <button class="date-btn" id="next-period-btn" title="Next period">»</button>
+    </div>
+    <button class="today-btn" id="today-btn">Today</button>
+  </div>
   <div class="nav-spacer"></div>
   <div class="status-filter" id="status-filter">
     <span class="status-filter-label">Show:</span>
-    <button class="sf-pill active" data-status="WATCHING" style="--pill-color:var(--st-watching)">
-      <span class="sf-dot" style="background:var(--st-watching)"></span>Watching
-    </button>
-    <button class="sf-pill active" data-status="COMPLETED" style="--pill-color:var(--st-completed)">
-      <span class="sf-dot" style="background:var(--st-completed)"></span>Completed
-    </button>
-    <button class="sf-pill active" data-status="PLANNED" style="--pill-color:var(--st-planning)">
-      <span class="sf-dot" style="background:var(--st-planning)"></span>Planned
-    </button>
-    <button class="sf-pill active" data-status="PAUSED" style="--pill-color:var(--st-paused)">
-      <span class="sf-dot" style="background:var(--st-paused)"></span>Paused
-    </button>
-    <button class="sf-pill" data-status="DROPPED" style="--pill-color:var(--st-dropped)">
-      <span class="sf-dot" style="background:var(--st-dropped)"></span>Dropped
-    </button>
+    <button class="sf-pill sf-ico-pill active" data-status="WATCHING" title="Watching"><span class="sf-ico si-watching">👁</span></button>
+    <button class="sf-pill sf-ico-pill active" data-status="COMPLETED" title="Completed"><span class="sf-ico si-completed">✓</span></button>
+    <button class="sf-pill sf-ico-pill active" data-status="PLANNED" title="Planned"><span class="sf-ico si-planning">◷</span></button>
+    <button class="sf-pill sf-ico-pill active" data-status="PAUSED" title="Paused"><span class="sf-ico si-paused">⏸</span></button>
+    <button class="sf-pill sf-ico-pill" data-status="DROPPED" title="Dropped"><span class="sf-ico si-dropped">✕</span></button>
   </div>
   <span id="watched-toggle-mount"></span>
     <a href="downloads.html" class="nav-icon-btn" title="Downloads">DL</a>
@@ -54,32 +62,11 @@
 <!-- ── Status banner (loading / error) ─────────────────── -->
 <div id="status-banner" class="status-banner hidden"></div>
 
-<!-- ── View controls ───────────────────────────────────── -->
-<div class="view-controls">
-  <div class="view-modes">
-    <button class="view-mode" data-mode="today">Today</button>
-    <button class="view-mode" data-mode="1d">1D</button>
-    <button class="view-mode active" data-mode="3d">3D</button>
-    <button class="view-mode" data-mode="week">Week</button>
-    <button class="view-mode" data-mode="month">Month</button>
-  </div>
-  <button class="view-mode layout-toggle" id="planner-btn" title="Planner view">▥</button>
-  <div class="ctrl-sep"></div>
-  <div class="date-nav">
-    <button class="date-btn" id="prev-period-btn" title="Previous period">«</button>
-    <button class="date-btn" id="prev-day-btn" title="Previous day">‹</button>
-    <span class="date-range-label" id="date-range-label">—</span>
-    <button class="date-btn" id="next-day-btn" title="Next day">›</button>
-    <button class="date-btn" id="next-period-btn" title="Next period">»</button>
-  </div>
-  <button class="today-btn" id="today-btn">Today</button>
-</div>
-
 <!-- ── Calendar ─────────────────────────────────────────── -->
 <div class="calendar" id="calendar"></div>
 
 <script type="module">
-  import { init } from './js/calendar.js?v=56';
+  import { init } from './js/calendar.js?v=58';
   import { initSearch } from './js/search.js?v=9';
   await init();
   initSearch();

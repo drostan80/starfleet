@@ -27,7 +27,7 @@ import {
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange, airChangeBadge, isDateOnly,
-} from './calendar.js?v=52';
+} from './calendar.js?v=58';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -36,7 +36,7 @@ import {
 import { renderKeepBadge, remindKeep } from './keep.js?v=4';
 import { SVC_ICONS, _mpvSvg, _jellyfinSvg, _downloadSvg } from './icons.js?v=17';
 import { startDownload } from './downloads.js?v=2';
-import { openArtPicker } from './art-picker.js?v=8';
+import { openArtPicker } from './art-picker.js?v=9';
 
 /* ── Constants ───────────────────────────────────────────── */
 
@@ -2776,8 +2776,9 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     posterCol.appendChild(snEditHint);
     posterCol.addEventListener('click', (e) => {
       e.stopPropagation();
-      openArtPicker(show, seasonData.id, 'poster', snImg, () => {},
-        (msg) => showBanner(msg, 'error'));
+      openArtPicker(show, seasonData.id, 'poster', snImg, (url) => {
+        seasonData.posterUrl = url;  // the page's own copy follows the pick (null = back to the fallback)
+      }, (msg) => showBanner(msg, 'error'));
     });
   }
   bodyEl.appendChild(posterCol);

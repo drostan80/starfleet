@@ -5,7 +5,7 @@
  * Extracted to avoid circular dependency between show.js and calendar.js.
  */
 
-import { fetchShowArt, selectArtAsset, deselectArtAsset, addManualArtUrl, deleteArtAsset } from './api.js?v=31';
+import { fetchShowArt, selectArtAsset, addManualArtUrl, deleteArtAsset } from './api.js?v=31';
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -189,16 +189,14 @@ export function openArtPicker(show, seasonId, kind, targetImg, onSelect, onError
     card.appendChild(deleteBtn);
 
     card.addEventListener('click', async () => {
-      const prevSelected = assets.find(a => a.selected);
       try {
-        if (prevSelected && prevSelected.id !== asset.id) {
-          await deselectArtAsset(prevSelected.id);
-          prevSelected.selected = false;
-        }
-        if (!asset.selected) {
-          await selectArtAsset(asset.id);
-          asset.selected = true;
-        }
+        // Always ask the server to select it — also when it is already marked active: the
+        // server deselects whatever else holds the slot and re-writes the show's banner /
+        // poster field the calendar reads (a pick used to revert on other views when that
+        // field had drifted from the selection).
+        await selectArtAsset(asset.id);
+        for (const a of assets) a.selected = false;
+        asset.selected = true;
         if (targetImg) targetImg.src = asset.url;
         if (onSelect) onSelect(asset.url);
         overlay.remove();

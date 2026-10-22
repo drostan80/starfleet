@@ -162,6 +162,19 @@ body {
 }
 .nav-icon-btn:hover { color: var(--text); }
 
+/* The calendar's / list's nav carries their controls: below ~1600px they take their own row under the rest. */
+@media (max-width: 1600px) {
+  .has-nav-controls { --nav-h: 96px; }
+  .has-nav-controls .top-nav {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--nav-h);
+    padding: 6px 20px;
+    row-gap: 6px;
+  }
+  .has-nav-controls .nav-controls { order: 10; flex-basis: 100%; margin-left: 0; }
+}
+
 /* ── Phone-width nav (2026-09-20, user request) ──────────────
  * Card grid/sizing is fine on phone as-is per the user — the actual
  * problem is .top-nav: brand + 6 nav-links + 5 status-filter pills +
@@ -199,6 +212,14 @@ body {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     margin-right: 0;
+  }
+  /* the calendar's controls take their own row under the links */
+  .has-nav-controls { --nav-h: 142px; }
+  .nav-controls {
+    flex-basis: 100%;
+    margin-left: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 }
 
@@ -285,6 +306,26 @@ body {
   transition: opacity 0.12s;
 }
 .sf-pill:not(.active) .sf-dot { opacity: 0.3; }
+
+/* Icon pills: the status logos (the picker's), no text (user 2026-10-22) */
+.sf-ico-pill { padding: 2px; border-radius: 50%; width: 28px; height: 28px; justify-content: center; }
+.sf-ico {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; line-height: 1; color: #fff;
+}
+.sf-ico-pill:not(.active) .sf-ico { filter: grayscale(0.7) brightness(0.7); }
+
+/* ── Controls in the nav (calendar page): between the links and the Show filter ── */
+.nav-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 14px;
+  min-width: 0;
+}
+.nav-controls .date-range-label { min-width: 150px; }
 
 /* ── Watched toggle ─────────────────────────────────────── */
 .wt-toggle {

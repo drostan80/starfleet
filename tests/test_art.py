@@ -313,3 +313,91 @@ class TestEpisodeKindArtIsolatedFromRegular:
             "SELECT selected FROM art_asset WHERE show_id = 's-test01' AND episode_kind = 'special'"
         ).fetchone()
         assert selected["selected"] == 1
+
+
+class TestShowColumnsFollowTheSelection:
+    """A picked banner / cover must stick on every view (user 2026-10-22): the calendar reads
+    show.banner_url / poster_url, so they may never drift from what is selected."""
+
+    @staticmethod
+    def _banner(conn, kind, source, url, selected=False):
+        aid = art.upsert_asset(conn, "s-test01", None, kind, source, url)
+        if selected:
+            conn.execute("UPDATE art_asset SET selected = 1 WHERE id = ?", (aid,))
+        conn.commit()
+        return aid
+
+    @staticmethod
+    def _col(conn, column="banner_url"):
+        return conn.execute(f"SELECT {column} FROM show WHERE id = 's-test01'").fetchone()[0]
+
+    def test_banner_and_background_are_one_slot(self, conn):
+        a = self._banner(conn, "banner", "tvdb", "https://cdn/a.jpg")
+        b = self._banner(conn, "background", "tvdb", "https://cdn/b.jpg")
+        art.select_asset(conn, a)
+        art.select_asset(conn, b)
+        selected = conn.execute("SELECT id FROM art_asset WHERE selected = 1").fetchall()
+        assert [r["id"] for r in selected] == [b]
+        assert self._col(conn) == "https://cdn/b.jpg"
+
+    def test_selecting_the_active_asset_again_rewrites_an_empty_column(self, conn):
+        a = self._banner(conn, "banner", "tvdb", "https://cdn/a.jpg", selected=True)
+        conn.execute("UPDATE show SET banner_url = NULL WHERE id = 's-test01'")
+        art.select_asset(conn, a)
+        assert self._col(conn) == "https://cdn/a.jpg"
+
+    def test_deselecting_one_keeps_the_column_of_the_one_still_selected(self, conn):
+        a = self._banner(conn, "banner", "tvdb", "https://cdn/a.jpg", selected=True)
+        b = self._banner(conn, "background", "tvdb", "https://cdn/b.jpg", selected=True)
+        conn.execute("UPDATE show SET banner_url = 'https://cdn/a.jpg' WHERE id = 's-test01'")
+        art.deselect_asset(conn, b)
+        assert self._col(conn) == "https://cdn/a.jpg"
+        art.deselect_asset(conn, a)
+        assert self._col(conn) is None
+
+    def test_repair_pass_sets_every_column_from_the_selection(self, conn):
+        self._banner(conn, "banner", "tvdb", "https://cdn/a.jpg", selected=True)
+        self._banner(conn, "poster", "tvdb", "https://cdn/p.jpg", selected=True)
+        conn.execute("UPDATE show SET banner_url = 'https://s4.anilist.co/x.jpg',"
+                     " poster_url = NULL WHERE id = 's-test01'")
+        assert art.sync_all_show_art_columns(conn) == 1
+        assert self._col(conn) == "https://cdn/a.jpg"
+        assert self._col(conn, "poster_url") == "https://cdn/p.jpg"
+        assert art.sync_all_show_art_columns(conn) == 0  # nothing left to repair
+
+    def test_repair_leaves_a_column_alone_when_nothing_is_selected(self, conn):
+        # a show whose art never went through art_asset keeps the poster its source gave it
+        assert art.sync_all_show_art_columns(conn) == 0
+        assert self._col(conn) == "old-banner.jpg"
+        assert self._col(conn, "poster_url") == "old-poster.jpg"
+
+    def test_repair_with_two_selected_keeps_the_one_in_the_column_else_the_banner_kind(self, conn):
+        self._banner(conn, "banner", "tvdb", "https://cdn/a.jpg", selected=True)
+        self._banner(conn, "background", "tvdb", "https://cdn/b.jpg", selected=True)
+        conn.execute("UPDATE show SET banner_url = 'https://cdn/b.jpg' WHERE id = 's-test01'")
+        art.sync_show_art_columns(conn, "s-test01")
+        assert self._col(conn) == "https://cdn/b.jpg"
+        conn.execute("UPDATE show SET banner_url = 'other' WHERE id = 's-test01'")
+        art.sync_show_art_columns(conn, "s-test01")
+        assert self._col(conn) == "https://cdn/a.jpg"
+
+    def test_auto_select_fills_the_banner_slot_once(self, conn):
+        self._banner(conn, "banner", "tvdb", "https://cdn/a.jpg")
+        self._banner(conn, "background", "tvdb", "https://cdn/b.jpg")
+        art.auto_select_best(conn, "s-test01")
+        n = conn.execute("SELECT COUNT(*) FROM art_asset WHERE selected = 1").fetchone()[0]
+        assert n == 1
+
+    def test_a_source_refresh_does_not_overwrite_a_selected_banner_or_poster(self, conn):
+        from lcars import metadata
+
+        self._banner(conn, "banner", "tvdb", "https://cdn/a.jpg", selected=True)
+        conn.execute("UPDATE show SET banner_url = 'https://cdn/a.jpg' WHERE id = 's-test01'")
+        conn.execute(
+            f"UPDATE show SET poster_url = {metadata._KEEP_SELECTED_POSTER}"
+            f"COALESCE(?, poster_url) END,"
+            f" banner_url = {metadata._KEEP_SELECTED_BANNER}COALESCE(?, banner_url) END"
+            f" WHERE id = 's-test01'", ("https://anilist/cover.jpg", "https://anilist/ban.jpg"))
+        assert self._col(conn) == "https://cdn/a.jpg"  # selected: kept
+        # no poster selected: the source's value is taken as before
+        assert self._col(conn, "poster_url") == "https://anilist/cover.jpg"

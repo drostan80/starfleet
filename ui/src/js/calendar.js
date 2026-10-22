@@ -11,7 +11,7 @@
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
 import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=31';
-import { openArtPicker } from './art-picker.js?v=8';
+import { openArtPicker } from './art-picker.js?v=9';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,
@@ -368,8 +368,10 @@ function computeRange() {
 
 /* ── Date formatting ─────────────────────────────────────── */
 
+/** "22 Oct" — the year only when it is not the current one. */
 function fmtShortDate(d) {
-  return `${d.getDate()} ${MON_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+  const y = d.getFullYear() === new Date().getFullYear() ? '' : ` ${d.getFullYear()}`;
+  return `${d.getDate()} ${MON_NAMES[d.getMonth()]}${y}`;
 }
 
 function fmtDayName(d) {
@@ -379,7 +381,8 @@ function fmtDayName(d) {
 /** Format for the date-range label in the controls bar. */
 function fmtRangeLabel(startLocal, endLocal) {
   if (state.mode === 'month') {
-    return `${MONTH_NAMES_FULL[state.anchor.getMonth()]} ${state.anchor.getFullYear()}`;
+    const y = state.anchor.getFullYear() === new Date().getFullYear() ? '' : ` ${state.anchor.getFullYear()}`;
+    return `${MONTH_NAMES_FULL[state.anchor.getMonth()]}${y}`;
   }
   // endLocal is exclusive — the last visible day is endLocal - 1 day
   const lastDay = addDays(endLocal, -1);
@@ -391,9 +394,9 @@ function fmtRangeLabel(startLocal, endLocal) {
     }
     return `${fmtDayName(startLocal)} ${fmtShortDate(startLocal)}`;
   }
-  // multi-day — show abbreviated if same month+year
+  // "Thu 22 — Sat 24 Oct"; the month on both ends only when they differ (year only when not this year)
   if (startLocal.getMonth() === lastDay.getMonth() && startLocal.getFullYear() === lastDay.getFullYear()) {
-    return `${fmtDayName(startLocal)} ${startLocal.getDate()} — ${fmtDayName(lastDay)} ${lastDay.getDate()} ${MON_NAMES[lastDay.getMonth()]} ${lastDay.getFullYear()}`;
+    return `${fmtDayName(startLocal)} ${startLocal.getDate()} — ${fmtDayName(lastDay)} ${fmtShortDate(lastDay)}`;
   }
   return `${fmtDayName(startLocal)} ${fmtShortDate(startLocal)} — ${fmtDayName(lastDay)} ${fmtShortDate(lastDay)}`;
 }
