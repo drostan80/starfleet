@@ -104,6 +104,7 @@ function buildIndicator(ep) {
     e.stopPropagation();
     await H.onWatchToggle(btn, ep);
     apply();
+    btn.closest('.mt')?.classList.toggle('mt-watched', btn.classList.contains('watched'));
   });
   return btn;
 }
@@ -384,6 +385,12 @@ export function buildMonthTile(ep, cfg) {
   const tile = el('article', 'mt');
   tile.dataset.episodeId = ep.id;
   tile.dataset.showId = ep.show.id;
+  // Outlines (user 2026-10-22): a first episode (any season) green; a season finale dark orange-red;
+  // watched tiles are dimmed like the days of the neighbouring months.
+  const regular = ep.kind === 'REGULAR' && ep.season > 0;
+  if (regular && ep.episode === 1) tile.classList.add('mt-first');
+  else if (regular && ep.isSeasonFinale) tile.classList.add('mt-last');
+  if (ep.state === 'WATCHED') tile.classList.add('mt-watched');
 
   const { strip, filePath } = buildBar(ep, cfg, true);
   strip.classList.add('under');

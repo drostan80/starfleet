@@ -84,7 +84,7 @@ const EPISODES_IN_RANGE_QUERY = `
     episodesInRange(start: $start, end: $end, first: 200, after: $after) {
       edges { node {
         id
-        season episode title absoluteNumber kind
+        season episode title absoluteNumber kind isSeasonFinale
         airDateUtc runtimeMinutes
         ${AIR_FIELDS}
         availableViaSonarr availableViaRadarr availableLocally

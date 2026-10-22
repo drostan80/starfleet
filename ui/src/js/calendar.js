@@ -10,8 +10,8 @@
  */
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=32';
-import { openArtPicker } from './art-picker.js?v=10';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=33';
+import { openArtPicker } from './art-picker.js?v=11';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,
@@ -22,7 +22,7 @@ import { startDownload } from './downloads.js?v=2';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   registerHelpers, getDesign, buildCardV2, buildBannerRow, buildMonthTile, patchBannerRows,
-} from './cards-v2.js?v=6';
+} from './cards-v2.js?v=7';
 
 /* ── Constants ────────────────────────────────────────────── */
 
@@ -1351,6 +1351,9 @@ function renderPlanner(dayGroups, todayStr, cfg) {
   calendar.appendChild(container);
 }
 
+/** Set when the Month view is opened (or Today is pressed in it): the next render scrolls this week's row to the middle. */
+let _centerMonthOnToday = false;
+
 /** Month layout — a grid of whole Monday–Sunday weeks, one banner tile per show airing a day. */
 function renderMonth(dayGroups, todayStr, cfg) {
   const calendar = document.getElementById('calendar');
@@ -1387,6 +1390,12 @@ function renderMonth(dayGroups, todayStr, cfg) {
     grid.appendChild(cell);
   }
   calendar.appendChild(grid);
+
+  if (_centerMonthOnToday) {
+    _centerMonthOnToday = false;
+    const today = grid.querySelector('.day-today');
+    if (today) requestAnimationFrame(() => today.scrollIntoView({ block: 'center' }));
+  }
 }
 
 /**
@@ -1645,7 +1654,7 @@ function setMode(mode) {
   state.mode = mode;
   if (mode === 'today') state.anchor = new Date();
   if (mode === 'week') state.anchor = isoWeekMon(new Date());
-  if (mode === 'month') state.anchor = new Date();
+  if (mode === 'month') { state.anchor = new Date(); _centerMonthOnToday = true; }
 
   document.querySelectorAll('.view-mode[data-mode]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === mode);
@@ -1822,6 +1831,7 @@ export async function init() {
   if (todayBtn) {
     todayBtn.addEventListener('click', () => {
       state.anchor = new Date();
+      if (state.mode === 'month') _centerMonthOnToday = true;
       render();
     });
   }

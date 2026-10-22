@@ -1823,6 +1823,29 @@ def resolve_episode_show(obj, info):
     return _get_show(db.get_connection(), obj["show_id"])
 
 
+@episode_type.field("isSeasonFinale")
+def resolve_episode_is_season_finale(obj, info):
+    """The last regular episode of its season, once the season's length is known (R2.15a:
+    AniList's total equals the episodes held, the series ended, or a later season exists) — a
+    season still airing, whose later episodes LCARS doesn't hold yet, has no finale. Never a
+    special."""
+    if obj.get("kind") != "regular" or not obj.get("season"):
+        return False
+    conn = db.get_connection()
+    row = conn.execute(
+        "SELECT MAX(episode), COUNT(*) FROM episode"
+        " WHERE show_id = ? AND season = ? AND kind = 'regular'",
+        (obj["show_id"], obj["season"]),
+    ).fetchone()
+    if row[0] is None or obj["episode"] != row[0]:
+        return False
+    level = conn.execute(
+        "SELECT * FROM season WHERE show_id = ? AND kind = 'tvdb_season' AND season_number = ?",
+        (obj["show_id"], obj["season"]),
+    ).fetchone()
+    return level is not None and status_rules.episode_count_confirmed(conn, level, row[1])
+
+
 @episode_type.field("seasonEntity")
 def resolve_episode_season_entity(obj, info):
     if obj.get("season_id") is None:

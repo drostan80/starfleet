@@ -5,7 +5,7 @@
  * Extracted to avoid circular dependency between show.js and calendar.js.
  */
 
-import { fetchShowArt, selectArtAsset, addManualArtUrl, deleteArtAsset } from './api.js?v=32';
+import { fetchShowArt, selectArtAsset, addManualArtUrl, deleteArtAsset } from './api.js?v=33';
 
 /* ── Helpers ─────────────────────────────────────────────── */
 

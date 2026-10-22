@@ -469,3 +469,9 @@
   height: 18px;
 }
 .mt .status-in-bar .status-icon-btn { width: 18px; height: 18px; font-size: 10px; }
+
+/* Month tiles: a first episode green, a season finale dark orange-red, watched dimmed */
+.mt-first { border-color: #3f9d63; box-shadow: 0 0 0 1px #3f9d63; }
+.mt-last { border-color: #b5471f; box-shadow: 0 0 0 1px #b5471f; }
+.mt-watched { opacity: 0.5; transition: opacity 0.15s; }
+.mt-watched:hover { opacity: 0.9; }

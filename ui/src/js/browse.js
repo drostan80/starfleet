@@ -13,13 +13,13 @@ import {
   browseSeasonalAnime, browseTmdb,
   searchArrCandidates, addShowWithArr, addShow, skipShow,
   setStatus, setSeasonStatus, setSeasonMapping,
-} from './api.js?v=32';
-import { showBanner } from './calendar.js?v=60';
+} from './api.js?v=33';
+import { showBanner } from './calendar.js?v=61';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS as PICKER_LABELS, STATUS_ICON_CLASS, withConfirmation,
 } from './status-picker.js?v=2';
-import { remindKeep } from './keep.js?v=5';
+import { remindKeep } from './keep.js?v=6';
 import { _anilistSvg, _malSvg, _tvdbSvg, _imdbSvg, _tmdbMarkSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg } from './icons.js?v=17';
 
 // ── Constants ────────────────────────────────────────────

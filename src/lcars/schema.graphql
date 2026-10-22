@@ -327,6 +327,8 @@ type Episode {
   "Where this episode is in Jellyfin (its own page, else its show's), once the Jellyfin sync has met it; null otherwise. The Jellyfin link next to the mpv one."
   jellyfinUrl: String
   kind: EpisodeKind!
+  "True for the last regular episode of its (Sonarr / TVDB) season once the season's length is known (RULEBOOK R2.15a: AniList's total equals the episodes held, the series ended, or a later season exists); false while a season is still airing, and for specials (season 0) and non-regular episodes. The calendar's Month view outlines these."
+  isSeasonFinale: Boolean!
   "Decimal-capable synthesized numbering (§5.2, e.g. 12.1) — null until sourced or synthesized."
   absoluteNumber: Float
   "The last irreducible direct-Sonarr-read blocker for the Data thin-client swap, closed 2026-08-16 — sourced from Sonarr's own episode.title, go-forward capture only (null on every episode that existed before this field did, until its show's next real Sonarr fetch). No Radarr/movie equivalent — media_shape = MOVIE has no episode row at all, a movie's own title lives on Show."

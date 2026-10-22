@@ -23,20 +23,20 @@ import {
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=32';
+} from './api.js?v=33';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange, airChangeBadge, isDateOnly,
-} from './calendar.js?v=60';
+} from './calendar.js?v=61';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS, withConfirmation, STATUS_ICON_CLASS,
 } from './status-picker.js?v=2';
-import { renderKeepBadge, remindKeep } from './keep.js?v=5';
+import { renderKeepBadge, remindKeep } from './keep.js?v=6';
 import { SVC_ICONS, _mpvSvg, _jellyfinSvg, _downloadSvg } from './icons.js?v=17';
 import { startDownload } from './downloads.js?v=2';
-import { openArtPicker } from './art-picker.js?v=10';
+import { openArtPicker } from './art-picker.js?v=11';
 
 /* ── Constants ───────────────────────────────────────────── */
 
