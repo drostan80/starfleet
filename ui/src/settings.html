@@ -6,7 +6,8 @@
   <title>STARFLEET — Settings</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=28">
+  <link rel="stylesheet" href="css/main.css?v=29">
+  <link rel="stylesheet" href="css/cards-v2.css?v=4">
   <style>
     .settings-section {
       margin-top: 32px;
@@ -122,6 +123,13 @@
     </div>
   </form>
 
+  <!-- ── Card design (this browser / device) ───────────── -->
+  <div class="settings-section" id="design-section">
+    <h2>Card design <span class="device-only">(this device only)</span></h2>
+    <div id="design-picker-mount"></div>
+    <span class="field-hint">New: art-only cards, banner rows and the month view. Classic: the previous cards. Applies from the next page you open.</span>
+  </div>
+
   <!-- ── Android app downloads (native only) ───────────── -->
   <div class="settings-section" id="app-downloads-section" style="display:none">
     <h2>App Downloads <span class="device-only">(this device only)</span></h2>
@@ -189,8 +197,10 @@
 <script type="module">
   import { getConfig, saveConfig, syncConfig, applyAppName } from './js/config.js?v=5';
   import { initSearch } from './js/search.js?v=9';
+  import { mountDesignPicker } from './js/cards-v2.js?v=4';
   applyAppName();
   initSearch();
+  mountDesignPicker(document.getElementById('design-picker-mount'));
 
   const form      = document.getElementById('settings-form');
   const savedMsg  = document.getElementById('settings-saved');

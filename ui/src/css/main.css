@@ -1259,11 +1259,12 @@ body {
 .status-icon-btn:hover { transform: scale(1.15); }
 
 /* Status colour variants */
-.si-watching  { background: var(--st-watching); }
-.si-completed { background: var(--st-completed); }
-.si-planning  { background: var(--st-planning); }
-.si-paused    { background: var(--st-paused); }
-.si-dropped   { background: var(--st-dropped); }
+/* muted (user 2026-10-22): the picker's own colours, softer than the filter pills' --st-* */
+.si-watching  { background: #4a8f6a; }
+.si-completed { background: #4f7fc0; }
+.si-planning  { background: #bf9a4e; }
+.si-paused    { background: #bf8454; }
+.si-dropped   { background: #b95f5f; }
 .si-skipped   { background: var(--faint); }
 .si-untracked { background: var(--muted); }
 

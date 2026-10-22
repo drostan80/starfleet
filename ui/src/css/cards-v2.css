@@ -1,0 +1,447 @@
+/* The redesigned cards (cards-v2.js). Only used when Design = New. */
+
+/* ── Design switch ─────────────────────────────────────── */
+.design-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.design-picker-label {
+  padding: 0 6px 0 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.design-opt {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: 500 12px 'DM Sans', sans-serif;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.design-opt:hover { color: var(--text); }
+.design-opt.active { background: var(--accent-d); color: var(--text); }
+
+/* ── Indicator circle (card and banner) ────────────────── */
+.ind {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(10, 12, 18, 0.62);
+  color: #9aa3bf;
+  cursor: pointer;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.12s, background 0.15s;
+}
+.ind:hover { transform: scale(1.12); }
+.ind.loading { opacity: 0.5; }
+.ind .g { display: none; width: 20px; height: 20px; }
+.ind .g svg { width: 100%; height: 100%; display: block; }
+.ind svg circle, .ind svg path { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ind svg .fill { fill: currentColor; stroke: none; }
+
+.ind-future .g-clock { display: block; }
+.ind-airing .g-dot { display: block; }
+.ind-airing { color: var(--av-airing); }
+.ind-airing .g-dot .fill { animation: ind-blink 1.1s ease-in-out infinite; }
+.ind-aired .g-tick { display: block; }
+.ind-aired:hover { color: #c9d0e8; }
+
+/* watched: the blue ticked circle, whatever the air state was */
+.ind.watched .g { display: none; }
+.ind.watched .g-tick { display: block; }
+.ind.watched { color: #fff; background: transparent; }
+.ind.watched svg .ring { fill: var(--st-completed); stroke: var(--st-completed); }
+.ind.watched svg path { stroke: #fff; }
+
+@keyframes ind-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.15; }
+}
+
+/* ── Status tab: a small square in the status colour, flower on hover ── */
+.status-btn-wrap.status-tab {
+  right: 0;
+  bottom: 0;
+  width: 22px;
+  height: 22px;
+  z-index: 6;
+}
+.status-tab .status-icon-btn {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 13px;
+  height: 13px;
+  border-radius: 6px 0 0 0;
+  font-size: 0;
+  transition: width 0.15s, height 0.15s, border-radius 0.15s, font-size 0.15s;
+}
+.status-tab.radial-open .status-icon-btn,
+.status-tab:hover .status-icon-btn {
+  right: 0;
+  bottom: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 12px;
+}
+.status-tab .status-icon-btn:hover { transform: none; }
+
+/* ── The card ──────────────────────────────────────────── */
+.card2 {
+  flex-direction: row;
+  height: var(--art-h);
+  overflow: visible;
+}
+.card2 > .svc-strip {
+  align-self: stretch;
+  border-radius: 7px 0 0 7px;
+}
+.card2 .svc-dl { background: transparent; border-radius: 50%; color: var(--muted); opacity: 0.85; }
+.card2 .svc-dl svg { width: 13px; height: 13px; }
+.card2 .svc-dl:hover { color: var(--accent); opacity: 1; }
+.card2 .svc-dl.triggered { color: var(--st-watching); }
+
+.card2-art {
+  border-radius: 0 7px 7px 0;
+  min-height: 120px;
+}
+
+/* Hover glass: title centred on top with SxxExx under it; air time bottom left. */
+.card2-frost {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  z-index: 2;
+}
+.card2:hover .card2-frost { opacity: 1; }
+.card2-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 34px 8px 34px;  /* clear of the picker (left) and the indicator (right) */
+  text-align: center;
+  background: rgba(14, 17, 26, 0.46);
+  -webkit-backdrop-filter: blur(9px) saturate(1.2);
+  backdrop-filter: blur(9px) saturate(1.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.card2-title {
+  display: block;
+  pointer-events: auto;
+  color: #fff;
+  font: 600 13px/1.25 'DM Sans', sans-serif;
+  text-decoration: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.card2-title:hover { color: var(--accent); }
+.card2-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 3px;
+  font: 500 11px 'DM Mono', monospace;
+  letter-spacing: 0.03em;
+  color: rgba(255, 255, 255, 0.88);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+.card2-time { white-space: nowrap; }
+.card2-badge { white-space: nowrap; }
+
+/* Cover-art picker: top left, on hover */
+.card2-art-btn {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(10, 12, 18, 0.62);
+  font-size: 12px;
+  cursor: pointer;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.card2:hover .card2-art-btn { opacity: 1; }
+.card2-art-btn:hover { background: var(--accent); }
+.card2-art-btn:disabled { opacity: 0.4; cursor: default; }
+/* Week planner: the regular card, its art uncropped (the column sets the width). */
+.day-col > .card2 { height: auto; }
+.day-col > .card2 .card2-art { min-height: 0; }
+.day-col > .card2 .card2-art img {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+/* ── The banner row (1D / 3D planner) ──────────────────── */
+.banner-row {
+  display: flex;
+  flex-direction: row;
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  z-index: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.banner-row:has(.status-btn-wrap.radial-open) { z-index: 100; }
+.banner-row:hover { border-color: var(--faint); box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35); }
+.banner-row > .svc-strip { align-self: stretch; border-radius: 7px 0 0 7px; }
+.banner-row .svc-dl { background: transparent; border-radius: 50%; color: var(--muted); opacity: 0.85; }
+.banner-row .svc-dl svg { width: 13px; height: 13px; }
+.banner-row .svc-dl:hover { color: var(--accent); opacity: 1; }
+.banner-row .svc-dl.triggered { color: var(--st-watching); }
+
+.bn-banner {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 96px;           /* no banner yet */
+  border-radius: 0 7px 7px 0;
+  overflow: hidden;
+  background: linear-gradient(155deg, #141c2e 0%, #1a2340 50%, #202840 100%);
+}
+/* the whole banner, scaled to the width: the row is as tall as the banner */
+.bn-img { display: block; width: 100%; height: auto; }
+.bn-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(8, 10, 16, 0.78) 0%, rgba(8, 10, 16, 0.45) 55%, rgba(8, 10, 16, 0.12) 100%);
+  pointer-events: none;
+}
+.bn-info {
+  position: absolute;
+  left: 10px;
+  top: 8px;
+  right: 40px;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  pointer-events: none;
+}
+.bn-title {
+  pointer-events: auto;
+  align-self: flex-start;
+  max-width: 100%;
+  color: #fff;
+  font: 700 15px/1.2 'Syne', 'DM Sans', sans-serif;
+  text-decoration: none;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bn-title:hover { color: var(--accent); }
+.bn-line { display: flex; align-items: center; gap: 10px; font: 500 11px 'DM Mono', monospace; color: rgba(255, 255, 255, 0.9); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); }
+.bn-badge { letter-spacing: 0.04em; }
+.bn-ep-title {
+  font: 400 12px 'DM Sans', sans-serif;
+  color: rgba(255, 255, 255, 0.8);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bn-play {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(10, 12, 18, 0.55);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  z-index: 3;
+  transition: transform 0.12s, background 0.15s;
+}
+.bn-play:hover { transform: translateY(-50%) scale(1.1); background: var(--st-watching); }
+.bn-art {
+  position: absolute;
+  left: 8px;
+  top: 7px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(10, 12, 18, 0.55);
+  font-size: 11px;
+  cursor: pointer;
+  z-index: 3;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.banner-row:hover .bn-art { opacity: 1; }
+.bn-art:hover { background: var(--accent); }
+.bn-art:disabled { opacity: 0.4; cursor: default; }
+
+/* 3D: the banner, the link bar under it */
+.svc-strip.h {
+  width: auto;
+  flex-direction: row;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 6px 34px 6px 10px;  /* clear of the status tab */
+  background: var(--surface-2);
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 7px 7px;
+}
+.svc-strip.h:has(> .svc:nth-child(11)) { gap: 5px; padding: 6px 34px 6px 10px; }
+.banner-row:not(.with-card) { flex-direction: column; }
+.banner-row:not(.with-card) .bn-banner { border-radius: 7px 7px 0 0; }
+
+/* 1D: the regular card on the left, the banner beside it filling the row */
+.banner-row.with-card > .card2-plain {
+  width: var(--card-w);
+  height: var(--art-h);
+  flex: none;
+  border: none;
+  border-radius: 7px 0 0 7px;
+  box-shadow: none;
+}
+.banner-row .card2-art img { width: 100%; height: 100%; object-fit: cover; }
+.banner-row.with-card .bn-banner { min-height: var(--art-h); border-radius: 0 7px 7px 0; }
+.banner-row.with-card .bn-img { position: absolute; inset: 0; height: 100%; object-fit: cover; }
+
+/* ── Month view ────────────────────────────────────────── */
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(190px, 1fr));
+  gap: 8px;
+  overflow-x: auto;
+}
+.month-cell {
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.month-cell.month-out { opacity: 0.45; }
+.month-cell.day-today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-d); }
+.month-head {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--border);
+}
+.month-num { font: 700 22px/1 'Syne', sans-serif; color: var(--text); }
+.month-ord { font: 500 10px 'DM Mono', monospace; color: var(--muted); align-self: flex-start; margin-top: 2px; }
+.month-dname { margin-left: 4px; font: 500 11px 'DM Sans', sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.month-cell.day-today .month-num, .month-cell.day-today .month-dname { color: var(--accent); }
+.month-body { display: flex; flex-direction: column; gap: 7px; padding: 7px; }
+
+.mt { border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
+.mt:hover { border-color: var(--faint); }
+.mt-banner { min-height: 52px; border-radius: 6px 6px 0 0; }
+.mt-banner .bn-img { width: 100%; height: auto; }
+.mt-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 30px;
+  text-align: center;
+  font: 600 12px 'DM Sans', sans-serif;
+  color: var(--muted);
+}
+.mt-banner.has-img .mt-fallback { display: none; }
+.mt .ind { width: 20px; height: 20px; top: 5px; right: 5px; }
+.mt .ind .g { width: 16px; height: 16px; }
+.mt .bn-art { width: 20px; height: 20px; top: 5px; left: 5px; font-size: 10px; opacity: 0.7; }
+.mt:hover .bn-art { opacity: 1; }
+.mt .svc-strip.h { gap: 5px; padding: 4px 6px; border-radius: 0 0 6px 6px; }
+.mt .svc-strip.h .svc { width: 15px; height: 15px; }
+.mt-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 22px;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 2px 8px rgba(0, 0, 0, 0.9);
+  cursor: pointer;
+  z-index: 3;
+  transition: transform 0.12s, color 0.12s;
+}
+.mt-play:hover { transform: scale(1.15); color: #fff; }
+/* hover: title, SxxExx, episode name and air time on frosted glass */
+.mt-frost {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 30px;
+  background: rgba(14, 17, 26, 0.55);
+  -webkit-backdrop-filter: blur(7px) saturate(1.2);
+  backdrop-filter: blur(7px) saturate(1.2);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+.mt:hover .mt-frost { opacity: 1; }
+.mt-title {
+  pointer-events: auto;
+  align-self: center;
+  max-width: 100%;
+  color: #fff;
+  font: 600 12px/1.25 'DM Sans', sans-serif;
+  text-align: center;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mt-title:hover { color: var(--accent); }
+.mt-ep-title { font: 400 11px 'DM Sans', sans-serif; color: rgba(255, 255, 255, 0.8); text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt-frost .card2-line { margin-top: 0; font-size: 10px; }

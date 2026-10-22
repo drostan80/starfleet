@@ -1,11 +1,12 @@
 /**
  * Calendar page — view state, data fetching, and rendering.
  *
- * View modes: Today | 1D | 3D | Week
+ * View modes: Today | 1D | 3D | Week | Month
  * - Today: forces anchor = current day; prev/next disabled
  * - 1D:    prev/next step by 1 day
  * - 3D:    prev/next step by 3 days
  * - Week:  prev/next step by 7 days; range is Mon–Sun of anchor week
+ * - Month: prev/next step by a month; the grid is whole Mon–Sun weeks around the month
  */
 
 import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
@@ -19,11 +20,15 @@ import {
 import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _jellyfinSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg, SVC_ICONS } from './icons.js?v=17';
 import { startDownload } from './downloads.js?v=2';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
+import {
+  registerHelpers, getDesign, buildCardV2, buildBannerRow, buildMonthTile, patchBannerRows,
+} from './cards-v2.js?v=4';
 
 /* ── Constants ────────────────────────────────────────────── */
 
 const DAY_NAMES  = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const DAY_NAMES_FULL = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const MONTH_NAMES_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const MON_NAMES  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 /* Status constants imported from status-picker.js */
 
@@ -163,6 +168,7 @@ async function _doTmdbFetch(show, apiKey) {
 
 /** Patch planner body elements that have no banner with a TMDB backdrop. */
 function _patchPlannerBanners(showId, bdUrl) {
+  patchBannerRows(showId, bdUrl);
   document.querySelectorAll(`.planner-body[data-show-id="${showId}"]:not(.has-banner)`).forEach(body => {
     body.classList.add('has-banner');
     body.style.setProperty('--banner-url', `url(${bdUrl})`);
@@ -247,7 +253,7 @@ async function _doTmdbBackdropFetch(show, apiKey) {
 /* ── View state ───────────────────────────────────────────── */
 
 let state = {
-  mode: '3d',       // 'today' | '1d' | '3d' | 'week'
+  mode: '3d',       // 'today' | '1d' | '3d' | 'week' | 'month'
   layout: 'rows',   // 'rows' | 'planner'
   anchor: new Date(), // local-time reference day (time portion ignored)
 };
@@ -342,6 +348,14 @@ function computeRange() {
       startLocal = anchor;
       endLocal   = addDays(anchor, 7);
       break;
+    case 'month': {
+      // whole Monday–Sunday weeks covering the anchor's month
+      const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+      const last  = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
+      startLocal = isoWeekMon(first);
+      endLocal   = addDays(isoWeekMon(last), 7);
+      break;
+    }
   }
 
   return {
@@ -364,6 +378,9 @@ function fmtDayName(d) {
 
 /** Format for the date-range label in the controls bar. */
 function fmtRangeLabel(startLocal, endLocal) {
+  if (state.mode === 'month') {
+    return `${MONTH_NAMES_FULL[state.anchor.getMonth()]} ${state.anchor.getFullYear()}`;
+  }
   // endLocal is exclusive — the last visible day is endLocal - 1 day
   const lastDay = addDays(endLocal, -1);
   if (startLocal.toDateString() === lastDay.toDateString()) {
@@ -769,6 +786,7 @@ export function showTotal(show) {
  * @returns {HTMLElement}
  */
 export function buildCard(ep, cfg) {
+  if (getDesign() === 'new') return buildCardV2(ep, cfg);  // cards-v2.js (Design switch)
   const avail  = availState(ep);
   const aired  = hasAired(ep);
   const status = ep.seasonEntity?.status || ep.show.status || 'WATCHING';
@@ -1055,7 +1073,7 @@ function renderEpisodes(episodes, cfg) {
   const calendar = document.getElementById('calendar');
   if (!calendar) return;
   calendar.innerHTML = '';
-  calendar.classList.toggle('planner', state.layout === 'planner');
+  calendar.classList.toggle('planner', state.layout === 'planner' && state.mode !== 'month');
 
   if (activeStatuses.size === 0) {
     const empty = document.createElement('div');
@@ -1080,7 +1098,9 @@ function renderEpisodes(episodes, cfg) {
     return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`;
   })();
 
-  if (state.layout === 'planner') {
+  if (state.mode === 'month') {
+    renderMonth(dayGroups, todayStr, cfg);
+  } else if (state.layout === 'planner') {
     renderPlanner(dayGroups, todayStr, cfg);
   } else {
     renderRows(dayGroups, todayStr, cfg);
@@ -1290,7 +1310,10 @@ function renderPlanner(dayGroups, todayStr, cfg) {
         if (!b.airDateUtc) return -1;
         return new Date(a.airDateUtc) - new Date(b.airDateUtc);
       });
-      const cardFn = wideMode ? buildPlannerCard : buildCard;
+      // Design = New: the 1D / 3D rows are banner rows; the week keeps buildCard (the new card)
+      const cardFn = wideMode ? (getDesign() === 'new'
+        ? (e, c) => buildBannerRow(e, c, { withCard: state.mode !== '3d' })
+        : buildPlannerCard) : buildCard;
       appendGroupedEpisodes(col, group.episodes, cfg, cardFn);
     }
 
@@ -1298,6 +1321,44 @@ function renderPlanner(dayGroups, todayStr, cfg) {
   }
 
   calendar.appendChild(container);
+}
+
+/** Month layout — a grid of whole Monday–Sunday weeks, one banner tile per show airing a day. */
+function renderMonth(dayGroups, todayStr, cfg) {
+  const calendar = document.getElementById('calendar');
+  const grid = document.createElement('div');
+  grid.className = 'month-grid';
+  const month = state.anchor.getMonth();
+
+  for (const group of dayGroups) {
+    if (!group.localDate) continue;  // an undated episode has no cell
+    const d = group.localDate;
+    const cell = document.createElement('section');
+    cell.className = 'month-cell'
+      + (group.dateStr === todayStr ? ' day-today' : '')
+      + (d.getMonth() !== month ? ' month-out' : '');
+
+    const head = document.createElement('div');
+    head.className = 'month-head';
+    const n = d.getDate();
+    const suffix = (n % 10 === 1 && n !== 11) ? 'st' : (n % 10 === 2 && n !== 12) ? 'nd'
+      : (n % 10 === 3 && n !== 13) ? 'rd' : 'th';
+    head.innerHTML = `<span class="month-num">${n}</span><span class="month-ord">${suffix}</span>`
+      + `<span class="month-dname">${DAY_NAMES_FULL[d.getDay()]}</span>`;
+    cell.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'month-body';
+    group.episodes.sort((a, b) => {
+      if (!a.airDateUtc) return 1;
+      if (!b.airDateUtc) return -1;
+      return new Date(a.airDateUtc) - new Date(b.airDateUtc);
+    });
+    for (const ep of group.episodes) body.appendChild(buildMonthTile(ep, cfg));
+    cell.appendChild(body);
+    grid.appendChild(cell);
+  }
+  calendar.appendChild(grid);
 }
 
 /**
@@ -1534,6 +1595,7 @@ async function render(silent = false) {
 /** Navigate by one day (inner ‹/› buttons). */
 function navigateDay(delta) {
   if (state.mode === 'today') return;
+  if (state.mode === 'month') return navigatePeriod(delta);  // a month at a time
   state.anchor = addDays(dayOf(state.anchor), delta);
   render();
 }
@@ -1541,6 +1603,11 @@ function navigateDay(delta) {
 /** Navigate by one full period (outer «/» buttons). */
 function navigatePeriod(delta) {
   if (state.mode === 'today') return;
+  if (state.mode === 'month') {
+    state.anchor = new Date(state.anchor.getFullYear(), state.anchor.getMonth() + delta, 1);
+    render();
+    return;
+  }
   const steps = { today: 0, '1d': 1, '3d': 3, week: 7 };
   state.anchor = addDays(dayOf(state.anchor), delta * steps[state.mode]);
   render();
@@ -1550,6 +1617,7 @@ function setMode(mode) {
   state.mode = mode;
   if (mode === 'today') state.anchor = new Date();
   if (mode === 'week') state.anchor = isoWeekMon(new Date());
+  if (mode === 'month') state.anchor = new Date();
 
   document.querySelectorAll('.view-mode[data-mode]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === mode);
@@ -1569,6 +1637,7 @@ const KEYBIND_HELP = [
   ['1',       '1-day view'],
   ['3',       '3-day view'],
   ['7',       'Week view'],
+  ['m',       'Month view'],
   ['p',       'Toggle planner view'],
   ['r',       'Refresh now'],
   ['?',       'Show this help'],
@@ -1639,6 +1708,11 @@ function initKeyboardNav() {
         setMode('week');
         break;
 
+      case 'm':
+        e.preventDefault();
+        setMode('month');
+        break;
+
       case 'r':
         e.preventDefault();
         render();
@@ -1676,6 +1750,13 @@ function syncLayoutBtn() {
 }
 
 /* ── Init ────────────────────────────────────────────────── */
+
+registerHelpers({
+  isEpisodeAiringNow, hasAired, availState, fmtEpBadge, fmtAirTime, fmtTimeOnly, isDateOnly,
+  airChangeBadge, buildSvcStrip, onWatchToggle, onStatusChange, launchMpv, episodeCtx,
+  fetchTmdbPoster, fetchTmdbBackdrop, posterCache, backdropCache, startDownload,
+  downloadSvg: _downloadSvg, getShowArtAssets, openArtPicker, showBanner,
+});
 
 /** Wire up controls and kick off first render. */
 export async function init() {
