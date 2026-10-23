@@ -768,6 +768,15 @@ def get_sync_cursor(conn) -> str | None:
         return None
 
 
+def _lookup_range_since(jst_stamp: str) -> str:
+    """ProgLookup's LastUpdate range "since": Syoboi reads `YYYYMMDD_HHMMSS-`.  It answers any
+    other spelling (our stored `YYYY-MM-DD HH:MM:SS`) with an empty list and no error, so from
+    09-08 to 10-23 every change-driven sweep fetched nothing (checked live 2026-10-23: the same
+    20 shows gave 0 programmes with the dashed form, 81 with this one)."""
+    stamp = datetime.strptime(jst_stamp, "%Y-%m-%d %H:%M:%S")
+    return stamp.strftime("%Y%m%d_%H%M%S") + "-"
+
+
 def incremental_sync(conn, *, force: bool = False) -> dict:
     """`_incremental_sync` behind the challenge guard: a Cloudflare challenge stops the sweep,
     pauses Syoboi for CHALLENGE_PAUSE_HOURS and opens one review; while paused nothing is
@@ -854,7 +863,7 @@ def _incremental_sync(conn, *, force: bool = False) -> dict:
         # ── Incremental: changed programmes since cursor ──
         if cursor_before:
             # ProgLookup LastUpdate range: "from-" means "since"
-            last_update_range = f"{cursor_before}-"
+            last_update_range = _lookup_range_since(cursor_before)
             incremental_programs = _fetch_programs_all_tids(
                 all_tids, client=client, last_update=last_update_range,
             )

@@ -669,3 +669,34 @@ class TestDuplicateTids:
             syoboi._fetch_and_ingest_titles(None, [5, 5, 6], "now", mock.Mock(), result)
         sent = [t for call in ft.call_args_list for t in call.args[0]]
         assert sent == [5, 6]
+
+
+class TestLookupRange:
+    """Syoboi ignores a LastUpdate range in any other spelling than YYYYMMDD_HHMMSS- (empty
+    answer, no error): the change-driven sync fetched nothing for weeks (found 2026-10-23)."""
+
+    def test_since_uses_syoboi_stamp(self):
+        from lcars import syoboi
+
+        assert syoboi._lookup_range_since("2026-10-06 02:24:24") == "20261006_022424-"
+
+    def test_incremental_sync_sends_it(self):
+        from lcars import syoboi
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        sent = []
+        with mock.patch.object(syoboi, "_load_pause"), \
+                mock.patch.object(syoboi, "_recovered"), \
+                mock.patch.object(syoboi, "get_sync_cursor", return_value="2026-10-06 02:24:24"), \
+                mock.patch.object(syoboi, "fetch_proginfo", return_value=None), \
+                mock.patch.object(syoboi, "_fetch_programs_all_tids",
+                                  side_effect=lambda t, **kw: sent.append(kw.get("last_update"))
+                                  or []), \
+                mock.patch.object(syoboi, "_fetch_and_ingest_titles"), \
+                mock.patch("lcars.syoboi_levels.fetchable_tids", return_value=[1]):
+            conn.execute("CREATE TABLE show_external_id (service, external_id, show_id)")
+            conn.execute("CREATE TABLE show (id, tracked, tracking_space)")
+            conn.execute("CREATE TABLE syoboi_program (tid)")
+            syoboi.incremental_sync(conn)
+        assert sent[0] == "20261006_022424-"
