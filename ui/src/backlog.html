@@ -562,7 +562,8 @@
 
   /* ── Added recently: the latest grabs from Sonarr and Radarr, in order of the grab ── */
   const AR_LIMIT = 30;   // items shown
-  const AR_FETCH = 60;   // grabs read per service, so duplicates dropped still leave 30
+  const AR_FETCH = 100;  // grabs read per service, so duplicates dropped and batches grouped still leave 30
+  const AR_BATCH_SECONDS = 120;  // grabs of one season this close together are one batch (a season pack)
 
   function agoText(iso) {
     const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
@@ -588,14 +589,35 @@
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
-        })
-        .slice(0, AR_LIMIT);
-      box.hidden = grabs.length === 0;
+        });
+      // a batch (a season pack grabbed in one go) is one card: S01E37–E60
+      const batches = [];
+      for (const g of grabs) {
+        const t = new Date(g.date).getTime();
+        const batch = g.episodeNumber == null ? null : batches.find(b =>
+          b.service === g.service && b.key === `${g.showId || g.title}|${g.seasonNumber}`
+          && Math.abs(b.oldest - t) <= AR_BATCH_SECONDS * 1000);
+        if (batch) {
+          batch.members.push(g);
+          batch.oldest = Math.min(batch.oldest, t);
+        } else {
+          batches.push({ service: g.service, key: `${g.showId || g.title}|${g.seasonNumber}`,
+                         oldest: t, members: [g] });
+        }
+      }
+      const cards = batches.slice(0, AR_LIMIT).map(b => {
+        // the card is the newest grab; a batch plays from its first episode
+        const eps = b.members.map(m => m.episodeNumber).filter(n => n != null).sort((x, y) => x - y);
+        const first = b.members.reduce((a, m) => (m.episodeNumber ?? 1e9) < (a.episodeNumber ?? 1e9) ? m : a);
+        return { ...b.members[0], filePath: first.filePath, playEpisode: first.episodeNumber,
+                 first: eps[0], last: eps[eps.length - 1], count: eps.length };
+      });
+      box.hidden = cards.length === 0;
       strip.replaceChildren();
-      if (!grabs.length) return;
+      if (!cards.length) return;
 
       // posters of the shows LCARS knows (one request)
-      const ids = [...new Set(grabs.map(g => g.showId).filter(Boolean))];
+      const ids = [...new Set(cards.map(g => g.showId).filter(Boolean))];
       const posters = {};
       if (ids.length) {
         try {
@@ -606,7 +628,7 @@
       }
 
       const cfg = getConfig();
-      for (const g of grabs) {
+      for (const g of cards) {
         const item = document.createElement('div');
         item.className = 'ar-item';
 
@@ -635,7 +657,7 @@
           play.title = 'Play in mpv';
           play.textContent = '▶';
           play.addEventListener('click', () => launchMpv(g.filePath, cfg,
-            g.showId ? { showId: g.showId, season: g.seasonNumber ?? null, episode: g.episodeNumber ?? null } : null));
+            g.showId ? { showId: g.showId, season: g.seasonNumber ?? null, episode: g.playEpisode ?? g.episodeNumber ?? null } : null));
           art.appendChild(play);
         }
         item.appendChild(art);
@@ -649,8 +671,10 @@
 
         const meta = document.createElement('div');
         meta.className = 'ar-meta';
+        const pad = n => String(n).padStart(2, '0');
         const ep = (g.seasonNumber != null && g.episodeNumber != null)
-          ? `S${String(g.seasonNumber).padStart(2, '0')}E${String(g.episodeNumber).padStart(2, '0')}` : 'Film';
+          ? (g.count > 1 ? `S${pad(g.seasonNumber)}E${pad(g.first)}–E${pad(g.last)}`
+                         : `S${pad(g.seasonNumber)}E${pad(g.episodeNumber)}`) : 'Film';
         const left = document.createElement('span');
         left.textContent = ep;
         const right = document.createElement('span');

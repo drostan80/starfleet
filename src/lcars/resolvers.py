@@ -3107,7 +3107,7 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
             if not cfg.sonarr_url or not cfg.sonarr_api_key:
                 return []
             with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
-                data = client.history_page(page=page, page_size=page_size)
+                data = client.history_page(page=page, page_size=page_size, event_type=1)
             grabbed = [r for r in (data.get("records") or []) if r.get("eventType") == "grabbed"]
             fp_by_idx = _grab_file_paths_sonarr(conn, grabbed)
             return [
@@ -3129,7 +3129,7 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
             if not cfg.radarr_url or not cfg.radarr_api_key:
                 return []
             with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
-                data = client.history_page(page=page, page_size=page_size)
+                data = client.history_page(page=page, page_size=page_size, event_type=1)
             grabbed = [r for r in (data.get("records") or []) if r.get("eventType") == "grabbed"]
             fp_by_idx = _grab_file_paths_radarr(conn, grabbed)
             return [

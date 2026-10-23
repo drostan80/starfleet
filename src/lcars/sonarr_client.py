@@ -265,7 +265,7 @@ class SonarrClient:
             "episode/monitor", {"episodeIds": episode_ids, "monitored": monitored}
         )
 
-    def history_page(self, page: int, page_size: int = 250) -> dict:
+    def history_page(self, page: int, page_size: int = 250, event_type: int | None = None) -> dict:
         """§5.2/§6.7, B.3 — one page of Sonarr's own grab/import event
         log, newest first. `includeEpisode`/`includeSeries` embed the
         full episode (seasonNumber/episodeNumber, and — 2026-08-24 —
@@ -279,15 +279,17 @@ class SonarrClient:
         Real event types seen: `grabbed`, `downloadFolderImported`
         (data.importedPath is the file's actual path),
         `episodeFileDeleted`, `downloadIgnored` (a rejected grab — no
-        availability effect)."""
-        return self._get(
-            "history",
-            params={
-                "page": page,
-                "pageSize": page_size,
-                "sortKey": "date",
-                "sortDirection": "descending",
-                "includeEpisode": "true",
-                "includeSeries": "true",
-            },
-        )
+        availability effect).
+        `event_type` filters on the service's side (1 = grabbed, checked live 2026-10-23): a bulk
+        delete or import burst in the log would otherwise push the grabs off a page."""
+        params = {
+            "page": page,
+            "pageSize": page_size,
+            "sortKey": "date",
+            "sortDirection": "descending",
+            "includeEpisode": "true",
+            "includeSeries": "true",
+        }
+        if event_type is not None:
+            params["eventType"] = event_type
+        return self._get("history", params=params)

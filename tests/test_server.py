@@ -373,8 +373,9 @@ class _FakeSonarrClient:
         self._history_page_result = history_page_result or {"records": []}
         self.calls = []
 
-    def history_page(self, page=1, page_size=20):
+    def history_page(self, page=1, page_size=20, event_type=None):
         self.calls.append(("history_page", page, page_size))
+        self.history_event_type = event_type
         return self._history_page_result
 
     def __enter__(self):
@@ -10092,6 +10093,7 @@ async def test_recent_grabs_resolves_show_id_and_file_path(client, monkeypatch):
     grab = data["recentGrabs"][0]
     assert grab["showId"] == show["id"]
     assert grab["filePath"] == "/data/show/s01e01.mkv"
+    assert fake.history_event_type == 1  # grabs only: a purge must not crowd them out
 
 
 PREVIEW_SHOW_BACKFILL = """

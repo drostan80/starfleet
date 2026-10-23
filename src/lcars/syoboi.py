@@ -42,6 +42,81 @@ JST = timezone(timedelta(hours=9))
 
 _last_api_call: float = 0.0
 
+# Cloudflare has put cal.syoboi.jp behind a bot challenge before (2026-10-22: every non-browser
+# request got 403, `cf-mitigated: challenge`, for about a day).  Retrying 24 batches per sweep
+# only adds failures, so the first challenge pauses every Syoboi call for a while, persistently
+# (a restart does not end it), and opens one review saying so.
+CHALLENGE_PAUSE_HOURS = 6
+_PAUSE_KEY = "syoboi_paused_until"
+REVIEW_FIELD = "syoboi_challenge"
+
+_paused_until: str | None = None  # ISO UTC; None = not paused
+
+
+class SyoboiChallenge(httpx.HTTPError):
+    """Syoboi answered with Cloudflare's bot challenge (or we are paused after one).  An
+    httpx.HTTPError but not an HTTPStatusError, so the per-batch handlers do not swallow it
+    and the sweep stops at the first one."""
+
+
+def _is_challenge(resp: httpx.Response) -> bool:
+    return resp.status_code == 403 and (
+        resp.headers.get("cf-mitigated") == "challenge" or "Just a moment" in resp.text[:2000])
+
+
+class SyoboiPaused(SyoboiChallenge):
+    """The pause after an earlier challenge is still running: no request was made."""
+
+
+def _check_not_paused() -> None:
+    global _paused_until
+    if _paused_until is not None:
+        if util.now_utc_iso() < _paused_until:
+            raise SyoboiPaused(f"Syoboi paused until {_paused_until} after a Cloudflare challenge")
+        _paused_until = None
+
+
+def _hit_challenge() -> SyoboiChallenge:
+    global _paused_until
+    _paused_until = util.utc_iso_offset_hours(CHALLENGE_PAUSE_HOURS)
+    return SyoboiChallenge("Syoboi answered with a Cloudflare bot challenge (HTTP 403)")
+
+
+def _load_pause(conn) -> None:
+    """Take the pause stored by an earlier run (a restart must not forget it)."""
+    global _paused_until
+    row = conn.execute("SELECT value FROM web_setting WHERE key = ?", (_PAUSE_KEY,)).fetchone()
+    if row and row["value"] > util.now_utc_iso():
+        _paused_until = row["value"]
+    elif row:
+        conn.execute("DELETE FROM web_setting WHERE key = ?", (_PAUSE_KEY,))
+
+
+def _record_challenge(conn) -> None:
+    """Persist the pause and tell you once (extending the open review if one is still open)."""
+    from lcars import reviews
+
+    until = _paused_until or util.utc_iso_offset_hours(CHALLENGE_PAUSE_HOURS)
+    conn.execute("INSERT INTO web_setting (key, value) VALUES (?, ?)"
+                 " ON CONFLICT (key) DO UPDATE SET value = excluded.value", (_PAUSE_KEY, until))
+    now = util.now_utc_iso()
+    log.warning("Syoboi hit a Cloudflare challenge — all Syoboi calls paused until %s", until)
+    reviews.open_review(
+        conn, "service", "syoboi", REVIEW_FIELD, "syoboi",
+        f"Syoboi hit a Cloudflare challenge at {now}; its calls are paused and will be retried "
+        f"automatically in {CHALLENGE_PAUSE_HOURS} hours (at {until}). If you see this review "
+        "again, check by hand what needs to be done.",
+        ["acknowledge"], {"paused_until": until, "pause_hours": CHALLENGE_PAUSE_HOURS})
+
+
+def _recovered(conn) -> None:
+    """Syoboi answered normally: a later challenge opens a fresh review."""
+    from lcars import pending_review
+
+    conn.execute("DELETE FROM web_setting WHERE key = ?", (_PAUSE_KEY,))
+    pending_review.close_obsolete(conn, "service", "syoboi", REVIEW_FIELD,
+                                  "Syoboi answers again without a challenge")
+
 
 def _rate_limit():
     """Enforce minimum spacing between API calls."""
@@ -72,12 +147,15 @@ def _get(params: dict, *, client: httpx.Client | None = None,
     client = client or httpx.Client(timeout=timeout, follow_redirects=True)
     try:
         for attempt in range(max_retries):
+            _check_not_paused()
             _rate_limit()
             resp = client.get(
                 BASE_URL,
                 params=params,
                 headers={"User-Agent": USER_AGENT},
             )
+            if _is_challenge(resp):
+                raise _hit_challenge()
             if resp.status_code == 429:
                 wait = 5 * (attempt + 1)
                 log.warning("Syoboi 429, backing off %ds", wait)
@@ -623,10 +701,15 @@ def fetch_proginfo(*, client: httpx.Client | None = None,
     owns_client = client is None
     c = client or httpx.Client(timeout=timeout, follow_redirects=True)
     try:
+        _check_not_paused()
         _rate_limit()
         resp = c.get(PROGINFO_URL, headers={"User-Agent": USER_AGENT})
+        if _is_challenge(resp):
+            raise _hit_challenge()
         resp.raise_for_status()
         root = ET.fromstring(resp.text)
+    except SyoboiChallenge:
+        raise
     except Exception:
         log.warning("proginfo.xml fetch/parse failed — treating as changed")
         return None
@@ -686,6 +769,24 @@ def get_sync_cursor(conn) -> str | None:
 
 
 def incremental_sync(conn, *, force: bool = False) -> dict:
+    """`_incremental_sync` behind the challenge guard: a Cloudflare challenge stops the sweep,
+    pauses Syoboi for CHALLENGE_PAUSE_HOURS and opens one review; while paused nothing is
+    requested; the first normal answer afterwards closes the review."""
+    _load_pause(conn)
+    try:
+        result = _incremental_sync(conn, force=force)
+    except SyoboiPaused:
+        return {"changed": False, "paused": True, "programs_stored": 0, "new_tids_fetched": 0,
+                "titles_stored": 0, "cursor_before": None, "cursor_after": None}
+    except SyoboiChallenge:
+        _record_challenge(conn)
+        return {"changed": False, "paused": True, "programs_stored": 0, "new_tids_fetched": 0,
+                "titles_stored": 0, "cursor_before": None, "cursor_after": None}
+    _recovered(conn)
+    return result
+
+
+def _incremental_sync(conn, *, force: bool = False) -> dict:
     """Change-driven Syoboi sync: poll proginfo.xml, then ProgLookup
     with LastUpdate for changed rows only.
 

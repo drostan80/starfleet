@@ -232,7 +232,7 @@ class RadarrClient:
         local-file audit (local_audit.py)."""
         return self._get("movie")
 
-    def history_page(self, page: int, page_size: int = 250) -> dict:
+    def history_page(self, page: int, page_size: int = 250, event_type: int | None = None) -> dict:
         """§5.2/§6.10, B.3 — Radarr's own grab/import event log, mirrors
         SonarrClient.history_page() exactly — verified live against a
         real Radarr instance (6.3.0.10514) before this was written.
@@ -242,14 +242,16 @@ class RadarrClient:
         found by testing: the embedded movie's own `hasFile` field can
         come back null even when `movieFileId` is populated — the
         `eventType` itself is the authoritative signal here, not the
-        embedded object's own hasFile."""
-        return self._get(
-            "history",
-            params={
-                "page": page,
-                "pageSize": page_size,
-                "sortKey": "date",
-                "sortDirection": "descending",
-                "includeMovie": "true",
-            },
-        )
+        embedded object's own hasFile.
+        `event_type` filters on the service's side (1 = grabbed, checked live 2026-10-23): a bulk
+        delete or import burst in the log would otherwise push the grabs off a page."""
+        params = {
+            "page": page,
+            "pageSize": page_size,
+            "sortKey": "date",
+            "sortDirection": "descending",
+            "includeMovie": "true",
+        }
+        if event_type is not None:
+            params["eventType"] = event_type
+        return self._get("history", params=params)
