@@ -23,6 +23,7 @@ No documented rate limit, but we pace at 2s between requests (429s
 observed at 1s pacing).
 """
 
+import json
 import logging
 import time
 import xml.etree.ElementTree as ET
@@ -50,6 +51,14 @@ CHALLENGE_PAUSE_HOURS = 6
 _PAUSE_KEY = "syoboi_paused_until"
 REVIEW_FIELD = "syoboi_challenge"
 
+# A 429 used to sleep 5+10+15 s per batch inside the one-threaded server, freezing every request
+# (nginx's /auth/check timed out: 500s, 2026-10-26).  Now the first 429 stops the sweep and pauses
+# Syoboi for a short while; no sleep.  A sweep also fetches at most MAX_BATCHES_PER_SWEEP batches
+# per tick and resumes the rest on the next one.
+RATE_LIMIT_PAUSE_MINUTES = 15
+MAX_BATCHES_PER_SWEEP = 5
+_SWEEP_KEY = "syoboi_sweep"
+
 _paused_until: str | None = None  # ISO UTC; None = not paused
 
 
@@ -57,6 +66,10 @@ class SyoboiChallenge(httpx.HTTPError):
     """Syoboi answered with Cloudflare's bot challenge (or we are paused after one).  An
     httpx.HTTPError but not an HTTPStatusError, so the per-batch handlers do not swallow it
     and the sweep stops at the first one."""
+
+
+class SyoboiRateLimited(httpx.HTTPError):
+    """Syoboi answered 429.  Not a SyoboiChallenge: no review, only the short pause."""
 
 
 def _is_challenge(resp: httpx.Response) -> bool:
@@ -141,31 +154,27 @@ def _jst_to_utc(jst_str: str) -> str:
 
 
 def _get(params: dict, *, client: httpx.Client | None = None,
-         timeout: float = 60.0, max_retries: int = 3) -> ET.Element:
+         timeout: float = 60.0) -> ET.Element:
     """Make a rate-limited GET to the Syoboi API, return parsed XML root."""
     owns_client = client is None
     client = client or httpx.Client(timeout=timeout, follow_redirects=True)
     try:
-        for attempt in range(max_retries):
-            _check_not_paused()
-            _rate_limit()
-            resp = client.get(
-                BASE_URL,
-                params=params,
-                headers={"User-Agent": USER_AGENT},
-            )
-            if _is_challenge(resp):
-                raise _hit_challenge()
-            if resp.status_code == 429:
-                wait = 5 * (attempt + 1)
-                log.warning("Syoboi 429, backing off %ds", wait)
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            return ET.fromstring(resp.text)
-        # Final attempt failed with 429
+        _check_not_paused()
+        _rate_limit()
+        resp = client.get(
+            BASE_URL,
+            params=params,
+            headers={"User-Agent": USER_AGENT},
+        )
+        if _is_challenge(resp):
+            raise _hit_challenge()
+        if resp.status_code == 429:
+            global _paused_until
+            _paused_until = util.utc_iso_offset_hours(RATE_LIMIT_PAUSE_MINUTES / 60)
+            log.warning("Syoboi 429 — all Syoboi calls paused until %s", _paused_until)
+            raise SyoboiRateLimited("Syoboi answered 429 (too many requests)")
         resp.raise_for_status()
-        return ET.fromstring(resp.text)  # unreachable, keeps type checker happy
+        return ET.fromstring(resp.text)
     finally:
         if owns_client:
             client.close()
@@ -787,6 +796,14 @@ def incremental_sync(conn, *, force: bool = False) -> dict:
     except SyoboiPaused:
         return {"changed": False, "paused": True, "programs_stored": 0, "new_tids_fetched": 0,
                 "titles_stored": 0, "cursor_before": None, "cursor_after": None}
+    except SyoboiRateLimited:
+        # Short pause, kept across a restart; the sweep state (what is left) is already saved.
+        conn.execute("INSERT INTO web_setting (key, value) VALUES (?, ?)"
+                     " ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                     (_PAUSE_KEY, _paused_until))
+        conn.commit()
+        return {"changed": False, "paused": True, "programs_stored": 0, "new_tids_fetched": 0,
+                "titles_stored": 0, "cursor_before": None, "cursor_after": None}
     except SyoboiChallenge:
         _record_challenge(conn)
         return {"changed": False, "paused": True, "programs_stored": 0, "new_tids_fetched": 0,
@@ -820,8 +837,10 @@ def _incremental_sync(conn, *, force: bool = False) -> dict:
         "cursor_after": cursor_before,
     }
 
-    # ── Pulse check ──
-    if cursor_before and not force:
+    sweep = _load_sweep(conn)
+
+    # ── Pulse check (not while a sweep is unfinished: it resumes from its saved list) ──
+    if cursor_before and not force and sweep is None:
         feed_latest = fetch_proginfo()
         if feed_latest is not None:
             # Convert cursor (JST) to UTC for comparison
@@ -841,72 +860,107 @@ def _incremental_sync(conn, *, force: bool = False) -> dict:
 
     result["changed"] = True
 
-    # ── Gather tracked TIDs ──
-    all_tid_rows = conn.execute(
+    if sweep is None:
+        sweep = _start_sweep(conn, cursor_before)
+        if sweep is None:
+            return result
+        _save_sweep(conn, sweep)
+
+    client = httpx.Client(timeout=60.0, follow_redirects=True)
+    try:
+        # At most MAX_BATCHES_PER_SWEEP batches (programmes + titles) per tick, so the one thread
+        # is never held for long; the rest waits in the saved sweep.  Each batch is ingested as
+        # it arrives, so a 429 mid-sweep loses nothing already fetched.
+        for _ in range(MAX_BATCHES_PER_SWEEP):
+            phase = "changed" if sweep["changed"] else "new" if sweep["new"] else None
+            if phase is None:
+                break
+            batch, sweep[phase] = sweep[phase][:50], sweep[phase][50:]
+            _save_sweep(conn, sweep)  # a failed batch is not retried forever; it is dropped
+            programs = _fetch_programs_all_tids(
+                batch, client=client, last_update=sweep["since"] if phase == "changed" else None,
+            )
+            if programs:
+                stored = ingest_programs(conn, programs, now_iso)
+                result["programs_stored"] += stored
+                if phase == "new":
+                    result["new_tids_fetched"] += len(batch)
+            _fetch_and_ingest_titles(
+                conn, list({p["tid"] for p in programs}) if phase == "changed" else batch,
+                now_iso, client, result,
+            )
+    except (SyoboiChallenge, SyoboiRateLimited):
+        # The batch in flight is not done: put it back at the head of its list.
+        sweep[phase] = batch + sweep[phase]
+        _save_sweep(conn, sweep)
+        raise
+    finally:
+        client.close()
+
+    if not sweep["changed"] and not sweep["new"]:
+        conn.execute("DELETE FROM web_setting WHERE key = ?", (_SWEEP_KEY,))
+        conn.commit()
+    result["cursor_after"] = get_sync_cursor(conn)
+    return result
+
+
+def _priority_order(conn, tids) -> list[int]:
+    """Fetch order: watching shows first, then planned, then the rest; within each, the TID
+    whose next broadcast is soonest first (today, then tomorrow, ...), TIDs with no coming
+    broadcast last; the TID number breaks ties so the order is stable."""
+    rank: dict[int, int] = {}
+    for status, tid in conn.execute(
+        "SELECT s.status, x.external_id FROM show_external_id x JOIN show s ON s.id = x.show_id"
+        " WHERE x.service = 'syoboi' UNION ALL"
+        " SELECT s.status, x.external_id FROM season_external_id x"
+        " JOIN season z ON z.id = x.season_id JOIN show s ON s.id = z.show_id"
+        " WHERE x.service = 'syoboi'"
+    ):
+        if str(tid).isdigit():
+            r = 0 if status == "watching" else 1 if status == "planned" else 2
+            rank[int(tid)] = min(rank.get(int(tid), 2), r)
+    today_jst = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = today_jst.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")  # today's shows count as today
+    nxt = {r["tid"]: r["t"] for r in conn.execute(
+        "SELECT tid, MIN(st_time_utc) AS t FROM syoboi_program"
+        " WHERE deleted = 0 AND st_time_utc >= ? GROUP BY tid", (start,))}
+    return sorted(dict.fromkeys(tids), key=lambda t: (
+        rank.get(t, 2), t not in nxt, nxt.get(t, ""), t))
+
+
+def _start_sweep(conn, cursor_before: str | None) -> dict | None:
+    """The tracked TIDs, split into changed-since-cursor and never-fetched, in priority order."""
+    from lcars import syoboi_levels  # a run per level, not per show (syoboi_levels.py)
+
+    all_tids = {int(r["tid"]) for r in conn.execute(
         """SELECT sei.external_id AS tid
            FROM show_external_id sei
            JOIN show s ON sei.show_id = s.id
            WHERE sei.service = 'syoboi'
              AND s.tracked = 1
-             AND s.tracking_space = 'anime'"""
-    ).fetchall()
-    all_tids = [int(r["tid"]) for r in all_tid_rows]
-    from lcars import syoboi_levels  # a run per level, not per show (syoboi_levels.py)
-
-    all_tids = sorted(set(all_tids) | set(syoboi_levels.fetchable_tids(conn)))
-
+             AND s.tracking_space = 'anime'""")}
+    all_tids |= set(syoboi_levels.fetchable_tids(conn))
     if not all_tids:
-        return result
+        return None
+    have = {r[0] for r in conn.execute("SELECT DISTINCT tid FROM syoboi_program")}
+    new = [t for t in all_tids if t not in have]
+    return {
+        "since": _lookup_range_since(cursor_before) if cursor_before else None,
+        "changed": _priority_order(conn, all_tids) if cursor_before else [],
+        "new": _priority_order(conn, new),
+    }
 
-    client = httpx.Client(timeout=60.0, follow_redirects=True)
-    try:
-        # ── Incremental: changed programmes since cursor ──
-        if cursor_before:
-            # ProgLookup LastUpdate range: "from-" means "since"
-            last_update_range = _lookup_range_since(cursor_before)
-            incremental_programs = _fetch_programs_all_tids(
-                all_tids, client=client, last_update=last_update_range,
-            )
-            if incremental_programs:
-                stored = ingest_programs(conn, incremental_programs, now_iso)
-                result["programs_stored"] += stored
-                log.info(
-                    "Syoboi incremental: %d changed programmes across %d tracked TIDs",
-                    stored, len(all_tids),
-                )
 
-                # Also fetch titles for TIDs that had changes
-                changed_tids = list({p["tid"] for p in incremental_programs})
-                _fetch_and_ingest_titles(
-                    conn, changed_tids, now_iso, client, result
-                )
+def _load_sweep(conn) -> dict | None:
+    row = conn.execute("SELECT value FROM web_setting WHERE key = ?", (_SWEEP_KEY,)).fetchone()
+    return json.loads(row["value"]) if row else None
 
-        # ── New TIDs: shows with a Syoboi TID but no events yet ──
-        have = {r[0] for r in conn.execute("SELECT DISTINCT tid FROM syoboi_program")}
-        new_tid_rows = [{"tid": t} for t in all_tids if t not in have]
-        new_tids = [int(r["tid"]) for r in new_tid_rows]
 
-        if new_tids:
-            new_programs = _fetch_programs_all_tids(
-                new_tids, client=client,
-            )
-            if new_programs:
-                stored = ingest_programs(conn, new_programs, now_iso)
-                result["programs_stored"] += stored
-                result["new_tids_fetched"] = len(new_tids)
-                log.info(
-                    "Syoboi new TIDs: %d → %d programmes",
-                    len(new_tids), stored,
-                )
-            _fetch_and_ingest_titles(
-                conn, new_tids, now_iso, client, result
-            )
-    finally:
-        client.close()
-
-    # Update cursor
-    result["cursor_after"] = get_sync_cursor(conn)
-    return result
+def _save_sweep(conn, sweep: dict) -> None:
+    conn.execute("INSERT INTO web_setting (key, value) VALUES (?, ?)"
+                 " ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                 (_SWEEP_KEY, json.dumps(sweep)))
+    conn.commit()
 
 
 def _fetch_programs_all_tids(

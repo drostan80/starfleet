@@ -119,3 +119,61 @@ def test_other_403_is_not_a_challenge():
     plain = httpx.Response(403, text="forbidden", request=httpx.Request("GET", URL))
     assert syoboi._is_challenge(plain) is False
     assert syoboi._is_challenge(_challenge()) is True
+
+
+def _tracked_show(conn, show_id, tid, status="watching"):
+    show_id = f"s-{tid:06d}"
+    conn.execute("INSERT INTO show (id, media_shape, tracking_space, title_romaji, primary_title,"
+                 " status, tracked, created_at, updated_at)"
+                 " VALUES (?, 'episodic', 'anime', 't', 'romaji', ?, 1, 'x', 'x')",
+                 (show_id, status))
+    conn.execute("INSERT INTO show_external_id (show_id, service, external_id, url, created_at)"
+                 " VALUES (?, 'syoboi', ?, 'u', 'x')", (show_id, str(tid)))
+
+
+def test_429_pauses_without_sleeping_and_keeps_the_sweep(conn, monkeypatch):
+    monkeypatch.setattr(syoboi_levels, "fetchable_tids", lambda conn: [])
+    monkeypatch.setattr(syoboi.time, "sleep", lambda s: pytest.fail("slept"))
+    _tracked_show(conn, "a", 1)
+    r429 = httpx.Response(429, request=httpx.Request("GET", URL))
+    client = _client(r429)
+    with mock.patch.object(syoboi.httpx, "Client", return_value=client):
+        result = syoboi.incremental_sync(conn)
+    assert result["paused"] is True
+    assert client.get.call_count == 1
+    assert not _open_reviews(conn)  # a 429 is not a challenge: no review
+    until = conn.execute("SELECT value FROM web_setting WHERE key = 'syoboi_paused_until'"
+                         ).fetchone()["value"]
+    assert util.now_utc_iso() < until < util.utc_iso_offset_hours(0.3)
+    sweep = syoboi._load_sweep(conn)
+    assert sweep["new"] == [1]  # the batch in flight is back at the head
+
+
+def test_a_sweep_fetches_five_batches_a_tick_and_resumes(conn, monkeypatch):
+    monkeypatch.setattr(syoboi_levels, "fetchable_tids", lambda conn: [])
+    for i in range(1, 301):  # 300 never-fetched TIDs = 6 batches of 50
+        _tracked_show(conn, f"s{i}", i)
+    seen = []
+    monkeypatch.setattr(syoboi, "_fetch_programs_all_tids",
+                        lambda tids, **kw: seen.append(list(tids)) or [])
+    monkeypatch.setattr(syoboi, "_fetch_and_ingest_titles", lambda *a, **k: None)
+    syoboi.incremental_sync(conn)
+    assert len(seen) == syoboi.MAX_BATCHES_PER_SWEEP
+    assert len(syoboi._load_sweep(conn)["new"]) == 50
+    syoboi.incremental_sync(conn)
+    assert len(seen) == 6
+    assert syoboi._load_sweep(conn) is None
+    assert sorted(t for b in seen for t in b) == list(range(1, 301))
+
+
+def test_priority_watching_first_then_soonest_broadcast(conn):
+    _tracked_show(conn, "plan", 1, "planned")
+    _tracked_show(conn, "w_later", 2)
+    _tracked_show(conn, "w_today", 3)
+    _tracked_show(conn, "w_none", 4)
+    _tracked_show(conn, "w_tomorrow", 5)
+    for tid, days in ((1, 0), (2, 3), (3, 0), (5, 1)):
+        when = util.utc_iso_offset_hours(24 * days + 1)
+        conn.execute("INSERT INTO syoboi_program (pid, tid, chid, st_time_utc, deleted, fetched_at)"
+                     " VALUES (?, ?, 1, ?, 0, 'x')", (tid, tid, when))
+    assert syoboi._priority_order(conn, [1, 2, 3, 4, 5]) == [3, 5, 2, 4, 1]

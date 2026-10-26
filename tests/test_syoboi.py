@@ -696,7 +696,10 @@ class TestLookupRange:
                 mock.patch.object(syoboi, "_fetch_and_ingest_titles"), \
                 mock.patch("lcars.syoboi_levels.fetchable_tids", return_value=[1]):
             conn.execute("CREATE TABLE show_external_id (service, external_id, show_id)")
-            conn.execute("CREATE TABLE show (id, tracked, tracking_space)")
-            conn.execute("CREATE TABLE syoboi_program (tid)")
+            conn.execute("CREATE TABLE show (id, tracked, tracking_space, status)")
+            conn.execute("CREATE TABLE season_external_id (service, external_id, season_id)")
+            conn.execute("CREATE TABLE season (id, show_id)")
+            conn.execute("CREATE TABLE syoboi_program (tid, st_time_utc, deleted)")
+            conn.execute("CREATE TABLE web_setting (key PRIMARY KEY, value)")
             syoboi.incremental_sync(conn)
         assert sent[0] == "20261006_022424-"
