@@ -73,3 +73,12 @@ def _no_real_anilist_facts(monkeypatch):
         raise anilist_client.AniListError("AniList is not reachable in tests")
 
     monkeypatch.setattr(level_reconcile, "facts_for", offline)
+
+
+@pytest.fixture
+def early_october(monkeypatch):
+    # For tests whose fixtures treat dates around 2026-10-04 as "just aired": without this they
+    # turn into history (FINISHED_GRACE_DAYS) as the real clock moves on.
+    from lcars import air_sources
+
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 100_000)

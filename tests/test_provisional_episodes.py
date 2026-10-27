@@ -149,7 +149,7 @@ def syoboi_candidates(conn):
         " JOIN episode e ON e.id = c.episode_id WHERE c.source = 'syoboi' ORDER BY 1, 2")]
 
 
-def test_syoboi_is_a_choice_per_station_without_any_anidb_mapping(conn):
+def test_syoboi_is_a_choice_per_station_without_any_anidb_mapping(conn, early_october):
     from lcars import air_sources
 
     # a second station airs the same run a day later (the show has no AniDB mapping at all)
@@ -173,7 +173,7 @@ def test_a_syoboi_run_that_does_not_fit_the_season_is_not_offered(conn):
     assert syoboi_candidates(conn) == []
 
 
-def test_candidates_are_collected_for_airing_shows_without_a_button_click(conn):
+def test_candidates_are_collected_for_airing_shows_without_a_button_click(conn, early_october):
     from lcars import air_sources
 
     first = air_sources.collect_for_airing(conn)

@@ -19,13 +19,6 @@ SOON = "2999-01-01T00:00:00Z"
 
 
 @pytest.fixture
-def early_october(monkeypatch):
-    # For tests whose fixtures treat dates around 2026-10-04 as "just aired": without this they
-    # turn into history (FINISHED_GRACE_DAYS) as the real clock moves on.
-    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 100_000)
-
-
-@pytest.fixture
 def conn(tmp_path):
     path = tmp_path / "prec.db"
     subprocess.run(
@@ -259,7 +252,7 @@ def _anime_with_syoboi(conn, stored="2026-10-12T15:00:00Z"):
     return show, e
 
 
-def test_a_source_that_moves_later_is_not_undone_by_a_stale_earlier_one(conn):
+def test_a_source_that_moves_later_is_not_undone_by_a_stale_earlier_one(conn, early_october):
     """Earliest is how a date is picked at the onset, not a hard rule: Syoboi moves the 12th to
     the 19th, AniList still says the 12th; the 19th must hold, refresh after refresh."""
     show, e = _anime_with_syoboi(conn)
