@@ -12,7 +12,7 @@
  * ordering TBD (batch 5 — specials placement decision pending).
  */
 
-import { bootstrapConfig, requireConfig, rewriteHost, applyAppName } from './config.js?v=5';
+import { bootstrapConfig, requireConfig, rewriteHost, applyAppName } from './config.js?v=6';
 import {
   fetchShow, addWatchEvent, deleteWatchEvent, setScore, setSeasonScore,
   setSeasonStatus, setSeasonMapping, reconcileSeasonMapping,
@@ -23,20 +23,20 @@ import {
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=33';
+} from './api.js?v=34';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange, airChangeBadge, isDateOnly,
-} from './calendar.js?v=65';
+} from './calendar.js?v=66';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS, withConfirmation, STATUS_ICON_CLASS,
 } from './status-picker.js?v=2';
-import { renderKeepBadge, remindKeep } from './keep.js?v=6';
+import { renderKeepBadge, remindKeep } from './keep.js?v=7';
 import { SVC_ICONS, _mpvSvg, _jellyfinSvg, _downloadSvg } from './icons.js?v=17';
 import { startDownload } from './downloads.js?v=2';
-import { openArtPicker } from './art-picker.js?v=12';
+import { openArtPicker } from './art-picker.js?v=13';
 
 /* ── Constants ───────────────────────────────────────────── */
 

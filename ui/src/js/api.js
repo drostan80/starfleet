@@ -12,7 +12,7 @@ import { broadcastWatched } from './auto-refresh.js?v=1';
  * CAN set. Once that lands, implement subscriptions here.
  */
 
-import { getConfig, syncConfig } from './config.js?v=5';
+import { getConfig, syncConfig } from './config.js?v=6';
 
 /**
  * Execute a GraphQL query or mutation against LCARS.

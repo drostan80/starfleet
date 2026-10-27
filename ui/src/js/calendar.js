@@ -9,9 +9,9 @@
  * - Month: prev/next step by a month; the grid is whole Mon–Sun weeks around the month
  */
 
-import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=5';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=33';
-import { openArtPicker } from './art-picker.js?v=12';
+import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=6';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=34';
+import { openArtPicker } from './art-picker.js?v=13';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_5 as STATUSES, STATUS_LABELS, STATUS_CLASS, STATUS_COLOR,

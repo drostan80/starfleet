@@ -148,7 +148,7 @@ export function applyAppName() {
     : '';
   document.title = suffix ? `${APP_NAME} — ${suffix}` : APP_NAME;
   const brand = document.querySelector('.nav-brand');
-  if (brand) brand.textContent = APP_NAME;
+  if (brand) brand.title = APP_NAME; // the nav brand is the logo image, not text
 }
 
 /**
