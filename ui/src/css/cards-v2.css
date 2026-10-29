@@ -333,6 +333,10 @@
 .banner-row:not(.with-card) { flex-direction: column; }
 .banner-row:not(.with-card) .bn-banner { border-radius: 7px 7px 0 0; }
 
+/* a collapsed group of episodes: a banner row with no link bar under it */
+.banner-row.group-row { cursor: pointer; }
+.banner-row.group-row .bn-banner { border-radius: 7px; }
+
 /* 1D: the regular card on the left, the banner beside it filling the row */
 .banner-row.with-card > .card2-plain {
   width: var(--card-w);

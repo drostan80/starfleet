@@ -21,8 +21,8 @@ import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _jellyfinSvg, _tvdbSvg, _imdbMa
 import { startDownload } from './downloads.js?v=2';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
-  registerHelpers, getDesign, buildCardV2, buildBannerRow, buildMonthTile, patchBannerRows,
-} from './cards-v2.js?v=10';
+  registerHelpers, getDesign, buildCardV2, buildBannerRow, buildBannerGroup, buildMonthTile, patchBannerRows,
+} from './cards-v2.js?v=11';
 
 /* ── Constants ────────────────────────────────────────────── */
 
@@ -1253,12 +1253,17 @@ function buildExpandedGroup(showGroup, cfg, cardBuilder) {
   return wrapper;
 }
 
-function appendGroupedEpisodes(container, episodes, cfg, cardBuilder) {
+function appendGroupedEpisodes(container, episodes, cfg, cardBuilder, bannerGroups = false) {
   const byShow = groupByShow(episodes);
   for (const [, showGroup] of byShow) {
     const isExpanded = _expandedShows.has(showGroup.show.id);
     if (showGroup.episodes.length >= GROUP_THRESHOLD && !isExpanded) {
-      container.appendChild(buildGroupCard(showGroup, cfg, cardBuilder));
+      container.appendChild(bannerGroups
+        ? buildBannerGroup(showGroup, cfg, () => {
+          _expandedShows.add(showGroup.show.id);
+          renderEpisodes(_lastEpisodes, cfg);
+        })
+        : buildGroupCard(showGroup, cfg, cardBuilder));
     } else if (showGroup.episodes.length >= GROUP_THRESHOLD && isExpanded) {
       container.appendChild(buildExpandedGroup(showGroup, cfg, cardBuilder));
     } else {
@@ -1342,7 +1347,7 @@ function renderPlanner(dayGroups, todayStr, cfg) {
       const cardFn = wideMode ? (getDesign() === 'new'
         ? (e, c) => buildBannerRow(e, c, { withCard: state.mode !== '3d' })
         : buildPlannerCard) : buildCard;
-      appendGroupedEpisodes(col, group.episodes, cfg, cardFn);
+      appendGroupedEpisodes(col, group.episodes, cfg, cardFn, wideMode && getDesign() === 'new');
     }
 
     container.appendChild(col);

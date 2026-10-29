@@ -443,6 +443,42 @@ export function buildBannerRow(ep, cfg, { withCard = false } = {}) {
   return row;
 }
 
+/** A collapsed run of episodes (1D / 3D): a banner row like the others, the count in place of the episode line. */
+export function buildBannerGroup(showGroup, cfg, onExpand) {
+  const { show, episodes } = showGroup;
+  const row = el('article', 'banner-row group-row');
+  row.dataset.showId = show.id;
+
+  const box = el('div', 'bn-banner');
+  box.dataset.showId = show.id;
+  const bannerSrc = show.bannerUrl || H.backdropCache.get(show.id) || null;
+  if (bannerSrc) setBannerImage(box, bannerSrc, cfg, show);
+  else if (cfg.tmdb_api_key) H.fetchTmdbBackdrop(show, cfg.tmdb_api_key);
+  box.appendChild(el('div', 'bn-scrim'));
+
+  const info = el('div', 'bn-info');
+  const title = el('span', 'bn-title');
+  title.textContent = show.displayTitle;
+  title.title = show.displayTitle;
+  info.appendChild(title);
+  const line = el('div', 'bn-line');
+  const count = el('span', 'bn-badge');
+  count.textContent = `${episodes.length} EPISODES`;
+  line.appendChild(count);
+  info.appendChild(line);
+  const first = episodes[0];
+  const last = episodes[episodes.length - 1];
+  const sxx = `S${String(first.season ?? 0).padStart(2, '0')}`;
+  const range = el('div', 'bn-ep-title');
+  range.textContent = `${sxx}E${String(first.episode ?? 0).padStart(2, '0')}–E${String(last.episode ?? 0).padStart(2, '0')} · click to expand`;
+  info.appendChild(range);
+  box.appendChild(info);
+
+  row.appendChild(box);
+  row.addEventListener('click', onExpand);
+  return row;
+}
+
 /* ── The Month tile's popup: a small frosted box at the pointer (hover, or a long press) ── */
 
 let _tip = null;
