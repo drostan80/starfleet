@@ -442,7 +442,7 @@ def test_a_chosen_schedule_wins_and_every_refresh_keeps_following_it(conn, early
 
 
 def test_in_a_chosen_season_an_empty_date_takes_the_earliest_candidate_until_the_source_has_one(
-    conn,
+    conn, early_october,
 ):
     show = _show(conn)
     e1 = _episode(conn, show, 1, "2026-10-07T16:00:00Z", "syoboi")
