@@ -4750,6 +4750,27 @@ def resolve_resolve_review_choice(_, info, id, choice, note=None):
     return _get_pending_review(conn, id)
 
 
+@mutation.field("linkIndividualSeason")
+def resolve_link_individual_season(
+    _, info, season_id, tvdb_id, season_number=None, despite=False,
+):
+    from lcars import tvdb_vetting
+
+    conn = db.get_connection()
+    client = require_client(info)
+    if client not in RESOLVING_CLIENTS:
+        raise GraphQLError(
+            f"{client!r} cannot link a TVDB id — only {sorted(RESOLVING_CLIENTS)} can")
+    try:
+        level_id = tvdb_vetting.link_individual(
+            conn, season_id, tvdb_id, season_number, bool(despite))
+    except (reviews.ReviewError, shows.ShowInputError, ValueError) as e:
+        conn.rollback()
+        raise GraphQLError(str(e)) from None
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM season WHERE id = ?", (level_id,)).fetchone())
+
+
 # -- 5.9 franchise / next-up manual ordering (§3 principle 6) ----------------
 
 

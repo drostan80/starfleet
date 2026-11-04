@@ -931,7 +931,17 @@ function createAnimeCard(item) {
     const badge = document.createElement('div');
     badge.className = 'browse-auto-badge';
     badge.textContent = 'auto-added';
-    badge.title = 'This season was auto-detected — confirm or correct the mapping on the show page';
+    if (item.lcarsShowId) {
+      badge.title = 'This season was auto-detected — confirm or correct the mapping on the show page';
+    } else {
+      // no TVDB id, so no show and no show page yet: the TVDB id goes in on the Lists page
+      badge.title = 'Added without a TVDB id, so it has no show page yet — click to enter its TVDB id on the Lists page';
+      badge.style.cursor = 'pointer';
+      badge.addEventListener('click', (e) => {
+        e.stopPropagation();
+        location.href = 'list.html#individual-seasons';
+      });
+    }
     card.appendChild(badge);
   }
 

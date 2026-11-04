@@ -261,6 +261,28 @@ def resolve(conn, payload: dict, choice: str, note: str | None) -> None:
     join(conn, season_id, tvdb_id, _season_from_note(note))
 
 
+def link_individual(conn, season_id: str, tvdb_id: int, season_number: int | None = None,
+                    despite: bool = False) -> str:
+    """The Lists page's "Create the show from this TVDB id": an individual season gets the TVDB
+    id you typed, with no review needed. You are the source (R3.7), so the same hard stops as
+    the review's "another TVDB id" run, and a mismatch needs `despite`. The show is created and
+    the season joins it (`join`). Returns the new level's id; raises `reviews.ReviewError`."""
+    from lcars import reviews
+
+    indiv = conn.execute("SELECT * FROM season WHERE id = ?", (season_id,)).fetchone()
+    if indiv is None or indiv["kind"] != "individual_season":
+        raise reviews.ReviewError("this isn't an individual season any more")
+    if not despite:
+        entry = entry_facts(indiv["anilist_id"], [indiv["label"] or ""])
+        tvdb = tvdb_facts(conn, tvdb_id)
+        new_show = add_check._tracked_show_for_tvdb(conn, tvdb_id) is None
+        stops = hard_stops(entry, tvdb, anime=True, new_show=new_show)
+        if stops:
+            raise reviews.ReviewError(
+                f"TVDB {tvdb_id} doesn't fit: " + "; ".join(stops))
+    return join(conn, season_id, tvdb_id, season_number)
+
+
 def _season_from_note(note: str | None) -> int | None:
     m = re.search(r"season\s*(\d+)", note or "", re.I)
     return int(m.group(1)) if m else None

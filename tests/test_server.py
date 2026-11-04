@@ -12345,6 +12345,48 @@ async def test_another_tvdb_id_that_does_not_fit_becomes_the_reviews_candidate(
     assert json.loads(still["choices"])[0]["id"] == "link_tvdb_despite"
 
 
+async def _link_individual(client, season_id, tvdb_id, season=None, despite=False):
+    return (await client.post("/", json={
+        "query": "mutation($s: ID!, $t: Int!, $n: Int, $d: Boolean) {"
+                 " linkIndividualSeason(seasonId: $s, tvdbId: $t, seasonNumber: $n, despite: $d)"
+                 " { id kind show { id } } }",
+        "variables": {"s": season_id, "t": tvdb_id, "n": season, "d": despite}},
+        headers=auth_headers())).json()
+
+
+async def test_an_individual_season_with_no_review_gets_its_show_from_a_typed_tvdb_id(
+    client, monkeypatch,
+):
+    # the Mercedes case: added without a TVDB id, so no show page and no review; you have the id
+    _vetting_env(monkeypatch, lookup=_FRIEREN_LOOKUP, facts=_FRIEREN_FACTS)
+    body = await _add_raw(client, anilistId=154587, tvdbCandidateId=424536)
+    season_id = json.loads(body["errors"][0]["message"][len("individual_season:"):])["seasonId"]
+    conn = db.get_connection()
+    conn.execute("DELETE FROM pending_review")  # no review open for it
+    conn.commit()
+    config.set_current(config.Config())  # no Sonarr in this test
+    result = await _link_individual(client, season_id, 424536)
+    assert "errors" not in result, result
+    assert result["data"]["linkIndividualSeason"]["show"]["id"] is not None
+    assert result["data"]["linkIndividualSeason"]["kind"] == "tvdb_season"
+    assert conn.execute("SELECT COUNT(*) FROM season WHERE id = ?", (season_id,)).fetchone()[0] == 0
+
+
+async def test_a_typed_tvdb_id_that_does_not_fit_is_refused_unless_despite(client, monkeypatch):
+    _vetting_env(monkeypatch, lookup=_FRIEREN_LOOKUP, facts=_FRIEREN_FACTS)
+    body = await _add_raw(client, anilistId=154587, tvdbCandidateId=424536)
+    season_id = json.loads(body["errors"][0]["message"][len("individual_season:"):])["seasonId"]
+    monkeypatch.setattr(shows, "_lookup_arr", lambda conn, shape, term: [_MARIA_LOOKUP])
+    config.set_current(config.Config())
+    refused = await _link_individual(client, season_id, 276151)
+    assert "doesn't fit" in refused["errors"][0]["message"]
+    conn = db.get_connection()
+    assert conn.execute("SELECT kind FROM season WHERE id = ?", (season_id,)).fetchone()[0] \
+        == "individual_season"  # nothing changed
+    ok = await _link_individual(client, season_id, 276151, despite=True)
+    assert "errors" not in ok, ok
+
+
 async def test_a_tvdb_link_review_cannot_be_dismissed_without_a_choice(client, monkeypatch):
     _vetting_env(monkeypatch, lookup=_FRIEREN_LOOKUP, facts=_FRIEREN_FACTS)
     await _add_raw(client, anilistId=154587, tvdbCandidateId=424536)

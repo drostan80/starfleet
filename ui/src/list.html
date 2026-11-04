@@ -123,6 +123,17 @@
                    background: var(--surface-3); border-radius: 10px; padding: 0 7px; }
     .indiv-list { padding: 2px 12px 8px; border-top: 1px solid var(--border); }
     .indiv-row { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+    .indiv-row { flex-wrap: wrap; }
+    .indiv-link { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+                  padding: 0 0 6px 4px; font-size: 12px; color: var(--text-dim, var(--text)); }
+    .indiv-link input { width: 90px; padding: 3px 6px; border: 1px solid var(--border);
+                        border-radius: 5px; background: transparent; color: var(--text);
+                        font-family: 'DM Mono', monospace; font-size: 12px; }
+    .indiv-link input.season { width: 64px; }
+    .indiv-link button { padding: 3px 10px; border: 1px solid var(--border); border-radius: 5px;
+                         background: transparent; color: var(--text); cursor: pointer; }
+    .indiv-link .indiv-msg { flex-basis: 100%; }
+    .indiv-link .indiv-msg.error { color: #e5484d; }
     .indiv-row .indiv-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
     .indiv-row a { color: var(--accent); font-size: 12px; }
     .indiv-row .status-btn-wrap { position: relative; bottom: auto; right: auto; flex: none; }
@@ -488,6 +499,57 @@
     }
   }
 
+  // An individual season has no show, so no show page: this is where its TVDB id goes in.
+  function buildTvdbLinkForm(s) {
+    const box = document.createElement('div');
+    box.className = 'indiv-link';
+    const lead = document.createElement('span');
+    lead.textContent = 'No TVDB id, so no show page yet. If you have it:';
+    const id = document.createElement('input');
+    id.placeholder = 'TVDB id'; id.inputMode = 'numeric'; id.setAttribute('aria-label', 'TVDB id');
+    const sn = document.createElement('input');
+    sn.className = 'season'; sn.placeholder = 'season'; sn.inputMode = 'numeric';
+    sn.title = 'Which TVDB season it is (only needed when the show has several)';
+    sn.setAttribute('aria-label', 'TVDB season');
+    const go = document.createElement('button');
+    go.textContent = 'Create the show from this TVDB id';
+    const msg = document.createElement('span');
+    msg.className = 'indiv-msg';
+    const anyway = document.createElement('button');
+    anyway.textContent = 'Link anyway'; anyway.hidden = true;
+    async function run(despite) {
+      const tvdbId = parseInt(id.value, 10);
+      if (!tvdbId) { msg.className = 'indiv-msg error'; msg.textContent = 'Enter the TVDB id (a number).'; return; }
+      go.disabled = anyway.disabled = true; anyway.hidden = true;
+      msg.className = 'indiv-msg'; msg.textContent = 'Creating the show…';
+      try {
+        const seasonNumber = sn.value.trim() ? parseInt(sn.value, 10) : null;
+        const data = await gql(
+          `mutation($sid: ID!, $tvdb: Int!, $sn: Int, $d: Boolean) {
+             linkIndividualSeason(seasonId: $sid, tvdbId: $tvdb, seasonNumber: $sn, despite: $d) { id show { id } }
+           }`, { sid: s.id, tvdb: tvdbId, sn: seasonNumber, d: despite });
+        const showId = data.linkIndividualSeason.show?.id;
+        msg.replaceChildren();
+        msg.append('Show created. ');
+        if (showId) {
+          const a = document.createElement('a');
+          a.href = `show.html?id=${encodeURIComponent(showId)}`; a.textContent = 'Open the show page →';
+          msg.appendChild(a);
+        }
+        box.querySelectorAll('input,button').forEach(el => el.hidden = true);
+        lead.hidden = true;
+      } catch (err) {
+        msg.className = 'indiv-msg error'; msg.textContent = err.message;
+        anyway.hidden = !/doesn't fit/.test(err.message);
+        go.disabled = anyway.disabled = false;
+      }
+    }
+    go.addEventListener('click', () => run(false));
+    anyway.addEventListener('click', () => run(true));
+    box.append(lead, id, sn, go, anyway, msg);
+    return box;
+  }
+
   /* ── Individual seasons (R3.6c: no TVDB show yet — no show page lists them) ── */
   async function loadIndividualSeasons() {
     const box = document.getElementById('individual-seasons');
@@ -548,6 +610,7 @@
           a.textContent = `AniList ${s.anilistId}`;
           row.appendChild(a);
         }
+        row.appendChild(buildTvdbLinkForm(s));
         list.appendChild(row);
       }
     } catch (err) {

@@ -2450,6 +2450,8 @@ type Mutation {
   resolvePendingReview(id: ID!, resolutionNote: String): PendingReview!
   "RULEBOOK R4.8b: apply one of the review's choices (its effect is done, then the review closes)."
   resolveReviewChoice(id: ID!, choice: String!, note: String): PendingReview!
+  "An individual season (no TVDB show, so no show page) gets the TVDB id you typed: the show is created, sent to Sonarr, and the season joins it. A TVDB show that doesn't fit the entry is refused unless despite is true. Returns the season's new level."
+  linkIndividualSeason(seasonId: ID!, tvdbId: Int!, seasonNumber: Int, despite: Boolean): Season!
 
   # -- 5.9 franchise / next-up manual ordering (§3 principle 6) --------------
   setFranchiseMemberOrder(franchiseId: ID!, showId: ID!, sortOrder: Int!): FranchiseEntry!
