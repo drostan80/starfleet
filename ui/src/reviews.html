@@ -1632,7 +1632,28 @@
         note = `<div class="action-note">Creates the season mapping with AniList ${esc(sequelAlId)}${sequelMalId != null ? ' / MAL ' + esc(String(sequelMalId)) : ''}. If the show was completed, it will reopen as watching.</div>`;
       } else if (isMerge) {
         buttons += `<button class="btn-primary btn-approve" id="btn-merge-${uid}">Merge</button>`;
-        note = `<div class="action-note">Merges the loser into the winner — loser is demoted (untracked), its data moves to the winner. Reversible via reverseShowMerge.</div>`;
+        editRow = `
+          <div class="detail-section">
+            <div class="detail-section-label">Not the same show? Link the missing ID instead</div>
+            <div class="id-form-grid">
+              <label id="merge-lbl-al-${uid}">AniList (this show)</label>
+              <input type="text" id="merge-al-${uid}" placeholder="e.g. 204466 or anilist.co URL">
+              <span class="hint" id="merge-hint-al-${uid}"></span>
+              <label id="merge-lbl-tv-${uid}">TVDB (candidate)</label>
+              <input type="text" id="merge-tv-${uid}" placeholder="e.g. 471878 or thetvdb.com URL">
+              <span class="hint" id="merge-hint-tv-${uid}"></span>
+            </div>
+            <div style="margin-top:8px">
+              <button class="btn-primary btn-approve" id="btn-merge-ids-${uid}" style="font-size:12px;padding:6px 14px">Save IDs &amp; resolve</button>
+              <a id="merge-search-al-${uid}" href="https://anilist.co/search/anime" target="_blank" rel="noopener" style="color:var(--accent);font-size:11px;margin-left:12px">Search AniList →</a>
+              <a id="merge-search-tv-${uid}" href="https://thetvdb.com/search" target="_blank" rel="noopener" style="color:var(--accent);font-size:11px;margin-left:8px">Search TVDB →</a>
+            </div>
+          </div>
+        `;
+        note = `<div class="action-note"><strong>Why you see this:</strong> two tracked shows have similar titles, and one has only a TVDB link while the other has only an AniList link, so the check cannot tell whether they are one show.
+          <br><strong>Merge</strong> — they are the same show: the loser is demoted (untracked) and its data moves to the winner (reversible via reverseShowMerge).
+          <br><strong>Not a duplicate</strong> — keep both; this pair is never flagged again.
+          <br><strong>Save IDs</strong> — keep both and give either side its missing ID (one is enough); the check then stops matching them and the show gets complete data.</div>`;
       } else if (isTvdbConsolidation) {
         editRow = `
           <div class="detail-section">
@@ -1745,7 +1766,7 @@
           `<button class="btn-primary btn-approve btn-choice" data-choice="${esc(c.id)}">${esc(c.label)}</button>`
         ).join('') + buttons;
       } else {
-        buttons += `<button class="btn-primary btn-dismiss" data-action="dismiss" id="btn-dismiss-${uid}">Dismiss</button>`;
+        buttons += `<button class="btn-primary btn-dismiss" data-action="dismiss" id="btn-dismiss-${uid}">${isMerge ? 'Not a duplicate' : 'Dismiss'}</button>`;
       }
 
       actionsHtml = `
@@ -2199,6 +2220,42 @@
             mergeEl.innerHTML =
               renderMergeCard(winCard, 'Winner (keeps data)') +
               renderMergeCard(loseCard, 'Loser (demoted)');
+
+            // Fill the link-missing-ID form: the loser (TVDB-only) wants an
+            // AniList id, the winner (AniList-only) wants a TVDB id.
+            const fuid = r.id.replace(/[^a-z0-9]/gi, '');
+            const fill = (side, card, svc, svcLabel, otherCard) => {
+              const lbl = document.getElementById(`merge-lbl-${side}-${fuid}`);
+              const inp = document.getElementById(`merge-${side}-${fuid}`);
+              const hint = document.getElementById(`merge-hint-${side}-${fuid}`);
+              const search = document.getElementById(`merge-search-${side}-${fuid}`);
+              if (!card || !inp) return;
+              if (lbl) lbl.textContent = `${svcLabel} for "${card.displayTitle}"`;
+              const have = card.externalIds[svc];
+              if (have) {
+                inp.value = have.id; inp.disabled = true;
+                if (hint) hint.textContent = 'already set';
+              }
+              if (svc === 'tvdb' && card.mediaShape === 'movie') {
+                // R3.2a: a film carries tvdb_movie, never a TVDB series id
+                inp.disabled = true; inp.placeholder = '';
+                if (hint) hint.textContent = 'a film has no TVDB series id';
+              }
+              if (search) {
+                const q = encodeURIComponent(card.displayTitle || '');
+                search.href = svc === 'tvdb'
+                  ? `https://thetvdb.com/search?query=${q}`
+                  : `https://anilist.co/search/anime?search=${q}`;
+              }
+            };
+            fill('al', loseCard, 'anilist', 'AniList', winCard);
+            fill('tv', winCard, 'tvdb', 'TVDB', loseCard);
+            if (winCard && loseCard && winCard.mediaShape !== loseCard.mediaShape) {
+              const mb = document.getElementById(`btn-merge-${fuid}`);
+              if (mb) { mb.disabled = true; mb.title = `${winCard.mediaShape} vs ${loseCard.mediaShape} cannot be the same show`; }
+              mergeEl.insertAdjacentHTML('beforebegin',
+                `<div class="action-note" style="margin-bottom:8px"><strong>Different kinds</strong> (${esc(winCard.mediaShape)} vs ${esc(loseCard.mediaShape)}) — these cannot be the same show; Merge is disabled. Click <em>Not a duplicate</em>.</div>`);
+            }
           } catch (err) {
             if (_selected === r.id && mergeEl) {
               mergeEl.innerHTML = `<div class="conflict-loading" style="color:var(--st-dropped)">Failed to load: ${esc(err.message)}</div>`;
@@ -2571,6 +2628,37 @@
           } catch (err) {
             setStatus(`Error: ${err.message}`, 'err');
             mergeBtn.disabled = false;
+          }
+        });
+      }
+
+      // Not a duplicate: give either side its missing ID, then resolve.
+      // With one side complete the sweep stops matching the pair.
+      const mergeIdsBtn = document.getElementById(`btn-merge-ids-${uid}`);
+      if (mergeIdsBtn) {
+        mergeIdsBtn.addEventListener('click', async () => {
+          const alInput = document.getElementById(`merge-al-${uid}`);
+          const tvInput = document.getElementById(`merge-tv-${uid}`);
+          const alVal = alInput && !alInput.disabled ? parseIdInput(alInput.value, 'anilist.co/anime') : null;
+          const tvVal = tvInput && !tvInput.disabled ? parseIdInput(tvInput.value, 'thetvdb.com') : null;
+          if (!alVal && !tvVal) { setStatus('Enter at least one ID', 'err'); return; }
+          mergeIdsBtn.disabled = true;
+          setStatus('Saving IDs…');
+          try {
+            const notes = [];
+            if (alVal) {
+              await linkShowExternalId(r.entityId, 'anilist', alVal, `https://anilist.co/anime/${alVal}`);
+              notes.push(`anilist=${alVal} on ${r.entityId}`);
+            }
+            if (tvVal) {
+              const winnerId = latestValue(r.proposedValueChain);
+              await linkShowExternalId(winnerId, 'tvdb', tvVal, `https://thetvdb.com/series/${tvVal}`);
+              notes.push(`tvdb=${tvVal} on ${winnerId}`);
+            }
+            await doResolve(noteVal() || `not a duplicate; linked ${notes.join(', ')} via web review`);
+          } catch (err) {
+            setStatus(`Error: ${err.message}`, 'err');
+            mergeIdsBtn.disabled = false;
           }
         });
       }

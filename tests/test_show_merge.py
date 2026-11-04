@@ -32,12 +32,15 @@ def conn(tmp_path) -> sqlite3.Connection:
     return c
 
 
-def _show(conn, show_id, title, tracking_space="anime", tracked=1, status="planned"):
+def _show(
+    conn, show_id, title, tracking_space="anime", tracked=1, status="planned",
+    media_shape="episodic",
+):
     conn.execute(
         "INSERT INTO show (id, media_shape, tracking_space, title_romaji, primary_title,"
         " status, tracked, created_at, updated_at)"
-        " VALUES (?, 'episodic', ?, ?, 'romaji', ?, ?, 'x', 'x')",
-        (show_id, tracking_space, title, status, tracked),
+        " VALUES (?, ?, ?, ?, 'romaji', ?, ?, 'x', 'x')",
+        (show_id, media_shape, tracking_space, title, status, tracked),
     )
 
 
@@ -127,6 +130,24 @@ def test_find_candidate_pairs_ignores_a_non_anime_winner_candidate(conn):
     _external_id(conn, "s-winnr5", "anilist", "222")
     conn.commit()
     assert show_merge.find_candidate_pairs(conn) == []
+
+
+def test_find_candidate_pairs_never_pairs_a_film_with_a_series(conn):
+    _show(conn, "s-loser5", "Mind Game", tracking_space="tv", media_shape="episodic")
+    _external_id(conn, "s-loser5", "tvdb", "111")
+    _show(conn, "s-winnr6", "Mind Game", tracking_space="anime", media_shape="movie")
+    _external_id(conn, "s-winnr6", "anilist", "222")
+    conn.commit()
+    assert show_merge.find_candidate_pairs(conn) == []
+
+
+def test_find_candidate_pairs_pairs_a_film_with_a_film(conn):
+    _show(conn, "s-loser6", "Same Film", tracking_space="tv", media_shape="movie")
+    _external_id(conn, "s-loser6", "tvdb", "111")
+    _show(conn, "s-winnr7", "Same Film", tracking_space="anime", media_shape="movie")
+    _external_id(conn, "s-winnr7", "anilist", "222")
+    conn.commit()
+    assert [p[:2] for p in show_merge.find_candidate_pairs(conn)] == [("s-loser6", "s-winnr7")]
 
 
 # --- merge_shows: validation --------------------------------------------------

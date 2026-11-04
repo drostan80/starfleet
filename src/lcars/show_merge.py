@@ -109,7 +109,7 @@ def find_candidate_pairs(conn) -> list[tuple[str, str, str]]:
     no dedup state to maintain between sweeps)."""
     losers = conn.execute(
         """
-        SELECT id, title_romaji, title_english, title_native FROM show
+        SELECT id, media_shape, title_romaji, title_english, title_native FROM show
         WHERE tracked = 1
           AND EXISTS (SELECT 1 FROM show_external_id WHERE show_id = show.id AND service = 'tvdb')
           AND NOT EXISTS (
@@ -120,7 +120,7 @@ def find_candidate_pairs(conn) -> list[tuple[str, str, str]]:
     ).fetchall()
     winners = conn.execute(
         """
-        SELECT id, title_romaji, title_english, title_native FROM show
+        SELECT id, media_shape, title_romaji, title_english, title_native FROM show
         WHERE tracked = 1 AND tracking_space = 'anime'
           AND (EXISTS (
               SELECT 1 FROM show_external_id WHERE show_id = show.id AND service = 'anilist'
@@ -136,16 +136,18 @@ def find_candidate_pairs(conn) -> list[tuple[str, str, str]]:
     def titles(row) -> list[str]:
         return [row[f] for f in ("title_romaji", "title_english", "title_native") if row[f]]
 
-    winner_titles_by_title: dict[str, list[str]] = {}
-    all_winner_titles: list[str] = []
+    # A film is never the same show as a series (R3.2a: a film carries
+    # tvdb_movie, never a series id), so winners are matched per media_shape.
+    winner_titles_by_shape: dict[str, dict[str, list[str]]] = {}
     for winner in winners:
+        by_title = winner_titles_by_shape.setdefault(winner["media_shape"], {})
         for t in titles(winner):
-            winner_titles_by_title.setdefault(t, []).append(winner["id"])
-            all_winner_titles.append(t)
+            by_title.setdefault(t, []).append(winner["id"])
 
     pairs = []
     for loser in losers:
-        matched_title = fuzzy.best_match(titles(loser), all_winner_titles)
+        winner_titles_by_title = winner_titles_by_shape.get(loser["media_shape"], {})
+        matched_title = fuzzy.best_match(titles(loser), list(winner_titles_by_title))
         if matched_title is None:
             continue
         winner_ids = set(winner_titles_by_title.get(matched_title, []))
