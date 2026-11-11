@@ -76,6 +76,25 @@ async function pushNativeToken(token) {
   }
 }
 
+// 2026-11-11 (user): inside the Android app a link to another site (Sonarr, AniList, MAL …) opened in
+// the app's own WebView, with no way back but closing the app. In the app those links now open in the
+// system browser (the app stays where it was). A regular browser is untouched: target="_blank" stays a
+// new tab. An older APK without `openExternal` rejects the call; the link then opens as it did before.
+if (window.Capacitor?.isNativePlatform?.()) {
+  document.addEventListener('click', (e) => {
+    if (e.button) return;
+    const a = e.target?.closest?.('a[href]');
+    if (!a) return;
+    let url;
+    try { url = new URL(a.href, location.href); } catch { return; }
+    if (!/^https?:$/.test(url.protocol) || url.origin === location.origin) return;
+    e.preventDefault();
+    e.stopPropagation();
+    window.Capacitor.Plugins.AppSettings.openExternal({ url: url.href })
+      .catch(() => { location.href = url.href; });
+  }, true);
+}
+
 export async function syncConfig() {
   try {
     const res = await fetch('/auth/settings');

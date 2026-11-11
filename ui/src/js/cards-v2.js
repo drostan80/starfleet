@@ -1,6 +1,6 @@
 /**
- * cards-v2.js — the redesigned episode cards (user 2026-10-22), the default; a "Design: Classic | New"
- * switch in Settings (localStorage) keeps the classic ones for whoever wants them.
+ * cards-v2.js — the episode cards (user 2026-10-22); the only design since 2026-11-11 (the Classic
+ * cards and the Settings switch were retired at the user's word).
  *
  *  - card:   art only, the left link bar (download button included), a status indicator circle,
  *            a small status-colour tab bottom right (hover → the flower picker); hovering the card
@@ -17,51 +17,6 @@ import { buildStatusBtn } from './status-picker.js?v=2';
 
 let H = null;
 export function registerHelpers(helpers) { H = helpers; }
-
-/* ── The Design switch ───────────────────────────────────── */
-
-const DESIGN_KEY = 'starfleet_design';
-
-/** New is the default; only an explicit choice of Classic (Settings) keeps the old cards. */
-export function getDesign() {
-  try { return localStorage.getItem(DESIGN_KEY) === 'classic' ? 'classic' : 'new'; } catch { return 'new'; }
-}
-
-function setDesign(value) {
-  try { localStorage.setItem(DESIGN_KEY, value); } catch { /* the choice just isn't remembered */ }
-}
-
-/** Put the Classic | New switch in `mount`; `onChange` runs after a change. */
-export function mountDesignPicker(mount, onChange) {
-  if (!mount) return;
-  mount.innerHTML = '';
-  const wrap = document.createElement('div');
-  wrap.className = 'design-picker';
-  wrap.title = 'Card design';
-  const label = document.createElement('span');
-  label.className = 'design-picker-label';
-  label.textContent = 'Design';
-  wrap.appendChild(label);
-  const buttons = {};
-  for (const [value, text] of [['classic', 'Classic'], ['new', 'New']]) {
-    const b = document.createElement('button');
-    b.className = 'design-opt';
-    b.textContent = text;
-    b.addEventListener('click', () => {
-      if (getDesign() === value) return;
-      setDesign(value);
-      sync();
-      onChange?.(value);
-    });
-    buttons[value] = b;
-    wrap.appendChild(b);
-  }
-  const sync = () => {
-    for (const [value, b] of Object.entries(buttons)) b.classList.toggle('active', getDesign() === value);
-  };
-  sync();
-  mount.appendChild(wrap);
-}
 
 /* ── Pieces ──────────────────────────────────────────────── */
 

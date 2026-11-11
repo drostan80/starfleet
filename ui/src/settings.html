@@ -8,7 +8,7 @@
   <link rel="icon" href="favicon.ico" sizes="any">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="css/main.css?v=32">
-  <link rel="stylesheet" href="css/cards-v2.css?v=14">
+  <link rel="stylesheet" href="css/cards-v2.css?v=15">
   <style>
     .settings-section {
       margin-top: 32px;
@@ -123,22 +123,23 @@
     </div>
   </form>
 
-  <!-- ── Card design (this browser / device) ───────────── -->
-  <div class="settings-section" id="design-section">
-    <h2>Card design <span class="device-only">(this device only)</span></h2>
-    <div id="design-picker-mount"></div>
-    <span class="field-hint">New: art-only cards, banner rows and the month view. Classic: the previous cards. Applies from the next page you open.</span>
-  </div>
-
   <!-- ── Android app downloads (native only) ───────────── -->
   <div class="settings-section" id="app-downloads-section" style="display:none">
     <h2>App Downloads <span class="device-only">(this device only)</span></h2>
     <div class="field-group field-checkbox">
       <label><input type="checkbox" id="auto-download-toggle"> Auto-download new episodes</label>
       <span class="field-hint">
-        Downloads unwatched, available episodes of shows you're watching (and
-        planned shows that have started airing) in the background, roughly
-        every 30 minutes.
+        Downloads unwatched episodes that Sonarr grabbed recently (see below), for
+        shows you're watching (and planned shows that have started airing), in
+        the background, roughly every 30 minutes.
+      </span>
+    </div>
+    <div class="field-group" id="app-grab-days-group">
+      <label for="app-grab-days">Auto-download Sonarr grabs from the last (days)</label>
+      <input type="number" id="app-grab-days" min="1" max="30" step="1" placeholder="3">
+      <span class="field-hint">
+        Only episodes Sonarr grabbed within this many days are downloaded
+        automatically (1–30, default 3). Older ones can still be downloaded by hand.
       </span>
     </div>
     <div class="field-group field-checkbox">
@@ -195,12 +196,10 @@
 </main>
 
 <script type="module">
-  import { getConfig, saveConfig, syncConfig, applyAppName } from './js/config.js?v=6';
+  import { getConfig, saveConfig, syncConfig, applyAppName } from './js/config.js?v=7';
   import { initSearch } from './js/search.js?v=12';
-  import { mountDesignPicker } from './js/cards-v2.js?v=11';
   applyAppName();
   initSearch();
-  mountDesignPicker(document.getElementById('design-picker-mount'));
 
   const form      = document.getElementById('settings-form');
   const savedMsg  = document.getElementById('settings-saved');
@@ -236,6 +235,7 @@
     const wifiOnlyToggle = document.getElementById('app-wifi-only-toggle');
     const storageLimit   = document.getElementById('app-storage-limit');
     const autoDeleteHrs  = document.getElementById('app-auto-delete-hours');
+    const grabDays       = document.getElementById('app-grab-days');
 
     async function initAppSettings() {
       try {
@@ -244,6 +244,9 @@
         wifiOnlyToggle.checked = !!s.wifiOnly;
         storageLimit.value     = s.storageLimitGb > 0 ? s.storageLimitGb : '';
         autoDeleteHrs.value    = s.autoDeleteWatchedHours > 0 ? s.autoDeleteWatchedHours : '';
+        // An app build older than 2026-11-11 has no grab window: hide the field there.
+        if (typeof s.autoDownloadGrabDays === 'number') grabDays.value = s.autoDownloadGrabDays;
+        else document.getElementById('app-grab-days-group').style.display = 'none';
         section.style.display = '';
       } catch (e) {
         console.warn('[starfleet] AppSettings.getSettings failed:', e);
@@ -262,6 +265,12 @@
     storageLimit.addEventListener('change', () => {
       const value = parseFloat(storageLimit.value) || 0;
       window.Capacitor.Plugins.AppSettings.updateSettings({ storageLimitGb: value })
+        .catch(e => console.warn('[starfleet] AppSettings.updateSettings failed:', e));
+    });
+    grabDays.addEventListener('change', () => {
+      const value = Math.min(30, Math.max(1, parseInt(grabDays.value, 10) || 3));
+      grabDays.value = value;
+      window.Capacitor.Plugins.AppSettings.updateSettings({ autoDownloadGrabDays: value })
         .catch(e => console.warn('[starfleet] AppSettings.updateSettings failed:', e));
     });
     autoDeleteHrs.addEventListener('change', () => {

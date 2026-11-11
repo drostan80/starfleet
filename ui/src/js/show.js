@@ -12,7 +12,7 @@
  * ordering TBD (batch 5 — specials placement decision pending).
  */
 
-import { bootstrapConfig, requireConfig, rewriteHost, applyAppName } from './config.js?v=6';
+import { bootstrapConfig, requireConfig, rewriteHost, applyAppName } from './config.js?v=7';
 import {
   fetchShow, addWatchEvent, deleteWatchEvent, setScore, setSeasonScore,
   setSeasonStatus, setSeasonMapping, reconcileSeasonMapping,
@@ -23,11 +23,11 @@ import {
   linkShowExternalId, unlinkShowExternalId, refreshShowMetadata,
   setEpisodeNumber, splitSeason, setDisplayTitle, searchAniList,
   amendShowArrLink, linkAniDb,
-} from './api.js?v=34';
+} from './api.js?v=35';
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange, airChangeBadge, isDateOnly,
-} from './calendar.js?v=67';
+} from './calendar.js?v=68';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,

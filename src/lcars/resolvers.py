@@ -18,8 +18,10 @@ the ObjectType bindings below only exist for fields that need real
 logic (relationships, computed values, paginated connections).
 """
 
+import datetime
 import json
 import logging
+import re
 import urllib.parse
 
 from ariadne import EnumType, MutationType, ObjectType, QueryType, SubscriptionType
@@ -883,8 +885,80 @@ def resolve_episodes_in_range(_, info, start, end, **page_args):
     )
 
 
+_GRAB_HISTORY_PAGE_SIZE = 250
+_GRAB_HISTORY_MAX_PAGES = 4
+
+
+def _recently_grabbed_episode_ids(conn, days: int) -> list[str]:
+    """Ids of the episodes Sonarr grabbed in the last `days` days (Sonarr's own history, grabs
+    only, newest first, read until a record falls outside the window). An episode is matched by
+    its show's TVDB id and Sonarr's season/episode numbers, the same key `recentGrabs` uses.
+    Sonarr not configured or not answering gives an empty list: the caller (the app's
+    auto-download) then downloads nothing rather than everything."""
+    cfg = config.get_current()
+    if not cfg.sonarr_url or not cfg.sonarr_api_key:
+        return []
+    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)
+    keys: set[tuple[str, int, int]] = set()
+    try:
+        with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
+            for page in range(1, _GRAB_HISTORY_MAX_PAGES + 1):
+                data = client.history_page(
+                    page=page, page_size=_GRAB_HISTORY_PAGE_SIZE, event_type=1
+                )
+                records = data.get("records") or []
+                reached_cutoff = False
+                for r in records:
+                    try:
+                        # fraction dropped: seconds are enough (Sonarr may send 7 digits)
+                        when = datetime.datetime.fromisoformat(
+                            re.sub(r"\.\d+", "", str(r.get("date", ""))).replace("Z", "+00:00")
+                        )
+                    except ValueError:
+                        continue
+                    if when.tzinfo is None:
+                        when = when.replace(tzinfo=datetime.UTC)
+                    if when < cutoff:
+                        reached_cutoff = True
+                        continue
+                    ep = r.get("episode") or {}
+                    tvdb_id = str((r.get("series") or {}).get("tvdbId", "") or "")
+                    if tvdb_id and ep.get("seasonNumber") is not None and (
+                        ep.get("episodeNumber") is not None
+                    ):
+                        keys.add((tvdb_id, ep["seasonNumber"], ep["episodeNumber"]))
+                if reached_cutoff or len(records) < _GRAB_HISTORY_PAGE_SIZE:
+                    break
+    except sonarr_client.SonarrError:
+        return []
+    if not keys:
+        return []
+    tvdb_ids = list({k[0] for k in keys})
+    rows = conn.execute(
+        "SELECT external_id, show_id FROM show_external_id"
+        " WHERE service = 'tvdb' AND external_id IN ({})".format(",".join("?" * len(tvdb_ids))),
+        tvdb_ids,
+    ).fetchall()
+    shows_by_tvdb: dict[str, list[str]] = {}
+    for r in rows:
+        shows_by_tvdb.setdefault(str(r["external_id"]), []).append(r["show_id"])
+    ids: list[str] = []
+    for tvdb_id, season, episode in keys:
+        for show_id in shows_by_tvdb.get(tvdb_id, []):
+            ep_row = conn.execute(
+                "SELECT id FROM episode WHERE show_id = ? AND sonarr_season = ?"
+                " AND sonarr_episode = ?",
+                (show_id, season, episode),
+            ).fetchone()
+            if ep_row:
+                ids.append(ep_row["id"])
+    return ids
+
+
 @query.field("backlog")
-def resolve_backlog(_, info, include_planned=False, **page_args):
+def resolve_backlog(
+    _, info, include_planned=False, grabbed_within_days=None, **page_args
+):
     """§6.3, B.9 — the backlog: unwatched, locally-available episodes on
     watching-status shows. Any watching show with available-but-unwatched
     episodes qualifies — the previous _show_is_airing gate excluded
@@ -903,20 +977,30 @@ def resolve_backlog(_, info, include_planned=False, **page_args):
     is exactly the case the user wants included, not excluded by an extra
     gate watching shows were never subject to. Default false: every other
     caller (the web Backlog page) keeps the original watching-only
-    behavior unchanged."""
+    behavior unchanged.
+
+    grabbedWithinDays (the app's auto-download, 2026-11-11, user): keep only episodes Sonarr
+    grabbed in the last N days (`_recently_grabbed_episode_ids`); Sonarr unreachable = none."""
     conn = db.get_connection()
     show_filter = "status = 'watching'"
     if include_planned:
         show_filter = "status = 'watching' OR status = 'planned'"
-    return pagination.paginate(
-        conn,
-        "episode",
+    where = (
         "state = 'unwatched' AND available_locally = 1"
         f" AND show_id IN (SELECT id FROM show WHERE {show_filter})"
-        f" AND {status_rules.followed_sql()}",
-        (),
-        **page_args,
+        f" AND {status_rules.followed_sql()}"
     )
+    params: tuple = ()
+    if grabbed_within_days is not None:
+        # The app's auto-download (2026-11-11, user): only what Sonarr grabbed in the last N days,
+        # not every unwatched file on the server.
+        ids = _recently_grabbed_episode_ids(conn, grabbed_within_days)
+        if not ids:
+            where += " AND 0"
+        else:
+            where += " AND id IN ({})".format(",".join("?" * len(ids)))
+            params = tuple(ids)
+    return pagination.paginate(conn, "episode", where, params, **page_args)
 
 
 @query.field("pendingReviews")

@@ -10096,6 +10096,83 @@ async def test_recent_grabs_resolves_show_id_and_file_path(client, monkeypatch):
     assert fake.history_event_type == 1  # grabs only: a purge must not crowd them out
 
 
+async def _backlog_grab_setup(client, monkeypatch, grab_date):
+    show = await add_show(
+        client, mediaShape="EPISODIC", trackingSpace="TV", titleRomaji="Window Test"
+    )
+    await gql(
+        client,
+        'mutation($id: ID!) { linkShowExternalId(showId: $id, service: "tvdb",'
+        ' externalId: "557078", url: "https://x") { service } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    conn = db.get_connection()
+    conn.execute("UPDATE show SET status = 'watching' WHERE id = ?", (show["id"],))
+    for n in (1, 2):
+        conn.execute(
+            "INSERT INTO episode (id, show_id, season, episode, kind, state, available_via_sonarr,"
+            " sonarr_season, sonarr_episode, file_path_sonarr, created_at, updated_at)"
+            " VALUES (?, ?, 1, ?, 'regular', 'unwatched', 'available', 1, ?,"
+            " '/data/w/x.mkv', 'x', 'x')",
+            (f"e-win00{n}", show["id"], n, n),
+        )
+    conn.commit()
+    cfg = config.get_current()
+    cfg.sonarr_url = "http://sonarr.test"
+    cfg.sonarr_api_key = "test-key"
+    fake = _FakeSonarrClient(history_page_result={
+        "records": [{
+            "eventType": "grabbed",
+            "series": {"title": "Window Test", "tvdbId": 557078},
+            "date": grab_date,
+            "episode": {"seasonNumber": 1, "episodeNumber": 2},
+        }],
+    })
+    monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
+
+
+BACKLOG_WINDOW = (
+    "{ backlog(grabbedWithinDays: 3) { edges { node { id } } } }"
+)
+
+
+async def test_backlog_grabbed_within_days_keeps_only_recent_grabs(client, monkeypatch):
+    import datetime as _dt
+
+    # Sonarr's form with a 7-digit fraction must parse too
+    recent = (_dt.datetime.now(_dt.UTC) - _dt.timedelta(hours=5)).strftime(
+        "%Y-%m-%dT%H:%M:%S.1234567Z"
+    )
+    await _backlog_grab_setup(client, monkeypatch, recent)
+    data = await gql(client, BACKLOG_WINDOW, headers=auth_headers())
+    assert [e["node"]["id"] for e in data["backlog"]["edges"]] == ["e-win002"]
+
+
+async def test_backlog_grabbed_within_days_ignores_old_grabs(client, monkeypatch):
+    import datetime as _dt
+
+    old = (_dt.datetime.now(_dt.UTC) - _dt.timedelta(days=10)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    await _backlog_grab_setup(client, monkeypatch, old)
+    data = await gql(client, BACKLOG_WINDOW, headers=auth_headers())
+    assert data["backlog"]["edges"] == []
+
+
+async def test_backlog_grabbed_within_days_sonarr_unconfigured_gives_nothing(client, monkeypatch):
+    import datetime as _dt
+
+    recent = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    await _backlog_grab_setup(client, monkeypatch, recent)
+    config.get_current().sonarr_url = ""
+    data = await gql(client, BACKLOG_WINDOW, headers=auth_headers())
+    assert data["backlog"]["edges"] == []
+    # without the window the same two episodes are the whole backlog (unchanged behaviour)
+    data = await gql(client, "{ backlog { edges { node { id } } } }", headers=auth_headers())
+    assert len(data["backlog"]["edges"]) == 2
+
+
 PREVIEW_SHOW_BACKFILL = """
     query {
       previewShowBackfill { service title externalId trackingSpace mediaShape }

@@ -1,34 +1,4 @@
-/* The redesigned cards (cards-v2.js). Only used when Design = New. */
-
-/* ── Design switch ─────────────────────────────────────── */
-.design-picker {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-}
-.design-picker-label {
-  padding: 0 6px 0 8px;
-  font-family: 'DM Mono', monospace;
-  font-size: 10px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.design-opt {
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font: 500 12px 'DM Sans', sans-serif;
-  padding: 4px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.design-opt:hover { color: var(--text); }
-.design-opt.active { background: var(--accent-d); color: var(--text); }
+/* The episode cards (cards-v2.js), the only card design since 2026-11-11. */
 
 /* ── Indicator circle (card and banner) ────────────────── */
 .ind {

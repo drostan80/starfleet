@@ -62,9 +62,20 @@ object LcarsClient {
     // practical sense; auto-download shouldn't wait for a manual promotion
     // to watching. Paused shows are unaffected (backlog never included
     // them, still doesn't).
+    // 2026-11-11, user: auto-download only what is unwatched AND grabbed by Sonarr in the last
+    // N days (Settings → App Downloads, default 3). The server filters (Sonarr's grab history);
+    // an older server rejects the argument and the worker downloads nothing, never everything.
+    const val GRAB_WINDOW_PREF = "auto_download_grab_days"
+    const val GRAB_WINDOW_DEFAULT_DAYS = 3
+    const val GRAB_WINDOW_MAX_DAYS = 30
+
+    fun grabWindowDays(context: Context): Int =
+        prefs(context).getInt(GRAB_WINDOW_PREF, GRAB_WINDOW_DEFAULT_DAYS)
+            .coerceIn(1, GRAB_WINDOW_MAX_DAYS)
+
     private const val BACKLOG_QUERY = """
-        query Backlog(${'$'}first: Int) {
-          backlog(first: ${'$'}first, includePlanned: true) {
+        query Backlog(${'$'}first: Int, ${'$'}days: Int) {
+          backlog(first: ${'$'}first, includePlanned: true, grabbedWithinDays: ${'$'}days) {
             edges { node {
               id season episode title
               filePathSonarr filePathRadarr availableLocally
@@ -84,7 +95,11 @@ object LcarsClient {
      */
     fun fetchBacklog(context: Context, first: Int = 100): List<BacklogEpisode> {
         val json = try {
-            graphql(context, BACKLOG_QUERY, JSONObject().put("first", first))
+            graphql(
+                context,
+                BACKLOG_QUERY,
+                JSONObject().put("first", first).put("days", grabWindowDays(context)),
+            )
         } catch (e: Exception) {
             null
         } ?: return emptyList()

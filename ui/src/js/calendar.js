@@ -9,8 +9,8 @@
  * - Month: prev/next step by a month; the grid is whole Mon–Sun weeks around the month
  */
 
-import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=6';
-import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=34';
+import { getConfig, requireConfig, bootstrapConfig, rewriteHost, applyAppName } from './config.js?v=7';
+import { fetchEpisodesInRange, addWatchEvent, deleteWatchEvent, setStatus, getShowArtAssets } from './api.js?v=35';
 import { openArtPicker } from './art-picker.js?v=13';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -21,8 +21,8 @@ import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _jellyfinSvg, _tvdbSvg, _imdbMa
 import { startDownload } from './downloads.js?v=2';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
-  registerHelpers, getDesign, buildCardV2, buildBannerRow, buildBannerGroup, buildMonthTile, patchBannerRows,
-} from './cards-v2.js?v=11';
+  registerHelpers, buildCardV2, buildBannerRow, buildBannerGroup, buildMonthTile, patchBannerRows,
+} from './cards-v2.js?v=12';
 
 /* ── Constants ────────────────────────────────────────────── */
 
@@ -425,12 +425,6 @@ export function hasAired(ep) {
   return t !== null && t <= Date.now();
 }
 
-/** The air time for display: "all day" for a date-only episode, else the viewer's local time. */
-export function fmtEpAirTime(ep) {
-  if (isDateOnly(ep)) return 'all day';
-  return fmtAirTime(ep.airDateUtc);
-}
-
 /**
  * The calendar's change icons next to an air time: "!" when a source the season does not follow
  * moved its schedule by more than two hours, "?" when the schedule the season follows did.
@@ -792,185 +786,11 @@ export function artKey(ep) {
   return ep.seasonEntity?.id ? `season:${ep.seasonEntity.id}` : `show:${ep.show.id}`;
 }
 
-/* ── Per-show episode stats ───────────────────────────────── */
-
-/**
- * Show-level episode total — the one accurate count we have from the show node.
- * (A per-show watched count is not exposed by the API at query time.)
- */
-export function showTotal(show) {
-  return show.totalEpisodes ?? '?';
-}
-
 /* ── Card rendering ──────────────────────────────────────── */
 
-/**
- * Build a single episode card DOM element.
- *
- * @param {object} ep        - Episode node from GraphQL
- * @param {object} showStats - { available, aired, total } for this show
- * @param {object} cfg       - Config object
- * @returns {HTMLElement}
- */
+/** A single episode card (cards-v2.js; the Classic design was retired 2026-11-11, user). */
 export function buildCard(ep, cfg) {
-  if (getDesign() === 'new') return buildCardV2(ep, cfg);  // cards-v2.js (Design switch)
-  const avail  = availState(ep);
-  const aired  = hasAired(ep);
-  const status = ep.seasonEntity?.status || ep.show.status || 'WATCHING';
-  const externalIds = ep.show.externalIds.edges.map(e => e.node);
-
-  const card = document.createElement('article');
-  card.className = 'show-card';
-  card.dataset.episodeId = ep.id;
-  card.dataset.showId    = ep.show.id;
-
-  /* ── Meta bar ── */
-  const meta = document.createElement('div');
-  meta.className = 'card-meta';
-
-  const badge = document.createElement('span');
-  badge.className = 'ep-badge';
-  badge.textContent = fmtEpBadge(ep);
-  meta.appendChild(badge);
-
-  const airtime = document.createElement('span');
-  airtime.className = 'airtime';
-  airtime.textContent = fmtEpAirTime(ep);
-  const changeBadge = airChangeBadge(ep);
-  if (changeBadge) airtime.appendChild(changeBadge);
-  meta.appendChild(airtime);
-
-  const availIcon = document.createElement('span');
-  availIcon.className = `avail-icon avail-${avail}`;
-  availIcon.title = {
-    ready:       'Available',
-    downloading: 'Downloading',
-    airing:      'Airing now',
-    missing:     'Aired — not available and not downloading',
-    future:      'Not yet aired',
-  }[avail];
-  availIcon.textContent = avail === 'ready' ? '▶' : avail === 'future' ? '◷' : avail === 'airing' ? '●' : '⬇';
-  meta.appendChild(availIcon);
-
-  const watchBtn = document.createElement('button');
-  watchBtn.className = `watch-btn${ep.state === 'WATCHED' ? ' watched' : ''}`;
-  watchBtn.title = ep.state === 'WATCHED' ? 'Watched — click to unmark' : 'Mark as watched';
-  watchBtn.textContent = '✓';
-  watchBtn.dataset.state = ep.state;
-  const existingWid = ep.watchEvents?.edges?.[0]?.node?.id;
-  if (existingWid) watchBtn.dataset.watchEventId = existingWid;
-  watchBtn.addEventListener('click', () => onWatchToggle(watchBtn, ep));
-  meta.appendChild(watchBtn);
-
-  card.appendChild(meta);
-
-  /* ── Card body ── */
-  const body = document.createElement('div');
-  body.className = 'card-body';
-
-  // Service strip
-  const filePath = ep.show.mediaShape === 'MOVIE' ? ep.filePathRadarr : ep.filePathSonarr;
-  const malId    = ep.seasonEntity?.malId ?? null;
-  body.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg, episodeCtx(ep),
-                               ep.jellyfinUrl));
-
-  // Cover art — use posterUrl if available; otherwise use TMDB cache or trigger a fetch
-  const art = document.createElement('div');
-  art.className = 'card-art';
-  art.dataset.showId = ep.show.id;
-
-  // Click on art launches mpv for available episodes
-  if (ep.availableLocally) {
-    art.classList.add('art-playable');
-    art.addEventListener('click', () => launchMpv(filePath, cfg, episodeCtx(ep)));
-  }
-
-  const posterUrl = coverFor(ep) || posterCache.get(ep.show.id) || null;
-  art.dataset.artKey = artKey(ep);
-  if (posterUrl) {
-    const img = document.createElement('img');
-    img.src = posterUrl;
-    img.alt = ep.show.displayTitle;
-    // No loading="lazy" — cards render in a wrapped flex row, not off-screen
-    // below a scroll boundary, so lazy-loading only delays the request.
-    // If the LCARS-provided URL fails (Sonarr auth, broken path, etc.), fall back to TMDB
-    if (cfg.tmdb_api_key) {
-      img.onerror = () => {
-        img.remove();
-        posterCache.delete(ep.show.id); // allow fresh fetch
-        fetchTmdbPoster(ep.show, cfg.tmdb_api_key);
-      };
-    }
-    art.appendChild(img);
-  } else if (cfg.tmdb_api_key) {
-    // Kick off TMDB fetch; it will patch the DOM when it resolves
-    fetchTmdbPoster(ep.show, cfg.tmdb_api_key);
-  }
-  if (ep.show.score != null) {
-    const score = document.createElement('span');
-    score.className = 'art-score';
-    score.textContent = `★ ${ep.show.score.toFixed(1)}`;
-    art.appendChild(score);
-  }
-  body.appendChild(art);
-
-  card.appendChild(body);
-
-  /* ── Footer ── */
-  const footer = document.createElement('div');
-  footer.className = 'card-footer';
-
-  const title = document.createElement('a');
-  title.className = 'show-title';
-  title.href = `show.html?id=${encodeURIComponent(ep.show.id)}`;
-  title.textContent = ep.show.displayTitle;
-  title.title = ep.show.displayTitle;
-  footer.appendChild(title);
-
-  // Episode counts — watched / available / total, centered
-  const w = ep.show.watchedEpisodeCount;
-  const a = ep.show.availableEpisodeCount;
-  const total = showTotal(ep.show);
-  if (w != null || a != null || total !== '?') {
-    const counts = document.createElement('div');
-    counts.className = 'ep-counts';
-    const parts = [];
-    if (w != null) parts.push(`<span class="c-watched">W-${w}</span>`);
-    if (a != null) { if (parts.length) parts.push(`<span class="c-sep">/</span>`); parts.push(`<span class="c-avail">A-${a}</span>`); }
-    if (total !== '?') { if (parts.length) parts.push(`<span class="c-sep">/</span>`); parts.push(`<span class="c-total">T-${total}</span>`); }
-    counts.innerHTML = parts.join('');
-    footer.appendChild(counts);
-  }
-
-  card.appendChild(footer);
-
-  // Download button — absolutely pinned to bottom-left of the card
-  if (ep.availableLocally && filePath) {
-    const dlBtn = document.createElement('button');
-    dlBtn.className = 'card-dl-btn';
-    dlBtn.title = 'Download';
-    dlBtn.innerHTML = _downloadSvg;
-    dlBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      startDownload({
-        showTitle: ep.show.displayTitle,
-        label: fmtEpBadge(ep) + (ep.title ? ` — ${ep.title}` : ''),
-        filePath,
-        episodeId: ep.id,
-        showId: ep.show.id,
-        season: ep.season ?? null,
-        episode: ep.episode ?? null,
-      });
-      dlBtn.classList.add('triggered');
-      setTimeout(() => dlBtn.classList.remove('triggered'), 1200);
-    });
-    card.appendChild(dlBtn);
-  }
-
-  // Status button — absolutely pinned to bottom-right of the card itself
-  card.appendChild(buildStatusBtn({ id: ep.show.id, currentStatus: status, onPick: onStatusChange }));
-
-  return card;
+  return buildCardV2(ep, cfg);
 }
 
 /* ── Status icon button + radial picker ──────────────────── */
@@ -1343,11 +1163,11 @@ function renderPlanner(dayGroups, todayStr, cfg) {
         if (!b.airDateUtc) return -1;
         return new Date(a.airDateUtc) - new Date(b.airDateUtc);
       });
-      // Design = New: the 1D / 3D rows are banner rows; the week keeps buildCard (the new card)
-      const cardFn = wideMode ? (getDesign() === 'new'
+      // the 1D / 3D rows are banner rows; the week keeps the card
+      const cardFn = wideMode
         ? (e, c) => buildBannerRow(e, c, { withCard: state.mode !== '3d' })
-        : buildPlannerCard) : buildCard;
-      appendGroupedEpisodes(col, group.episodes, cfg, cardFn, wideMode && getDesign() === 'new');
+        : buildCard;
+      appendGroupedEpisodes(col, group.episodes, cfg, cardFn, wideMode);
     }
 
     container.appendChild(col);
@@ -1413,190 +1233,6 @@ function fmtTimeOnly(isoUtc) {
   const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone?.split('/').pop()?.replace('_', ' ') || '';
   return `${time} ${tz}`.trim();
-}
-
-/**
- * Build a horizontal browse-style card for planner columns (1–3 cols).
- * Layout: [svc-strip] [poster img, scaled] [detail pane with optional banner bg]
- */
-function buildPlannerCard(ep, cfg) {
-  const avail  = availState(ep);
-  const aired  = hasAired(ep);
-  const status = ep.seasonEntity?.status || ep.show.status || 'WATCHING';
-
-  const card = document.createElement('article');
-  card.className = 'planner-card';
-  card.dataset.episodeId = ep.id;
-  card.dataset.showId    = ep.show.id;
-
-  const filePath = ep.show.mediaShape === 'MOVIE' ? ep.filePathRadarr : ep.filePathSonarr;
-
-  // Service strip — same vertical icon bar as regular calendar cards
-  const externalIds = ep.show.externalIds?.edges?.map(e => e.node) || [];
-  const malId = ep.seasonEntity?.malId ?? null;
-  card.appendChild(buildSvcStrip(externalIds, malId, filePath, ep.availableLocally, cfg, episodeCtx(ep),
-                               ep.jellyfinUrl));
-
-  // Cover image — full poster, scaled (not cropped)
-  const cover = document.createElement('div');
-  cover.className = 'planner-cover';
-  cover.dataset.showId = ep.show.id;
-  const posterUrl = coverFor(ep) || posterCache.get(ep.show.id) || null;
-  if (posterUrl) {
-    const img = document.createElement('img');
-    img.src = posterUrl;
-    img.alt = ep.show.displayTitle;
-    if (cfg.tmdb_api_key) {
-      img.onerror = () => {
-        img.remove();
-        posterCache.delete(ep.show.id);
-        fetchTmdbPoster(ep.show, cfg.tmdb_api_key);
-      };
-    }
-    cover.appendChild(img);
-  } else if (cfg.tmdb_api_key) {
-    fetchTmdbPoster(ep.show, cfg.tmdb_api_key);
-  }
-
-  if (ep.availableLocally) {
-    cover.classList.add('art-playable');
-    cover.addEventListener('click', () => launchMpv(filePath, cfg, episodeCtx(ep)));
-  }
-
-  card.appendChild(cover);
-
-  // Detail body — banner art background when available
-  const body = document.createElement('div');
-  body.className = 'planner-body';
-  body.dataset.showId = ep.show.id;
-  const bannerSrc = ep.show.bannerUrl || backdropCache.get(ep.show.id) || null;
-  if (bannerSrc) {
-    body.classList.add('has-banner');
-    body.style.setProperty('--banner-url', `url(${bannerSrc})`);
-  } else if (cfg.tmdb_api_key) {
-    fetchTmdbBackdrop(ep.show, cfg.tmdb_api_key);
-  }
-
-  // Title
-  const title = document.createElement('a');
-  title.className = 'planner-title';
-  title.href = `show.html?id=${encodeURIComponent(ep.show.id)}`;
-  title.textContent = ep.show.displayTitle;
-  title.title = ep.show.displayTitle;
-  body.appendChild(title);
-
-  // Badge row: S01E02 + air time (time only, no date)
-  const badgeRow = document.createElement('div');
-  badgeRow.className = 'planner-badge-row';
-  const badge = document.createElement('span');
-  badge.className = 'planner-badge';
-  badge.textContent = fmtEpBadge(ep);
-  badgeRow.appendChild(badge);
-  const timeStr = isDateOnly(ep) ? 'all day' : fmtTimeOnly(ep.airDateUtc);
-  if (timeStr) {
-    const airtime = document.createElement('span');
-    airtime.className = 'planner-airtime';
-    airtime.textContent = timeStr;
-    const changeBadge = airChangeBadge(ep);
-    if (changeBadge) airtime.appendChild(changeBadge);
-    badgeRow.appendChild(airtime);
-  }
-  body.appendChild(badgeRow);
-
-  // Action row: avail/play button + watch button
-  const actions = document.createElement('div');
-  actions.className = 'planner-actions';
-
-  const availBtn = document.createElement('button');
-  availBtn.className = `planner-avail-btn avail-${avail}`;
-  availBtn.title = {
-    ready:       'Play in mpv',
-    downloading: 'Downloading',
-    airing:      'Airing now',
-    missing:     'Aired — not available',
-    future:      'Not yet aired',
-  }[avail];
-  availBtn.textContent = avail === 'ready' ? '▶' : avail === 'future' ? '◷' : avail === 'airing' ? '●' : '⬇';
-  if (avail === 'ready' && ep.availableLocally) {
-    availBtn.addEventListener('click', () => launchMpv(filePath, cfg, episodeCtx(ep)));
-  }
-  actions.appendChild(availBtn);
-
-  const watchBtn = document.createElement('button');
-  watchBtn.className = `watch-btn${ep.state === 'WATCHED' ? ' watched' : ''}`;
-  watchBtn.title = ep.state === 'WATCHED' ? 'Watched — click to unmark' : 'Mark as watched';
-  watchBtn.textContent = '✓';
-  watchBtn.dataset.state = ep.state;
-  const existingWid = ep.watchEvents?.edges?.[0]?.node?.id;
-  if (existingWid) watchBtn.dataset.watchEventId = existingWid;
-  watchBtn.addEventListener('click', () => onWatchToggle(watchBtn, ep));
-  actions.appendChild(watchBtn);
-
-  // Episode counts
-  const w = ep.show.watchedEpisodeCount;
-  const a = ep.show.availableEpisodeCount;
-  const total = showTotal(ep.show);
-  if (w != null || a != null || total !== '?') {
-    const counts = document.createElement('div');
-    counts.className = 'ep-counts planner-counts';
-    const parts = [];
-    if (w != null) parts.push(`<span class="c-watched">W-${w}</span>`);
-    if (a != null) { if (parts.length) parts.push(`<span class="c-sep">/</span>`); parts.push(`<span class="c-avail">A-${a}</span>`); }
-    if (total !== '?') { if (parts.length) parts.push(`<span class="c-sep">/</span>`); parts.push(`<span class="c-total">T-${total}</span>`); }
-    counts.innerHTML = parts.join('');
-    body.appendChild(counts);
-  }
-
-  // Episode title if available
-  if (ep.title) {
-    const epTitle = document.createElement('div');
-    epTitle.className = 'planner-ep-title';
-    epTitle.textContent = ep.title;
-    body.appendChild(epTitle);
-  }
-
-  // Action buttons (absolutely positioned right side — appended last)
-  body.appendChild(actions);
-
-  card.appendChild(body);
-
-  // Art picker button — opens full art picker modal
-  const fetchBtn = document.createElement('button');
-  fetchBtn.className = 'planner-fetch-art';
-  fetchBtn.title = 'Choose banner art';
-  fetchBtn.textContent = '🖼';
-  fetchBtn.addEventListener('click', async () => {
-    fetchBtn.textContent = '⏳';
-    fetchBtn.disabled = true;
-    try {
-      const result = await getShowArtAssets(ep.show.id);
-      const showObj = { id: ep.show.id, artAssets: result.artAssets || [] };
-      openArtPicker(showObj, null, 'banner', null, (url) => {
-        ep.show.bannerUrl = url;
-        backdropCache.set(ep.show.id, url);
-        body.classList.add('has-banner');
-        body.style.setProperty('--banner-url', `url(${url})`);
-        document.querySelectorAll(`.planner-card .planner-body[data-show-id="${ep.show.id}"]`).forEach(b => {
-          if (b !== body) {
-            b.classList.add('has-banner');
-            b.style.setProperty('--banner-url', `url(${url})`);
-          }
-        });
-      }, (msg) => showBanner(msg, 'error'));
-    } catch {
-      fetchBtn.textContent = '✗';
-      setTimeout(() => { fetchBtn.textContent = '🖼'; fetchBtn.disabled = false; }, 2000);
-      return;
-    }
-    fetchBtn.textContent = '🖼';
-    fetchBtn.disabled = false;
-  });
-  card.appendChild(fetchBtn);
-
-  // Status flower picker
-  card.appendChild(buildStatusBtn({ id: ep.show.id, currentStatus: status, onPick: onStatusChange }));
-
-  return card;
 }
 
 /**
