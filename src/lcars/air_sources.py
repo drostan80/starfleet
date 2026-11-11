@@ -503,7 +503,8 @@ def auto_apply(conn, show_id: str, events: list[dict]) -> dict:
         earliest = _earliest_syoboi(cands)
         if (earliest is not None and current[1] == "syoboi"
                 and current[0] != earliest["air_date_utc"]
-                and any(c["source"] == "syoboi" and c["air_date_utc"] == current[0] for c in cands)):
+                and any(c["source"] == "syoboi" and c["air_date_utc"] == current[0]
+                        for c in cands)):
             # stored on a later Syoboi station (a rebroadcast) than its earliest one: the premiere
             # wins, the same rule as syoboi.rewire_airdates (user 2026-11-11)
             _write_date(conn, row["id"], anime, "syoboi", earliest["air_date_utc"],
@@ -517,7 +518,7 @@ def auto_apply(conn, show_id: str, events: list[dict]) -> dict:
             key=lambda e: (e["precision"] != air_time.TIME, e["new"]),
         )
         for e in ordered:
-            if e["source"] == current[1] and e["new"] == current[0] and e["precision"] == current[2]:
+            if (e["source"], e["new"], e["precision"]) == (current[1], current[0], current[2]):
                 continue  # already stored
             if (e["source"] in airdate_priority.WEAK_SOURCES
                     and current[1] not in airdate_priority.WEAK_SOURCES
