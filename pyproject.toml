@@ -11,7 +11,9 @@ dependencies = [
     # Schema-first GraphQL, hand-written SDL wired to resolvers — SCOPE.md §11.1.
     "ariadne>=0.23",
     # graphql-core 3.3.0 (09-30) breaks ariadne 1.1.0 (no ExecutionContext): stay on 3.2.x.
-    "graphql-core>=3.2,<3.3",
+    # 3.2.14 (11-11) calls enum parse_value with two arguments; ariadne 1.1.1's enum patch takes
+    # one, so every enum input fails (382 CI tests, v0.4.28): stay below 3.2.14 until ariadne follows.
+    "graphql-core>=3.2,<3.2.14",
     # ASGI server to run the Ariadne app; async matches aniq's own httpx-based
     # convention (CLAUDE.md, aniq repo) for the outbound Sonarr/AniList/MAL calls
     # LCARS grows in Phase B.
