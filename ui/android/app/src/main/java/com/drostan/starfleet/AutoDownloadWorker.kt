@@ -49,8 +49,12 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
          * running every 30 minutes.
          */
         fun schedule(context: Context) {
-            val enabled = context.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
-                .getBoolean("auto_download_enabled", true)
+            // 2026-11-11 (user): "delete watched episodes after N hours" must work with
+            // auto-download off too, so the tick also runs when only that is set (doWork
+            // then deletes and stops before downloading anything).
+            val prefs = context.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
+            val enabled = prefs.getBoolean("auto_download_enabled", true) ||
+                prefs.getFloat("auto_delete_watched_hours", 0f) > 0f
             if (!enabled) {
                 cancel(context)
                 return
@@ -99,6 +103,11 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
         // lowered the storage limit, a fresh batch shouldn't immediately
         // blow past it again.
         evict(applicationContext, db)
+
+        // Running only for the auto-delete (see schedule()): nothing to download.
+        val autoDownload = applicationContext.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
+            .getBoolean("auto_download_enabled", true)
+        if (!autoDownload) return@withContext Result.success()
 
         val backlog = LcarsClient.fetchBacklog(applicationContext)
         val existingIds = db.listAll().map { it.episodeId }.toSet()

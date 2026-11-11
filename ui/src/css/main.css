@@ -1916,3 +1916,30 @@ body {
 .parent-picker-row:hover {
   background: var(--surface);
 }
+
+/* ── Episode stored on this device (Android app only; downloads.js sets .on-device) ──
+   2026-11-11 (user): the download button turns green (tapping it does nothing) and the play
+   buttons turn blue (they play the local copy, offline). */
+.on-device .svc.svc-dl,
+.on-device .sp-dl-icon.available {
+  color: var(--st-watching);
+  background: rgba(34,197,94,0.22);
+  opacity: 1;
+  cursor: default;
+}
+.on-device .svc.svc-dl:hover { color: var(--st-watching); }
+.on-device .card-art.art-playable::after,
+.on-device .card-art.art-playable:hover::after,
+.on-device .mt-play,
+.on-device .mt-play:hover {
+  color: var(--st-completed);
+}
+.on-device .bn-play,
+.on-device .bn-play:hover { background: var(--st-completed); }
+/* the mpv logo is a picture: a blue ring around it instead */
+.on-device .svc.svc-player,
+.on-device .sp-mpv-icon.available,
+.on-device .sp-mpv-btn {
+  box-shadow: 0 0 0 2px var(--st-completed);
+  background: rgba(59,130,246,0.25);
+}

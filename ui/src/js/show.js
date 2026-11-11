@@ -27,7 +27,7 @@ import {
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange, airChangeBadge, isDateOnly,
-} from './calendar.js?v=68';
+} from './calendar.js?v=69';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -35,7 +35,7 @@ import {
 } from './status-picker.js?v=2';
 import { renderKeepBadge, remindKeep } from './keep.js?v=7';
 import { SVC_ICONS, _mpvSvg, _jellyfinSvg, _downloadSvg } from './icons.js?v=17';
-import { startDownload } from './downloads.js?v=2';
+import { startDownload } from './downloads.js?v=4';
 import { openArtPicker } from './art-picker.js?v=13';
 
 /* ── Constants ───────────────────────────────────────────── */
@@ -1558,6 +1558,7 @@ function renderAnidbOrder(show, container, cfg) {
 function buildAnidbEpRow(ep, show, cfg) {
   const m = ep.anidbMapping;
   const row = el('div', 'sp-ep-row');
+  row.dataset.dlEp = ep.id;  // downloads.js marks it on-device
 
   const avail = epAvailState(ep, show.mediaShape, show.durationMinutes);
   if (avail === 'future') row.classList.add('future');
@@ -1615,6 +1616,7 @@ function buildAnidbEpRow(ep, show, cfg) {
       // isWatched a few lines below, and the same pattern repeated at
       // every other watched-check in this file).
       launchMpv(epFilePath, cfg, {
+        episodeId: ep.id,  // plays the local copy when it is on this device
         showId: show.id,
         season: ep.season,
         episode: ep.episode,
@@ -2797,6 +2799,7 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
   for (const ep of mergedEps) {
     const isMini = minisodes.includes(ep);
     const row = el('div', `sp-ep-row${isMini ? ' minisode' : ''}`);
+    row.dataset.dlEp = ep.id;  // downloads.js marks it on-device
 
     const avail = epAvailState(ep, show.mediaShape, show.durationMinutes);
     if (avail === 'future') row.classList.add('future');
@@ -2854,6 +2857,7 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     if (canPlay) {
       mpvIcon.innerHTML = _mpvSvg;
       mpvIcon.addEventListener('click', () => launchMpv(epFilePath, cfg, {
+        episodeId: ep.id,  // plays the local copy when it is on this device
         showId: show.id,
         season: ep.season,
         episode: ep.episode,

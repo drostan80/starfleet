@@ -55,6 +55,8 @@ export function downloadUrl(filePath) {
  */
 export async function startDownload({ showTitle, label, filePath, episodeId, showId, season, episode }) {
   if (window.Capacitor?.isNativePlatform?.()) {
+    // Already stored on this device: the (green) button does nothing (user 2026-11-11).
+    if (isOnDevice(episodeId)) return { alreadyOnDevice: true };
     // showId/season/episode: stored alongside the download (DownloadDatabase,
     // A4) so VlcPlugin can report addWatchEvent for offline playback without
     // JS needing to pass them again at play time — episodeId alone is
@@ -181,6 +183,57 @@ export async function getDownloads() {
  */
 export function getDownloadCount() {
   return loadEntries().length;
+}
+
+/* ── Episodes stored on this device (Android only) ───────── */
+
+/*
+ * 2026-11-11 (user): in the app, an episode already downloaded to this device shows its download
+ * button green (tapping it does nothing) and its play button blue (it plays the local copy, offline).
+ * The set below mirrors DownloadPlugin's index (status 'complete' only); every element carrying an
+ * episode id (`data-episode-id`, or `data-dl-ep` on the show page's episode rows) gets the class
+ * `on-device` while that episode is stored here; the colours live in main.css.
+ */
+let _onDevice = new Set();
+
+function isNative() { return !!window.Capacitor?.isNativePlatform?.(); }
+
+/** True when this episode's file is downloaded on this device (always false off Android). */
+export function isOnDevice(episodeId) {
+  return episodeId != null && _onDevice.has(String(episodeId));
+}
+
+/** Toggle `on-device` on every element in `root` that names an episode. */
+export function markOnDevice(root = document) {
+  root.querySelectorAll('[data-episode-id], [data-dl-ep]').forEach((n) => {
+    const id = n.dataset.dlEp || n.dataset.episodeId;
+    n.classList.toggle('on-device', _onDevice.has(id));
+  });
+}
+
+/** Re-read the native index, then re-mark the page. */
+export async function refreshOnDevice() {
+  if (!isNative()) return;
+  try {
+    const { downloads } = await window.Capacitor.Plugins.Download.listDownloads();
+    _onDevice = new Set(downloads.filter((d) => d.status === 'complete').map((d) => String(d.episodeId)));
+  } catch { return; }  // keep the last known set
+  markOnDevice();
+}
+
+if (isNative()) {
+  refreshOnDevice();
+  // Pages rebuild their cards on every refresh: mark new ones as they appear (once per frame).
+  let queued = false;
+  new MutationObserver(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; markOnDevice(); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  // A download finishing, the auto-delete, or a watched episode: re-read now and then.
+  setInterval(refreshOnDevice, 60_000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshOnDevice(); });
+  window.addEventListener('starfleet:refresh-after-watch', () => refreshOnDevice());
 }
 
 /* ── Internal ────────────────────────────────────────────── */

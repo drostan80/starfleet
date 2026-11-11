@@ -18,7 +18,7 @@ import {
   STATUS_ICONS, STATUS_ICON_CLASS, withConfirmation,
 } from './status-picker.js?v=2';
 import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _jellyfinSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg, SVC_ICONS } from './icons.js?v=17';
-import { startDownload } from './downloads.js?v=2';
+import { startDownload, isOnDevice, playOffline } from './downloads.js?v=4';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   registerHelpers, buildCardV2, buildBannerRow, buildBannerGroup, buildMonthTile, patchBannerRows,
@@ -589,6 +589,13 @@ export async function launchMpv(filePath, cfg, ctx = null) {
   // JS. Do NOT also call addWatchEvent here — that would double-report
   // the same viewing.
   if (window.Capacitor?.isNativePlatform?.()) {
+    // Stored on this device (user 2026-11-11): play the local copy, offline; playOffline() fires
+    // the same delayed refresh as below.
+    if (ctx?.episodeId && isOnDevice(ctx.episodeId)) {
+      try {
+        if (await playOffline(ctx.episodeId, filePath.split('/').pop())) return;
+      } catch { /* local file gone: stream it instead */ }
+    }
     try {
       await window.Capacitor.Plugins.Vlc.play({
         path: filePath,

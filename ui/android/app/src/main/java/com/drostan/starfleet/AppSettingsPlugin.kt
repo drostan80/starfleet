@@ -50,6 +50,7 @@ class AppSettingsPlugin : Plugin() {
     @PluginMethod
     fun updateSettings(call: PluginCall) {
         val editor = prefs().edit()
+        var autoDownloadChanged = false
         if (call.data.has("wifiOnly")) {
             editor.putBoolean("downloads_wifi_only", call.getBoolean("wifiOnly", false) ?: false)
         }
@@ -61,6 +62,7 @@ class AppSettingsPlugin : Plugin() {
                 "auto_delete_watched_hours",
                 (call.getDouble("autoDeleteWatchedHours") ?: 0.0).toFloat(),
             )
+            autoDownloadChanged = true  // the tick also runs for the auto-delete alone
         }
         if (call.data.has("autoDownloadGrabDays")) {
             editor.putInt(
@@ -69,7 +71,6 @@ class AppSettingsPlugin : Plugin() {
                     .coerceIn(1, LcarsClient.GRAB_WINDOW_MAX_DAYS),
             )
         }
-        var autoDownloadChanged = false
         if (call.data.has("autoDownloadEnabled")) {
             editor.putBoolean(
                 "auto_download_enabled",
