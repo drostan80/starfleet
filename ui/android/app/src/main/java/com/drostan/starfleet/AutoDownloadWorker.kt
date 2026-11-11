@@ -97,6 +97,7 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
         // Time-based auto-delete (2026-09-20, user request) before the
         // size-based eviction below — independent trigger, regardless of
         // whether storage_limit_gb has actually been exceeded.
+        syncWatchedFromServer(applicationContext, db)
         evictWatchedPastHours(applicationContext, db)
 
         // Eviction before enqueueing new downloads — if the user just
@@ -152,6 +153,31 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
                 }
             }
         }
+    }
+
+    /**
+     * 2026-11-11 (user): a download marked watched outside the app's own player (✓ by hand,
+     * another device, Jellyfin) counts too: LCARS's watch time is copied into the local index, so
+     * the hours below run from then. Only a watch AFTER the file was downloaded counts (a copy
+     * downloaded to re-watch something is kept). Never un-marks: the local index stays the source
+     * of truth (an in-app watch may not have reached LCARS yet). Only when the auto-delete is on.
+     */
+    private fun syncWatchedFromServer(context: Context, db: DownloadDatabase) {
+        val hours = context.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
+            .getFloat("auto_delete_watched_hours", 0f)
+        if (hours <= 0f) return
+        val rows = db.listAll().filter { it.status == "complete" && !it.watched }
+        if (rows.isEmpty()) return
+        val times = LcarsClient.fetchWatchTimes(context, rows.map { it.episodeId }) ?: return
+        var marked = 0
+        for (row in rows) {
+            val watchedAt = times[row.episodeId] ?: continue
+            val downloadedAt = LcarsClient.parseInstant(row.downloadedAt)
+            if (downloadedAt != null && !watchedAt.isAfter(downloadedAt)) continue
+            db.markWatched(row.episodeId, watchedAt.toString())
+            marked++
+        }
+        android.util.Log.d("AutoDownloadWorker", "watched elsewhere: ${rows.size} checked, $marked marked")
     }
 
     /**

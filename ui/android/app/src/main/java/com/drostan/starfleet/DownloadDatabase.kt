@@ -123,10 +123,10 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
         writableDatabase.update(TABLE, values, "episode_id = ?", arrayOf(episodeId))
     }
 
-    fun markWatched(episodeId: String) {
+    fun markWatched(episodeId: String, watchedAtIso: String = java.time.Instant.now().toString()) {
         val values = ContentValues().apply {
             put("watched", 1)
-            put("watched_at", java.time.Instant.now().toString())
+            put("watched_at", watchedAtIso)
         }
         writableDatabase.update(TABLE, values, "episode_id = ?", arrayOf(episodeId))
     }

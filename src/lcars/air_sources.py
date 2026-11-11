@@ -422,6 +422,28 @@ def _candidates_by_episode(conn, show_id: str) -> dict[str, list[dict]]:
     return by_episode
 
 
+def _earliest_syoboi(cands: list[dict]) -> dict | None:
+    """Syoboi's earliest timed station for an episode (its premiere; the other stations are
+    rebroadcasts), None when Syoboi has no timed candidate."""
+    timed = [c for c in cands if c["source"] == "syoboi" and c["precision"] == air_time.TIME]
+    return min(timed, key=lambda c: c["air_date_utc"]) if timed else None
+
+
+def _one_syoboi_event(events: list[dict], earliest: dict | None) -> list[dict]:
+    """Syoboi lists ~8 stations per episode, one candidate each. Applied one by one in time order,
+    the latest station won (watch 10-23: Hotel Inhumans, Kusuriya, Ranma 1/2; 11-11: The Ramparts
+    of Ice S2E11-13 on AT-X, three days after TBS). A changed Syoboi station therefore counts only
+    as Syoboi's earliest timed station (user 2026-11-11)."""
+    if earliest is None or not any(e["source"] == "syoboi" for e in events):
+        return events
+    rest = [e for e in events if e["source"] != "syoboi"]
+    return rest + [{
+        "episode_id": earliest["episode_id"], "source": "syoboi", "channel": earliest["channel"],
+        "old": None, "new": earliest["air_date_utc"], "precision": earliest["precision"],
+        "local_date": earliest["local_date"],
+    }]
+
+
 def auto_apply(conn, show_id: str, events: list[dict]) -> dict:
     """The automatic rule over the candidates (user 10-07). Skips a `manual` date, a skipped
     season (R2.10) and a season that follows a chosen schedule (`apply_choice` handles it).
@@ -474,17 +496,29 @@ def auto_apply(conn, show_id: str, events: list[dict]) -> dict:
                             pick["precision"], pick["local_date"], "system", now)
                 stats["filled"] += 1
             continue
-        if row["id"] not in changed_ids:
-            continue
         if (row["air_aired_at"] or row["air_date_utc"]) < history:
             continue  # long aired: the file, not a schedule, is the truth; history is not rewritten
-        ordered = sorted(
-            events_by_episode[row["id"]],
-            key=lambda e: (e["precision"] != air_time.TIME, e["new"]),
-        )
         current = (row["air_date_utc"], row["air_date_source"],
                    row["air_precision"] or air_time.TIME)
+        earliest = _earliest_syoboi(cands)
+        if (earliest is not None and current[1] == "syoboi"
+                and current[0] != earliest["air_date_utc"]
+                and any(c["source"] == "syoboi" and c["air_date_utc"] == current[0] for c in cands)):
+            # stored on a later Syoboi station (a rebroadcast) than its earliest one: the premiere
+            # wins, the same rule as syoboi.rewire_airdates (user 2026-11-11)
+            _write_date(conn, row["id"], anime, "syoboi", earliest["air_date_utc"],
+                        earliest["precision"], earliest["local_date"], "system", now)
+            current = (earliest["air_date_utc"], "syoboi", earliest["precision"])
+            stats["changed"] += 1
+        if row["id"] not in changed_ids:
+            continue
+        ordered = sorted(
+            _one_syoboi_event(events_by_episode[row["id"]], earliest),
+            key=lambda e: (e["precision"] != air_time.TIME, e["new"]),
+        )
         for e in ordered:
+            if e["source"] == current[1] and e["new"] == current[0] and e["precision"] == current[2]:
+                continue  # already stored
             if (e["source"] in airdate_priority.WEAK_SOURCES
                     and current[1] not in airdate_priority.WEAK_SOURCES
                     and (air_time.hours_apart(e["new"], current[0]) or 0)

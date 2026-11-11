@@ -136,6 +136,55 @@ object LcarsClient {
     """
 
     /**
+     * 2026-11-11 (user): a download counts as watched for the auto-delete also when it was marked
+     * watched another way (✓ by hand, another device, Jellyfin). For each episode id LCARS holds as
+     * WATCHED: its latest watch time. Ids LCARS has as unwatched are left out. Null = the server
+     * could not be asked (the caller then changes nothing).
+     */
+    fun fetchWatchTimes(context: Context, ids: List<String>): Map<String, java.time.Instant>? {
+        val out = mutableMapOf<String, java.time.Instant>()
+        for (chunk in ids.chunked(40)) {
+            val vars = JSONObject()
+            val params = mutableListOf<String>()
+            val fields = StringBuilder()
+            chunk.forEachIndexed { i, id ->
+                vars.put("id$i", id)
+                params.add("\$id$i: ID!")
+                fields.append("e$i: episode(id: \$id$i) { state watchEvents(first: 50) { edges { node { watchedAt } } } } ")
+            }
+            val query = "query DownloadWatched(${params.joinToString(", ")}) { $fields}"
+            val res = try { graphql(context, query, vars) } catch (e: Exception) {
+                android.util.Log.d("LcarsClient", "fetchWatchTimes failed: $e")
+                null
+            } ?: return null
+            val data = res.optJSONObject("data") ?: return null
+            chunk.forEachIndexed { i, id ->
+                val ep = data.optJSONObject("e$i") ?: return@forEachIndexed
+                if (ep.optString("state") != "WATCHED") return@forEachIndexed
+                val edges = ep.optJSONObject("watchEvents")?.optJSONArray("edges") ?: return@forEachIndexed
+                var latest: java.time.Instant? = null
+                for (k in 0 until edges.length()) {
+                    val node = edges.optJSONObject(k)?.optJSONObject("node") ?: continue
+                    val t = parseInstant(node.optStringOrNull("watchedAt")) ?: continue
+                    if (latest == null || t.isAfter(latest)) latest = t
+                }
+                latest?.let { out[id] = it }
+            }
+        }
+        return out
+    }
+
+    /** An ISO time as LCARS or this app writes it ("…Z", an offset, or naive = UTC); null if unreadable. */
+    fun parseInstant(s: String?): java.time.Instant? {
+        if (s.isNullOrBlank()) return null
+        return try { java.time.Instant.parse(s) } catch (e: Exception) {
+            try { java.time.OffsetDateTime.parse(s).toInstant() } catch (e: Exception) {
+                try { java.time.LocalDateTime.parse(s).toInstant(java.time.ZoneOffset.UTC) } catch (e: Exception) { null }
+            }
+        }
+    }
+
+    /**
      * A4 step 37 — fired from VlcPlugin's own onActivityResult, independent
      * of the local SQLite `watched` write eviction (step 36) reads. Returns
      * whether the network call succeeded; VlcPlugin queues a retry (via

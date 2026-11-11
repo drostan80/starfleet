@@ -760,3 +760,57 @@ def test_provisional_episodes_are_not_made_when_the_season_starts_before_the_las
     result = provisional_episodes.sync_show(conn, show)
     assert result["created"] == 0
     assert conn.execute("SELECT COUNT(*) FROM episode WHERE provisional = 1").fetchone()[0] == 0
+
+
+# ── Syoboi's stations: the premiere wins, not the latest rebroadcast (user 2026-11-11) ───────────
+
+
+@pytest.fixture
+def ramparts(conn, early_october, monkeypatch):
+    """The Ramparts of Ice S2E11 on 11-11: TBS (and MBS) at 14:56Z on the 10th, AT-X three days
+    later. Dates moved to early October so the episode is airing, not history."""
+    monkeypatch.setattr(air_sources, "HISTORY_DAYS", 100_000)
+    show = _show(conn)
+    e = _episode(conn, show, 1)
+    _syoboi(conn, show, e, 1, 5, "2026-10-08T14:56:00Z")    # TBS
+    conn.execute("INSERT INTO syoboi_program (pid, tid, chid, count, st_time_utc, deleted,"
+                 " fetched_at) VALUES (9001, 100, 20, 1, '2026-10-11T13:30:00Z', 0, ?)", (NOW,))
+    air_sources.refresh_show_schedules(conn, show)
+    return show, e
+
+
+def test_when_every_station_moves_the_episode_takes_the_earliest_not_the_latest(conn, ramparts):
+    show, e = ramparts
+    assert _row(conn, e)["air_date_utc"] == "2026-10-08T14:56:00Z"
+    conn.execute("UPDATE syoboi_program SET st_time_utc = '2026-10-15T14:56:00Z' WHERE chid = 5")
+    conn.execute("UPDATE syoboi_program SET st_time_utc = '2026-10-18T13:30:00Z' WHERE chid = 20")
+    air_sources.refresh_show_schedules(conn, show)
+    row = _row(conn, e)
+    assert (row["air_date_utc"], row["air_date_source"]) == ("2026-10-15T14:56:00Z", "syoboi")
+
+
+def test_an_episode_left_on_a_later_station_moves_to_the_earliest(conn, ramparts):
+    show, e = ramparts
+    conn.execute("UPDATE episode SET air_date_utc = '2026-10-11T13:30:00Z' WHERE id = ?", (e,))
+    air_sources.refresh_show_schedules(conn, show)       # no candidate changed
+    assert _row(conn, e)["air_date_utc"] == "2026-10-08T14:56:00Z"
+    change = conn.execute("SELECT previous_air_date_utc, new_air_date_utc FROM air_date_change"
+                          " WHERE episode_id = ? ORDER BY rowid DESC", (e,)).fetchone()
+    assert tuple(change) == ("2026-10-11T13:30:00Z", "2026-10-08T14:56:00Z")
+
+
+def test_a_syoboi_date_that_is_no_station_of_the_episode_is_left_alone(conn, ramparts):
+    """The Mouse Cursor show on 11-11: the stored date is Syoboi's newer schedule, the per-station
+    candidates are older; that is not a later station and is not touched."""
+    show, e = ramparts
+    conn.execute("UPDATE episode SET air_date_utc = '2026-10-22T14:56:00Z' WHERE id = ?", (e,))
+    air_sources.auto_apply(conn, show, [])
+    assert _row(conn, e)["air_date_utc"] == "2026-10-22T14:56:00Z"
+
+
+def test_a_manual_date_on_a_later_station_is_not_moved(conn, ramparts):
+    show, e = ramparts
+    conn.execute("UPDATE episode SET air_date_utc = '2026-10-11T13:30:00Z',"
+                 " air_date_source = 'manual' WHERE id = ?", (e,))
+    air_sources.auto_apply(conn, show, [])
+    assert _row(conn, e)["air_date_utc"] == "2026-10-11T13:30:00Z"
