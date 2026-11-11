@@ -507,7 +507,7 @@ export async function fetchRecentGrabs(service, page = 1, pageSize = 20) {
     query RecentGrabs($service: String!, $page: Int, $pageSize: Int) {
       recentGrabs(service: $service, page: $page, pageSize: $pageSize) {
         service title releaseTitle date quality
-        seasonNumber episodeNumber airDate filePath showId
+        seasonNumber episodeNumber airDate filePath showId episodeId
       }
     }
   `, { service, page, pageSize });

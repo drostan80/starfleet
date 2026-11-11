@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=33">
+  <link rel="stylesheet" href="css/main.css?v=34">
   <link rel="stylesheet" href="css/cards-v2.css?v=15">
   <style>
     /* ── Backlog card size — 20% larger than calendar default ── */
@@ -275,13 +275,13 @@
 
 <script type="module">
   import { getConfig, bootstrapConfig, applyAppName } from './js/config.js?v=7';
-  import { initSearch } from './js/search.js?v=12';
-  import { fetchBacklog, fetchRecentGrabs, gql } from './js/api.js?v=35';
+  import { initSearch } from './js/search.js?v=13';
+  import { fetchBacklog, fetchRecentGrabs, gql } from './js/api.js?v=36';
   import {
     buildCard,
     showBanner, hideBanner,
     fetchTmdbPoster,
-  } from './js/calendar.js?v=69';
+  } from './js/calendar.js?v=70';
   import { buildWatchedToggle } from './js/watched-toggle.js?v=1';
 
   applyAppName();
@@ -611,6 +611,7 @@
         const eps = b.members.map(m => m.episodeNumber).filter(n => n != null).sort((x, y) => x - y);
         const first = b.members.reduce((a, m) => (m.episodeNumber ?? 1e9) < (a.episodeNumber ?? 1e9) ? m : a);
         return { ...b.members[0], filePath: first.filePath, playEpisode: first.episodeNumber,
+                 episodeId: first.episodeId,
                  first: eps[0], last: eps[eps.length - 1], count: eps.length };
       });
       box.hidden = cards.length === 0;
@@ -632,6 +633,7 @@
       for (const g of cards) {
         const item = document.createElement('div');
         item.className = 'ar-item';
+        if (g.episodeId) item.dataset.dlEp = g.episodeId;  // downloads.js: on-device colours
 
         const art = document.createElement('div');
         art.className = 'ar-art';
@@ -658,7 +660,8 @@
           play.title = 'Play in mpv';
           play.textContent = '▶';
           play.addEventListener('click', () => launchMpv(g.filePath, cfg,
-            g.showId ? { showId: g.showId, season: g.seasonNumber ?? null, episode: g.playEpisode ?? g.episodeNumber ?? null } : null));
+            g.showId ? { showId: g.showId, season: g.seasonNumber ?? null, episode: g.playEpisode ?? g.episodeNumber ?? null,
+                         episodeId: g.episodeId ?? null } : null));
           art.appendChild(play);
         }
         item.appendChild(art);

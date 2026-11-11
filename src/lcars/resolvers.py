@@ -889,48 +889,56 @@ _GRAB_HISTORY_PAGE_SIZE = 250
 _GRAB_HISTORY_MAX_PAGES = 4
 
 
+def _grabs_within(client, days: int) -> list[dict]:
+    """Sonarr's or Radarr's grab records of the last `days` days (grabs only, newest first, read
+    until a record falls outside the window; at most 4 pages of 250). Raises the client's own error
+    when the service does not answer."""
+    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)
+    out: list[dict] = []
+    for page in range(1, _GRAB_HISTORY_MAX_PAGES + 1):
+        data = client.history_page(page=page, page_size=_GRAB_HISTORY_PAGE_SIZE, event_type=1)
+        records = data.get("records") or []
+        reached_cutoff = False
+        for r in records:
+            try:
+                # fraction dropped: seconds are enough (Sonarr may send 7 digits)
+                when = datetime.datetime.fromisoformat(
+                    re.sub(r"\.\d+", "", str(r.get("date", ""))).replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=datetime.UTC)
+            if when < cutoff:
+                reached_cutoff = True
+                continue
+            out.append(r)
+        if reached_cutoff or len(records) < _GRAB_HISTORY_PAGE_SIZE:
+            break
+    return out
+
+
 def _recently_grabbed_episode_ids(conn, days: int) -> list[str]:
-    """Ids of the episodes Sonarr grabbed in the last `days` days (Sonarr's own history, grabs
-    only, newest first, read until a record falls outside the window). An episode is matched by
-    its show's TVDB id and Sonarr's season/episode numbers, the same key `recentGrabs` uses.
-    Sonarr not configured or not answering gives an empty list: the caller (the app's
+    """Ids of the episodes Sonarr grabbed in the last `days` days (`_grabs_within`). An episode is
+    matched by its show's TVDB id and Sonarr's season/episode numbers, the same key `recentGrabs`
+    uses. Sonarr not configured or not answering gives an empty list: the caller (the app's
     auto-download) then downloads nothing rather than everything."""
     cfg = config.get_current()
     if not cfg.sonarr_url or not cfg.sonarr_api_key:
         return []
-    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)
     keys: set[tuple[str, int, int]] = set()
     try:
         with sonarr_client.SonarrClient(cfg.sonarr_url, cfg.sonarr_api_key) as client:
-            for page in range(1, _GRAB_HISTORY_MAX_PAGES + 1):
-                data = client.history_page(
-                    page=page, page_size=_GRAB_HISTORY_PAGE_SIZE, event_type=1
-                )
-                records = data.get("records") or []
-                reached_cutoff = False
-                for r in records:
-                    try:
-                        # fraction dropped: seconds are enough (Sonarr may send 7 digits)
-                        when = datetime.datetime.fromisoformat(
-                            re.sub(r"\.\d+", "", str(r.get("date", ""))).replace("Z", "+00:00")
-                        )
-                    except ValueError:
-                        continue
-                    if when.tzinfo is None:
-                        when = when.replace(tzinfo=datetime.UTC)
-                    if when < cutoff:
-                        reached_cutoff = True
-                        continue
-                    ep = r.get("episode") or {}
-                    tvdb_id = str((r.get("series") or {}).get("tvdbId", "") or "")
-                    if tvdb_id and ep.get("seasonNumber") is not None and (
-                        ep.get("episodeNumber") is not None
-                    ):
-                        keys.add((tvdb_id, ep["seasonNumber"], ep["episodeNumber"]))
-                if reached_cutoff or len(records) < _GRAB_HISTORY_PAGE_SIZE:
-                    break
+            records = _grabs_within(client, days)
     except sonarr_client.SonarrError:
         return []
+    for r in records:
+        ep = r.get("episode") or {}
+        tvdb_id = str((r.get("series") or {}).get("tvdbId", "") or "")
+        if tvdb_id and ep.get("seasonNumber") is not None and (
+            ep.get("episodeNumber") is not None
+        ):
+            keys.add((tvdb_id, ep["seasonNumber"], ep["episodeNumber"]))
     if not keys:
         return []
     tvdb_ids = list({k[0] for k in keys})
@@ -953,6 +961,37 @@ def _recently_grabbed_episode_ids(conn, days: int) -> list[str]:
             if ep_row:
                 ids.append(ep_row["id"])
     return ids
+
+
+@query.field("grabbedMovies")
+def resolve_grabbed_movies(_, info, within_days: int):
+    """The app's auto-download, films (user 2026-11-11): tracked films Radarr grabbed in the last
+    N days whose file is there and that were never watched, on a planned or watching film (the
+    same statuses `backlog(includePlanned)` takes for episodes). Matched by TMDB id, like
+    `recentGrabs`. Radarr not configured or not answering gives none, never every film."""
+    cfg = config.get_current()
+    if not cfg.radarr_url or not cfg.radarr_api_key:
+        return []
+    try:
+        with radarr_client.RadarrClient(cfg.radarr_url, cfg.radarr_api_key) as client:
+            records = _grabs_within(client, within_days)
+    except radarr_client.RadarrError:
+        return []
+    tmdb_ids = list({
+        str((r.get("movie") or {}).get("tmdbId", "") or "") for r in records
+    } - {""})
+    if not tmdb_ids:
+        return []
+    conn = db.get_connection()
+    return [dict(r) for r in conn.execute(
+        "SELECT s.* FROM show s JOIN show_external_id x ON x.show_id = s.id"
+        " WHERE x.service = 'tmdb' AND x.external_id IN ({})"
+        " AND s.tracked = 1 AND s.media_shape = 'movie' AND s.status IN ('watching', 'planned')"
+        " AND s.available_via_radarr = 'available' AND s.file_path_radarr IS NOT NULL"
+        " AND NOT EXISTS (SELECT 1 FROM watch_event w WHERE w.show_id = s.id)"
+        " GROUP BY s.id ORDER BY s.id".format(",".join("?" * len(tmdb_ids))),
+        tmdb_ids,
+    )]
 
 
 @query.field("backlog")
@@ -3058,9 +3097,9 @@ def resolve_service_health(_, info):
     return service_health.get_all(conn)
 
 
-def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, tuple[str | None, str | None]]:
-    """Batch-looks up (file_path_sonarr, show_id) for a list of Sonarr
-    grab records.
+def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, tuple]:
+    """Batch-looks up (file_path_sonarr, show_id, episode_id) for a list of Sonarr
+    grab records (episode_id 2026-11-11: the app marks and plays a grab stored on the device).
 
     Returns a dict of record-index → (file_path_sonarr, show_id) — path
     is None when the episode isn't in LCARS or hasn't been imported yet;
@@ -3094,14 +3133,16 @@ def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, tuple[str | 
 
     placeholders = ",".join("?" * len(show_ids))
     ep_rows = conn.execute(
-        "SELECT show_id, sonarr_season, sonarr_episode, file_path_sonarr"
+        "SELECT id, show_id, sonarr_season, sonarr_episode, file_path_sonarr"
         " FROM episode"
         f" WHERE show_id IN ({placeholders}) AND sonarr_season IS NOT NULL"
         " AND file_path_sonarr IS NOT NULL",
         show_ids,
     ).fetchall()
-    fp_map: dict[tuple[str, int, int], str] = {
-        (r_["show_id"], r_["sonarr_season"], r_["sonarr_episode"]): r_["file_path_sonarr"]
+    fp_map: dict[tuple[str, int, int], tuple[str, str]] = {
+        (r_["show_id"], r_["sonarr_season"], r_["sonarr_episode"]): (
+            r_["file_path_sonarr"], r_["id"]
+        )
         for r_ in ep_rows
     }
 
@@ -3109,7 +3150,8 @@ def _grab_file_paths_sonarr(conn, grabbed: list[dict]) -> dict[int, tuple[str | 
     for i, (tvdb_id, s_num, e_num) in enumerate(keys):
         show_id = tvdb_to_show.get(tvdb_id)
         if show_id and s_num is not None and e_num is not None:
-            result[i] = (fp_map.get((show_id, s_num, e_num)), show_id)
+            path, episode_id = fp_map.get((show_id, s_num, e_num), (None, None))
+            result[i] = (path, show_id, episode_id)
     return result
 
 
@@ -3204,8 +3246,9 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
                     "season_number": (r.get("episode") or {}).get("seasonNumber"),
                     "episode_number": (r.get("episode") or {}).get("episodeNumber"),
                     "air_date": (r.get("episode") or {}).get("airDateUtc"),
-                    "file_path": fp_by_idx.get(i, (None, None))[0],
-                    "show_id": fp_by_idx.get(i, (None, None))[1],
+                    "file_path": fp_by_idx.get(i, (None, None, None))[0],
+                    "show_id": fp_by_idx.get(i, (None, None, None))[1],
+                    "episode_id": fp_by_idx.get(i, (None, None, None))[2],
                 }
                 for i, r in enumerate(grabbed)
             ]
@@ -3228,6 +3271,8 @@ def resolve_recent_grabs(_, info, service: str, page: int = 1, page_size: int = 
                     "air_date": None,
                     "file_path": fp_by_idx.get(i, (None, None))[0],
                     "show_id": fp_by_idx.get(i, (None, None))[1],
+                    # a film's download is keyed by the film (show) id
+                    "episode_id": fp_by_idx.get(i, (None, None))[1],
                 }
                 for i, r in enumerate(grabbed)
             ]

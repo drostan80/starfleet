@@ -129,6 +129,43 @@ object LcarsClient {
         return result
     }
 
+    private const val GRABBED_MOVIES_QUERY = """
+        query GrabbedMovies(${'$'}days: Int!) {
+          grabbedMovies(withinDays: ${'$'}days) { id displayTitle filePathRadarr }
+        }
+    """
+
+    /**
+     * 2026-11-11 (user): films Radarr grabbed in the same window are auto-downloaded too. A film
+     * has no episode: its download is keyed by the film's (show) id, season/episode stay null (a
+     * VLC watch then reports a film watch). An older server without `grabbedMovies` = none.
+     */
+    fun fetchGrabbedMovies(context: Context): List<BacklogEpisode> {
+        val json = try {
+            graphql(context, GRABBED_MOVIES_QUERY, JSONObject().put("days", grabWindowDays(context)))
+        } catch (e: Exception) {
+            null
+        } ?: return emptyList()
+        val films = json.optJSONObject("data")?.optJSONArray("grabbedMovies") ?: return emptyList()
+        val result = mutableListOf<BacklogEpisode>()
+        for (i in 0 until films.length()) {
+            val film = films.getJSONObject(i)
+            val filePath = film.optStringOrNull("filePathRadarr") ?: continue
+            result.add(
+                BacklogEpisode(
+                    id = film.getString("id"),
+                    showId = film.getString("id"),
+                    showTitle = film.optString("displayTitle", ""),
+                    season = null,
+                    episode = null,
+                    title = "Film",  // the Downloads page's label
+                    filePath = filePath,
+                )
+            )
+        }
+        return result
+    }
+
     private const val ADD_WATCH_EVENT_MUTATION = """
         mutation AddWatch(${'$'}showId: ID!, ${'$'}season: Int, ${'$'}episode: Int, ${'$'}watchedAt: DateTime, ${'$'}platform: String) {
           addWatchEvent(showId: ${'$'}showId, season: ${'$'}season, episode: ${'$'}episode, watchedAt: ${'$'}watchedAt, platform: ${'$'}platform) { id }
@@ -139,9 +176,12 @@ object LcarsClient {
      * 2026-11-11 (user): a download counts as watched for the auto-delete also when it was marked
      * watched another way (✓ by hand, another device, Jellyfin). For each episode id LCARS holds as
      * WATCHED: its latest watch time. Ids LCARS has as unwatched are left out. Null = the server
-     * could not be asked (the caller then changes nothing).
+     * could not be asked (the caller then changes nothing). `films`: ids that are films (their own
+     * show id), asked as a show — any watch of the film counts.
      */
-    fun fetchWatchTimes(context: Context, ids: List<String>): Map<String, java.time.Instant>? {
+    fun fetchWatchTimes(
+        context: Context, ids: List<String>, films: Set<String> = emptySet(),
+    ): Map<String, java.time.Instant>? {
         val out = mutableMapOf<String, java.time.Instant>()
         for (chunk in ids.chunked(40)) {
             val vars = JSONObject()
@@ -150,7 +190,9 @@ object LcarsClient {
             chunk.forEachIndexed { i, id ->
                 vars.put("id$i", id)
                 params.add("\$id$i: ID!")
-                fields.append("e$i: episode(id: \$id$i) { state watchEvents(first: 50) { edges { node { watchedAt } } } } ")
+                val field = if (id in films) "show" else "episode"
+                val state = if (id in films) "" else "state "
+                fields.append("e$i: $field(id: \$id$i) { ${state}watchEvents(first: 50) { edges { node { watchedAt } } } } ")
             }
             val query = "query DownloadWatched(${params.joinToString(", ")}) { $fields}"
             val res = try { graphql(context, query, vars) } catch (e: Exception) {
@@ -160,7 +202,7 @@ object LcarsClient {
             val data = res.optJSONObject("data") ?: return null
             chunk.forEachIndexed { i, id ->
                 val ep = data.optJSONObject("e$i") ?: return@forEachIndexed
-                if (ep.optString("state") != "WATCHED") return@forEachIndexed
+                if (id !in films && ep.optString("state") != "WATCHED") return@forEachIndexed
                 val edges = ep.optJSONObject("watchEvents")?.optJSONArray("edges") ?: return@forEachIndexed
                 var latest: java.time.Instant? = null
                 for (k in 0 until edges.length()) {

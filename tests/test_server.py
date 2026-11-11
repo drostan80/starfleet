@@ -10036,7 +10036,7 @@ RECENT_GRABS = """
     query($service: String!) {
       recentGrabs(service: $service) {
         service title releaseTitle date quality
-        seasonNumber episodeNumber airDate filePath showId
+        seasonNumber episodeNumber airDate filePath showId episodeId
       }
     }
 """
@@ -10093,6 +10093,7 @@ async def test_recent_grabs_resolves_show_id_and_file_path(client, monkeypatch):
     grab = data["recentGrabs"][0]
     assert grab["showId"] == show["id"]
     assert grab["filePath"] == "/data/show/s01e01.mkv"
+    assert grab["episodeId"] == "e-grab01"  # the app marks / plays a grab stored on the device
     assert fake.history_event_type == 1  # grabs only: a purge must not crowd them out
 
 
@@ -12811,3 +12812,96 @@ async def test_jellyfin_url_on_episode_and_show(client, migrated_db, monkeypatch
     assert data["show"]["jellyfinUrl"] == "http://jf:8096/web/#/details?id=J-SHOW"
     assert urls == {1: "http://jf:8096/web/#/details?id=J-EP1",   # its own page
                     2: None}  # not in Jellyfin: no link (the icon shows only when mpv can play)
+
+
+# ── grabbedMovies: the app's auto-download, films (user 2026-11-11) ────────────────────────────
+
+
+class _FakeRadarrHistory:
+    def __init__(self, records):
+        self.records = records
+
+    def history_page(self, page=1, page_size=250, event_type=None):
+        return {"records": self.records if page == 1 else []}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+async def _movie_grab_setup(client, monkeypatch, grab_date, status="planned"):
+    show = await add_show(client, mediaShape="MOVIE", trackingSpace="TV", titleRomaji="Film Test")
+    await gql(
+        client,
+        'mutation($id: ID!) { linkShowExternalId(showId: $id, service: "tmdb",'
+        ' externalId: "77001", url: "https://x") { service } }',
+        {"id": show["id"]},
+        headers=auth_headers(),
+    )
+    conn = db.get_connection()
+    conn.execute(
+        "UPDATE show SET status = ?, available_via_radarr = 'available',"
+        " file_path_radarr = '/data/movies/film.mkv' WHERE id = ?",
+        (status, show["id"]),
+    )
+    conn.commit()
+    cfg = config.get_current()
+    cfg.radarr_url = "http://radarr.test"
+    cfg.radarr_api_key = "test-key"
+    fake = _FakeRadarrHistory([{
+        "eventType": "grabbed", "movie": {"title": "Film Test", "tmdbId": 77001}, "date": grab_date,
+    }])
+    monkeypatch.setattr(radarr_client, "RadarrClient", lambda *a, **kw: fake)
+    return show
+
+
+GRABBED_MOVIES = "{ grabbedMovies(withinDays: 3) { id filePathRadarr } }"
+
+
+async def test_grabbed_movies_takes_a_film_grabbed_in_the_window(client, monkeypatch):
+    import datetime as _dt
+
+    recent = (_dt.datetime.now(_dt.UTC) - _dt.timedelta(hours=5)).strftime(
+        "%Y-%m-%dT%H:%M:%S.1234567Z"
+    )
+    show = await _movie_grab_setup(client, monkeypatch, recent)
+    data = await gql(client, GRABBED_MOVIES, headers=auth_headers())
+    assert data["grabbedMovies"] == [{"id": show["id"], "filePathRadarr": "/data/movies/film.mkv"}]
+
+
+async def test_grabbed_movies_ignores_a_grab_outside_the_window(client, monkeypatch):
+    import datetime as _dt
+
+    old = (_dt.datetime.now(_dt.UTC) - _dt.timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    await _movie_grab_setup(client, monkeypatch, old)
+    assert (await gql(client, GRABBED_MOVIES, headers=auth_headers()))["grabbedMovies"] == []
+
+
+async def test_grabbed_movies_skips_a_watched_film(client, monkeypatch):
+    import datetime as _dt
+
+    recent = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    show = await _movie_grab_setup(client, monkeypatch, recent)
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO watch_event (id, show_id, watched_at, created_at)"
+        " VALUES ('w-film1', ?, 'x', 'x')",
+        (show["id"],),
+    )
+    conn.commit()
+    assert (await gql(client, GRABBED_MOVIES, headers=auth_headers()))["grabbedMovies"] == []
+
+
+async def test_grabbed_movies_radarr_unconfigured_or_dropped_gives_nothing(client, monkeypatch):
+    import datetime as _dt
+
+    recent = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    await _movie_grab_setup(client, monkeypatch, recent, status="dropped")
+    assert (await gql(client, GRABBED_MOVIES, headers=auth_headers()))["grabbedMovies"] == []
+    conn = db.get_connection()
+    conn.execute("UPDATE show SET status = 'planned'")
+    conn.commit()
+    config.get_current().radarr_url = ""
+    assert (await gql(client, GRABBED_MOVIES, headers=auth_headers()))["grabbedMovies"] == []

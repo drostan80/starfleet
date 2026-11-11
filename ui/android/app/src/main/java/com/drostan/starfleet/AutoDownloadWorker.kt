@@ -110,7 +110,8 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
             .getBoolean("auto_download_enabled", true)
         if (!autoDownload) return@withContext Result.success()
 
-        val backlog = LcarsClient.fetchBacklog(applicationContext)
+        val backlog = LcarsClient.fetchBacklog(applicationContext) +
+            LcarsClient.fetchGrabbedMovies(applicationContext)
         val existingIds = db.listAll().map { it.episodeId }.toSet()
         for (ep in backlog) {
             if (ep.id in existingIds) continue
@@ -168,7 +169,10 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
         if (hours <= 0f) return
         val rows = db.listAll().filter { it.status == "complete" && !it.watched }
         if (rows.isEmpty()) return
-        val times = LcarsClient.fetchWatchTimes(context, rows.map { it.episodeId }) ?: return
+        // a film's row is keyed by the film itself (no season/episode)
+        val films = rows.filter { it.episodeId == it.showId && it.season == null && it.episode == null }
+            .map { it.episodeId }.toSet()
+        val times = LcarsClient.fetchWatchTimes(context, rows.map { it.episodeId }, films) ?: return
         var marked = 0
         for (row in rows) {
             val watchedAt = times[row.episodeId] ?: continue

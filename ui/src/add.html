@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://s4.anilist.co">
   <link rel="preconnect" href="https://image.tmdb.org">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=33">
+  <link rel="stylesheet" href="css/main.css?v=34">
   <style>
     /* Force hidden attribute to work even on elements with explicit display */
     [hidden] { display: none !important; }
@@ -961,10 +961,10 @@
 
 <!-- ── Scripts ─────────────────────────────────────────── -->
 <script type="module">
-import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=35';
+import { gql, searchArrCandidates, addShowWithArr, addShow, setStatus, softDeleteShow, fetchShow, setSeasonMapping, reconcileSeasonMapping, setSeasonStatus, batchCheckTracked } from './js/api.js?v=36';
 import { bootstrapConfig, applyAppName } from './js/config.js?v=7';
-import { showBanner, hideBanner } from './js/calendar.js?v=69';
-import { initSearch } from './js/search.js?v=12';
+import { showBanner, hideBanner } from './js/calendar.js?v=70';
+import { initSearch } from './js/search.js?v=13';
 import { withConfirmation } from './js/status-picker.js?v=2';
 import {
   initBrowse, teardownBrowse, setBrowseType,
@@ -972,7 +972,7 @@ import {
   parseTvdbCheck, confirmTvdbCheck,
   parseLaterSeasonError, confirmAddSeason1,
   pickCorrectParent, attachSequelToChosenParent,
-} from './js/browse.js?v=31';
+} from './js/browse.js?v=32';
 
 applyAppName();
 await bootstrapConfig();

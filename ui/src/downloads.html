@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="icon" href="favicon.ico" sizes="any">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/main.css?v=33">
+  <link rel="stylesheet" href="css/main.css?v=34">
   <style>
     /* ── Downloads page ─────────────────────────────────────── */
     .dl-page {
@@ -91,6 +91,9 @@
     .dl-action-btn.retry { color: var(--accent); border-color: var(--accent-d); }
     .dl-action-btn.retry:hover { background: rgba(91,140,255,0.1); }
     .dl-action-btn.remove { color: var(--st-dropped); border-color: rgba(239,68,68,0.3); }
+    /* on this device: play is blue, as on the cards (user 2026-11-11) */
+    .dl-action-btn.dl-play { color: #fff; background: var(--st-completed); border-color: var(--st-completed); }
+    .dl-action-btn.dl-play:hover { background: #2563eb; }
     .dl-action-btn.remove:hover { background: rgba(239,68,68,0.1); }
 
     @media (max-width: 600px) {
@@ -190,7 +193,7 @@
       // never really re-triggerable as anything else).
       if (isNative && e.status === 'complete') {
         const playBtn = document.createElement('button');
-        playBtn.className = 'dl-action-btn retry';
+        playBtn.className = 'dl-action-btn dl-play';
         playBtn.textContent = '▶ Play';
         playBtn.addEventListener('click', () => playOffline(e.id, `${e.showTitle} — ${e.label}`));
         actions.appendChild(playBtn);

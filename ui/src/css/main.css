@@ -1936,6 +1936,9 @@ body {
 }
 .on-device .bn-play,
 .on-device .bn-play:hover { background: var(--st-completed); }
+/* the backlog page's "Added recently" strip */
+.on-device .ar-play,
+.on-device .ar-play:hover { color: var(--st-completed); }
 /* the mpv logo is a picture: a blue ring around it instead */
 .on-device .svc.svc-player,
 .on-device .sp-mpv-icon.available,
