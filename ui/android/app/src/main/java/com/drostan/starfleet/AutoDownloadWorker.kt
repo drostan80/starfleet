@@ -5,11 +5,15 @@ import android.content.Context
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
@@ -36,7 +40,36 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
 
     companion object {
         private const val WORK_NAME = "auto_download"
+        private const val NOW_NAME = "auto_download_now"
         private const val INTERVAL_MINUTES = 30L
+
+        /**
+         * 2026-11-12: a check also runs on app launch and from the Downloads page's "Check now"
+         * button, beside the 30-minute tick. One run at a time across all of them: two runs side
+         * by side would both see an episode as missing and download it twice (seen live once,
+         * see MainActivity), so every run takes this lock first.
+         */
+        private val runLock = Mutex()
+
+        private fun isEnabled(context: Context): Boolean {
+            val prefs = context.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
+            return prefs.getBoolean("auto_download_enabled", true) ||
+                prefs.getFloat("auto_delete_watched_hours", 0f) > 0f
+        }
+
+        /**
+         * One check right away (app launch, "Check now"), Wi-Fi only like the tick: without
+         * Wi-Fi it waits for it. A request made while one is already queued or running is
+         * dropped (KEEP). Returns false when both auto-download and auto-delete are off.
+         */
+        fun runNow(context: Context): Boolean {
+            if (!isEnabled(context)) return false
+            val request = OneTimeWorkRequestBuilder<AutoDownloadWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(NOW_NAME, ExistingWorkPolicy.KEEP, request)
+            return true
+        }
 
         /**
          * On/off toggle (2026-09-20, user request) — previously there was
@@ -52,10 +85,7 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
             // 2026-11-11 (user): "delete watched episodes after N hours" must work with
             // auto-download off too, so the tick also runs when only that is set (doWork
             // then deletes and stops before downloading anything).
-            val prefs = context.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
-            val enabled = prefs.getBoolean("auto_download_enabled", true) ||
-                prefs.getFloat("auto_delete_watched_hours", 0f) > 0f
-            if (!enabled) {
+            if (!isEnabled(context)) {
                 cancel(context)
                 return
             }
@@ -77,7 +107,10 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
         }
     }
 
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) { runLock.withLock { check() } }
+
+    private fun check(): Result {
+        android.util.Log.d("AutoDownloadWorker", "check start (${tags.joinToString()})")
         WatchEventRetryQueue.flush(applicationContext)
 
         val db = DownloadDatabase(applicationContext)
@@ -108,7 +141,7 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
         // Running only for the auto-delete (see schedule()): nothing to download.
         val autoDownload = applicationContext.getSharedPreferences("starfleet", Context.MODE_PRIVATE)
             .getBoolean("auto_download_enabled", true)
-        if (!autoDownload) return@withContext Result.success()
+        if (!autoDownload) return Result.success()
 
         val backlog = LcarsClient.fetchBacklog(applicationContext) +
             LcarsClient.fetchGrabbedMovies(applicationContext)
@@ -127,7 +160,7 @@ class AutoDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
             )
         }
 
-        Result.success()
+        return Result.success()
     }
 
     /**

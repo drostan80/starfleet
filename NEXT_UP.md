@@ -153,6 +153,7 @@ Priority order (user 2026-10-10):
 
 ## Parked ideas
 
+- **Syoboi per-station candidates going stale** (user 11-12: "add mouse cursor syoboi idea"): the Mouse Cursor show ("Now That I Can Control Reality With A Mouse Cursor…") S1E4–8 has stored dates from Syoboi's newer schedule (they match AniList), but its per-station Syoboi candidates were last fetched 10-20 and still hold the old schedule. So the candidate refresh is not keeping up with Syoboi changes. Stored dates are right today; the risk is a later rule acting on the stale candidates. Not investigated: check why the station candidates aren't refetched (refresh cadence / history cut-off / fetch path), then decide on a fix.
 - **Manual date offset on a show** and a **personal / catch-up schedule** for re-watching (user 10-07: "neither for now"). The backend paced mode already exists (A.10: `enablePacedMode`, `pacedNextDate`, used only by Next Up, no UI, none enabled on prod) — it could be surfaced on the calendar.
 - Streaming-source air times (Bilibili, Crunchyroll, Aniplus, Ani-One, Prime, Muse, Hi-Dive…) as extra schedule sources — cost investigated 10-07, not built.
 - Unified list page (fold Lists, Backlog, Grabs, Browse, Add into one page with preset views) — the long-term direction.

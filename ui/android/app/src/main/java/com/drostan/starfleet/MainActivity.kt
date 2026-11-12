@@ -66,6 +66,9 @@ class MainActivity : BridgeActivity() {
             // periodic work, which is exactly why enqueueUniquePeriodicWork
             // (not a plain enqueue) is used here in the first place.
             AutoDownloadWorker.schedule(this)
+            // 2026-11-12 (user): also one check on launch. Safe now: every run (tick, launch,
+            // "Check now") takes AutoDownloadWorker's lock, so two never diff side by side.
+            if (savedInstanceState == null) AutoDownloadWorker.runNow(this)
         } else {
             serverConfigured = false
         }

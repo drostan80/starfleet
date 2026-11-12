@@ -27,7 +27,7 @@ import {
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange, airChangeBadge, isDateOnly,
-} from './calendar.js?v=70';
+} from './calendar.js?v=71';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
@@ -35,7 +35,7 @@ import {
 } from './status-picker.js?v=2';
 import { renderKeepBadge, remindKeep } from './keep.js?v=8';
 import { SVC_ICONS, _mpvSvg, _jellyfinSvg, _downloadSvg } from './icons.js?v=17';
-import { startDownload } from './downloads.js?v=4';
+import { startDownload } from './downloads.js?v=5';
 import { openArtPicker } from './art-picker.js?v=14';
 
 /* ── Constants ───────────────────────────────────────────── */

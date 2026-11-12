@@ -18,7 +18,7 @@ import {
   STATUS_ICONS, STATUS_ICON_CLASS, withConfirmation,
 } from './status-picker.js?v=2';
 import { arrIcon, _anilistSvg, _malSvg, _mpvSvg, _jellyfinSvg, _tvdbSvg, _imdbMarkSvg, _tmdbMarkSvg, _downloadSvg, _tvmazeMarkSvg, _anidbMarkSvg, _syoboiSvg, SVC_ICONS } from './icons.js?v=17';
-import { startDownload, isOnDevice, playOffline } from './downloads.js?v=4';
+import { startDownload, isOnDevice, playOffline } from './downloads.js?v=5';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   registerHelpers, buildCardV2, buildBannerRow, buildBannerGroup, buildMonthTile, patchBannerRows,

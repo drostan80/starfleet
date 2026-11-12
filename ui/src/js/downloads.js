@@ -173,9 +173,20 @@ export async function getDownloads() {
       startedAt: d.downloadedAt,
       status: d.status,
       sizeBytes: d.sizeBytes,
+      watched: d.watched,
     }));
   }
   return loadEntries();
+}
+
+/**
+ * Android: run the auto-download / auto-delete check now (Wi-Fi only; waits for Wi-Fi).
+ * Resolves false when it can't run (desktop, or auto-download and auto-delete both off).
+ */
+export async function checkNow() {
+  if (!window.Capacitor?.isNativePlatform?.()) return false;
+  const { started } = await window.Capacitor.Plugins.Download.checkNow();
+  return !!started;
 }
 
 /**

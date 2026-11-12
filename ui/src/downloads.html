@@ -96,6 +96,18 @@
     .dl-action-btn.dl-play:hover { background: #2563eb; }
     .dl-action-btn.remove:hover { background: rgba(239,68,68,0.1); }
 
+    /* files the phone deleted (watched + hours passed, or over the space limit): kept as rows
+       so they aren't downloaded again, shown apart (user 2026-11-12) */
+    .dl-deleted { margin-top: 22px; }
+    .dl-deleted > summary {
+      cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 2px; user-select: none;
+    }
+    .dl-deleted .dl-entry { opacity: .55; grid-template-columns: 1fr; }
+    .dl-header-actions { display: flex; gap: 8px; align-items: center; }
+    .dl-header-actions .dl-clear-btn { white-space: nowrap; }
+    .dl-check-note { font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; margin: -12px 0 14px; }
+    .dl-check-note:empty { display: none; }
+
     @media (max-width: 600px) {
       .dl-page { padding: 16px 12px; }
       .dl-entry { grid-template-columns: 1fr; gap: 8px; }
@@ -126,15 +138,19 @@
 <div class="dl-page">
   <div class="dl-header">
     <span class="dl-title">Downloads</span>
-    <button class="dl-clear-btn" id="dl-clear-all" hidden>Clear all</button>
+    <div class="dl-header-actions">
+      <button class="dl-clear-btn" id="dl-check-now" hidden title="Look for new downloads and delete watched ones now (Wi-Fi only)">↻ Check now</button>
+      <button class="dl-clear-btn" id="dl-clear-all" hidden>Clear all</button>
+    </div>
   </div>
+  <div class="dl-check-note" id="dl-check-note"></div>
   <div id="dl-content"></div>
 </div>
 
 <script type="module">
   import { applyAppName } from './js/config.js?v=7';
   import './js/auto-refresh.js?v=1';  // page auto-refresh (every so often, and after a watch elsewhere)
-  import { getDownloads, retriggerDownload, purgeDownload, purgeAll, playOffline } from './js/downloads.js?v=4';
+  import { getDownloads, retriggerDownload, purgeDownload, purgeAll, playOffline, checkNow } from './js/downloads.js?v=5';
   applyAppName();
   const isNative = window.Capacitor?.isNativePlatform?.();
 
@@ -150,11 +166,13 @@
   }
 
   async function render() {
-    const entries = await getDownloads();
+    const all = await getDownloads();
+    const entries = all.filter((e) => e.status !== 'evicted');
+    const deleted = all.filter((e) => e.status === 'evicted');
     const content = document.getElementById('dl-content');
     const clearBtn = document.getElementById('dl-clear-all');
 
-    if (!entries.length) {
+    if (!entries.length && !deleted.length) {
       clearBtn.hidden = true;
       content.innerHTML = `
         <div class="dl-empty">
@@ -166,6 +184,10 @@
     }
 
     clearBtn.hidden = false;
+    content.innerHTML = '';
+    if (!entries.length) {
+      content.innerHTML = `<div class="dl-empty">Nothing stored on this phone right now.</div>`;
+    }
     const list = document.createElement('div');
     list.className = 'dl-list';
 
@@ -223,8 +245,30 @@
       list.appendChild(entry);
     }
 
-    content.innerHTML = '';
-    content.appendChild(list);
+    if (entries.length) content.appendChild(list);
+    if (deleted.length) content.appendChild(deletedSection(deleted));
+  }
+
+  // Collapsed by default; the open/closed choice is kept while the page is open.
+  let deletedOpen = false;
+  function deletedSection(rows) {
+    const box = document.createElement('details');
+    box.className = 'dl-deleted';
+    box.open = deletedOpen;
+    box.addEventListener('toggle', () => { deletedOpen = box.open; });
+    box.innerHTML = `<summary>Deleted from this phone (${rows.length})</summary>`;
+    for (const e of rows) {
+      const entry = document.createElement('div');
+      entry.className = 'dl-entry';
+      entry.innerHTML = `
+        <div class="dl-info">
+          <div class="dl-show-title">${esc(e.showTitle)}</div>
+          <div class="dl-ep-label">${esc(e.label)}</div>
+          <div class="dl-timestamp">deleted · ${e.watched ? 'watched' : 'space limit'} · downloaded ${relativeTime(e.startedAt)}</div>
+        </div>`;
+      box.appendChild(entry);
+    }
+    return box;
   }
 
   function esc(s) {
@@ -238,6 +282,19 @@
       await purgeAll();
       render();
     }
+  });
+
+  const checkBtn = document.getElementById('dl-check-now');
+  const checkNote = document.getElementById('dl-check-note');
+  checkBtn.hidden = !isNative;
+  checkBtn.addEventListener('click', async () => {
+    checkBtn.disabled = true;
+    let started = false;
+    try { started = await checkNow(); } catch (err) { console.warn('checkNow failed', err); }
+    checkNote.textContent = started ? 'checking… (Wi-Fi only)' : 'auto-download and auto-delete are off';
+    // the check runs in the background: refresh the list a few times while it works
+    for (const ms of [5000, 15000, 30000]) setTimeout(render, ms);
+    setTimeout(() => { checkNote.textContent = ''; checkBtn.disabled = false; }, 30000);
   });
 
   render();

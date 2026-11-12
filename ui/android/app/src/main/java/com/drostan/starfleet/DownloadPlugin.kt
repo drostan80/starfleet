@@ -202,6 +202,12 @@ class DownloadPlugin : Plugin() {
         call.resolve(JSObject().apply { put("downloads", arr) })
     }
 
+    /** "Check now" on the Downloads page: one auto-download / auto-delete run (Wi-Fi only). */
+    @PluginMethod
+    fun checkNow(call: PluginCall) {
+        call.resolve(JSObject().apply { put("started", AutoDownloadWorker.runNow(context)) })
+    }
+
     @PluginMethod
     fun getLocalUri(call: PluginCall) {
         val episodeId = call.getString("episodeId")
