@@ -71,6 +71,23 @@ Episode-level tables do not exist here. Counts come from the season records.
   AniDB episodes (ban risk avoided).
 - **Open check before any bulk TVDB fill:** TVDB's licence terms on bulk copying. Not yet read.
 
+## 6b. Terms check (2026-11-15) — BLOCKS the bulk fetches in phases 3 and 4
+
+- **AniList** (API terms of use, docs repo): "Using the AniList API as a backup or data storage service
+  is strictly prohibited." and "**Hoarding** or mass collection of data from the AniList API is strictly
+  prohibited." Also bars use in competing anime/manga list or tracker services. (anilist.co/terms itself
+  returned 403 to the fetch; the text is from the official ApiV2-GraphQL-Docs repo, terms-of-use.md.)
+  => the ~400-request bulk AniList fetch and the bulk cover/banner download are **not allowed**.
+- **TVDB** (api-information + tos pages): no explicit bulk or caching rule, but "you may not make
+  excessive calls to the API, as determined by us"; licence is "personal, non-commercial use";
+  cannot redistribute the Data; the API licence "does not give you the right to use or display
+  images"; attribution with a link to TheTVDB is required for end users.
+  => a 20k-series sweep is a grey area decided by TVDB; bulk art copies are not covered by the licence.
+- **Consequence for the plan:** the catalogue's source must be the community datasets (Fribb,
+  anime-lists, and a check of the licence of anime-offline-database), NOT bulk API sweeps. AniList and
+  TVDB are called per show, on add or when the user opens an entry, as Starfleet does today. Art is
+  copied per added show only. Needs the user's decision before phases 3 and 4 are rewritten.
+
 ## 7. Tiers
 
 | Tier | Meaning | Who sets it |
