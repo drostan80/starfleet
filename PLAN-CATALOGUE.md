@@ -83,6 +83,13 @@ Episode-level tables do not exist here. Counts come from the season records.
   cannot redistribute the Data; the API licence "does not give you the right to use or display
   images"; attribution with a link to TheTVDB is required for end users.
   => a 20k-series sweep is a grey area decided by TVDB; bulk art copies are not covered by the licence.
+- **MAL** (API agreement, read 2026-11-15): "You may not maintain, store or process any MyAnimeList
+  Content" beyond the time "reasonably necessary for the proper functioning of Your Applications";
+  bans "data scraping, web scraping, web harvesting"; content must come "directly through the API";
+  use is "solely for your internal business purposes". => no MAL bulk collection or catalogue either.
+- **AniDB**: wiki is behind Cloudflare (not readable by the fetch). From memory and the project's own
+  experience: HTTP API about 1 request per 2 s, flood bans, no mass scraping; the daily titles dump
+  (`anime-titles.dat.gz`, already used in `anidb.py`) is the sanctioned bulk file. **Not verified.**
 - **Consequence for the plan:** the catalogue's source must be the community datasets (Fribb,
   anime-lists, and a check of the licence of anime-offline-database), NOT bulk API sweeps. AniList and
   TVDB are called per show, on add or when the user opens an entry, as Starfleet does today. Art is
