@@ -521,6 +521,7 @@
   border-bottom: 1px solid var(--border);
   font-size: 12px; transition: background .1s;
 }
+.sp-ep-row-coords { grid-template-columns: 60px 44px 120px 1fr 90px 58px 34px 34px; }
 .sp-ep-row:last-child { border-bottom: none; }
 .sp-ep-row:hover { background: var(--surface-2); }
 
@@ -580,7 +581,7 @@
 }
 .sp-mpv-icon img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .sp-mpv-icon.available {
-  background: rgba(34,197,94,0.15); color: var(--svc-player); cursor: pointer;
+  background: transparent; color: var(--svc-player); cursor: pointer;
 }
 .sp-mpv-icon.unavailable {
   background: var(--surface-3); color: var(--faint); cursor: default;
@@ -1011,6 +1012,7 @@ a.sp-special-title:hover { color: var(--accent); }
   .sp-season-poster { width: 100px; }
   .sp-season-poster img { width: 84px; height: 122px; }
   .sp-ep-row { grid-template-columns: 60px 40px 1fr 80px 52px 28px 28px; gap: 6px; padding: 8px 10px; }
+  .sp-ep-row-coords { grid-template-columns: 60px 40px 120px 1fr 80px 52px 28px 28px; }
   .sp-ep-synopsis { padding-left: 60px; }
   .sp-ep-syn-textarea { min-width: 0; }
 }

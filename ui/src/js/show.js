@@ -27,14 +27,14 @@ import {
 import {
   fmtEpBadge, availState, showBanner, hideBanner, launchMpv, episodeCtx,
   onStatusChange, airChangeBadge, isDateOnly,
-} from './calendar.js?v=71';
+} from './calendar.js?v=72';
 import { buildWatchedToggle, loadShowWatched } from './watched-toggle.js?v=1';
 import {
   buildStatusBtn, refreshStatusBtn,
   STATUSES_6, STATUS_LABELS, withConfirmation, STATUS_ICON_CLASS,
 } from './status-picker.js?v=2';
 import { renderKeepBadge, remindKeep } from './keep.js?v=8';
-import { SVC_ICONS, _mpvSvg, _jellyfinSvg, _downloadSvg } from './icons.js?v=17';
+import { SVC_ICONS, _mpvSvg, _jellyfinSvg, _downloadSvg } from './icons.js?v=18';
 import { startDownload } from './downloads.js?v=5';
 import { openArtPicker } from './art-picker.js?v=14';
 
@@ -2798,7 +2798,7 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
 
   for (const ep of mergedEps) {
     const isMini = minisodes.includes(ep);
-    const row = el('div', `sp-ep-row${isMini ? ' minisode' : ''}`);
+    const row = el('div', `sp-ep-row sp-ep-row-coords${isMini ? ' minisode' : ''}`);
     row.dataset.dlEp = ep.id;  // downloads.js marks it on-device
 
     const avail = epAvailState(ep, show.mediaShape, show.durationMinutes);
@@ -2817,15 +2817,16 @@ function renderSeasonCard(sn, seasonData, episodes, show, container, cfg, startO
     row.appendChild(el('span', 'sp-ep-abs', fmtAbs(ep.absoluteNumber)));
 
     // Cross-database source coordinates (compact badges)
-    if (ep.externalIds?.length) {
+    // Always one cell, so the grid columns line up on every row
+    {
       const coordWrap = el('div', 'sp-ep-coords');
-      for (const ext of ep.externalIds) {
+      for (const ext of ep.externalIds || []) {
         if (ext.service === 'tvdb') continue; // same as sonarr S/E, skip
         const svcLabel = { anidb: 'ADB', anilist: 'AL', mal: 'MAL' }[ext.service] || ext.service;
         const coord = ext.episodeNumber != null ? `${svcLabel}:${ext.episodeNumber}` : `${svcLabel}`;
         coordWrap.appendChild(el('span', 'sp-ep-coord-badge', coord));
       }
-      if (coordWrap.childElementCount) row.appendChild(coordWrap);
+      row.appendChild(coordWrap);
     }
 
     // Title cell (with kind badge for non-REGULAR episodes, "Mini" for minisodes)
