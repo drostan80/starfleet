@@ -637,7 +637,10 @@ export async function launchMpv(filePath, cfg, ctx = null) {
   const mediaPath = filePath.startsWith('/data') ? filePath.slice('/data'.length) : filePath;
   // location.origin, not cfg.lcars_url (removed A0) — the mpv helper runs on
   // a different machine and needs an absolute URL.
-  const mediaUrl  = `${location.origin}/files${mediaPath}`;
+  // Percent-encode each segment: filenames carry spaces, {}, [] and () which
+  // mpv 0.42's URL parser rejects raw ("URL using bad/illegal format").
+  const encodedPath = mediaPath.split('/').map(encodeURIComponent).join('/');
+  const mediaUrl  = `${location.origin}/files${encodedPath}`;
 
   const playBody = { url: mediaUrl };
   if (ctx?.showId) {
