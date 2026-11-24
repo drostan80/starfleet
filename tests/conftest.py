@@ -82,3 +82,4 @@ def early_october(monkeypatch):
     from lcars import air_sources
 
     monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 100_000)
+    monkeypatch.setattr(air_sources, "HISTORY_DAYS", 100_000)  # same for the 45-day history cutoff
