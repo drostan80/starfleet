@@ -443,3 +443,16 @@
 .mt-last { border-color: #b5471f; box-shadow: 0 0 0 1px #b5471f; }
 .mt-watched { opacity: 0.5; transition: opacity 0.15s; }
 .mt-watched:hover { opacity: 0.9; }
+
+/* Month view: 4+ episodes of one show on a day collapse into one tile (expand/collapse as in 1D / 3D) */
+.month-body .mt-group .bn-banner { min-height: 64px; }
+.month-body .mt-group .bn-ep-title { white-space: normal; }
+.mt-group-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 4px 7px; border: 1px solid var(--accent); border-radius: 6px;
+  background: var(--surface-2); cursor: pointer;
+  font: 600 11px 'DM Sans', system-ui, sans-serif; color: var(--text);
+}
+.mt-group-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt-group-collapse { font: 10px 'DM Mono', monospace; color: var(--muted); flex-shrink: 0; }
+.mt-group-head:hover { opacity: 0.8; }

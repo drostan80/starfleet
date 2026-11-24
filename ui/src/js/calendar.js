@@ -1220,7 +1220,31 @@ function renderMonth(dayGroups, todayStr, cfg) {
       if (!b.airDateUtc) return -1;
       return new Date(a.airDateUtc) - new Date(b.airDateUtc);
     });
-    for (const ep of group.episodes) body.appendChild(buildMonthTile(ep, cfg));
+    // 4+ episodes of one show on one day collapse into one tile, like the 1D / 3D views
+    for (const [, sg] of groupByShow(group.episodes)) {
+      const many = sg.episodes.length >= GROUP_THRESHOLD;
+      if (many && !_expandedShows.has(sg.show.id)) {
+        const tile = buildBannerGroup(sg, cfg, () => {
+          _expandedShows.add(sg.show.id);
+          renderEpisodes(_lastEpisodes, cfg);
+        });
+        tile.classList.add('mt-group');
+        body.appendChild(tile);
+        continue;
+      }
+      if (many) {
+        const head = document.createElement('div');
+        head.className = 'mt-group-head';
+        head.innerHTML = '<span class="mt-group-title"></span><span class="mt-group-collapse">▴ Collapse</span>';
+        head.querySelector('.mt-group-title').textContent = `${sg.show.displayTitle} · ${sg.episodes.length}`;
+        head.addEventListener('click', () => {
+          _expandedShows.delete(sg.show.id);
+          renderEpisodes(_lastEpisodes, cfg);
+        });
+        body.appendChild(head);
+      }
+      for (const ep of sg.episodes) body.appendChild(buildMonthTile(ep, cfg));
+    }
     cell.appendChild(body);
     grid.appendChild(cell);
   }
