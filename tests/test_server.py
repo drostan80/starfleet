@@ -3377,6 +3377,10 @@ async def test_refresh_show_metadata_schedules_only_updates_the_dates_and_adds_n
     def _ep(number, date):
         return {"seasonNumber": 1, "episodeNumber": number, "airDateUtc": date, "runtime": 24}
 
+    from lcars import air_sources
+
+    monkeypatch.setattr(air_sources, "HISTORY_DAYS", 10**5)  # fixed October dates: airing
+    monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 10**5)
     fake = _FakeSonarrClient(series={"id": 42}, episodes=[_ep(1, "2026-10-04T20:00:00Z")])
     monkeypatch.setattr(sonarr_client, "SonarrClient", lambda *a, **kw: fake)
     show = await add_show(client, tvdbId=67890)  # PLANNED; the inline fetch holds episode 1

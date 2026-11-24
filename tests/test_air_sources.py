@@ -21,6 +21,7 @@ def _fixtures_are_dated_early_october(monkeypatch):
     # The fixtures use dates around 2026-10-04 as "just aired"; without this they would turn
     # into history (FINISHED_GRACE_DAYS) as the real clock moves on.
     monkeypatch.setattr(air_sources, "FINISHED_GRACE_DAYS", 100_000)
+    monkeypatch.setattr(air_sources, "HISTORY_DAYS", 100_000)  # and the 45-day history cutoff
 
 
 @pytest.fixture
